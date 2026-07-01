@@ -2398,6 +2398,66 @@ void Player::InitStatsForLevel(bool reapplyMods)
     if (GtHpPerStaEntry const* hpPerSta = sHpPerStaGameTable.GetRow(GetLevel()))
         info.stats[STAT_STAMINA] = std::max<int32>(int32(std::round(expectedPlayerHealth / hpPerSta->Health)), 1);
 
+    // Combat-stats retail parity Phase P2 (per-class STR/AGI/INT split, sniff-backed per contract
+    // Clause 2 -- see docs/midnight-assessment/combat-stats-retail-parity-phase-p2-handoff.md
+    // §8.1/§8.7-§8.9). Same CURRENT_EXPANSION gate as P1's HP squish above -- but here the gate is
+    // load-bearing, not just a squish tweak: ExpectedStat.PlayerSecondaryStat is literally 0 for
+    // levels 1-9 (confirmed via DB2 export, ExpansionID=-2 rows), so applying this formula below
+    // max-level content would zero out secondary stats entirely. The existing
+    // player_classlevelstats-driven leveling curve is left untouched below CURRENT_EXPANSION.
+    if (Trinity::GetExpansionForLevel(GetLevel()) == CURRENT_EXPANSION)
+    {
+        float expectedPrimaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerPrimaryStat,
+            GetLevel(), -2, 0, Classes(GetClass()), 0);
+        float expectedSecondaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerSecondaryStat,
+            GetLevel(), -2, 0, Classes(GetClass()), 0);
+
+        // Primary-stat squish: retail gear-naked L80 primary stat averages ~0.382x the raw curve
+        // across all 6 classes sniffed so far (Warrior/Paladin/Rogue/Priest/Mage/DemonHunter --
+        // STR/AGI/INT primaries respectively), a tight 0.374-0.388 spread -- single shared
+        // constant, class-independent, same pattern as P1's HP squish (§8.7).
+        constexpr float PRIMARY_STAT_SQUISH = 0.382f;
+
+        Stats primaryStat = GetPrimaryStat();
+        info.stats[primaryStat] = std::max<int32>(int32(std::round(expectedPrimaryStat * PRIMARY_STAT_SQUISH)), 1);
+
+        // Secondary-stat split is NOT a shared curve -- retail splits PlayerSecondaryStat
+        // unevenly per class, and the split is per-CLASS, not per-primary-stat-archetype:
+        // Warrior and Paladin both have STR primary but wildly different splits (~1% vs ~66%
+        // spread at L80 -- §8.7 falsified the archetype-sibling hypothesis). Weights below are
+        // (observed secondary stat ÷ raw PlayerSecondaryStat(80)=486.3374), derived from naked
+        // L80 sniffs for the 6 classes evidenced so far. Direction (which stat wins) is
+        // confirmed level-stable for all 3 classes with a second anchor; magnitude is only
+        // approximately stable (Paladin ~4% drift L1->L80, Rogue ~40%, Priest >50% -- §8.9), so
+        // this L80-anchored constant is most accurate at L80-90 and a documented approximation
+        // elsewhere in that band -- acceptable under contract Clause 2 (sniff evidence), same
+        // single-anchor-constant pattern as P1's HP squish. Untested classes (Hunter/Shaman/
+        // Warlock/Monk/Druid/DeathKnight/Evoker) fall back to the average split across the 6
+        // known classes -- an explicit approximation, not sniffed evidence; refine per-class as
+        // sniffs land (see handoff §8.9 "Status").
+        struct SecondaryStatWeights { float strength, agility, intellect; };
+        SecondaryStatWeights secondaryWeights = [](Classes unitClass) -> SecondaryStatWeights
+        {
+            switch (unitClass)
+            {
+                case CLASS_WARRIOR:      return { 0.0f,     0.22208f, 0.22003f }; // STR primary
+                case CLASS_PALADIN:      return { 0.0f,     0.11104f, 0.32285f }; // STR primary
+                case CLASS_ROGUE:        return { 0.26523f, 0.0f,     0.22414f }; // AGI primary
+                case CLASS_DEMON_HUNTER: return { 0.26523f, 0.0f,     0.33101f }; // AGI primary
+                case CLASS_PRIEST:       return { 0.19123f, 0.27554f, 0.0f     }; // INT primary
+                case CLASS_MAGE:         return { 0.14804f, 0.22003f, 0.0f     }; // INT primary
+                default:                 return { 0.23304f, 0.23304f, 0.23304f }; // untested -- neutral average fallback
+            }
+        }(Classes(GetClass()));
+
+        if (primaryStat != STAT_STRENGTH)
+            info.stats[STAT_STRENGTH] = std::max<int32>(int32(std::round(expectedSecondaryStat * secondaryWeights.strength)), 1);
+        if (primaryStat != STAT_AGILITY)
+            info.stats[STAT_AGILITY] = std::max<int32>(int32(std::round(expectedSecondaryStat * secondaryWeights.agility)), 1);
+        if (primaryStat != STAT_INTELLECT)
+            info.stats[STAT_INTELLECT] = std::max<int32>(int32(std::round(expectedSecondaryStat * secondaryWeights.intellect)), 1);
+    }
+
     // save base values (bonuses already included in stored stats
     for (uint8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
         SetCreateStat(Stats(i), info.stats[i]);

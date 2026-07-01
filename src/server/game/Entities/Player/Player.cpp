@@ -2375,6 +2375,29 @@ void Player::InitStatsForLevel(bool reapplyMods)
     // reset size before reapply auras
     SetObjectScale(1.0f);
 
+    // Combat-stats retail parity Phase P1 (Option A, locked by combat-stats-retail-parity-contract.md
+    // Clause 8): player base stamina/HP sourced from ExpectedStat.PlayerHealth at runtime, the same
+    // DB2 path creatures already use (Creature::GetMaxHealthByLevel) -- replaces the stale
+    // player_classlevelstats.sta column as the sole HP lever (SetCreateHealth(0) below).
+    // contentTuningId=0: matches retail sniff at L1/L8/L80 (FR-B/C/D/E/F all show ContentTuningID 0).
+    // See docs/midnight-assessment/combat-stats-retail-parity-phase-p1-handoff.md §6.
+    float expectedPlayerHealth = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerHealth,
+        GetLevel(), -2, 0, Classes(GetClass()), 0);
+
+    // Midnight 12.0 Stat and Item Squish (retail-like, sniff-backed -- contract Clause 2 accepts
+    // packet sniff as evidence). Pass B FR-D/E/F (2026-06-30): retail gear-naked L80 MaxHealth is
+    // 46540/46520/46500 (WAR/MAG/DH) vs raw ExpectedStat.PlayerHealth(L80)=51710.81 -- a ~0.9 factor.
+    // Two DB2 row-swap hypotheses (ExpansionID=11, ContentTuningXExpected) were ruled out 2026-06-30 --
+    // see phase-p1-handoff.md §3.5 -- so this ships as a minimal sniff-backed constant, not a DB2 row.
+    // Gated on CURRENT_EXPANSION (Trinity::GetExpansionForLevel, i.e. level>=80) because retail L1
+    // (FR-B/C) and L8 (FR-A) already match the *unsquished* formula exactly -- only the new-expansion
+    // (Midnight) band needs it. Single-anchor constant (L80 only); re-derive if L90 sniff lands.
+    if (Trinity::GetExpansionForLevel(GetLevel()) == CURRENT_EXPANSION)
+        expectedPlayerHealth *= 0.9f;
+
+    if (GtHpPerStaEntry const* hpPerSta = sHpPerStaGameTable.GetRow(GetLevel()))
+        info.stats[STAT_STAMINA] = std::max<int32>(int32(std::round(expectedPlayerHealth / hpPerSta->Health)), 1);
+
     // save base values (bonuses already included in stored stats
     for (uint8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
         SetCreateStat(Stats(i), info.stats[i]);

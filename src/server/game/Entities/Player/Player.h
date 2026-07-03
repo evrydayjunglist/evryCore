@@ -60,6 +60,7 @@ struct ItemTemplate;
 struct Loot;
 struct Mail;
 struct MapEntry;
+struct PlayerLevelInfo;
 struct PvpTalentEntry;
 struct QuestPackageItemEntry;
 struct RewardPackEntry;
@@ -1333,6 +1334,13 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool IsMaxLevel() const;
 
         void InitStatsForLevel(bool reapplyMods = false);
+
+        // Combat-stats retail parity (docs/midnight-assessment/combat-stats-retail-parity-*.md):
+        // shared ExpectedStat.db2-based override (P1 stamina/HP, P2 primary/secondary stats) applied
+        // on top of the legacy player_classlevelstats-sourced PlayerLevelInfo for a given target
+        // level. Used by both InitStatsForLevel() (login) and GiveLevel() (in-session level-up) so
+        // the two paths can never drift apart again -- see fork-journal.md 2026-07-02 GiveLevel gap.
+        void ApplyRetailStatOverridesForLevel(uint8 level, PlayerLevelInfo& info) const;
 
         // .cheat command related
         bool GetCommandStatus(uint32 command) const { return (_activeCheats & command) != 0; }

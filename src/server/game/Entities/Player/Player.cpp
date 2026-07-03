@@ -2211,6 +2211,13 @@ void Player::GiveLevel(uint8 level)
     PlayerLevelInfo info;
     sObjectMgr->GetPlayerLevelInfo(GetRace(), GetClass(), level, &info);
 
+    // Combat-stats retail parity: without this, GiveLevel() applied the raw legacy
+    // player_classlevelstats stats (pre-squish, e.g. Monk L2 sta=69) straight over whatever
+    // InitStatsForLevel() had correctly set at login, silently reverting stamina/HP (and,
+    // at max-level content, STR/AGI/INT) every time a character levels up in-session. See
+    // ApplyRetailStatOverridesForLevel() and fork-journal.md 2026-07-02.
+    ApplyRetailStatOverridesForLevel(level, info);
+
     uint32 basemana = 0;
     sObjectMgr->GetPlayerClassLevelInfo(GetClass(), level, basemana);
 
@@ -2337,52 +2344,24 @@ void Player::InitTalentForLevel()
         SendTalentsInfoData(); // update at client
 }
 
-void Player::InitStatsForLevel(bool reapplyMods)
+// Combat-stats retail parity (docs/midnight-assessment/combat-stats-retail-parity-*.md):
+// ExpectedStat.db2-based override applied on top of the legacy player_classlevelstats-sourced
+// PlayerLevelInfo for `level`. Factored out of InitStatsForLevel() 2026-07-02 so GiveLevel()
+// (in-session level-up) can share the exact same math instead of applying the raw legacy `info`
+// -- without this, every level-up silently reverted stamina/HP (P1, all levels) and, at
+// max-level content, STR/AGI/INT (P2) back to the pre-squish curve until the next login. Found
+// via an owner retail-vs-local sniff comparison of a fresh L1->L2 Pandaren Monk: MaxHealth 292
+// (correct, login) collapsed to 71 (legacy sta=69 from player_classlevelstats) after one level-up.
+void Player::ApplyRetailStatOverridesForLevel(uint8 level, PlayerLevelInfo& info) const
 {
-    if (reapplyMods)                                        //reapply stats values only on .reset stats (level) command
-        _RemoveAllStatBonuses();
-
-    uint32 basemana = 0;
-    sObjectMgr->GetPlayerClassLevelInfo(GetClass(), GetLevel(), basemana);
-
-    PlayerLevelInfo info;
-    sObjectMgr->GetPlayerLevelInfo(GetRace(), GetClass(), GetLevel(), &info);
-
-    uint8 exp_max_lvl = GetMaxLevelForExpansion(GetSession()->GetExpansion());
-    uint8 conf_max_lvl = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
-    if (exp_max_lvl == GetMaxLevelForExpansion(CURRENT_EXPANSION) || exp_max_lvl >= conf_max_lvl)
-        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::MaxLevel), conf_max_lvl);
-    else
-        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::MaxLevel), exp_max_lvl);
-    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::NextLevelXP), sObjectMgr->GetXPForLevel(GetLevel()));
-    if (m_activePlayerData->XP >= m_activePlayerData->NextLevelXP)
-        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::XP), m_activePlayerData->NextLevelXP - 1);
-
-    // reset before any aura state sources (health set/aura apply)
-    SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::AuraState), 0);
-
-    UpdateSkillsForLevel();
-
-    // set default cast time multiplier
-    SetModCastingSpeed(1.0f);
-    SetModSpellHaste(1.0f);
-    SetModHaste(1.0f);
-    SetModRangedHaste(1.0f);
-    SetModHasteRegen(1.0f);
-    SetModTimeRate(1.0f);
-    SetSpellEmpowerStage(-1);
-
-    // reset size before reapply auras
-    SetObjectScale(1.0f);
-
-    // Combat-stats retail parity Phase P1 (Option A, locked by combat-stats-retail-parity-contract.md
-    // Clause 8): player base stamina/HP sourced from ExpectedStat.PlayerHealth at runtime, the same
-    // DB2 path creatures already use (Creature::GetMaxHealthByLevel) -- replaces the stale
-    // player_classlevelstats.sta column as the sole HP lever (SetCreateHealth(0) below).
+    // Phase P1 (Option A, locked by combat-stats-retail-parity-contract.md Clause 8): player base
+    // stamina/HP sourced from ExpectedStat.PlayerHealth at runtime, the same DB2 path creatures
+    // already use (Creature::GetMaxHealthByLevel) -- replaces the stale player_classlevelstats.sta
+    // column as the sole HP lever (SetCreateHealth(0) at the call sites).
     // contentTuningId=0: matches retail sniff at L1/L8/L80 (FR-B/C/D/E/F all show ContentTuningID 0).
     // See docs/midnight-assessment/combat-stats-retail-parity-phase-p1-handoff.md §6.
     float expectedPlayerHealth = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerHealth,
-        GetLevel(), -2, 0, Classes(GetClass()), 0);
+        level, -2, 0, Classes(GetClass()), 0);
 
     // Midnight 12.0 Stat and Item Squish (retail-like, sniff-backed -- contract Clause 2 accepts
     // packet sniff as evidence). Pass B FR-D/E/F (2026-06-30): retail gear-naked L80 MaxHealth is
@@ -2392,10 +2371,10 @@ void Player::InitStatsForLevel(bool reapplyMods)
     // Gated on CURRENT_EXPANSION (Trinity::GetExpansionForLevel, i.e. level>=80) because retail L1
     // (FR-B/C) and L8 (FR-A) already match the *unsquished* formula exactly -- only the new-expansion
     // (Midnight) band needs it. Single-anchor constant (L80 only); re-derive if L90 sniff lands.
-    if (Trinity::GetExpansionForLevel(GetLevel()) == CURRENT_EXPANSION)
+    if (Trinity::GetExpansionForLevel(level) == CURRENT_EXPANSION)
         expectedPlayerHealth *= 0.9f;
 
-    if (GtHpPerStaEntry const* hpPerSta = sHpPerStaGameTable.GetRow(GetLevel()))
+    if (GtHpPerStaEntry const* hpPerSta = sHpPerStaGameTable.GetRow(level))
         info.stats[STAT_STAMINA] = std::max<int32>(int32(std::round(expectedPlayerHealth / hpPerSta->Health)), 1);
 
     // Combat-stats retail parity Phase P2 (per-class STR/AGI/INT split, sniff-backed per contract
@@ -2405,12 +2384,12 @@ void Player::InitStatsForLevel(bool reapplyMods)
     // levels 1-9 (confirmed via DB2 export, ExpansionID=-2 rows), so applying this formula below
     // max-level content would zero out secondary stats entirely. The existing
     // player_classlevelstats-driven leveling curve is left untouched below CURRENT_EXPANSION.
-    if (Trinity::GetExpansionForLevel(GetLevel()) == CURRENT_EXPANSION)
+    if (Trinity::GetExpansionForLevel(level) == CURRENT_EXPANSION)
     {
         float expectedPrimaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerPrimaryStat,
-            GetLevel(), -2, 0, Classes(GetClass()), 0);
+            level, -2, 0, Classes(GetClass()), 0);
         float expectedSecondaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerSecondaryStat,
-            GetLevel(), -2, 0, Classes(GetClass()), 0);
+            level, -2, 0, Classes(GetClass()), 0);
 
         // Primary-stat squish: retail gear-naked L80 primary stat averages ~0.382x the raw curve
         // across all 6 classes sniffed so far (Warrior/Paladin/Rogue/Priest/Mage/DemonHunter --
@@ -2457,6 +2436,47 @@ void Player::InitStatsForLevel(bool reapplyMods)
         if (primaryStat != STAT_INTELLECT)
             info.stats[STAT_INTELLECT] = std::max<int32>(int32(std::round(expectedSecondaryStat * secondaryWeights.intellect)), 1);
     }
+}
+
+void Player::InitStatsForLevel(bool reapplyMods)
+{
+    if (reapplyMods)                                        //reapply stats values only on .reset stats (level) command
+        _RemoveAllStatBonuses();
+
+    uint32 basemana = 0;
+    sObjectMgr->GetPlayerClassLevelInfo(GetClass(), GetLevel(), basemana);
+
+    PlayerLevelInfo info;
+    sObjectMgr->GetPlayerLevelInfo(GetRace(), GetClass(), GetLevel(), &info);
+
+    uint8 exp_max_lvl = GetMaxLevelForExpansion(GetSession()->GetExpansion());
+    uint8 conf_max_lvl = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    if (exp_max_lvl == GetMaxLevelForExpansion(CURRENT_EXPANSION) || exp_max_lvl >= conf_max_lvl)
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::MaxLevel), conf_max_lvl);
+    else
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::MaxLevel), exp_max_lvl);
+    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::NextLevelXP), sObjectMgr->GetXPForLevel(GetLevel()));
+    if (m_activePlayerData->XP >= m_activePlayerData->NextLevelXP)
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::XP), m_activePlayerData->NextLevelXP - 1);
+
+    // reset before any aura state sources (health set/aura apply)
+    SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::AuraState), 0);
+
+    UpdateSkillsForLevel();
+
+    // set default cast time multiplier
+    SetModCastingSpeed(1.0f);
+    SetModSpellHaste(1.0f);
+    SetModHaste(1.0f);
+    SetModRangedHaste(1.0f);
+    SetModHasteRegen(1.0f);
+    SetModTimeRate(1.0f);
+    SetSpellEmpowerStage(-1);
+
+    // reset size before reapply auras
+    SetObjectScale(1.0f);
+
+    ApplyRetailStatOverridesForLevel(GetLevel(), info);
 
     // save base values (bonuses already included in stored stats
     for (uint8 i = STAT_STRENGTH; i < MAX_STATS; ++i)

@@ -1025,6 +1025,7 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_DATA_ELEMENTS,
     PLAYER_LOGIN_QUERY_LOAD_DATA_FLAGS,
     PLAYER_LOGIN_QUERY_LOAD_BANK_TAB_SETTINGS,
+    PLAYER_LOGIN_QUERY_LOAD_CHROMIE_TIME,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -3036,6 +3037,9 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         std::variant<int64, float> GetDataElementCharacter(uint32 dataElementId) const;
         void SetDataElementCharacter(uint32 dataElementId, std::variant<int64, float> value);
 
+        UF::CTROptions BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const;
+        void SetChromieTimeExpansion(uint32 uiExpansionId);
+
         bool HasDataFlagAccount(uint32 dataFlagId) const;
         void SetDataFlagAccount(uint32 dataFlagId, bool on);
 
@@ -3168,6 +3172,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _LoadCUFProfiles(PreparedQueryResult result);
         void _LoadPlayerData(PreparedQueryResult elementsResult, PreparedQueryResult flagsResult);
         void _LoadCharacterBankTabSettings(PreparedQueryResult result);
+        void _LoadChromieTime(PreparedQueryResult result);
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/
@@ -3198,6 +3203,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _SaveCUFProfiles(CharacterDatabaseTransaction trans);
         void _SavePlayerData(CharacterDatabaseTransaction trans);
         void _SaveCharacterBankTabSettings(CharacterDatabaseTransaction trans) const;
+        void _SaveChromieTime(CharacterDatabaseTransaction trans) const;
 
         /*********************************************************/
         /***              ENVIRONMENTAL SYSTEM                 ***/

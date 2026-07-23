@@ -161,7 +161,8 @@ ConditionMgr::ConditionTypeInfo const ConditionMgr::StaticConditionTypeData[COND
     { .Name = "Private Object",            .HasConditionValue1 = false, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false },
     { .Name = "String ID",                 .HasConditionValue1 = false, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 =  true },
     { .Name = "Label",                     .HasConditionValue1 =  true, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false },
-    { .Name = "Group status",              .HasConditionValue1 =  true, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false }
+    { .Name = "Group status",              .HasConditionValue1 =  true, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false },
+    { .Name = "Chromie Time",              .HasConditionValue1 =  true, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false },
 };
 
 static bool MeetsGroupStatusCondition(Player const* player, GroupStatusCondition status)
@@ -706,6 +707,12 @@ bool Condition::Meets(ConditionSourceInfo& sourceInfo) const
                 condMeets = MeetsGroupStatusCondition(player, GroupStatusCondition(ConditionValue1));
             break;
         }
+        case CONDITION_CHROMIE_TIME:
+        {
+            if (Player const* player = object->ToPlayer())
+                condMeets = uint32(player->m_activePlayerData->UiChromieTimeExpansionID) == ConditionValue1;
+            break;
+        }
         default:
             break;
     }
@@ -928,6 +935,7 @@ uint32 Condition::GetSearcherTypeMaskForCondition() const
             mask |= GRID_MAP_TYPE_MASK_CREATURE | GRID_MAP_TYPE_MASK_GAMEOBJECT;
             break;
         case CONDITION_GROUP_STATUS:
+        case CONDITION_CHROMIE_TIME:
             mask |= GRID_MAP_TYPE_MASK_PLAYER;
             break;
         default:
@@ -2702,6 +2710,16 @@ bool ConditionMgr::isConditionTypeValid(Condition* cond) const
         case CONDITION_STRING_ID:
         case CONDITION_LABEL:
             break;
+        case CONDITION_CHROMIE_TIME:
+        {
+            // 0 = present timeline; non-zero must exist in UIChromieTimeExpansionInfo
+            if (cond->ConditionValue1 && !sUIChromieTimeExpansionInfoStore.LookupEntry(cond->ConditionValue1))
+            {
+                TC_LOG_ERROR("sql.sql", "{} has non existing UIChromieTimeExpansionInfo ID in value1 ({}), skipped.", *cond, cond->ConditionValue1);
+                return false;
+            }
+            break;
+        }
         case CONDITION_DIFFICULTY_ID:
             if (!sDifficultyStore.LookupEntry(cond->ConditionValue1))
             {

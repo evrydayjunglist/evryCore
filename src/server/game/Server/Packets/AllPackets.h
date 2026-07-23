@@ -36,6 +36,7 @@
 #include "ChannelPackets.h"
 #include "CharacterPackets.h"
 #include "ChatPackets.h"
+#include "ChromieTimePackets.h"
 #include "ClientConfigPackets.h"
 #include "CollectionPackets.h"
 #include "CombatLogPackets.h"

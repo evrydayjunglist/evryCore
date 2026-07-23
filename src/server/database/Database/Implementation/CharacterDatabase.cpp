@@ -843,6 +843,10 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_SEL_CHARACTER_BANK_TAB_SETTINGS, "SELECT tabId, name, icon, description, depositFlags FROM character_bank_tab_settings WHERE characterGuid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHARACTER_BANK_TAB_SETTINGS, "DELETE FROM character_bank_tab_settings WHERE characterGuid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_INS_CHARACTER_BANK_TAB_SETTINGS, "INSERT INTO character_bank_tab_settings (characterGuid, tabId, name, icon, description, depositFlags) VALUES (?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+
+    PrepareStatement(CHAR_SEL_CHARACTER_CHROMIE_TIME, "SELECT uiExpansionId FROM character_chromie_time WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_CHARACTER_CHROMIE_TIME, "DELETE FROM character_chromie_time WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_CHARACTER_CHROMIE_TIME, "INSERT INTO character_chromie_time (guid, uiExpansionId) VALUES (?, ?)", CONNECTION_ASYNC);
 }
 
 CharacterDatabaseConnection::CharacterDatabaseConnection(MySQLConnectionInfo& connInfo, ConnectionFlags connectionFlags) : MySQLConnection(connInfo, connectionFlags)

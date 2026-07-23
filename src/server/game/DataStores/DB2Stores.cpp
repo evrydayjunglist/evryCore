@@ -2192,12 +2192,13 @@ uint32 DB2Manager::GetRedirectedContentTuningId(uint32 contentTuningId, std::spa
     {
         for (ConditionalContentTuningEntry const* conditionalContentTuning : *conditionalContentTunings)
         {
-            uint32 block = conditionalContentTuning->RedirectEnum / 32;
-            uint32 flag = conditionalContentTuning->RedirectEnum % 32;
+            // RedirectEnum is a bit index into ConditionalFlags (RedirectFlag mirrors 1<<(enum%32) when nonzero).
+            uint32 block = uint32(conditionalContentTuning->RedirectEnum) / 32u;
+            uint32 bit = uint32(conditionalContentTuning->RedirectEnum) % 32u;
             if (block >= redirectFlag.size())
                 continue;
 
-            if (flag & redirectFlag[block])
+            if (redirectFlag[block] & (1u << bit))
                 return conditionalContentTuning->RedirectContentTuningID;
         }
     }

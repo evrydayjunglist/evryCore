@@ -3182,6 +3182,14 @@ uint8 Creature::GetLevelForTarget(WorldObject const* target) const
 
             if (Player const* playerTarget = target->ToPlayer())
             {
+                // Spawn bakes non-redirected min/max via ApplyLevelScaling({}). Re-resolve with the
+                // viewer's ConditionalFlags so Chromie-for-scaling ConditionalContentTuning applies.
+                if (Optional<ContentTuningLevels> levels = sDB2Manager.GetContentTuningData(m_unitData->ContentTuningID, playerTarget->m_playerData->CtrOptions->ConditionalFlags))
+                {
+                    scalingLevelMin = levels->MinLevel;
+                    scalingLevelMax = levels->MaxLevel;
+                }
+
                 if (scalingFactionGroup && sFactionTemplateStore.AssertEntry(sChrRacesStore.AssertEntry(playerTarget->GetRace())->FactionID)->FactionGroup != scalingFactionGroup)
                     scalingLevelMin = scalingLevelMax;
 

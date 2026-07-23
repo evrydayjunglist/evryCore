@@ -3039,8 +3039,18 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         UF::CTROptions BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const;
         void SetChromieTimeExpansion(uint32 uiExpansionId);
+        /// ContentTuning Chromie outdoor MinLevelSquish (campaign CTs use 10).
+        static uint32 GetChromieTimeStartLevel();
+        /// PROVISIONAL: first level at which Chromie start/re-enter from present is refused
+        /// (Blizzard support 275056). Stay-in change uses CanSelectChromieTimeExpansion().
+        static uint32 GetChromieTimeSelectLockLevel();
         /// ContentTuning Chromie max band: 1 + GetMaxLevelForExpansion(CURRENT_EXPANSION - 1).
         static uint32 GetChromieTimeEndLevel();
+        /// Left Exile's Reach (capital arrival quest rewarded). Blizzard news: Chromie at L10 OR after ER.
+        bool HasCompletedExilesReach() const;
+        /// PROVISIONAL Midnight model: start/re-enter locked at select-lock; stay-in may change
+        /// until end band. See chromie-time-polish-start-gates-handoff.md.
+        bool CanSelectChromieTimeExpansion() const;
         /// Clear Chromie UF/CTR; optional capital teleport to faction Chromie (end-level kick).
         void RemoveFromChromieTime(bool teleportToCapital = false);
 

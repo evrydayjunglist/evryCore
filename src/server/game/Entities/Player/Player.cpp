@@ -30516,10 +30516,61 @@ UF::CTROptions Player::BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const
     return options;
 }
 
+uint32 Player::GetChromieTimeStartLevel()
+{
+    // UIChromieTimeExpansionInfo ContentTuning rows (e.g. 1700/1736): MinLevelSquish = 10.
+    // Blizzard news: available at level 10 or after finishing Exile's Reach (see HasCompletedExilesReach).
+    return 10u;
+}
+
+uint32 Player::GetChromieTimeSelectLockLevel()
+{
+    // PROVISIONAL — Blizzard support 275056 (Timewalking Campaign No Longer Available):
+    // "option to choose" removed upon reaching level 68. Applies to start/re-enter from
+    // present only; stay-in scaling continues to GetChromieTimeEndLevel() (ContentTuning).
+    // Midnight article body not proven updated; forums still report ~68 re-enter lock.
+    return 68u;
+}
+
 uint32 Player::GetChromieTimeEndLevel()
 {
     // ContentTuning Chromie MaxLevelSquish=1 + MaxLevelType PrevExpansionMaxLevel
     return 1u + GetMaxLevelForExpansion(uint32(std::max(int32(CURRENT_EXPANSION) - 1, 0)));
+}
+
+bool Player::HasCompletedExilesReach() const
+{
+    // Capital arrival after leaving map 2175 — not achievement 14222 (that CriteriaTree is the
+    // old Alliance/Horde NPE BfA funnel: Nation of Kul Tiras / Mission Statement).
+    constexpr uint32 QUEST_WELCOME_TO_STORMWIND = 59583;
+    constexpr uint32 QUEST_WELCOME_TO_ORGRIMMAR = 60343;
+
+    return IsQuestRewarded(QUEST_WELCOME_TO_STORMWIND) || IsQuestRewarded(QUEST_WELCOME_TO_ORGRIMMAR);
+}
+
+bool Player::CanSelectChromieTimeExpansion() const
+{
+    uint32 const level = GetLevel();
+
+    // Blizzard news 23574988: available at level 10 or after completing Exile's Reach.
+    // Racial starters never reward Welcome to SW/Org — they still need level 10.
+    if (level < GetChromieTimeStartLevel() && !HasCompletedExilesReach())
+        return false;
+
+    // Past ContentTuning Chromie end band — refuse select; kick clears on level-up when already in.
+    if (level >= GetChromieTimeEndLevel())
+        return false;
+
+    // PROVISIONAL Midnight model (no sniff A/B yet):
+    // - Start/re-enter from present: locked at GetChromieTimeSelectLockLevel() (68).
+    // - Already in a campaign: may change timelines until end band (stay-in ≠ re-enter).
+    // Evidence: support 275056 "choice" wording; ContentTuning max ~81; Hierophant 2026-04
+    // (leveled to 80 in Chromie / L70 alt cannot start; change while in at 70 reported).
+    // Counter-reports exist (no swap after ~70) — revisit if retail sniff contradicts.
+    if (!m_activePlayerData->UiChromieTimeExpansionID && level >= GetChromieTimeSelectLockLevel())
+        return false;
+
+    return true;
 }
 
 void Player::SetChromieTimeExpansion(uint32 uiExpansionId)

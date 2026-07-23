@@ -70,8 +70,8 @@ void WorldSession::HandleChromieTimeSelectExpansion(WorldPackets::ChromieTime::C
     if (!expansionInfo || !expansionInfo->SpellID)
         return;
 
-    // Past ContentTuning Chromie end band — client should hide; refuse select server-side.
-    if (player->GetLevel() >= Player::GetChromieTimeEndLevel())
+    // PROVISIONAL: start/re-enter locked at 68 from present; stay-in may change until end band.
+    if (!player->CanSelectChromieTimeExpansion())
         return;
 
     // CompletedPlayerConditionID = "already done / no longer offer" (0 on current Ui rows).

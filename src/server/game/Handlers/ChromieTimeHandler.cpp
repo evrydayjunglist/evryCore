@@ -70,19 +70,8 @@ void WorldSession::HandleChromieTimeSelectExpansion(WorldPackets::ChromieTime::C
     if (!expansionInfo || !expansionInfo->SpellID)
         return;
 
-    UF::CTROptions const& current = *player->m_playerData->CtrOptions;
-    UF::CTROptions next = player->BuildCtrOptionsForChromieTime(selectExpansion.Expansion);
-
-    WorldPackets::ChromieTime::SetCtrOptions setCtrOptions;
-    setCtrOptions.From.ConditionalFlags = current.ConditionalFlags;
-    setCtrOptions.From.FactionGroup = int8(current.FactionGroup);
-    setCtrOptions.From.ChromieTimeExpansionMask = current.ChromieTimeExpansionMask;
-    setCtrOptions.To.ConditionalFlags = next.ConditionalFlags;
-    setCtrOptions.To.FactionGroup = int8(next.FactionGroup);
-    setCtrOptions.To.ChromieTimeExpansionMask = next.ChromieTimeExpansionMask;
-    SendPacket(setCtrOptions.Write());
-
-    // CT-A: player self-casts expansion SpellID (effect 277 sets UF) — no quest-start effect
+    // CT-A: player self-casts expansion SpellID (effect 277 → SetChromieTimeExpansion,
+    // which sends SMSG_SET_CTR_OPTIONS + UF). Leave/kick reuse the same Set* path.
     player->CastSpell(player, uint32(expansionInfo->SpellID), true);
 
     WorldPackets::ChromieTime::ChromieTimeSelectExpansionSuccess success;

@@ -41,6 +41,7 @@
 #include "CharacterPackets.h"
 #include "CharmInfo.h"
 #include "Chat.h"
+#include "ChromieTimePackets.h"
 #include "ChatPackets.h"
 #include "ChatTextBuilder.h"
 #include "CinematicMgr.h"
@@ -2299,6 +2300,15 @@ void Player::GiveLevel(uint8 level)
         UpdateCriteria(CriteriaType::GainLevels, level - oldLevel);
     if (IsMaxLevel())
         UpdateCriteria(CriteriaType::ReachMaxLevel);
+
+    // Chromie Time end: ContentTuning MaxLevelSquish=1 + PrevExpansionMaxLevel → 1+max(prev exp)
+    // (Phase 3/5; Midnight = 81). Silent clear — do not cast confirmation spell 335807.
+    if (m_activePlayerData->UiChromieTimeExpansionID)
+    {
+        uint32 chromieEndLevel = 1u + GetMaxLevelForExpansion(uint32(std::max(int32(CURRENT_EXPANSION) - 1, 0)));
+        if (level >= chromieEndLevel)
+            SetChromieTimeExpansion(0);
+    }
 
     PushQuests();
 
@@ -30509,10 +30519,26 @@ void Player::SetChromieTimeExpansion(uint32 uiExpansionId)
     if (uiExpansionId && !sUIChromieTimeExpansionInfoStore.LookupEntry(uiExpansionId))
         return;
 
+    UF::CTROptions const& current = *m_playerData->CtrOptions;
+    UF::CTROptions options = BuildCtrOptionsForChromieTime(uiExpansionId);
+
+    // CT-A leave + select: SMSG_SET_CTR_OPTIONS (from → to) accompanies Chromie CTR changes.
+    // Skip during load (not in world) and when nothing changed.
+    if (IsInWorld() && (current != options || m_activePlayerData->UiChromieTimeExpansionID != int32(uiExpansionId)))
+    {
+        WorldPackets::ChromieTime::SetCtrOptions setCtrOptions;
+        setCtrOptions.From.ConditionalFlags = current.ConditionalFlags;
+        setCtrOptions.From.FactionGroup = int8(current.FactionGroup);
+        setCtrOptions.From.ChromieTimeExpansionMask = current.ChromieTimeExpansionMask;
+        setCtrOptions.To.ConditionalFlags = options.ConditionalFlags;
+        setCtrOptions.To.FactionGroup = int8(options.FactionGroup);
+        setCtrOptions.To.ChromieTimeExpansionMask = options.ChromieTimeExpansionMask;
+        SendDirectMessage(setCtrOptions.Write());
+    }
+
     SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData)
         .ModifyValue(&UF::ActivePlayerData::UiChromieTimeExpansionID), int32(uiExpansionId));
 
-    UF::CTROptions options = BuildCtrOptionsForChromieTime(uiExpansionId);
     auto ctrOptions = m_values.ModifyValue(&Player::m_playerData).ModifyValue(&UF::PlayerData::CtrOptions);
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::FactionGroup), options.FactionGroup);
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::ChromieTimeExpansionMask), options.ChromieTimeExpansionMask);

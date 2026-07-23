@@ -3039,6 +3039,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         UF::CTROptions BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const;
         void SetChromieTimeExpansion(uint32 uiExpansionId);
+        /// ContentTuning Chromie max band: 1 + GetMaxLevelForExpansion(CURRENT_EXPANSION - 1).
+        static uint32 GetChromieTimeEndLevel();
+        /// Clear Chromie UF/CTR; optional capital teleport to faction Chromie (end-level kick).
+        void RemoveFromChromieTime(bool teleportToCapital = false);
 
         bool HasDataFlagAccount(uint32 dataFlagId) const;
         void SetDataFlagAccount(uint32 dataFlagId, bool on);

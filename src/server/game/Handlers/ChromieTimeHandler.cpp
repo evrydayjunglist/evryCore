@@ -70,6 +70,17 @@ void WorldSession::HandleChromieTimeSelectExpansion(WorldPackets::ChromieTime::C
     if (!expansionInfo || !expansionInfo->SpellID)
         return;
 
+    // Past ContentTuning Chromie end band — client should hide; refuse select server-side.
+    if (player->GetLevel() >= Player::GetChromieTimeEndLevel())
+        return;
+
+    // CompletedPlayerConditionID = "already done / no longer offer" (0 on current Ui rows).
+    // Do NOT gate on ShowPlayerConditionID here: those ModifierTrees are PlayerIsInChromieTime
+    // for that Ui (type 300) — a client list/filter signal, not "may select while in present."
+    // Using MeetPlayerCondition(ShowPC) blocked every first-time select (silent no-op).
+    if (expansionInfo->CompletedPlayerConditionID && player->MeetPlayerCondition(uint32(expansionInfo->CompletedPlayerConditionID)))
+        return;
+
     // CT-A: player self-casts expansion SpellID (effect 277 → SetChromieTimeExpansion,
     // which sends SMSG_SET_CTR_OPTIONS + UF). Leave/kick reuse the same Set* path.
     player->CastSpell(player, uint32(expansionInfo->SpellID), true);

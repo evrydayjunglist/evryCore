@@ -2301,14 +2301,10 @@ void Player::GiveLevel(uint8 level)
     if (IsMaxLevel())
         UpdateCriteria(CriteriaType::ReachMaxLevel);
 
-    // Chromie Time end: ContentTuning MaxLevelSquish=1 + PrevExpansionMaxLevel → 1+max(prev exp)
-    // (Phase 3/5; Midnight = 81). Silent clear — do not cast confirmation spell 335807.
-    if (m_activePlayerData->UiChromieTimeExpansionID)
-    {
-        uint32 chromieEndLevel = 1u + GetMaxLevelForExpansion(uint32(std::max(int32(CURRENT_EXPANSION) - 1, 0)));
-        if (level >= chromieEndLevel)
-            SetChromieTimeExpansion(0);
-    }
+    // Chromie Time end band (Phase 3/5/polish). Silent clear — not confirmation spell 335807.
+    // Wiki: also teleported to capital; coords = world Chromie 167032 (SW/Org embassy spawns).
+    if (m_activePlayerData->UiChromieTimeExpansionID && level >= GetChromieTimeEndLevel())
+        RemoveFromChromieTime(true);
 
     PushQuests();
 
@@ -21839,8 +21835,14 @@ void Player::_LoadChromieTime(PreparedQueryResult result)
         return;
 
     uint32 uiExpansionId = result->Fetch()[0].GetUInt32();
-    if (uiExpansionId)
-        SetChromieTimeExpansion(uiExpansionId);
+    if (!uiExpansionId)
+        return;
+
+    // Do not restore Chromie past the ContentTuning end band (UF stays 0 → save deletes row).
+    if (GetLevel() >= GetChromieTimeEndLevel())
+        return;
+
+    SetChromieTimeExpansion(uiExpansionId);
 }
 
 void Player::_SaveChromieTime(CharacterDatabaseTransaction trans) const
@@ -30514,6 +30516,12 @@ UF::CTROptions Player::BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const
     return options;
 }
 
+uint32 Player::GetChromieTimeEndLevel()
+{
+    // ContentTuning Chromie MaxLevelSquish=1 + MaxLevelType PrevExpansionMaxLevel
+    return 1u + GetMaxLevelForExpansion(uint32(std::max(int32(CURRENT_EXPANSION) - 1, 0)));
+}
+
 void Player::SetChromieTimeExpansion(uint32 uiExpansionId)
 {
     if (uiExpansionId && !sUIChromieTimeExpansionInfoStore.LookupEntry(uiExpansionId))
@@ -30543,6 +30551,25 @@ void Player::SetChromieTimeExpansion(uint32 uiExpansionId)
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::FactionGroup), options.FactionGroup);
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::ChromieTimeExpansionMask), options.ChromieTimeExpansionMask);
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::ConditionalFlags), std::move(options.ConditionalFlags));
+}
+
+void Player::RemoveFromChromieTime(bool teleportToCapital /*= false*/)
+{
+    if (!m_activePlayerData->UiChromieTimeExpansionID)
+        return;
+
+    SetChromieTimeExpansion(0);
+
+    if (!teleportToCapital || !IsInWorld())
+        return;
+
+    // Wiki kick → capital near Chromie 167032 — not on her / hourglass / campfire.
+    // Org: Chromie (1557.18,-4216.54) faces ~NE toward bonfire GO 204676 (1558.98,-4212.85);
+    //      stand SW of pedestal at ground Z, facing Chromie. SW: no campfire in the pad.
+    if (GetTeamId() == TEAM_ALLIANCE)
+        TeleportTo(0, -8196.72f, 742.37f, 76.50f, 4.57677f); // ~3 yd from Chromie, face her (o+π)
+    else
+        TeleportTo(1, 1554.80f, -4219.20f, 54.25f, 0.95f);   // clear of hourglass 350063 + bonfire 204676
 }
 
 bool Player::HasDataFlagAccount(uint32 dataFlagId) const

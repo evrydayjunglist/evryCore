@@ -11543,6 +11543,68 @@ std::vector<uint32> const* ObjectMgr::GetUiMapQuestsList(uint32 uiMapId) const
     return Trinity::Containers::MapGetValuePtr(_uiMapQuestsStore, uiMapId);
 }
 
+void ObjectMgr::LoadChromieTimeExpansionQuests()
+{
+    uint32 oldMSTime = getMSTime();
+
+    _chromieTimeExpansionQuestStore.clear();
+
+    //                                               0               1                 2
+    QueryResult result = WorldDatabase.Query("SELECT UiExpansionId, AllianceQuestId, HordeQuestId FROM chromie_time_expansion_quest");
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 Chromie Time expansion quests. DB table `chromie_time_expansion_quest` is empty!");
+        return;
+    }
+
+    uint32 count = 0;
+    do
+    {
+        Field* fields = result->Fetch();
+
+        ChromieTimeExpansionQuest mapping;
+        mapping.UiExpansionId = fields[0].GetUInt32();
+        mapping.AllianceQuestId = fields[1].GetUInt32();
+        mapping.HordeQuestId = fields[2].GetUInt32();
+
+        if (!sUIChromieTimeExpansionInfoStore.LookupEntry(mapping.UiExpansionId))
+        {
+            TC_LOG_ERROR("sql.sql", "Table `chromie_time_expansion_quest` references non-existing UIChromieTimeExpansionInfo {}, skipped", mapping.UiExpansionId);
+            continue;
+        }
+
+        if (mapping.AllianceQuestId && !GetQuestTemplate(mapping.AllianceQuestId))
+        {
+            TC_LOG_ERROR("sql.sql", "Table `chromie_time_expansion_quest` UiExpansionId {} references non-existing Alliance quest {}, skipped",
+                mapping.UiExpansionId, mapping.AllianceQuestId);
+            continue;
+        }
+
+        if (mapping.HordeQuestId && !GetQuestTemplate(mapping.HordeQuestId))
+        {
+            TC_LOG_ERROR("sql.sql", "Table `chromie_time_expansion_quest` UiExpansionId {} references non-existing Horde quest {}, skipped",
+                mapping.UiExpansionId, mapping.HordeQuestId);
+            continue;
+        }
+
+        if (!mapping.AllianceQuestId && !mapping.HordeQuestId)
+        {
+            TC_LOG_ERROR("sql.sql", "Table `chromie_time_expansion_quest` UiExpansionId {} has no quest ids, skipped", mapping.UiExpansionId);
+            continue;
+        }
+
+        _chromieTimeExpansionQuestStore[mapping.UiExpansionId] = mapping;
+        ++count;
+    } while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} Chromie Time expansion quest mappings in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+}
+
+ChromieTimeExpansionQuest const* ObjectMgr::GetChromieTimeExpansionQuest(uint32 uiExpansionId) const
+{
+    return Trinity::Containers::MapGetValuePtr(_chromieTimeExpansionQuestStore, uiExpansionId);
+}
+
 void ObjectMgr::LoadSpawnTrackingTemplates()
 {
     uint32 oldMSTime = getMSTime();

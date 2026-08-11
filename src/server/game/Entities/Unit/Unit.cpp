@@ -803,18 +803,45 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit const* excludeCasterChannel
     return false;
 }
 
-/*static*/ void Unit::DealDamageMods(Unit const* attacker, Unit const* victim, uint32& damage, uint32* absorb)
+/*static*/ void Unit::DealDamageMods(Unit const* attacker, Unit const* victim, uint32& damage, uint32* absorb, uint32* originalDamage /*= nullptr*/)
 {
     if (!victim || !victim->IsAlive() || victim->HasUnitState(UNIT_STATE_IN_FLIGHT) || (victim->GetTypeId() == TYPEID_UNIT && victim->ToCreature()->IsEvadingAttacks()))
     {
         if (absorb)
             *absorb += damage;
         damage = 0;
+        if (originalDamage)
+            *originalDamage = 0;
         return;
     }
 
-    if (attacker)
-        damage *= attacker->GetDamageMultiplierForTarget(victim);
+    if (!attacker)
+        return;
+
+    // Creature→target: scale outgoing damage down to the level-matched DPS curve.
+    // Player→scalable creature: amplify to create-level scale. Creatures spawn at
+    // ScalingLevelMax with full ExpectedStat HP (e.g. Echo CT 70 → L30/~4379) while
+    // player AP/weapon math stays at the player's level; without this inverse of
+    // GetHealthMultiplierForTarget, Echo SS/white land ~35–65× low vs retail sniffs
+    // (EVR-136 / ExpectedStat CreatureHealth L2 85.8 vs L30 4378.8).
+    float scale = attacker->GetDamageMultiplierForTarget(victim);
+    float const healthMult = victim->GetHealthMultiplierForTarget(attacker);
+    if (healthMult > 0.0f && std::fabs(healthMult - 1.0f) > 1e-6f)
+        scale /= healthMult;
+
+    if (G3D::fuzzyEq(scale, 1.0f))
+        return;
+
+    auto applyScale = [scale](uint32& value)
+    {
+        value = uint32(std::max(std::round(float(value) * scale), 0.0f));
+    };
+
+    applyScale(damage);
+    if (absorb)
+        applyScale(*absorb);
+    if (originalDamage)
+        applyScale(*originalDamage);
 }
 
 /*static*/ AuraEffectVector Unit::CopyAuraEffectList(Unit::AuraEffectList const& list)
@@ -826,10 +853,11 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit const* excludeCasterChannel
 
 /*static*/ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss)
 {
+    // Incoming damage is already create-level scaled when DealDamageMods ran (player→scalable
+    // creature amplify / creature→target DPS curve). Do not divide by HealthMultiplier here —
+    // that double-applied after EVR-136 moved the amplify into DealDamageMods.
     uint32 damageDone = damage;
     uint32 damageTaken = damage;
-    if (attacker)
-        damageTaken = damage / victim->GetHealthMultiplierForTarget(attacker);
 
     // call script hooks
     {
@@ -848,14 +876,9 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit const* excludeCasterChannel
         // Hook for OnDamage Event
         sScriptMgr->OnDamage(attacker, victim, tmpDamage);
 
-        // if any script modified damage, we need to also apply the same modification to unscaled damage value
         if (tmpDamage != damageTaken)
         {
-            if (attacker)
-                damageDone = tmpDamage * victim->GetHealthMultiplierForTarget(attacker);
-            else
-                damageDone = tmpDamage;
-
+            damageDone = tmpDamage;
             damageTaken = tmpDamage;
         }
     }
@@ -2324,7 +2347,7 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType, bool extr
             CalcDamageInfo damageInfo;
             CalculateMeleeDamage(victim, &damageInfo, attType);
             // Send log damage message to client
-            Unit::DealDamageMods(damageInfo.Attacker, victim, damageInfo.Damage, &damageInfo.Absorb);
+            Unit::DealDamageMods(damageInfo.Attacker, victim, damageInfo.Damage, &damageInfo.Absorb, &damageInfo.OriginalDamage);
 
             // sparring
             if (Creature* victimCreature = victim->ToCreature())

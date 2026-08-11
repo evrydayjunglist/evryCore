@@ -3114,7 +3114,9 @@ uint64 Creature::GetMaxHealthByLevel(uint8 level) const
     CreatureTemplate const* cInfo = GetCreatureTemplate();
     CreatureDifficulty const* creatureDifficulty = GetCreatureDifficulty();
     double baseHealth = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureHealth, level, creatureDifficulty->GetHealthScalingExpansion(), m_unitData->ContentTuningID, Classes(cInfo->unit_class), 0);
-    return std::ceil(baseHealth * creatureDifficulty->HealthModifier);
+    // Retail wire uses floor (Echo 38046/38038 L30 ExpectedStat 4378.775 -> MaxHealth 4378).
+    // ceil made local 4379 and cascaded to scaled tooltips (L1 79 vs retail 78).
+    return std::floor(baseHealth * creatureDifficulty->HealthModifier);
 }
 
 float Creature::GetHealthMultiplierForTarget(WorldObject const* target) const

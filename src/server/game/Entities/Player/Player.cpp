@@ -2459,6 +2459,11 @@ void Player::InitStatsForLevel(bool reapplyMods)
     if (m_activePlayerData->XP >= m_activePlayerData->NextLevelXP)
         SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::XP), m_activePlayerData->NextLevelXP - 1);
 
+    // LoadFromDB calls SetXP() before InitStatsForLevel(), when NextLevelXP is still 0, so the
+    // <50% XP -> ScalingPlayerLevelDelta -1 rule never applied. Recompute now that NextLevelXP
+    // is valid (also covers CreatePlayer / other InitStatsForLevel callers).
+    SetXP(m_activePlayerData->XP);
+
     // reset before any aura state sources (health set/aura apply)
     SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::AuraState), 0);
 

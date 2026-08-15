@@ -27,6 +27,8 @@
 namespace
 {
     constexpr float QUEST_SEARCH_RANGE = 40.0f;
+    constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
+    constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
 }
 
 PlayerbotMgr* PlayerbotMgr::instance()
@@ -200,7 +202,18 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.Walker.Update(player, diff);
 
     if (bot.QuestInteractQueued)
-        return;
+    {
+        bot.QuestInteractWaitMs += diff;
+        if (bot.QuestInteractWaitMs < QUEST_CHAIN_PAUSE_MS)
+            return;
+
+        bot.QuestInteractQueued = false;
+        bot.QuestInteractWaitMs = 0;
+        bot.QuestArriveWaitMs = 0;
+        bot.QuestSearchEmptyMs = 0;
+        bot.QuestTarget = {};
+        bot.Walker.Reset();
+    }
 
     if (bot.Walker.IsMoving())
         return;
@@ -212,7 +225,10 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     {
         bot.QuestArriveWaitMs += diff;
         if (PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
+        {
             bot.QuestInteractQueued = true;
+            bot.QuestInteractWaitMs = 0;
+        }
         else if (bot.QuestArriveWaitMs >= 5000)
         {
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} arrived but cannot interact with {}.",
@@ -228,17 +244,23 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     Optional<PlayerbotClient::QuestTarget> target = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE);
     if (!target)
     {
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no starter or turn-in quest in {:.0f} yards. The quest is not skipped.",
-            player->GetName(), QUEST_SEARCH_RANGE);
-        bot.QuestSearchFailed = true;
+        bot.QuestSearchEmptyMs += diff;
+        if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no starter or turn-in quest in {:.0f} yards. The quest is not skipped.",
+                player->GetName(), QUEST_SEARCH_RANGE);
+            bot.QuestSearchFailed = true;
+        }
         return;
     }
 
+    bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = *target;
     if (player->GetExactDist(bot.QuestTarget.Pos) <= bot.QuestTarget.StopDistance
         && PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
     {
         bot.QuestInteractQueued = true;
+        bot.QuestInteractWaitMs = 0;
         return;
     }
 

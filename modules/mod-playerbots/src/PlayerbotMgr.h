@@ -37,6 +37,8 @@ struct PlayerbotRecord
     bool QuestInteractQueued = false;
     bool QuestSearchFailed = false;
     uint32 QuestArriveWaitMs = 0;
+    uint32 QuestInteractWaitMs = 0;
+    uint32 QuestSearchEmptyMs = 0;
     PlayerbotClient::QuestTarget QuestTarget;
     PlayerbotWalker Walker;
 };

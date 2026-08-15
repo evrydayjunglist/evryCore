@@ -8,8 +8,8 @@
  *
  * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+ * for more details.
  *
  * You should have received a copy of the GNU General Public License along
  * with this program. If not, see <http://www.gnu.org/licenses/>.
@@ -17,12 +17,17 @@
 
 #include "PlayerbotMgr.h"
 #include "Config.h"
+#include "GameTime.h"
 #include "Log.h"
 #include "Player.h"
-#include "PlayerbotClient.h"
 #include "PlayerbotFactory.h"
 #include "World.h"
 #include "WorldSession.h"
+
+namespace
+{
+    constexpr float QUEST_SEARCH_RANGE = 40.0f;
+}
 
 PlayerbotMgr* PlayerbotMgr::instance()
 {
@@ -67,10 +72,13 @@ void PlayerbotMgr::Start()
     }
 }
 
-void PlayerbotMgr::Update(uint32 /*diff*/)
+void PlayerbotMgr::Update(uint32 diff)
 {
     for (PlayerbotRecord& bot : _bots)
+    {
         UpdateLogin(bot);
+        UpdateWorld(bot, diff);
+    }
 }
 
 bool PlayerbotMgr::IsBotAccount(uint32 accountId) const
@@ -83,17 +91,8 @@ void PlayerbotMgr::OnBotLogin(Player* player)
     if (!player)
         return;
 
-    for (PlayerbotRecord& bot : _bots)
-    {
-        if (bot.Account.CharacterGuid != player->GetGUID())
-            continue;
-
-        if (bot.FirstQuestQueued)
-            return;
-
-        bot.FirstQuestQueued = PlayerbotClient::TryAcceptFirstStarterQuest(player);
-        return;
-    }
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is in the world. Cinematic skip, time sync, and walking run from WorldScript::OnUpdate.",
+        player->GetName());
 }
 
 void PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
@@ -143,4 +142,98 @@ void PlayerbotMgr::UpdateLogin(PlayerbotRecord& bot)
     session->HandleContinuePlayerLogin();
     bot.ContinueLoginCalled = true;
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} called HandleContinuePlayerLogin.", bot.Account.AccountId);
+}
+
+void PlayerbotMgr::ReplyTimeSync(WorldSession* session)
+{
+    uint32 sequenceIndex = 0;
+    if (!session->GetOldestPendingTimeSyncCounter(sequenceIndex))
+        return;
+
+    uint32 const clientTime = GameTime::GetGameTimeMS();
+    PlayerbotClient::QueueTimeSyncResponse(session, sequenceIndex, clientTime);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} queued CMSG_TIME_SYNC_RESPONSE for sequence {}.",
+        session->GetAccountId(), sequenceIndex);
+}
+
+void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
+{
+    if (!bot.ContinueLoginCalled)
+        return;
+
+    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+    if (!session)
+        return;
+
+    Player* player = session->GetPlayer();
+    if (!player || !player->IsInWorld())
+        return;
+
+    ReplyTimeSync(session);
+
+    if (!bot.CinematicSkipped)
+    {
+        PlayerbotClient::QueueCompleteCinematic(session);
+        bot.CinematicSkipped = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_COMPLETE_CINEMATIC.", player->GetName());
+    }
+
+    if (!bot.InitMoverQueued)
+    {
+        PlayerbotClient::QueueMoveInitActiveMoverComplete(session, GameTime::GetGameTimeMS());
+        bot.InitMoverQueued = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE.", player->GetName());
+    }
+
+    if (bot.Walker.IsMoving())
+        bot.Walker.Update(player, diff);
+
+    if (bot.QuestInteractQueued)
+        return;
+
+    if (bot.Walker.IsMoving())
+        return;
+
+    if (bot.Walker.HasFailed())
+        return;
+
+    if (bot.Walker.HasArrived() && !bot.QuestTarget.NpcGuid.IsEmpty())
+    {
+        bot.QuestArriveWaitMs += diff;
+        if (PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
+            bot.QuestInteractQueued = true;
+        else if (bot.QuestArriveWaitMs >= 5000)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} arrived but cannot interact with {}.",
+                player->GetName(), bot.QuestTarget.NpcGuid.ToString());
+            bot.QuestSearchFailed = true;
+        }
+        return;
+    }
+
+    if (bot.QuestSearchFailed)
+        return;
+
+    Optional<PlayerbotClient::QuestTarget> target = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE);
+    if (!target)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no starter or turn-in quest in {:.0f} yards. The quest is not skipped.",
+            player->GetName(), QUEST_SEARCH_RANGE);
+        bot.QuestSearchFailed = true;
+        return;
+    }
+
+    bot.QuestTarget = *target;
+    if (player->GetExactDist(bot.QuestTarget.Pos) <= bot.QuestTarget.StopDistance
+        && PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
+    {
+        bot.QuestInteractQueued = true;
+        return;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} ({}).",
+        player->GetName(), bot.QuestTarget.NpcGuid.ToString(), bot.QuestTarget.QuestId,
+        bot.QuestTarget.TurnIn ? "turn-in" : "accept");
+    bot.QuestArriveWaitMs = 0;
+    bot.Walker.Start(player, bot.QuestTarget.Pos, bot.QuestTarget.StopDistance);
 }

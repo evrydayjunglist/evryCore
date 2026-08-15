@@ -25,6 +25,25 @@ endif()
 set(SCRIPTS "static" CACHE STRING "Build core with scripts")
 set_property(CACHE SCRIPTS PROPERTY STRINGS ${SCRIPTS_AVAILABLE_OPTIONS})
 
+set(MODULES_AVAILABLE_OPTIONS none static)
+if(MODULES)
+  list(FIND MODULES_AVAILABLE_OPTIONS "${MODULES}" MODULES_INDEX)
+  if(${MODULES_INDEX} EQUAL -1)
+    message(FATAL_ERROR "The value (${MODULES}) of your MODULES variable is invalid! "
+                        "Allowed values are: ${MODULES_AVAILABLE_OPTIONS}")
+  endif()
+endif()
+
+set(MODULES "static" CACHE STRING "Build core with drop-in modules")
+set_property(CACHE MODULES PROPERTY STRINGS ${MODULES_AVAILABLE_OPTIONS})
+
+GetModuleSourceList(GAME_MODULE_LIST)
+foreach(SOURCE_MODULE ${GAME_MODULE_LIST})
+  ModuleNameToVariable(${SOURCE_MODULE} MODULE_MODULE_VARIABLE)
+  set(${MODULE_MODULE_VARIABLE} "default" CACHE STRING "Build type of the ${SOURCE_MODULE} game module.")
+  set_property(CACHE ${MODULE_MODULE_VARIABLE} PROPERTY STRINGS default disabled static)
+endforeach()
+
 # Build a list of all script modules when -DSCRIPT="custom" is selected
 GetScriptModuleList(SCRIPT_MODULE_LIST)
 foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})

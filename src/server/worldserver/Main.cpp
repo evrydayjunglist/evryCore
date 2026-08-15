@@ -45,6 +45,8 @@
 #include "ScriptMgr.h"
 #include "ScriptReloadMgr.h"
 #include "SecretMgr.h"
+#include "EnabledModulesList.h"
+#include "ModulesScriptLoader.h"
 #include "TCSoap.h"
 #include "TerrainMgr.h"
 #include "ThreadPool.h"
@@ -221,6 +223,21 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    std::vector<std::string> loadedModuleConfigFiles;
+    std::vector<std::string> moduleConfigErrors;
+    fs::path modulesDir = boost::dll::program_location().parent_path() / "modules";
+    bool modulesConfigLoadSuccess = sConfigMgr->LoadModulesDir(modulesDir.generic_string(), true, loadedModuleConfigFiles, moduleConfigErrors);
+    for (std::string const& loadedConfigFile : loadedModuleConfigFiles)
+        printf("Loaded module config file %s\n", loadedConfigFile.c_str());
+
+    if (!modulesConfigLoadSuccess)
+    {
+        for (std::string const& moduleConfigError : moduleConfigErrors)
+            printf("Error in module config files: %s\n", moduleConfigError.c_str());
+
+        return 1;
+    }
+
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
 
     std::shared_ptr<Trinity::Asio::IoContext> ioContext = std::make_shared<Trinity::Asio::IoContext>();
@@ -347,6 +364,7 @@ int main(int argc, char** argv)
     auto scriptReloadMgrHandle = Trinity::make_unique_ptr_with_deleter<&ScriptReloadMgr::Unload>(sScriptReloadMgr);
 
     sScriptMgr->SetScriptLoader(AddScripts);
+    sScriptMgr->SetModulesLoader(AddModulesScripts);
     auto sScriptMgrHandle = Trinity::make_unique_ptr_with_deleter<&ScriptMgr::Unload>(sScriptMgr);
 
     // Initialize the World
@@ -649,7 +667,7 @@ bool StartDB()
     MySQL::Library_Init();
 
     // Load databases
-    DatabaseLoader loader("server.worldserver", DatabaseLoader::DATABASE_NONE);
+    DatabaseLoader loader("server.worldserver", DatabaseLoader::DATABASE_NONE, EVRY_ENABLED_MODULES_LIST);
     loader
         .AddDatabase(LoginDatabase, "Login")
         .AddDatabase(CharacterDatabase, "Character")

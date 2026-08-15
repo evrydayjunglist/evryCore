@@ -30,6 +30,7 @@
 #include "Optional.h"
 #include "Player.h"
 #include "RealmList.h"
+#include "ScriptMgr.h"
 #include "StringConvert.h"
 #include "World.h"
 #include "WorldSession.h"
@@ -165,6 +166,9 @@ catch (std::exception const& formatError)
 
 bool ChatHandler::_ParseCommands(std::string_view text)
 {
+    if (!sScriptMgr->OnTryExecuteCommand(*this, text))
+        return true;
+
     if (Trinity::ChatCommands::TryExecuteCommand(*this, text))
         return true;
 

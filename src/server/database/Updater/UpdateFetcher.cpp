@@ -40,9 +40,11 @@ struct UpdateFetcher::DirectoryEntry
 UpdateFetcher::UpdateFetcher(Path const& sourceDirectory,
     std::function<void(std::string const&)> const& apply,
     std::function<void(Path const& path)> const& applyFile,
-    std::function<QueryResult(std::string const&)> const& retrieve) :
+    std::function<QueryResult(std::string const&)> const& retrieve,
+    std::string_view modulesList,
+    std::string_view dbModuleName) :
         _sourceDirectory(std::make_unique<Path>(sourceDirectory)), _apply(apply), _applyFile(applyFile),
-        _retrieve(retrieve)
+        _retrieve(retrieve), _modulesList(modulesList), _dbModuleName(dbModuleName)
 {
 }
 
@@ -96,31 +98,58 @@ UpdateFetcher::DirectoryStorage UpdateFetcher::ReceiveIncludedDirectories() cons
     DirectoryStorage directories;
 
     QueryResult const result = _retrieve("SELECT `path`, `state` FROM `updates_include`");
-    if (!result)
-        return directories;
-
-    do
+    if (result)
     {
-        Field* fields = result->Fetch();
-
-        std::string path = fields[0].GetString();
-        if (path.starts_with("$"))
-            path = _sourceDirectory->generic_string() + path.substr(1);
-
-        Path const p(path);
-
-        if (!is_directory(p))
+        do
         {
-            TC_LOG_WARN("sql.updates", "DBUpdater: Given update include directory \"{}\" does not exist, skipped!", p.generic_string());
-            continue;
+            Field* fields = result->Fetch();
+
+            std::string path = fields[0].GetString();
+            if (path.starts_with("$"))
+                path = _sourceDirectory->generic_string() + path.substr(1);
+
+            Path const p(path);
+
+            if (!is_directory(p))
+            {
+                TC_LOG_WARN("sql.updates", "DBUpdater: Given update include directory \"{}\" does not exist, skipped!", p.generic_string());
+                continue;
+            }
+
+            DirectoryEntry const entry = { p, AppliedFileEntry::StateConvert(fields[1].GetStringView()) };
+            directories.push_back(entry);
+
+            TC_LOG_TRACE("sql.updates", "Added applied file \"{}\" from remote.", p.filename().generic_string());
+
+        } while (result->NextRow());
+    }
+
+    if (!_modulesList.empty() && !_dbModuleName.empty())
+    {
+        for (std::string_view const moduleName : Trinity::Tokenize(_modulesList, ',', false))
+        {
+            if (moduleName.empty())
+                continue;
+
+            Path const moduleSqlRoot = *_sourceDirectory / "modules" / std::string(moduleName) / "data" / "sql";
+            if (!is_directory(moduleSqlRoot))
+                continue;
+
+            directory_iterator const end;
+            for (directory_iterator itr(moduleSqlRoot); itr != end; ++itr)
+            {
+                if (!is_directory(itr->path()))
+                    continue;
+
+                std::string const dirName = itr->path().filename().string();
+                if (dirName.find(_dbModuleName) == std::string::npos)
+                    continue;
+
+                directories.push_back({ itr->path(), RELEASED });
+                TC_LOG_TRACE("sql.updates", "Added module sql directory \"{}\".", itr->path().generic_string());
+            }
         }
-
-        DirectoryEntry const entry = { p, AppliedFileEntry::StateConvert(fields[1].GetStringView()) };
-        directories.push_back(entry);
-
-        TC_LOG_TRACE("sql.updates", "Added applied file \"{}\" from remote.", p.filename().generic_string());
-
-    } while (result->NextRow());
+    }
 
     return directories;
 }

@@ -19,10 +19,12 @@
 #define SC_SCRIPTMGR_H
 
 #include "Common.h"
+#include "DatabaseEnvFwd.h"
 #include "ObjectGuid.h"
 #include "Tuples.h"
 #include <boost/preprocessor/punctuation/remove_parens.hpp>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 class AccountMgr;
@@ -36,6 +38,7 @@ class Battleground;
 class BattlegroundMap;
 class BattlegroundScript;
 class Channel;
+class ChatHandler;
 class Conversation;
 class ConversationAI;
 class Creature;
@@ -1010,6 +1013,159 @@ class TC_GAME_API PlayerChoiceScript : public ScriptObject
         virtual void OnResponse(WorldObject* object, Player* player, PlayerChoice const* choice, PlayerChoiceResponse const* response, uint16 clientIdentifier);
 };
 
+enum AllCreatureHook : uint16
+{
+    ALLCREATUREHOOK_ON_ADD_WORLD = 0,
+    ALLCREATUREHOOK_ON_REMOVE_WORLD,
+    ALLCREATUREHOOK_ON_UPDATE,
+    ALLCREATUREHOOK_CAN_GOSSIP_HELLO,
+    ALLCREATUREHOOK_END
+};
+
+class TC_GAME_API AllCreatureScript : public ScriptObject
+{
+    protected:
+        // Empty enabledHooks enables every hook in this family (including per-tick OnAllCreatureUpdate).
+        explicit AllCreatureScript(char const* name, std::vector<uint16> enabledHooks = {});
+
+    public:
+        ~AllCreatureScript();
+
+        static std::vector<AllCreatureScript*> EnabledHooks[ALLCREATUREHOOK_END];
+
+        virtual void OnCreatureAddWorld(Creature* creature);
+        virtual void OnCreatureRemoveWorld(Creature* creature);
+        virtual void OnAllCreatureUpdate(Creature* creature, uint32 diff);
+        // Return true to skip default gossip handling.
+        virtual bool CanCreatureGossipHello(Player* player, Creature* creature);
+};
+
+enum AllGameObjectHook : uint16
+{
+    ALLGAMEOBJECTHOOK_ON_ADD_WORLD = 0,
+    ALLGAMEOBJECTHOOK_ON_REMOVE_WORLD,
+    ALLGAMEOBJECTHOOK_END
+};
+
+class TC_GAME_API AllGameObjectScript : public ScriptObject
+{
+    protected:
+        explicit AllGameObjectScript(char const* name, std::vector<uint16> enabledHooks = {});
+
+    public:
+        ~AllGameObjectScript();
+
+        static std::vector<AllGameObjectScript*> EnabledHooks[ALLGAMEOBJECTHOOK_END];
+
+        virtual void OnGameObjectAddWorld(GameObject* go);
+        virtual void OnGameObjectRemoveWorld(GameObject* go);
+};
+
+enum AllItemHook : uint16
+{
+    ALLITEMHOOK_ON_USE = 0,
+    ALLITEMHOOK_END
+};
+
+class TC_GAME_API AllItemScript : public ScriptObject
+{
+    protected:
+        explicit AllItemScript(char const* name, std::vector<uint16> enabledHooks = {});
+
+    public:
+        ~AllItemScript();
+
+        static std::vector<AllItemScript*> EnabledHooks[ALLITEMHOOK_END];
+
+        // Return true if the module handled the use (same meaning as ItemScript::OnUse).
+        virtual bool OnItemUse(Player* player, Item* item, SpellCastTargets const& targets, ObjectGuid castId);
+};
+
+enum AllMapHook : uint16
+{
+    ALLMAPHOOK_ON_CREATE = 0,
+    ALLMAPHOOK_ON_DESTROY,
+    ALLMAPHOOK_ON_PLAYER_ENTER,
+    ALLMAPHOOK_ON_PLAYER_LEAVE,
+    ALLMAPHOOK_ON_UPDATE,
+    ALLMAPHOOK_END
+};
+
+class TC_GAME_API AllMapScript : public ScriptObject
+{
+    protected:
+        explicit AllMapScript(char const* name, std::vector<uint16> enabledHooks = {});
+
+    public:
+        ~AllMapScript();
+
+        static std::vector<AllMapScript*> EnabledHooks[ALLMAPHOOK_END];
+
+        virtual void OnCreateMap(Map* map);
+        virtual void OnDestroyMap(Map* map);
+        virtual void OnPlayerEnterAll(Map* map, Player* player);
+        virtual void OnPlayerLeaveAll(Map* map, Player* player);
+        virtual void OnMapUpdate(Map* map, uint32 diff);
+};
+
+enum AllSpellHook : uint16
+{
+    ALLSPELLHOOK_ON_CAST = 0,
+    ALLSPELLHOOK_END
+};
+
+class TC_GAME_API AllSpellScript : public ScriptObject
+{
+    protected:
+        explicit AllSpellScript(char const* name, std::vector<uint16> enabledHooks = {});
+
+    public:
+        ~AllSpellScript();
+
+        static std::vector<AllSpellScript*> EnabledHooks[ALLSPELLHOOK_END];
+
+        virtual void OnSpellCast(Spell* spell, WorldObject* caster, SpellInfo const* spellInfo, bool skipCheck);
+};
+
+enum AllCommandHook : uint16
+{
+    ALLCOMMANDHOOK_ON_TRY_EXECUTE = 0,
+    ALLCOMMANDHOOK_END
+};
+
+class TC_GAME_API AllCommandScript : public ScriptObject
+{
+    protected:
+        explicit AllCommandScript(char const* name, std::vector<uint16> enabledHooks = {});
+
+    public:
+        ~AllCommandScript();
+
+        static std::vector<AllCommandScript*> EnabledHooks[ALLCOMMANDHOOK_END];
+
+        // Return false to block the command.
+        virtual bool OnTryExecuteCommand(ChatHandler& handler, std::string_view cmd);
+};
+
+enum GlobalHook : uint16
+{
+    GLOBALHOOK_ON_ITEM_DELETE_FROM_DB = 0,
+    GLOBALHOOK_END
+};
+
+class TC_GAME_API GlobalScript : public ScriptObject
+{
+    protected:
+        explicit GlobalScript(char const* name, std::vector<uint16> enabledHooks = {});
+
+    public:
+        ~GlobalScript();
+
+        static std::vector<GlobalScript*> EnabledHooks[GLOBALHOOK_END];
+
+        virtual void OnItemDeleteFromDB(CharacterDatabaseTransaction trans, ObjectGuid::LowType itemGuid);
+};
+
 // Manages registration, loading, and execution of scripts.
 class TC_GAME_API ScriptMgr
 {
@@ -1044,6 +1200,12 @@ class TC_GAME_API ScriptMgr
         void SetScriptLoader(ScriptLoaderCallbackType script_loader_callback)
         {
             _script_loader_callback = script_loader_callback;
+        }
+
+        /// Sets the modules loader callback (circular dependency game <-> modules)
+        void SetModulesLoader(ScriptLoaderCallbackType modules_loader_callback)
+        {
+            _modules_loader_callback = modules_loader_callback;
         }
 
     public: /* Updating script ids */
@@ -1318,11 +1480,44 @@ class TC_GAME_API ScriptMgr
 
         void OnEventTrigger(WorldObject* object, WorldObject* invoker, uint32 eventId);
 
+    public: /* AllCreatureScript */
+
+        void OnCreatureAddWorld(Creature* creature);
+        void OnCreatureRemoveWorld(Creature* creature);
+        void OnAllCreatureUpdate(Creature* creature, uint32 diff);
+        bool OnCreatureGossipHello(Player* player, Creature* creature);
+
+    public: /* AllGameObjectScript */
+
+        void OnGameObjectAddWorld(GameObject* go);
+        void OnGameObjectRemoveWorld(GameObject* go);
+
+    public: /* AllMapScript */
+
+        void OnCreateAllMaps(Map* map);
+        void OnDestroyAllMaps(Map* map);
+        void OnPlayerEnterAll(Map* map, Player* player);
+        void OnPlayerLeaveAll(Map* map, Player* player);
+        void OnAllMapUpdate(Map* map, uint32 diff);
+
+    public: /* AllSpellScript */
+
+        void OnSpellCast(Spell* spell, WorldObject* caster, SpellInfo const* spellInfo, bool skipCheck);
+
+    public: /* AllCommandScript */
+
+        bool OnTryExecuteCommand(ChatHandler& handler, std::string_view cmd);
+
+    public: /* GlobalScript */
+
+        void OnItemDeleteFromDB(CharacterDatabaseTransaction trans, ObjectGuid::LowType itemGuid);
+
     private:
         uint32 _scriptCount;
         bool _scriptIdUpdated;
 
         ScriptLoaderCallbackType _script_loader_callback;
+        ScriptLoaderCallbackType _modules_loader_callback;
 
         std::string _currentContext;
 };

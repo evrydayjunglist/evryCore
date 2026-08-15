@@ -1,0 +1,1 @@
+-- mod-example canary: proves module SQL updates apply. No schema changes.

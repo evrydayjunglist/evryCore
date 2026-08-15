@@ -19,6 +19,7 @@
 #include "AchievementMgr.h"
 #include "AreaTrigger.h"
 #include "AreaTriggerAI.h"
+#include "Chat.h"
 #include "ChatCommand.h"
 #include "Conversation.h"
 #include "ConversationAI.h"
@@ -51,6 +52,7 @@
 #include "Vehicle.h"
 #include "Weather.h"
 #include "WorldPacket.h"
+#include <algorithm>
 #include <unordered_map>
 
 // Trait which indicates whether this script type
@@ -1260,6 +1262,40 @@ private:
     FOR_SCRIPTS(T, itr, end) \
         itr->second
 
+#define CALL_ENABLED_HOOKS(scriptType, hookType, action) \
+    do { \
+        auto const& trinityEnabledHooks = scriptType::EnabledHooks[hookType]; \
+        for (auto* script : trinityEnabledHooks) \
+        { \
+            action; \
+        } \
+    } while (0)
+
+template<typename Script, uint16 HookEnd>
+void RegisterEnabledHooks(Script* script, std::vector<uint16> enabledHooks, std::vector<Script*> (&hooks)[HookEnd])
+{
+    if (enabledHooks.empty())
+    {
+        enabledHooks.resize(HookEnd);
+        for (uint16 i = 0; i < HookEnd; ++i)
+            enabledHooks[i] = i;
+    }
+
+    for (uint16 hook : enabledHooks)
+        if (hook < HookEnd)
+            hooks[hook].push_back(script);
+}
+
+template<typename Script, uint16 HookEnd>
+void UnregisterEnabledHooks(Script* script, std::vector<Script*> (&hooks)[HookEnd])
+{
+    for (uint16 i = 0; i < HookEnd; ++i)
+    {
+        auto& list = hooks[i];
+        list.erase(std::remove(list.begin(), list.end(), script), list.end());
+    }
+}
+
 // Utility macros for finding specific scripts.
 #define GET_SCRIPT(T, I, V) \
     T* V = ScriptRegistry<T>::Instance()->GetScriptById(I); \
@@ -1287,7 +1323,7 @@ std::string const& ScriptObject::GetName() const
 }
 
 ScriptMgr::ScriptMgr()
-    : _scriptCount(0), _scriptIdUpdated(false), _script_loader_callback(nullptr)
+    : _scriptCount(0), _scriptIdUpdated(false), _script_loader_callback(nullptr), _modules_loader_callback(nullptr)
 {
 }
 
@@ -1328,6 +1364,9 @@ void ScriptMgr::Initialize()
     ASSERT(_script_loader_callback,
            "Script loader callback wasn't registered!");
     _script_loader_callback();
+
+    if (_modules_loader_callback)
+        _modules_loader_callback();
 
     // Initialize all dynamic scripts
     // and finishes the context switch to do
@@ -1615,6 +1654,7 @@ void ScriptMgr::OnCreateMap(Map* map)
     ASSERT(map);
 
     ForEachMapScript([](auto* script, auto* map) { script->OnCreate(map); }, map);
+    OnCreateAllMaps(map);
 }
 
 void ScriptMgr::OnDestroyMap(Map* map)
@@ -1622,6 +1662,7 @@ void ScriptMgr::OnDestroyMap(Map* map)
     ASSERT(map);
 
     ForEachMapScript([](auto* script, auto* map) { script->OnDestroy(map); }, map);
+    OnDestroyAllMaps(map);
 }
 
 void ScriptMgr::OnPlayerEnterMap(Map* map, Player* player)
@@ -1632,6 +1673,7 @@ void ScriptMgr::OnPlayerEnterMap(Map* map, Player* player)
     FOREACH_SCRIPT(PlayerScript)->OnMapChanged(player);
 
     ForEachMapScript([](auto* script, auto* map, Player* player) { script->OnPlayerEnter(map, player); }, map, player);
+    OnPlayerEnterAll(map, player);
 }
 
 void ScriptMgr::OnPlayerLeaveMap(Map* map, Player* player)
@@ -1640,6 +1682,7 @@ void ScriptMgr::OnPlayerLeaveMap(Map* map, Player* player)
     ASSERT(player);
 
     ForEachMapScript([](auto* script, auto* map, Player* player) { script->OnPlayerLeave(map, player); }, map, player);
+    OnPlayerLeaveAll(map, player);
 }
 
 void ScriptMgr::OnMapUpdate(Map* map, uint32 diff)
@@ -1647,6 +1690,7 @@ void ScriptMgr::OnMapUpdate(Map* map, uint32 diff)
     ASSERT(map);
 
     ForEachMapScript([](auto* script, auto* map, uint32 diff) { script->OnUpdate(map, diff); }, map, diff);
+    OnAllMapUpdate(map, diff);
 }
 
 InstanceScript* ScriptMgr::CreateInstanceData(InstanceMap* map)
@@ -1680,6 +1724,11 @@ bool ScriptMgr::OnItemUse(Player* player, Item* item, SpellCastTargets const& ta
 {
     ASSERT(player);
     ASSERT(item);
+
+    bool handled = false;
+    CALL_ENABLED_HOOKS(AllItemScript, ALLITEMHOOK_ON_USE, handled = script->OnItemUse(player, item, targets, castId) || handled);
+    if (handled)
+        return true;
 
     GET_SCRIPT_RET(ItemScript, item->GetScriptId(), tmpscript, false);
     return tmpscript->OnUse(player, item, targets, castId);
@@ -3246,6 +3295,200 @@ void PlayerChoiceScript::OnResponse(WorldObject* /*object*/, Player* /*player*/,
 {
 }
 
+std::vector<AllCreatureScript*> AllCreatureScript::EnabledHooks[ALLCREATUREHOOK_END] = {};
+
+AllCreatureScript::AllCreatureScript(char const* name, std::vector<uint16> enabledHooks)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllCreatureScript>::Instance()->AddScript(this);
+    RegisterEnabledHooks(this, std::move(enabledHooks), EnabledHooks);
+}
+
+AllCreatureScript::~AllCreatureScript()
+{
+    UnregisterEnabledHooks(this, EnabledHooks);
+}
+
+void AllCreatureScript::OnCreatureAddWorld(Creature* /*creature*/) { }
+void AllCreatureScript::OnCreatureRemoveWorld(Creature* /*creature*/) { }
+void AllCreatureScript::OnAllCreatureUpdate(Creature* /*creature*/, uint32 /*diff*/) { }
+bool AllCreatureScript::CanCreatureGossipHello(Player* /*player*/, Creature* /*creature*/) { return false; }
+
+std::vector<AllGameObjectScript*> AllGameObjectScript::EnabledHooks[ALLGAMEOBJECTHOOK_END] = {};
+
+AllGameObjectScript::AllGameObjectScript(char const* name, std::vector<uint16> enabledHooks)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllGameObjectScript>::Instance()->AddScript(this);
+    RegisterEnabledHooks(this, std::move(enabledHooks), EnabledHooks);
+}
+
+AllGameObjectScript::~AllGameObjectScript()
+{
+    UnregisterEnabledHooks(this, EnabledHooks);
+}
+
+void AllGameObjectScript::OnGameObjectAddWorld(GameObject* /*go*/) { }
+void AllGameObjectScript::OnGameObjectRemoveWorld(GameObject* /*go*/) { }
+
+std::vector<AllItemScript*> AllItemScript::EnabledHooks[ALLITEMHOOK_END] = {};
+
+AllItemScript::AllItemScript(char const* name, std::vector<uint16> enabledHooks)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllItemScript>::Instance()->AddScript(this);
+    RegisterEnabledHooks(this, std::move(enabledHooks), EnabledHooks);
+}
+
+AllItemScript::~AllItemScript()
+{
+    UnregisterEnabledHooks(this, EnabledHooks);
+}
+
+bool AllItemScript::OnItemUse(Player* /*player*/, Item* /*item*/, SpellCastTargets const& /*targets*/, ObjectGuid /*castId*/) { return false; }
+
+std::vector<AllMapScript*> AllMapScript::EnabledHooks[ALLMAPHOOK_END] = {};
+
+AllMapScript::AllMapScript(char const* name, std::vector<uint16> enabledHooks)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllMapScript>::Instance()->AddScript(this);
+    RegisterEnabledHooks(this, std::move(enabledHooks), EnabledHooks);
+}
+
+AllMapScript::~AllMapScript()
+{
+    UnregisterEnabledHooks(this, EnabledHooks);
+}
+
+void AllMapScript::OnCreateMap(Map* /*map*/) { }
+void AllMapScript::OnDestroyMap(Map* /*map*/) { }
+void AllMapScript::OnPlayerEnterAll(Map* /*map*/, Player* /*player*/) { }
+void AllMapScript::OnPlayerLeaveAll(Map* /*map*/, Player* /*player*/) { }
+void AllMapScript::OnMapUpdate(Map* /*map*/, uint32 /*diff*/) { }
+
+std::vector<AllSpellScript*> AllSpellScript::EnabledHooks[ALLSPELLHOOK_END] = {};
+
+AllSpellScript::AllSpellScript(char const* name, std::vector<uint16> enabledHooks)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllSpellScript>::Instance()->AddScript(this);
+    RegisterEnabledHooks(this, std::move(enabledHooks), EnabledHooks);
+}
+
+AllSpellScript::~AllSpellScript()
+{
+    UnregisterEnabledHooks(this, EnabledHooks);
+}
+
+void AllSpellScript::OnSpellCast(Spell* /*spell*/, WorldObject* /*caster*/, SpellInfo const* /*spellInfo*/, bool /*skipCheck*/) { }
+
+std::vector<AllCommandScript*> AllCommandScript::EnabledHooks[ALLCOMMANDHOOK_END] = {};
+
+AllCommandScript::AllCommandScript(char const* name, std::vector<uint16> enabledHooks)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllCommandScript>::Instance()->AddScript(this);
+    RegisterEnabledHooks(this, std::move(enabledHooks), EnabledHooks);
+}
+
+AllCommandScript::~AllCommandScript()
+{
+    UnregisterEnabledHooks(this, EnabledHooks);
+}
+
+bool AllCommandScript::OnTryExecuteCommand(ChatHandler& /*handler*/, std::string_view /*cmd*/) { return true; }
+
+std::vector<GlobalScript*> GlobalScript::EnabledHooks[GLOBALHOOK_END] = {};
+
+GlobalScript::GlobalScript(char const* name, std::vector<uint16> enabledHooks)
+    : ScriptObject(name)
+{
+    ScriptRegistry<GlobalScript>::Instance()->AddScript(this);
+    RegisterEnabledHooks(this, std::move(enabledHooks), EnabledHooks);
+}
+
+GlobalScript::~GlobalScript()
+{
+    UnregisterEnabledHooks(this, EnabledHooks);
+}
+
+void GlobalScript::OnItemDeleteFromDB(CharacterDatabaseTransaction /*trans*/, ObjectGuid::LowType /*itemGuid*/) { }
+
+void ScriptMgr::OnCreatureAddWorld(Creature* creature)
+{
+    CALL_ENABLED_HOOKS(AllCreatureScript, ALLCREATUREHOOK_ON_ADD_WORLD, script->OnCreatureAddWorld(creature));
+}
+
+void ScriptMgr::OnCreatureRemoveWorld(Creature* creature)
+{
+    CALL_ENABLED_HOOKS(AllCreatureScript, ALLCREATUREHOOK_ON_REMOVE_WORLD, script->OnCreatureRemoveWorld(creature));
+}
+
+void ScriptMgr::OnAllCreatureUpdate(Creature* creature, uint32 diff)
+{
+    CALL_ENABLED_HOOKS(AllCreatureScript, ALLCREATUREHOOK_ON_UPDATE, script->OnAllCreatureUpdate(creature, diff));
+}
+
+bool ScriptMgr::OnCreatureGossipHello(Player* player, Creature* creature)
+{
+    bool skip = false;
+    CALL_ENABLED_HOOKS(AllCreatureScript, ALLCREATUREHOOK_CAN_GOSSIP_HELLO, skip = script->CanCreatureGossipHello(player, creature) || skip);
+    return skip;
+}
+
+void ScriptMgr::OnGameObjectAddWorld(GameObject* go)
+{
+    CALL_ENABLED_HOOKS(AllGameObjectScript, ALLGAMEOBJECTHOOK_ON_ADD_WORLD, script->OnGameObjectAddWorld(go));
+}
+
+void ScriptMgr::OnGameObjectRemoveWorld(GameObject* go)
+{
+    CALL_ENABLED_HOOKS(AllGameObjectScript, ALLGAMEOBJECTHOOK_ON_REMOVE_WORLD, script->OnGameObjectRemoveWorld(go));
+}
+
+void ScriptMgr::OnCreateAllMaps(Map* map)
+{
+    CALL_ENABLED_HOOKS(AllMapScript, ALLMAPHOOK_ON_CREATE, script->OnCreateMap(map));
+}
+
+void ScriptMgr::OnDestroyAllMaps(Map* map)
+{
+    CALL_ENABLED_HOOKS(AllMapScript, ALLMAPHOOK_ON_DESTROY, script->OnDestroyMap(map));
+}
+
+void ScriptMgr::OnPlayerEnterAll(Map* map, Player* player)
+{
+    CALL_ENABLED_HOOKS(AllMapScript, ALLMAPHOOK_ON_PLAYER_ENTER, script->OnPlayerEnterAll(map, player));
+}
+
+void ScriptMgr::OnPlayerLeaveAll(Map* map, Player* player)
+{
+    CALL_ENABLED_HOOKS(AllMapScript, ALLMAPHOOK_ON_PLAYER_LEAVE, script->OnPlayerLeaveAll(map, player));
+}
+
+void ScriptMgr::OnAllMapUpdate(Map* map, uint32 diff)
+{
+    CALL_ENABLED_HOOKS(AllMapScript, ALLMAPHOOK_ON_UPDATE, script->OnMapUpdate(map, diff));
+}
+
+void ScriptMgr::OnSpellCast(Spell* spell, WorldObject* caster, SpellInfo const* spellInfo, bool skipCheck)
+{
+    CALL_ENABLED_HOOKS(AllSpellScript, ALLSPELLHOOK_ON_CAST, script->OnSpellCast(spell, caster, spellInfo, skipCheck));
+}
+
+bool ScriptMgr::OnTryExecuteCommand(ChatHandler& handler, std::string_view cmd)
+{
+    bool allow = true;
+    CALL_ENABLED_HOOKS(AllCommandScript, ALLCOMMANDHOOK_ON_TRY_EXECUTE, allow = script->OnTryExecuteCommand(handler, cmd) && allow);
+    return allow;
+}
+
+void ScriptMgr::OnItemDeleteFromDB(CharacterDatabaseTransaction trans, ObjectGuid::LowType itemGuid)
+{
+    CALL_ENABLED_HOOKS(GlobalScript, GLOBALHOOK_ON_ITEM_DELETE_FROM_DB, script->OnItemDeleteFromDB(trans, itemGuid));
+}
+
 // Specialize for each script type class like so:
 template class TC_GAME_API ScriptRegistry<SpellScriptLoader>;
 template class TC_GAME_API ScriptRegistry<ServerScript>;
@@ -3281,3 +3524,10 @@ template class TC_GAME_API ScriptRegistry<QuestScript>;
 template class TC_GAME_API ScriptRegistry<WorldStateScript>;
 template class TC_GAME_API ScriptRegistry<EventScript>;
 template class TC_GAME_API ScriptRegistry<PlayerChoiceScript>;
+template class TC_GAME_API ScriptRegistry<AllCreatureScript>;
+template class TC_GAME_API ScriptRegistry<AllGameObjectScript>;
+template class TC_GAME_API ScriptRegistry<AllItemScript>;
+template class TC_GAME_API ScriptRegistry<AllMapScript>;
+template class TC_GAME_API ScriptRegistry<AllSpellScript>;
+template class TC_GAME_API ScriptRegistry<AllCommandScript>;
+template class TC_GAME_API ScriptRegistry<GlobalScript>;

@@ -38,6 +38,8 @@ public:
     bool LoadInitial(std::string file, std::vector<std::string> args, std::string& error);
     bool LoadAdditionalFile(std::string file, bool keepOnReload, std::string& error);
     bool LoadAdditionalDir(std::string const& dir, bool keepOnReload, std::vector<std::string>& loadedFiles, std::vector<std::string>& errors);
+    /// Loads module configs from a flat directory: all `*.conf.dist` first, then `*.conf` overrides.
+    bool LoadModulesDir(std::string const& dir, bool keepOnReload, std::vector<std::string>& loadedFiles, std::vector<std::string>& errors);
 
     /// Overrides configuration with environment variables and returns overridden keys
     std::vector<std::string> OverrideWithEnvVariablesIfAny();

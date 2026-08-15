@@ -33,6 +33,7 @@
 #include "GameObjectPackets.h"
 #include "GameTime.h"
 #include "GossipDef.h"
+#include "ScriptMgr.h"
 #include "GridNotifiersImpl.h"
 #include "Group.h"
 #include "Item.h"
@@ -948,6 +949,7 @@ void GameObject::AddToWorld()
 
         EnableCollision(toggledState);
         WorldObject::AddToWorld();
+        sScriptMgr->OnGameObjectAddWorld(this);
     }
 }
 
@@ -973,6 +975,7 @@ void GameObject::RemoveFromWorld()
         if (m_spawnId)
             Trinity::Containers::MultimapErasePair(GetMap()->GetGameObjectBySpawnIdStore(), m_spawnId, this);
         GetMap()->GetObjectsStore().Remove<GameObject>(this);
+        sScriptMgr->OnGameObjectRemoveWorld(this);
     }
 }
 

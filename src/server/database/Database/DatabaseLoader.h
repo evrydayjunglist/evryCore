@@ -24,6 +24,7 @@
 #include <queue>
 #include <stack>
 #include <string>
+#include <string_view>
 
 template <class T>
 class DatabaseWorkerPool;
@@ -33,7 +34,7 @@ class DatabaseWorkerPool;
 class TC_DATABASE_API DatabaseLoader
 {
 public:
-    DatabaseLoader(std::string const& logger, uint32 const defaultUpdateMask);
+    DatabaseLoader(std::string const& logger, uint32 const defaultUpdateMask, std::string_view modulesList = {});
 
     // Register a database to the loader (lazy implemented)
     template <class T>
@@ -70,6 +71,7 @@ private:
     std::string const _logger;
     bool const _autoSetup;
     uint32 const _updateFlags;
+    std::string const _modulesList;
 
     std::queue<Predicate> _open, _populate, _update, _prepare;
     std::stack<Closer> _close;

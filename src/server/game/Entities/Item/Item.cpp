@@ -1179,6 +1179,8 @@ void Item::CheckArtifactRelicSlotUnlock(Player const* owner)
 /*static*/
 void Item::DeleteFromDB(CharacterDatabaseTransaction trans, ObjectGuid::LowType itemGuid)
 {
+    sScriptMgr->OnItemDeleteFromDB(trans, itemGuid);
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ITEM_INSTANCE);
     stmt->setUInt64(0, itemGuid);
     CharacterDatabase.ExecuteOrAppend(trans, stmt);

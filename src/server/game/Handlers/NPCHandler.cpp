@@ -35,6 +35,7 @@
 #include "PetPackets.h"
 #include "Player.h"
 #include "ReputationMgr.h"
+#include "ScriptMgr.h"
 #include "SpellInfo.h"
 #include "Trainer.h"
 #include "WorldPacket.h"
@@ -182,6 +183,9 @@ void WorldSession::HandleGossipHelloOpcode(WorldPackets::NPC::Hello& packet)
     }
 
     _player->PlayerTalkClass->ClearMenus();
+    if (sScriptMgr->OnCreatureGossipHello(_player, unit))
+        return;
+
     if (!unit->AI()->OnGossipHello(_player))
     {
 //        _player->TalkedToCreature(unit->GetEntry(), unit->GetGUID());

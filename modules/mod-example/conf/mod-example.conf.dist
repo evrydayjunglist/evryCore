@@ -1,0 +1,16 @@
+################################################
+# evryCore example module                      #
+################################################
+[worldserver]
+
+#
+#    Example.Enable
+#        Description: Log a line when a player logs in (mod-example canary).
+#                     Does not change gameplay.
+#        Default:     1 (enabled)
+#
+#                     1 - enabled
+#                     0 - disabled
+#
+
+Example.Enable = 1

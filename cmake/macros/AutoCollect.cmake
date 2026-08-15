@@ -30,8 +30,8 @@ function(CollectAndAddSourceFiles target_name current_dir)
   list(FIND arg_EXCLUDE "${current_dir}" IS_EXCLUDED)
   if(IS_EXCLUDED EQUAL -1)
     cmake_path(RELATIVE_PATH current_dir BASE_DIRECTORY "${arg_BASE_DIR}" OUTPUT_VARIABLE fileset_name)
-    # normalize file set name
-    string(REGEX REPLACE "[./\\]" "_" fileset_name "${fileset_name}")
+    # FILE_SET names must be valid C identifiers (module folders often contain hyphens)
+    string(REGEX REPLACE "[^A-Za-z0-9]+" "_" fileset_name "${fileset_name}")
 
     file(GLOB private_source_files
       ${current_dir}/*.c

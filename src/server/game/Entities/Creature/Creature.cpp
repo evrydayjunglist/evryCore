@@ -46,6 +46,7 @@
 #include "PoolMgr.h"
 #include "QueryPackets.h"
 #include "ScriptedGossip.h"
+#include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
@@ -358,6 +359,8 @@ void Creature::AddToWorld()
 
         if (GetZoneScript())
             GetZoneScript()->OnCreatureCreate(this);
+
+        sScriptMgr->OnCreatureAddWorld(this);
     }
 }
 
@@ -376,6 +379,8 @@ void Creature::RemoveFromWorld()
         if (m_spawnId)
             Trinity::Containers::MultimapErasePair(GetMap()->GetCreatureBySpawnIdStore(), m_spawnId, this);
         GetMap()->GetObjectsStore().Remove<Creature>(this);
+
+        sScriptMgr->OnCreatureRemoveWorld(this);
     }
 }
 
@@ -926,6 +931,8 @@ void Creature::Update(uint32 diff)
         default:
             break;
     }
+
+    sScriptMgr->OnAllCreatureUpdate(this, diff);
 }
 
 void Creature::Heartbeat()

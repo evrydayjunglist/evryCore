@@ -36,6 +36,7 @@ target_link_libraries(worldserver
     trinity-core-interface
   PUBLIC
     scripts
+    modules
     game
     readline
     gsoap)
@@ -71,6 +72,16 @@ elseif(WIN32)
       COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/worldserver.conf.dist ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/
     )
     install(FILES worldserver.conf.dist DESTINATION "${CMAKE_INSTALL_PREFIX}")
+  endif()
+endif()
+
+if(COPY_CONF)
+  get_property(_evry_module_conf_copy GLOBAL PROPERTY EVRY_MODULE_CONFIG_COPY_COMMANDS)
+  if(_evry_module_conf_copy)
+    add_custom_command(TARGET worldserver POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/modules"
+      ${_evry_module_conf_copy}
+      COMMENT "Copying module configuration files")
   endif()
 endif()
 

@@ -3719,6 +3719,8 @@ void Spell::_cast(bool skipCheck)
                             controlledAI->OwnerAttacked(target);
     }
 
+    sScriptMgr->OnSpellCast(this, m_caster, GetSpellInfo(), skipCheck);
+
     SetExecutedCurrently(true);
 
     // Should this be done for original caster?

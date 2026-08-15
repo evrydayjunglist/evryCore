@@ -23,6 +23,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -55,7 +56,9 @@ public:
     UpdateFetcher(Path const& updateDirectory,
         std::function<void(std::string const&)> const& apply,
         std::function<void(Path const& path)> const& applyFile,
-        std::function<QueryResult(std::string const&)> const& retrieve);
+        std::function<QueryResult(std::string const&)> const& retrieve,
+        std::string_view modulesList = {},
+        std::string_view dbModuleName = {});
     ~UpdateFetcher();
 
     UpdateResult Update(bool const redundancyChecks, bool const allowRehash,
@@ -148,6 +151,8 @@ private:
     std::function<void(std::string const&)> const _apply;
     std::function<void(Path const& path)> const _applyFile;
     std::function<QueryResult(std::string const&)> const _retrieve;
+    std::string const _modulesList;
+    std::string const _dbModuleName;
 };
 
 #endif // UpdateFetcher_h__

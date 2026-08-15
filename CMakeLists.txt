@@ -46,6 +46,7 @@ endif()
 include(CheckCXXSourceRuns)
 include(CheckIncludeFiles)
 include(ConfigureScripts)
+include(ConfigureModules)
 
 # set default buildoptions and print them
 include(cmake/options.cmake)
@@ -79,6 +80,16 @@ include(cmake/showoptions.cmake)
 
 # add dependencies
 add_subdirectory(dep)
+
+# Optional extra deps from modules that ship their own CMakeLists.txt
+if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/modules")
+  file(GLOB _evry_module_dirs LIST_DIRECTORIES true "${CMAKE_SOURCE_DIR}/modules/*")
+  foreach(_evry_mod_dir ${_evry_module_dirs})
+    if(EXISTS "${_evry_mod_dir}/CMakeLists.txt")
+      add_subdirectory("${_evry_mod_dir}")
+    endif()
+  endforeach()
+endif()
 
 # add core sources
 add_subdirectory(src)

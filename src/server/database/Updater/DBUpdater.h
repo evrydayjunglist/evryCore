@@ -22,6 +22,7 @@
 #include "DatabaseEnvFwd.h"
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 template <class T>
 class DatabaseWorkerPool;
@@ -67,6 +68,8 @@ public:
 
     static inline std::string GetTableName();
 
+    static inline std::string GetDBModuleName();
+
     static std::string GetBaseFile();
 
     static bool IsEnabled(uint32 const updateMask);
@@ -75,7 +78,7 @@ public:
 
     static bool Create(DatabaseWorkerPool<T>& pool);
 
-    static bool Update(DatabaseWorkerPool<T>& pool);
+    static bool Update(DatabaseWorkerPool<T>& pool, std::string_view modulesList = {});
 
     static bool Populate(DatabaseWorkerPool<T>& pool);
 

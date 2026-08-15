@@ -1,0 +1,5 @@
+#pragma once
+
+#ifndef EVRY_ENABLED_MODULES_LIST
+#define EVRY_ENABLED_MODULES_LIST "@ENABLED_MODULE_LIST_CSV@"
+#endif

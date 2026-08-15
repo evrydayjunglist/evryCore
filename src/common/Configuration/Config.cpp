@@ -195,6 +195,49 @@ bool ConfigMgr::LoadAdditionalDir(std::string const& dir, bool keepOnReload, std
     return errors.empty();
 }
 
+bool ConfigMgr::LoadModulesDir(std::string const& dir, bool keepOnReload, std::vector<std::string>& loadedFiles, std::vector<std::string>& errors)
+{
+    fs::path dirPath = dir;
+    if (!fs::exists(dirPath) || !fs::is_directory(dirPath))
+        return true;
+
+    std::vector<fs::path> distFiles;
+    std::vector<fs::path> confFiles;
+
+    for (fs::directory_entry const& f : fs::directory_iterator(dirPath))
+    {
+        if (!fs::is_regular_file(f))
+            continue;
+
+        fs::path configFile = fs::absolute(f);
+        std::string const name = configFile.filename().string();
+        if (name.size() >= 10 && name.ends_with(".conf.dist"))
+            distFiles.push_back(std::move(configFile));
+        else if (configFile.extension() == ".conf")
+            confFiles.push_back(std::move(configFile));
+    }
+
+    std::sort(distFiles.begin(), distFiles.end());
+    std::sort(confFiles.begin(), confFiles.end());
+
+    auto loadList = [&](std::vector<fs::path> const& files)
+    {
+        for (fs::path const& filePath : files)
+        {
+            std::string fileName = filePath.generic_string();
+            std::string error;
+            if (LoadAdditionalFile(fileName, keepOnReload, error))
+                loadedFiles.push_back(std::move(fileName));
+            else
+                errors.push_back(std::move(error));
+        }
+    };
+
+    loadList(distFiles);
+    loadList(confFiles);
+    return errors.empty();
+}
+
 std::vector<std::string> ConfigMgr::OverrideWithEnvVariablesIfAny()
 {
     std::scoped_lock lock(_configLock);

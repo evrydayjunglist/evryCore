@@ -17,6 +17,7 @@
 
 #include "PlayerbotClient.h"
 #include "Creature.h"
+#include "CreatureData.h"
 #include "GameTime.h"
 #include "GossipDef.h"
 #include "LootItemType.h"
@@ -31,10 +32,12 @@
 #include "PlayerbotMovement.h"
 #include "Playerbots.h"
 #include "QuestDef.h"
+#include "Unit.h"
 #include "UnitDefines.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <limits>
+#include <unordered_set>
 #include <vector>
 
 void PlayerbotClient::QueueEnumCharacters(WorldSession* session)
@@ -144,7 +147,100 @@ void PlayerbotClient::QueueQuestGiverChooseReward(WorldSession* session, ObjectG
     session->QueuePacket(std::move(packet));
 }
 
-Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Player* player, float range)
+void PlayerbotClient::QueueSetSelection(WorldSession* session, ObjectGuid guid)
+{
+    if (!session)
+        return;
+
+    WorldPacket packet(CMSG_SET_SELECTION);
+    packet << guid;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueAttackSwing(WorldSession* session, ObjectGuid victim)
+{
+    if (!session || victim.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_ATTACK_SWING);
+    packet << victim;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueAttackStop(WorldSession* session)
+{
+    if (!session)
+        return;
+
+    session->QueuePacket(WorldPacket(CMSG_ATTACK_STOP));
+}
+
+namespace
+{
+    bool CreatureGivesMonsterCredit(Creature const* creature, uint32 creditEntry)
+    {
+        if (!creature || !creditEntry)
+            return false;
+
+        if (creature->GetEntry() == creditEntry)
+            return true;
+
+        CreatureTemplate const* info = creature->GetCreatureTemplate();
+        if (!info)
+            return false;
+
+        for (uint8 i = 0; i < MAX_KILL_CREDIT; ++i)
+        {
+            if (info->KillCredit[i] == creditEntry)
+                return true;
+        }
+
+        return false;
+    }
+
+    struct IncompleteMonsterCredit
+    {
+        int32 QuestId = 0;
+        uint32 CreditEntry = 0;
+    };
+
+    void CollectIncompleteMonsterCredits(Player* player, std::vector<IncompleteMonsterCredit>& out)
+    {
+        if (!player)
+            return;
+
+        for (auto const& [questId, status] : player->getQuestStatusMap())
+        {
+            if (status.Status != QUEST_STATUS_INCOMPLETE)
+                continue;
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            if (!quest)
+                continue;
+
+            for (QuestObjective const& objective : quest->GetObjectives())
+            {
+                if (objective.Type != QUEST_OBJECTIVE_MONSTER || objective.ObjectID <= 0)
+                    continue;
+                if (objective.Flags & QUEST_OBJECTIVE_FLAG_OPTIONAL)
+                    continue;
+                if (objective.Flags & QUEST_OBJECTIVE_FLAG_HIDDEN)
+                    continue;
+                if (!player->IsQuestObjectiveCompletable(questId, objective.ID))
+                    continue;
+                if (player->IsQuestObjectiveComplete(questId, objective.ID))
+                    continue;
+
+                IncompleteMonsterCredit credit;
+                credit.QuestId = int32(questId);
+                credit.CreditEntry = uint32(objective.ObjectID);
+                out.push_back(credit);
+            }
+        }
+    }
+}
+
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind)
 {
     if (!player || !player->IsInWorld())
         return {};
@@ -154,10 +250,8 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
     options.IsAlive = FindCreatureAliveState::Alive;
     player->GetCreatureListWithOptionsInGrid(nearby, range, options);
 
-    QuestTarget bestTurnIn;
-    QuestTarget bestAccept;
-    float bestTurnInDist = std::numeric_limits<float>::max();
-    float bestAcceptDist = std::numeric_limits<float>::max();
+    QuestTarget best;
+    float bestDist = std::numeric_limits<float>::max();
 
     for (Creature* creature : nearby)
     {
@@ -180,6 +274,10 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
 
             bool const isTurnIn = item.QuestIcon == 4 && player->GetQuestStatus(item.QuestId) == QUEST_STATUS_COMPLETE;
             bool const isAccept = item.QuestIcon == 2 && player->CanTakeQuest(quest, false) && player->CanAddQuest(quest, false);
+            if (kind == QuestSearchKind::TurnIn && !isTurnIn)
+                continue;
+            if (kind == QuestSearchKind::Accept && !isAccept)
+                continue;
             if (!isTurnIn && !isAccept)
                 continue;
 
@@ -196,34 +294,113 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
                 pickedStand = true;
             }
 
-            if (isTurnIn && dist < bestTurnInDist)
-            {
-                bestTurnInDist = dist;
-                bestTurnIn.NpcGuid = creature->GetGUID();
-                bestTurnIn.Pos = standPos;
-                bestTurnIn.StopDistance = 0.25f;
-                bestTurnIn.QuestId = int32(item.QuestId);
-                bestTurnIn.TurnIn = true;
-            }
-            else if (isAccept && dist < bestAcceptDist)
-            {
-                bestAcceptDist = dist;
-                bestAccept.NpcGuid = creature->GetGUID();
-                bestAccept.Pos = standPos;
-                bestAccept.StopDistance = 0.25f;
-                bestAccept.QuestId = int32(item.QuestId);
-                bestAccept.TurnIn = false;
-            }
+            if (dist >= bestDist)
+                continue;
+
+            bestDist = dist;
+            best.NpcGuid = creature->GetGUID();
+            best.Pos = standPos;
+            best.StopDistance = 0.25f;
+            best.QuestId = int32(item.QuestId);
+            best.TurnIn = isTurnIn;
         }
     }
 
-    if (!bestTurnIn.NpcGuid.IsEmpty())
-        return bestTurnIn;
+    if (best.NpcGuid.IsEmpty())
+        return {};
 
-    if (!bestAccept.NpcGuid.IsEmpty())
-        return bestAccept;
+    return best;
+}
 
-    return {};
+Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip)
+{
+    if (!player || !player->IsInWorld())
+        return {};
+
+    std::vector<IncompleteMonsterCredit> credits;
+    CollectIncompleteMonsterCredits(player, credits);
+    if (credits.empty())
+        return {};
+
+    std::vector<Creature*> nearby;
+    FindCreatureOptions options;
+    options.IsAlive = FindCreatureAliveState::Alive;
+    player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+
+    CombatTarget best;
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (Creature* creature : nearby)
+    {
+        if (!creature || skip.contains(creature->GetGUID()))
+            continue;
+        if (!player->IsValidAttackTarget(creature))
+            continue;
+
+        IncompleteMonsterCredit const* matched = nullptr;
+        for (IncompleteMonsterCredit const& credit : credits)
+        {
+            if (CreatureGivesMonsterCredit(creature, credit.CreditEntry))
+            {
+                matched = &credit;
+                break;
+            }
+        }
+        if (!matched)
+            continue;
+
+        float const dist = player->GetExactDist(creature);
+        if (dist >= bestDist)
+            continue;
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+                player->GetName(), creature->GetGUID().ToString());
+            continue;
+        }
+
+        bestDist = dist;
+        best.CreatureGuid = creature->GetGUID();
+        best.Pos = standPos;
+        best.StopDistance = 0.25f;
+        best.QuestId = matched->QuestId;
+        best.CreditEntry = matched->CreditEntry;
+    }
+
+    if (best.CreatureGuid.IsEmpty())
+        return {};
+
+    return best;
+}
+
+bool PlayerbotClient::CombatTargetStillNeeded(Player* player, CombatTarget const& target)
+{
+    if (!player || target.QuestId <= 0 || !target.CreditEntry)
+        return false;
+    if (player->GetQuestStatus(uint32(target.QuestId)) != QUEST_STATUS_INCOMPLETE)
+        return false;
+
+    Quest const* quest = sObjectMgr->GetQuestTemplate(uint32(target.QuestId));
+    if (!quest)
+        return false;
+
+    for (QuestObjective const& objective : quest->GetObjectives())
+    {
+        if (objective.Type != QUEST_OBJECTIVE_MONSTER)
+            continue;
+        if (uint32(objective.ObjectID) != target.CreditEntry)
+            continue;
+        if (!player->IsQuestObjectiveCompletable(uint32(target.QuestId), objective.ID))
+            continue;
+        if (player->IsQuestObjectiveComplete(uint32(target.QuestId), objective.ID))
+            continue;
+        return true;
+    }
+
+    return false;
 }
 
 bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target)
@@ -250,5 +427,30 @@ bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target
     QueueQuestGiverAcceptQuest(player->GetSession(), target.NpcGuid, target.QuestId);
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_QUEST_GIVER_ACCEPT_QUEST for quest {} from {}.",
         player->GetName(), target.QuestId, target.NpcGuid.ToString());
+    return true;
+}
+
+bool PlayerbotClient::TryMeleeAttack(Player* player, ObjectGuid creatureGuid)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty())
+        return false;
+
+    Creature* creature = ObjectAccessor::GetCreature(*player, creatureGuid);
+    if (!creature || !creature->IsAlive())
+        return false;
+
+    if (!player->IsValidAttackTarget(creature))
+        return false;
+
+    if (!player->IsWithinMeleeRange(creature))
+        return false;
+
+    if (player->GetVictim() == creature && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+        return true;
+
+    QueueSetSelection(player->GetSession(), creatureGuid);
+    QueueAttackSwing(player->GetSession(), creatureGuid);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_ATTACK_SWING on {}.",
+        player->GetName(), creatureGuid.ToString());
     return true;
 }

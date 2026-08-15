@@ -17,16 +17,20 @@
 
 #include "PlayerbotMgr.h"
 #include "Config.h"
+#include "Creature.h"
 #include "GameTime.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotFactory.h"
+#include "UnitDefines.h"
 #include "World.h"
 #include "WorldSession.h"
 
 namespace
 {
     constexpr float QUEST_SEARCH_RANGE = 40.0f;
+    constexpr float COMBAT_SEARCH_RANGE = 150.0f;
     constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
 }
@@ -198,6 +202,17 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE.", player->GetName());
     }
 
+    if (!player->IsAlive())
+    {
+        if (!bot.QuestSearchFailed)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} died. The bot is standing still.", player->GetName());
+            ClearCombat(bot, player);
+            bot.QuestSearchFailed = true;
+        }
+        return;
+    }
+
     if (bot.Walker.IsMoving())
         bot.Walker.Update(player, diff);
 
@@ -212,6 +227,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.QuestArriveWaitMs = 0;
         bot.QuestSearchEmptyMs = 0;
         bot.QuestTarget = {};
+        bot.UnreachableGuids.clear();
         bot.Walker.Reset();
     }
 
@@ -219,7 +235,20 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
 
     if (bot.Walker.HasFailed())
-        return;
+    {
+        if (bot.CombatTarget.CreatureGuid.IsEmpty())
+            return;
+
+        bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+        ClearCombat(bot, player);
+        bot.Walker.Reset();
+    }
+
+    if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+    {
+        if (UpdateCombat(bot, player))
+            return;
+    }
 
     if (bot.Walker.HasArrived() && !bot.QuestTarget.NpcGuid.IsEmpty())
     {
@@ -241,27 +270,129 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (bot.QuestSearchFailed)
         return;
 
-    Optional<PlayerbotClient::QuestTarget> target = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE);
-    if (!target)
+    if (Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::TurnIn))
     {
-        bot.QuestSearchEmptyMs += diff;
-        if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
+        BeginQuestTarget(bot, player, *turnIn);
+        return;
+    }
+
+    if (Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindNearbyMonsterObjectiveTarget(player, COMBAT_SEARCH_RANGE, bot.UnreachableGuids))
+    {
+        bot.QuestSearchEmptyMs = 0;
+        bot.QuestTarget = {};
+        bot.CombatTarget = *kill;
+        bot.CombatSwingSent = false;
+
+        Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
+        if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no starter or turn-in quest in {:.0f} yards. The quest is not skipped.",
-                player->GetName(), QUEST_SEARCH_RANGE);
-            bot.QuestSearchFailed = true;
+            bot.CombatSwingSent = true;
+            return;
+        }
+
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (kill).",
+            player->GetName(), bot.CombatTarget.CreatureGuid.ToString(), bot.CombatTarget.QuestId);
+        bot.QuestArriveWaitMs = 0;
+        if (!bot.Walker.Start(player, bot.CombatTarget.Pos, bot.CombatTarget.StopDistance))
+        {
+            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
         }
         return;
     }
 
+    if (Optional<PlayerbotClient::QuestTarget> accept = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Accept))
+    {
+        BeginQuestTarget(bot, player, *accept);
+        return;
+    }
+
+    bot.QuestSearchEmptyMs += diff;
+    if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no nearby turn-in, kill target, or quest to accept (talk {:.0f} yards, kill {:.0f} yards). The quest is not skipped.",
+            player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
+        bot.QuestSearchFailed = true;
+    }
+}
+
+void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
+{
+    if (player && player->GetSession() && (!bot.CombatTarget.CreatureGuid.IsEmpty() || player->HasUnitState(UNIT_STATE_MELEE_ATTACKING)))
+        PlayerbotClient::QueueAttackStop(player->GetSession());
+
+    bot.CombatTarget = {};
+    bot.CombatSwingSent = false;
+}
+
+bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
+{
+    Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
+    if (!creature || !creature->IsAlive() || !player->IsValidAttackTarget(creature)
+        || !PlayerbotClient::CombatTargetStillNeeded(player, bot.CombatTarget))
+    {
+        ClearCombat(bot, player);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    if (!player->IsWithinMeleeRange(creature))
+    {
+        bot.CombatSwingSent = false;
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+        {
+            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
+            return false;
+        }
+
+        bot.CombatTarget.Pos = standPos;
+        if (player->GetExactDist(standPos) <= bot.CombatTarget.StopDistance)
+        {
+            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
+            return false;
+        }
+
+        if (!bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance))
+        {
+            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
+            return false;
+        }
+
+        return true;
+    }
+
+    if (player->GetVictim() == creature && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+        return true;
+
+    if (!bot.CombatSwingSent && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
+        bot.CombatSwingSent = true;
+
+    return true;
+}
+
+bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target)
+{
+    ClearCombat(bot, player);
     bot.QuestSearchEmptyMs = 0;
-    bot.QuestTarget = *target;
+    bot.QuestTarget = target;
+    bot.CombatTarget = {};
+    bot.Walker.Reset();
+
     if (player->GetExactDist(bot.QuestTarget.Pos) <= bot.QuestTarget.StopDistance
         && PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
     {
         bot.QuestInteractQueued = true;
         bot.QuestInteractWaitMs = 0;
-        return;
+        return true;
     }
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} ({}).",
@@ -269,4 +400,5 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.QuestTarget.TurnIn ? "turn-in" : "accept");
     bot.QuestArriveWaitMs = 0;
     bot.Walker.Start(player, bot.QuestTarget.Pos, bot.QuestTarget.StopDistance);
+    return true;
 }

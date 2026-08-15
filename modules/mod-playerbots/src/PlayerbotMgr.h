@@ -21,6 +21,7 @@
 #include "PlayerbotClient.h"
 #include "PlayerbotMovement.h"
 #include "Playerbots.h"
+#include "ObjectGuid.h"
 #include <unordered_set>
 #include <vector>
 
@@ -39,7 +40,10 @@ struct PlayerbotRecord
     uint32 QuestArriveWaitMs = 0;
     uint32 QuestInteractWaitMs = 0;
     uint32 QuestSearchEmptyMs = 0;
+    bool CombatSwingSent = false;
     PlayerbotClient::QuestTarget QuestTarget;
+    PlayerbotClient::CombatTarget CombatTarget;
+    std::unordered_set<ObjectGuid> UnreachableGuids;
     PlayerbotWalker Walker;
 };
 
@@ -61,6 +65,9 @@ private:
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
     void ReplyTimeSync(WorldSession* session);
+    void ClearCombat(PlayerbotRecord& bot, Player* player);
+    bool UpdateCombat(PlayerbotRecord& bot, Player* player);
+    bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);
 
     std::vector<PlayerbotRecord> _bots;
     std::unordered_set<uint32> _accountIds;

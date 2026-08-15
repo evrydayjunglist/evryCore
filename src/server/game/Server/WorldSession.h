@@ -1036,6 +1036,7 @@ class TC_GAME_API WorldSession
 
         /// Session in auth.queue currently
         void SetInQueue(bool state) { m_inQueue = state; }
+        bool IsInQueue() const { return m_inQueue; }
 
         /// Is the user engaged in a log out process?
         bool isLogingOut() const { return _logoutTime || m_playerLogout; }
@@ -1244,6 +1245,12 @@ class TC_GAME_API WorldSession
         void HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& charDelete);
         void HandleCharCreateOpcode(WorldPackets::Character::CreateCharacter& charCreate);
         void HandlePlayerLoginOpcode(WorldPackets::Character::PlayerLogin& playerLogin);
+
+        // Filled by CMSG_ENUM_CHARACTERS. HandlePlayerLoginOpcode refuses any guid that is not in this set.
+        bool IsLegitCharacterForAccount(ObjectGuid guid) const
+        {
+            return _legitCharacters.find(guid) != _legitCharacters.end();
+        }
 
         void SendConnectToInstance(WorldPackets::Auth::ConnectToSerial serial);
         void HandleContinuePlayerLogin();
@@ -1979,12 +1986,6 @@ class TC_GAME_API WorldSession
         // logging helper
         void LogUnexpectedOpcode(WorldPacket* packet, char const* status, const char *reason);
 
-        // EnumData helpers
-        bool IsLegitCharacterForAccount(ObjectGuid lowGUID)
-        {
-            return _legitCharacters.find(lowGUID) != _legitCharacters.end();
-        }
-
         // Movement helpers
         Unit* ValidateAndGetUnitBeingMoved(ObjectGuid guid, OpcodeClient opcode, bool forStatusAck) const;
 
@@ -2038,6 +2039,7 @@ class TC_GAME_API WorldSession
         rbac::RBACData* _RBACData;
         uint32 expireTime;
         bool forceExit;
+        bool _createdWithoutRealmSocket; // set in the constructor when no realm socket was passed; not a dropped connection
 
         std::unique_ptr<boost::circular_buffer<std::pair<int64, uint32>>> _timeSyncClockDeltaQueue; // first member: clockDelta. Second member: latency of the packet exchange that was used to compute that clockDelta.
         int64 _timeSyncClockDelta;

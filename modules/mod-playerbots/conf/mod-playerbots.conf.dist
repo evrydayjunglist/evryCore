@@ -25,3 +25,27 @@ Playerbots.Enable = 0
 #
 
 Playerbots.Count = 1
+
+#
+#    Appender.Playerbots
+#        Description: File for module.playerbots log lines. Lives under LogsDir
+#                     next to Server.log. Type 2 = file, level 3 = Info, flags 3 =
+#                     timestamp and log level on each line, mode a = append.
+#                     Does not replace Appender.Console. Do not put this in
+#                     worldserver.conf; Log::Initialize reads every Appender.*
+#                     key after module conf is loaded.
+#        Default:     2,3,3,Playerbots.log,a
+#
+
+Appender.Playerbots = 2,3,3,Playerbots.log,a
+
+#
+#    Logger.module.playerbots
+#        Description: What the module already logs as "module.playerbots".
+#                     Level 3 = Info. Appender list is Console (the existing
+#                     worldserver terminal) and Playerbots (the file above).
+#                     Lines do not go to Server.log unless you add Server here.
+#        Default:     3,Console Playerbots
+#
+
+Logger.module.playerbots = 3,Console Playerbots

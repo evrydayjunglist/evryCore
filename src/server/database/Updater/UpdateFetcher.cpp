@@ -78,12 +78,13 @@ void UpdateFetcher::FillFileListRecursively(Path const& path, LocaleFileStorage&
 
             LocaleFileEntry const entry = { itr->path(), state };
 
-            // Check for doubled filenames
-            // Because elements are only compared by their filenames, this is ok
-            if (storage.contains(entry))
+            // Updates are keyed by filename in the `updates` table, so names must be unique
+            // across core sql/ and every module data/sql/ folder.
+            if (auto existing = storage.find(entry); existing != storage.end())
             {
-                TC_LOG_FATAL("sql.updates", "Duplicate filename \"{}\" occurred. Because updates are ordered " \
-                    "by their filenames, every name needs to be unique!", itr->path().generic_string());
+                TC_LOG_FATAL("sql.updates", "Duplicate update filename \"{}\". Already present as \"{}\". "
+                    "Every .sql name must be unique across core and all modules.",
+                    itr->path().generic_string(), existing->first.generic_string());
 
                 throw UpdateException("Updating failed, see the log for details.");
             }
@@ -141,8 +142,8 @@ UpdateFetcher::DirectoryStorage UpdateFetcher::ReceiveIncludedDirectories() cons
                 if (!is_directory(itr->path()))
                     continue;
 
-                std::string const dirName = itr->path().filename().string();
-                if (dirName.find(_dbModuleName) == std::string::npos)
+                std::string const dirName = itr->path().filename().generic_string();
+                if (dirName != "db-" + _dbModuleName)
                     continue;
 
                 directories.push_back({ itr->path(), RELEASED });

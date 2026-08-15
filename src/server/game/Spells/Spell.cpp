@@ -3719,6 +3719,7 @@ void Spell::_cast(bool skipCheck)
                             controlledAI->OwnerAttacked(target);
     }
 
+    // Before CheckCast, same timing as OnPlayerSpellCast above.
     sScriptMgr->OnSpellCast(this, m_caster, GetSpellInfo(), skipCheck);
 
     SetExecutedCurrently(true);

@@ -1124,6 +1124,7 @@ class TC_GAME_API AllSpellScript : public ScriptObject
 
         static std::vector<AllSpellScript*> EnabledHooks[ALLSPELLHOOK_END];
 
+        // Runs from Spell::_cast before CheckCast, including casts that then fail. Same timing as PlayerScript.
         virtual void OnSpellCast(Spell* spell, WorldObject* caster, SpellInfo const* spellInfo, bool skipCheck);
 };
 

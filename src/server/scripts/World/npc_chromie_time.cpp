@@ -29,13 +29,13 @@ namespace
 enum ChromieTimeGossip
 {
     GOSSIP_MENU_CHROMIE              = 25426,
-    // npc_text → BroadcastText 269086 (Radiant Song / Isle of Dorn). ct-start sniff 12.0.7.68887.
+    // npc_text → BroadcastText 269086 (Radiant Song / Isle of Dorn). Sniff 12.0.7.68887.
     NPC_TEXT_CHROMIE_DORN_REFUSE     = 40348,
-    // npc_text → BroadcastText 206524 ("little more experience"). ct-lvl3 sniff 12.0.7.68887.
+    // npc_text → BroadcastText 206524 ("little more experience"). Sniff 12.0.7.68887.
     NPC_TEXT_CHROMIE_LOW_LEVEL       = 40349,
 };
 
-// Present + select-lock (68+) or past end band: Dorn funnel, no FAQ / no select (ct-start).
+// Present timeline, at or above GetChromieTimeSelectLockLevel() (68) or the end level: Dorn text, no FAQ, no select.
 bool IsChromieTimeDornRefuse(Player const* player)
 {
     if (player->m_activePlayerData->UiChromieTimeExpansionID != 0)
@@ -69,8 +69,8 @@ struct npc_chromie_time : public ScriptedAI
 
     bool OnGossipHello(Player* player) override
     {
-        // Hard refuse (ct-start): present + ineligible for Chromie — Dorn text, 0 options.
-        // FAQ is available on every other path (ct-lvl3 + owner model).
+        // Present and ineligible (GetChromieTimeSelectLockLevel or end level): Dorn text, no gossip options.
+        // FAQ stays on every other path.
         if (IsChromieTimeDornRefuse(player))
         {
             ClearGossipMenuFor(player);
@@ -81,8 +81,8 @@ struct npc_chromie_time : public ScriptedAI
 
         player->PrepareGossipMenu(me, GOSSIP_MENU_CHROMIE, true);
 
-        // Soft refuse (ct-lvl3): present + below start / no ER — FAQ stays, ChromieTimeNpc hidden,
-        // BT 206524. FAQ is also present when CanSelect (normal menu text 40347).
+        // Present and below start / no Exile's Reach: FAQ stays, ChromieTimeNpc hidden,
+        // BroadcastText 206524. FAQ is also present when CanSelect (menu text 40347).
         bool const inPresent = player->m_activePlayerData->UiChromieTimeExpansionID == 0;
         if (!player->CanSelectChromieTimeExpansion())
         {

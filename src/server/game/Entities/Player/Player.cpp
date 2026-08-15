@@ -2212,11 +2212,9 @@ void Player::GiveLevel(uint8 level)
     PlayerLevelInfo info;
     sObjectMgr->GetPlayerLevelInfo(GetRace(), GetClass(), level, &info);
 
-    // Combat-stats retail parity: without this, GiveLevel() applied the raw legacy
-    // player_classlevelstats stats (pre-squish, e.g. Monk L2 sta=69) straight over whatever
-    // InitStatsForLevel() had correctly set at login, silently reverting stamina/HP (and,
-    // at max-level content, STR/AGI/INT) every time a character levels up in-session. See
-    // ApplyRetailStatOverridesForLevel() and fork-journal.md 2026-07-02.
+    // GiveLevel used to copy player_classlevelstats onto the character (Monk level 2 stamina 69).
+    // That overwrote the ExpectedStat values InitStatsForLevel already set at login, so stamina,
+    // health, and at current-expansion levels STR/AGI/INT, dropped until the next login.
     ApplyRetailStatOverridesForLevel(level, info);
 
     uint32 basemana = 0;
@@ -2301,8 +2299,8 @@ void Player::GiveLevel(uint8 level)
     if (IsMaxLevel())
         UpdateCriteria(CriteriaType::ReachMaxLevel);
 
-    // Chromie Time end band (Phase 3/5/polish). Silent clear — not confirmation spell 335807.
-    // Wiki: also teleported to capital; coords = world Chromie 167032 (SW/Org embassy spawns).
+    // Chromie Time end level. Silent clear — do not cast confirmation spell 335807.
+    // Wiki also teleports to the capital; coords are world Chromie 167032 (Stormwind / Orgrimmar embassy).
     if (m_activePlayerData->UiChromieTimeExpansionID && level >= GetChromieTimeEndLevel())
         RemoveFromChromieTime(true);
 
@@ -2350,46 +2348,32 @@ void Player::InitTalentForLevel()
         SendTalentsInfoData(); // update at client
 }
 
-// Combat-stats retail parity (docs/midnight-assessment/combat-stats-retail-parity-*.md):
-// ExpectedStat.db2-based override applied on top of the legacy player_classlevelstats-sourced
-// PlayerLevelInfo for `level`. Factored out of InitStatsForLevel() 2026-07-02 so GiveLevel()
-// (in-session level-up) can share the exact same math instead of applying the raw legacy `info`
-// -- without this, every level-up silently reverted stamina/HP (P1, all levels) and, at
-// max-level content, STR/AGI/INT (P2) back to the pre-squish curve until the next login. Found
-// via an owner retail-vs-local sniff comparison of a fresh L1->L2 Pandaren Monk: MaxHealth 292
-// (correct, login) collapsed to 71 (legacy sta=69 from player_classlevelstats) after one level-up.
+// ExpectedStat.db2 override on top of the player_classlevelstats PlayerLevelInfo for `level`.
+// Shared by InitStatsForLevel (login) and GiveLevel (in-session) so those paths stay the same.
+// Without this, a level-up reverted stamina and health to the old SQL curve until relog.
+// Owner sniff: Pandaren Monk MaxHealth 292 at login, 71 after leveling 1 to 2 (legacy stamina 69).
 void Player::ApplyRetailStatOverridesForLevel(uint8 level, PlayerLevelInfo& info) const
 {
-    // Phase P1 (Option A, locked by combat-stats-retail-parity-contract.md Clause 8): player base
-    // stamina/HP sourced from ExpectedStat.PlayerHealth at runtime, the same DB2 path creatures
-    // already use (Creature::GetMaxHealthByLevel) -- replaces the stale player_classlevelstats.sta
-    // column as the sole HP lever (SetCreateHealth(0) at the call sites).
-    // contentTuningId=0: matches retail sniff at L1/L8/L80 (FR-B/C/D/E/F all show ContentTuningID 0).
-    // See docs/midnight-assessment/combat-stats-retail-parity-phase-p1-handoff.md §6.
+    // Base stamina and health from ExpectedStat.PlayerHealth, same path as Creature::GetMaxHealthByLevel.
+    // Replaces player_classlevelstats.sta. Call sites SetCreateHealth(0).
+    // contentTuningId 0 matches retail at levels 1, 8, and 80.
     float expectedPlayerHealth = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerHealth,
         level, -2, 0, Classes(GetClass()), 0);
 
-    // Midnight 12.0 Stat and Item Squish (retail-like, sniff-backed -- contract Clause 2 accepts
-    // packet sniff as evidence). Pass B FR-D/E/F (2026-06-30): retail gear-naked L80 MaxHealth is
-    // 46540/46520/46500 (WAR/MAG/DH) vs raw ExpectedStat.PlayerHealth(L80)=51710.81 -- a ~0.9 factor.
-    // Two DB2 row-swap hypotheses (ExpansionID=11, ContentTuningXExpected) were ruled out 2026-06-30 --
-    // see phase-p1-handoff.md §3.5 -- so this ships as a minimal sniff-backed constant, not a DB2 row.
-    // Gated on CURRENT_EXPANSION (Trinity::GetExpansionForLevel, i.e. level>=80) because retail L1
-    // (FR-B/C) and L8 (FR-A) already match the *unsquished* formula exactly -- only the new-expansion
-    // (Midnight) band needs it. Single-anchor constant (L80 only); re-derive if L90 sniff lands.
+    // Midnight 12.0 health squish. Naked level 80 MaxHealth 46540/46520/46500 (Warrior/Mage/Demon Hunter)
+    // vs ExpectedStat.PlayerHealth 51710.81, about 0.9. ExpansionID 11 and ContentTuningXExpected
+    // row swaps did not match, so this is a sniff constant, not a DB2 row. Apply only at
+    // CURRENT_EXPANSION (level 80+); levels 1 and 8 already match the unsquished formula.
+    // Constant from level 80; re-derive if a level 90 sniff lands.
     if (Trinity::GetExpansionForLevel(level) == CURRENT_EXPANSION)
         expectedPlayerHealth *= 0.9f;
 
     if (GtHpPerStaEntry const* hpPerSta = sHpPerStaGameTable.GetRow(level))
         info.stats[STAT_STAMINA] = std::max<int32>(int32(std::round(expectedPlayerHealth / hpPerSta->Health)), 1);
 
-    // Combat-stats retail parity Phase P2 (per-class STR/AGI/INT split, sniff-backed per contract
-    // Clause 2 -- see docs/midnight-assessment/combat-stats-retail-parity-phase-p2-handoff.md
-    // §8.1/§8.7-§8.9). Same CURRENT_EXPANSION gate as P1's HP squish above -- but here the gate is
-    // load-bearing, not just a squish tweak: ExpectedStat.PlayerSecondaryStat is literally 0 for
-    // levels 1-9 (confirmed via DB2 export, ExpansionID=-2 rows), so applying this formula below
-    // max-level content would zero out secondary stats entirely. The existing
-    // player_classlevelstats-driven leveling curve is left untouched below CURRENT_EXPANSION.
+    // Per-class STR/AGI/INT from ExpectedStat. Same CURRENT_EXPANSION check as the health squish:
+    // PlayerSecondaryStat is 0 for levels 1-9 (ExpansionID -2), so applying it earlier would zero
+    // secondary stats. Leave player_classlevelstats below CURRENT_EXPANSION.
     if (Trinity::GetExpansionForLevel(level) == CURRENT_EXPANSION)
     {
         float expectedPrimaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerPrimaryStat,
@@ -2397,29 +2381,20 @@ void Player::ApplyRetailStatOverridesForLevel(uint8 level, PlayerLevelInfo& info
         float expectedSecondaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerSecondaryStat,
             level, -2, 0, Classes(GetClass()), 0);
 
-        // Primary-stat squish: retail gear-naked L80 primary stat averages ~0.382x the raw curve
-        // across all 6 classes sniffed so far (Warrior/Paladin/Rogue/Priest/Mage/DemonHunter --
-        // STR/AGI/INT primaries respectively), a tight 0.374-0.388 spread -- single shared
-        // constant, class-independent, same pattern as P1's HP squish (§8.7).
+        // Naked level 80 primary stat is about 0.382 of the raw curve across Warrior, Paladin, Rogue,
+        // Priest, Mage, and Demon Hunter (spread 0.374-0.388). One shared constant, any class.
         constexpr float PRIMARY_STAT_SQUISH = 0.382f;
 
         Stats primaryStat = GetPrimaryStat();
         info.stats[primaryStat] = std::max<int32>(int32(std::round(expectedPrimaryStat * PRIMARY_STAT_SQUISH)), 1);
 
-        // Secondary-stat split is NOT a shared curve -- retail splits PlayerSecondaryStat
-        // unevenly per class, and the split is per-CLASS, not per-primary-stat-archetype:
-        // Warrior and Paladin both have STR primary but wildly different splits (~1% vs ~66%
-        // spread at L80 -- §8.7 falsified the archetype-sibling hypothesis). Weights below are
-        // (observed secondary stat ÷ raw PlayerSecondaryStat(80)=486.3374), derived from naked
-        // L80 sniffs for the 6 classes evidenced so far. Direction (which stat wins) is
-        // confirmed level-stable for all 3 classes with a second anchor; magnitude is only
-        // approximately stable (Paladin ~4% drift L1->L80, Rogue ~40%, Priest >50% -- §8.9), so
-        // this L80-anchored constant is most accurate at L80-90 and a documented approximation
-        // elsewhere in that band -- acceptable under contract Clause 2 (sniff evidence), same
-        // single-anchor-constant pattern as P1's HP squish. Untested classes (Hunter/Shaman/
-        // Warlock/Monk/Druid/DeathKnight/Evoker) fall back to the average split across the 6
-        // known classes -- an explicit approximation, not sniffed evidence; refine per-class as
-        // sniffs land (see handoff §8.9 "Status").
+        // Retail splits PlayerSecondaryStat per class, not per primary-stat type. Warrior and Paladin
+        // both use STR but split very differently (~1% vs ~66% at level 80). Weights are
+        // observed secondary / PlayerSecondaryStat(80)=486.3374 from naked level 80 sniffs of those
+        // six classes. Which stat wins is stable with a second level for three classes; magnitude
+        // drifts (Paladin ~4% from 1 to 80, Rogue ~40%, Priest over 50%), so this is most accurate
+        // at 80-90. Hunter, Shaman, Warlock, Monk, Druid, Death Knight, and Evoker use the average
+        // of the six sniffed classes until those classes are sniffed.
         struct SecondaryStatWeights { float strength, agility, intellect; };
         SecondaryStatWeights secondaryWeights = [](Classes unitClass) -> SecondaryStatWeights
         {
@@ -21838,7 +21813,7 @@ void Player::_LoadChromieTime(PreparedQueryResult result)
     if (!uiExpansionId)
         return;
 
-    // Do not restore Chromie past the ContentTuning end band (UF stays 0 → save deletes row).
+    // Do not restore Chromie Time past the ContentTuning end level (update field stays 0, save deletes the row).
     if (GetLevel() >= GetChromieTimeEndLevel())
         return;
 
@@ -30525,10 +30500,10 @@ uint32 Player::GetChromieTimeStartLevel()
 
 uint32 Player::GetChromieTimeSelectLockLevel()
 {
-    // PROVISIONAL — Blizzard support 275056 (Timewalking Campaign No Longer Available):
-    // "option to choose" removed upon reaching level 68. Applies to start/re-enter from
-    // present only; stay-in scaling continues to GetChromieTimeEndLevel() (ContentTuning).
-    // Midnight article body not proven updated; forums still report ~68 re-enter lock.
+    // Blizzard support 275056 (Timewalking Campaign No Longer Available): the option to choose
+    // is removed at level 68. That applies to start and re-enter from the present. Scaling while
+    // already in Chromie Time still uses GetChromieTimeEndLevel() from ContentTuning.
+    // Not confirmed that Midnight's article body was updated; forums still report about 68.
     return 68u;
 }
 
@@ -30541,7 +30516,7 @@ uint32 Player::GetChromieTimeEndLevel()
 bool Player::HasCompletedExilesReach() const
 {
     // Capital arrival after leaving map 2175 — not achievement 14222 (that CriteriaTree is the
-    // old Alliance/Horde NPE BfA funnel: Nation of Kul Tiras / Mission Statement).
+    // old Alliance/Horde Battle for Azeroth starter: Nation of Kul Tiras / Mission Statement).
     constexpr uint32 QUEST_WELCOME_TO_STORMWIND = 59583;
     constexpr uint32 QUEST_WELCOME_TO_ORGRIMMAR = 60343;
 
@@ -30553,20 +30528,20 @@ bool Player::CanSelectChromieTimeExpansion() const
     uint32 const level = GetLevel();
 
     // Blizzard news 23574988: available at level 10 or after completing Exile's Reach.
-    // Racial starters never reward Welcome to SW/Org — they still need level 10.
+    // Racial starters never reward Welcome to Stormwind or Orgrimmar — they still need level 10.
     if (level < GetChromieTimeStartLevel() && !HasCompletedExilesReach())
         return false;
 
-    // Past ContentTuning Chromie end band — refuse select; kick clears on level-up when already in.
+    // Past the ContentTuning Chromie end level — refuse select; kick clears on level-up when already in.
     if (level >= GetChromieTimeEndLevel())
         return false;
 
-    // PROVISIONAL Midnight model (no sniff A/B yet):
-    // - Start/re-enter from present: locked at GetChromieTimeSelectLockLevel() (68).
-    // - Already in a campaign: may change timelines until end band (stay-in ≠ re-enter).
-    // Evidence: support 275056 "choice" wording; ContentTuning max ~81; Hierophant 2026-04
-    // (leveled to 80 in Chromie / L70 alt cannot start; change while in at 70 reported).
-    // Counter-reports exist (no swap after ~70) — revisit if retail sniff contradicts.
+    // Not confirmed by sniff. Start and re-enter from the present lock at
+    // GetChromieTimeSelectLockLevel() (68). Already in a campaign may change timelines until
+    // the end level. Blizzard support 275056 talks about the "option to choose"; ContentTuning
+    // max is about 81. Reports: leveled to 80 while in Chromie Time; a level 70 alt could not
+    // start; changing while in at 70. Other reports: no swap after about 70. Revisit if a
+    // retail sniff contradicts this.
     if (!m_activePlayerData->UiChromieTimeExpansionID && level >= GetChromieTimeSelectLockLevel())
         return false;
 
@@ -30581,7 +30556,7 @@ void Player::SetChromieTimeExpansion(uint32 uiExpansionId)
     UF::CTROptions const& current = *m_playerData->CtrOptions;
     UF::CTROptions options = BuildCtrOptionsForChromieTime(uiExpansionId);
 
-    // CT-A leave + select: SMSG_SET_CTR_OPTIONS (from → to) accompanies Chromie CTR changes.
+    // Leaving and selecting: SMSG_SET_CTR_OPTIONS (from → to) with Chromie CTR changes.
     // Skip during load (not in world) and when nothing changed.
     if (IsInWorld() && (current != options || m_activePlayerData->UiChromieTimeExpansionID != int32(uiExpansionId)))
     {
@@ -30614,9 +30589,9 @@ void Player::RemoveFromChromieTime(bool teleportToCapital /*= false*/)
     if (!teleportToCapital || !IsInWorld())
         return;
 
-    // Wiki kick → capital near Chromie 167032 — not on her / hourglass / campfire.
-    // Org: Chromie (1557.18,-4216.54) faces ~NE toward bonfire GO 204676 (1558.98,-4212.85);
-    //      stand SW of pedestal at ground Z, facing Chromie. SW: no campfire in the pad.
+    // Kick to the capital near Chromie 167032 — not on her, the hourglass, or the campfire.
+    // Orgrimmar: Chromie (1557.18,-4216.54) faces about northeast toward bonfire GO 204676 (1558.98,-4212.85);
+    //      stand southwest of the pedestal at ground Z, facing Chromie. Stormwind: no campfire on the pad.
     if (GetTeamId() == TEAM_ALLIANCE)
         TeleportTo(0, -8196.72f, 742.37f, 76.50f, 4.57677f); // ~3 yd from Chromie, face her (o+π)
     else

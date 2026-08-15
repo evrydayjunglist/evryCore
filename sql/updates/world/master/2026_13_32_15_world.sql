@@ -1,18 +1,17 @@
--- Chromie Time: FAQ gossip tree + sub-10 npc_text (ct-lvl3 12.0.7.68887)
--- Model: FAQ available whenever Dorn select-lock is NOT active; ChromieTimeNpc select
---        still gated by CanSelectChromieTimeExpansion() in npc_chromie_time.
--- Flow 2R dual-check PASS: NN=15 free on master+evry (tip world 10-14; master/evry max 09).
+-- Chromie Time: FAQ gossip tree and below-start npc_text (sniff 12.0.7.68887)
+-- FAQ is available whenever the Dorn refuse is not active. ChromieTimeNpc select
+-- still uses CanSelectChromieTimeExpansion() in npc_chromie_time.
 
--- npc_text: BT 206524 (low-level / not ready) + FAQ answer bodies
+-- npc_text: BroadcastText 206524 (low-level / not ready) + FAQ answer bodies
 DELETE FROM `npc_text` WHERE `ID` IN (40349, 40352, 40353, 40354, 40357);
 INSERT INTO `npc_text` (`ID`, `Probability0`, `Probability1`, `Probability2`, `Probability3`, `Probability4`, `Probability5`, `Probability6`, `Probability7`, `BroadcastTextID0`, `BroadcastTextID1`, `BroadcastTextID2`, `BroadcastTextID3`, `BroadcastTextID4`, `BroadcastTextID5`, `BroadcastTextID6`, `BroadcastTextID7`, `VerifiedBuild`) VALUES
-(40349, 1, 0, 0, 0, 0, 0, 0, 0, 206524, 0, 0, 0, 0, 0, 0, 0, 68887), -- little more experience (ct-lvl3)
+(40349, 1, 0, 0, 0, 0, 0, 0, 0, 206524, 0, 0, 0, 0, 0, 0, 0, 68887), -- little more experience (below start)
 (40352, 1, 0, 0, 0, 0, 0, 0, 0, 240872, 0, 0, 0, 0, 0, 0, 0, 68887), -- FAQ hub
 (40353, 1, 0, 0, 0, 0, 0, 0, 0, 240784, 0, 0, 0, 0, 0, 0, 0, 68887), -- What are Timewalking Campaigns?
 (40354, 1, 0, 0, 0, 0, 0, 0, 0, 240843, 0, 0, 0, 0, 0, 0, 0, 68887), -- Can friends join?
 (40357, 1, 0, 0, 0, 0, 0, 0, 0, 240841, 0, 0, 0, 0, 0, 0, 0, 68887); -- Don't want to stay
 
--- FAQ menus (retail GossipIDs from ct-lvl3)
+-- FAQ menus (retail GossipIDs from sniff)
 DELETE FROM `gossip_menu` WHERE `MenuID` IN (31336, 31368, 31369, 31370);
 INSERT INTO `gossip_menu` (`MenuID`, `TextID`, `VerifiedBuild`) VALUES
 (31336, 40352, 68887),

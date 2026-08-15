@@ -42,7 +42,7 @@ void PushChromieTimeBreadcrumbQuest(Player* player, uint32 uiExpansionId)
     if (!quest)
         return;
 
-    // Skip rewarded / in-log / race-gated (same gate as SPELL_EFFECT_QUEST_START)
+    // Skip if rewarded, already in the log, or the race cannot take it (same checks as SPELL_EFFECT_QUEST_START)
     if (!player->CanTakeQuest(quest, false))
         return;
 
@@ -70,24 +70,24 @@ void WorldSession::HandleChromieTimeSelectExpansion(WorldPackets::ChromieTime::C
     if (!expansionInfo || !expansionInfo->SpellID)
         return;
 
-    // PROVISIONAL: start/re-enter locked at 68 from present; stay-in may change until end band.
+    // Start and re-enter from the present lock at 68; already in a campaign may change until the end level.
     if (!player->CanSelectChromieTimeExpansion())
         return;
 
-    // CompletedPlayerConditionID = "already done / no longer offer" (0 on current Ui rows).
-    // Do NOT gate on ShowPlayerConditionID here: those ModifierTrees are PlayerIsInChromieTime
-    // for that Ui (type 300) — a client list/filter signal, not "may select while in present."
-    // Using MeetPlayerCondition(ShowPC) blocked every first-time select (silent no-op).
+    // CompletedPlayerConditionID means already done / no longer offer (0 on current Ui rows).
+    // Do not use ShowPlayerConditionID here: those ModifierTrees are PlayerIsInChromieTime
+    // for that Ui (type 300) — a client list filter, not "may select while in the present."
+    // MeetPlayerCondition on ShowPlayerConditionID blocked every first-time select (silent no-op).
     if (expansionInfo->CompletedPlayerConditionID && player->MeetPlayerCondition(uint32(expansionInfo->CompletedPlayerConditionID)))
         return;
 
-    // CT-A: player self-casts expansion SpellID (effect 277 → SetChromieTimeExpansion,
-    // which sends SMSG_SET_CTR_OPTIONS + UF). Leave/kick reuse the same Set* path.
+    // Player self-casts the expansion SpellID (effect 277 → SetChromieTimeExpansion,
+    // which sends SMSG_SET_CTR_OPTIONS and the update field). Leave and kick reuse SetChromieTimeExpansion.
     player->CastSpell(player, uint32(expansionInfo->SpellID), true);
 
     WorldPackets::ChromieTime::ChromieTimeSelectExpansionSuccess success;
     SendPacket(success.Write());
 
-    // CT-A: AutoLaunched QUEST_GIVER_QUEST_DETAILS after select fan-out (separate from spell 325400)
+    // Auto-launched QUEST_GIVER_QUEST_DETAILS after select (separate from spell 325400)
     PushChromieTimeBreadcrumbQuest(player, selectExpansion.Expansion);
 }

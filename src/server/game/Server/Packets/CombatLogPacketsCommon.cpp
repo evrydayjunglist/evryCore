@@ -89,7 +89,7 @@ bool ContentTuningParams::GenerateDataForUnits<Creature, Player>(Creature* attac
         ScalingHealthItemLevelCurveID = contentTuning->HealthItemLevelCurveID;
         ScalingHealthPrimaryStatCurveID = contentTuning->HealthPrimaryStatCurveID;
         TargetContentTuningID = contentTuning->ID;
-        // Retail Echo damage logs (yav1): PlayerContentTuningID matches creature CT (70), not 0.
+        // Retail Echo damage logs: PlayerContentTuningID matches the creature ContentTuning (70), not 0.
         PlayerContentTuningID = contentTuning->ID;
         TargetHealingContentTuningID = contentTuning->ID;
     }

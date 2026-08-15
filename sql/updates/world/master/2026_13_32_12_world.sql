@@ -1,7 +1,6 @@
 -- Chromie Time: Expansion (UIChromieTimeExpansionInfo) → faction breadcrumb quests
--- UIChromieTimeExpansionInfo has no QuestID column; world map supplies later xpac rows.
--- Phase 2 V1: BC Ui ID 6 → Alliance 60959 / Horde 60961 (CT-A AutoLaunched details).
--- Flow 2R dual-check PASS: NN=12 free on master (no 2026_13_32 world) + evry (max 09) + tip (10/11).
+-- UIChromieTimeExpansionInfo has no QuestID column; world map supplies later expansion rows.
+-- Burning Crusade Ui ID 6 → Alliance 60959 / Horde 60961 (auto-launched quest details).
 
 DROP TABLE IF EXISTS `chromie_time_expansion_quest`;
 CREATE TABLE `chromie_time_expansion_quest` (
@@ -16,8 +15,8 @@ DELETE FROM `chromie_time_expansion_quest` WHERE `UiExpansionId` = 6;
 INSERT INTO `chromie_time_expansion_quest` (`UiExpansionId`, `AllianceQuestId`, `HordeQuestId`, `VerifiedBuild`) VALUES
 (6, 60959, 60961, 68887);
 
--- Dark Portal EK <-> Outland (world_safe_locs 3736/3737 already present; teleport rows missing in TDB)
--- CT-A travel: Blasted Lands DP then map 530. Not WoD assault scripts.
+-- Dark Portal Eastern Kingdoms <-> Outland (world_safe_locs 3736/3737 already present; teleport rows missing in TDB)
+-- Retail travel: Blasted Lands Dark Portal then map 530. Not Warlords of Draenor assault scripts.
 DELETE FROM `areatrigger_teleport` WHERE `ID` IN (4352, 4354);
 INSERT INTO `areatrigger_teleport` (`ID`, `PortLocID`, `Name`) VALUES
 (4352, 3736, 'Dark Portal - E. Kingdoms Target'),

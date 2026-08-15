@@ -45,7 +45,7 @@ namespace WorldPackets
             WorldPacket const* Write() override;
         };
 
-        // CT-A: two Party::CTROptions blocks (from → to), Length 26 for typical 1-flag transition
+        // Two Party::CTROptions blocks (from → to). Length 26 for a typical 1-flag change.
         class SetCtrOptions final : public ServerPacket
         {
         public:

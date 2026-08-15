@@ -818,12 +818,12 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit const* excludeCasterChannel
     if (!attacker)
         return;
 
-    // Creature→target: scale outgoing damage down to the level-matched DPS curve.
-    // Player→scalable creature: amplify to create-level scale. Creatures spawn at
-    // ScalingLevelMax with full ExpectedStat HP (e.g. Echo CT 70 → L30/~4379) while
-    // player AP/weapon math stays at the player's level; without this inverse of
-    // GetHealthMultiplierForTarget, Echo SS/white land ~35–65× low vs retail sniffs
-    // (EVR-136 / ExpectedStat CreatureHealth L2 85.8 vs L30 4378.8).
+    // Creature to target: scale outgoing damage down to the level-matched DPS curve.
+    // Player to scalable creature: amplify to create-level scale. Creatures spawn at
+    // ScalingLevelMax with full ExpectedStat HP (e.g. Echo ContentTuning 70 → level 30 / about 4379) while
+    // player attack power and weapon math stay at the player's level. Without this inverse of
+    // GetHealthMultiplierForTarget, Echo spell and white hits land about 35–65 times too low
+    // vs retail sniffs (ExpectedStat CreatureHealth level 2 85.8 vs level 30 4378.8).
     float scale = attacker->GetDamageMultiplierForTarget(victim);
     float const healthMult = victim->GetHealthMultiplierForTarget(attacker);
     if (healthMult > 0.0f && std::fabs(healthMult - 1.0f) > 1e-6f)
@@ -853,9 +853,9 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit const* excludeCasterChannel
 
 /*static*/ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss)
 {
-    // Incoming damage is already create-level scaled when DealDamageMods ran (player→scalable
-    // creature amplify / creature→target DPS curve). Do not divide by HealthMultiplier here —
-    // that double-applied after EVR-136 moved the amplify into DealDamageMods.
+    // Incoming damage is already create-level scaled when DealDamageMods ran (player to scalable
+    // creature amplify / creature to target DPS curve). Do not divide by HealthMultiplier here —
+    // that would apply the scale twice after the amplify moved into DealDamageMods.
     uint32 damageDone = damage;
     uint32 damageTaken = damage;
 

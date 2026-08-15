@@ -1,5 +1,4 @@
 -- Chromie Time: empty hotfix shell for UIChromieTimeExpansionInfo (data from client .db2)
--- Flow 2R dual-check PASS: NN=01 free on master+evry (evry has 2026_13_32_00_hotfixes.sql)
 
 CREATE TABLE IF NOT EXISTS `ui_chromie_time_expansion_info` (
   `ID` int unsigned NOT NULL DEFAULT '0',

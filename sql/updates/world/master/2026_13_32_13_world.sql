@@ -1,8 +1,7 @@
--- Chromie Time Phase 4: remaining UIChromieTimeExpansionInfo → faction breadcrumb maps
--- Ui 6 (BC) already present from 2026_13_32_12 (60959/60961; CT-A AutoLaunched Onward).
+-- Chromie Time: remaining UIChromieTimeExpansionInfo → faction breadcrumb maps
+-- Ui 6 (Burning Crusade) already present from 2026_13_32_12 (60959/60961; auto-launched Onward).
 -- Classic 5/7–10: Onward-to-Adventure pairs — AllowableRaces confirmed (do not assign A/H by ID order).
 -- 14–16: no Onward templates; wiki Timewalking Campaigns start quests present in world DB.
--- Flow 2R dual-check PASS: NN=13 free on master (no 13) + evry (max 09) + tip (10–12).
 
 DELETE FROM `chromie_time_expansion_quest` WHERE `UiExpansionId` IN (5, 7, 8, 9, 10, 14, 15, 16);
 INSERT INTO `chromie_time_expansion_quest` (`UiExpansionId`, `AllianceQuestId`, `HordeQuestId`, `VerifiedBuild`) VALUES

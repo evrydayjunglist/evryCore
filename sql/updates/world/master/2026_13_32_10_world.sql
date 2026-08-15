@@ -1,7 +1,6 @@
--- Chromie Time Phase 1: Org Chromie 167032 spawn + gossip menu 25426 options (CT-A 12.0.7.68887)
--- Flow 2R dual-check PASS: NN=10 free on master+evry (evry world uses 00-09)
+-- Chromie Time: Orgrimmar Chromie 167032 spawn and gossip menu 25426 options (sniff 12.0.7.68887)
 
--- Orgrimmar Chromie (retail CT-A position). Existing Stormwind spawn guid 8000063 left as-is.
+-- Orgrimmar Chromie (retail position). Existing Stormwind spawn guid 8000063 left as-is.
 DELETE FROM `creature` WHERE `guid` = 11800156;
 INSERT INTO `creature` (`guid`, `id`, `map`, `zoneId`, `areaId`, `spawnDifficulties`, `phaseUseFlags`, `PhaseId`, `PhaseGroup`, `terrainSwapMap`, `modelid`, `equipment_id`, `position_x`, `position_y`, `position_z`, `orientation`, `spawntimesecs`, `wander_distance`, `currentwaypoint`, `curHealthPct`, `MovementType`, `npcflag`, `unit_flags`, `unit_flags2`, `unit_flags3`, `ScriptName`, `StringId`, `VerifiedBuild`) VALUES
 (11800156, 167032, 1, 1637, 5170, '0', 0, 0, 0, -1, 0, 0, 1557.1771, -4216.5415, 56.071663, 1.017489, 120, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, '', NULL, 68887);

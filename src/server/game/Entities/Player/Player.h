@@ -1336,11 +1336,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         void InitStatsForLevel(bool reapplyMods = false);
 
-        // Combat-stats retail parity (docs/midnight-assessment/combat-stats-retail-parity-*.md):
-        // shared ExpectedStat.db2-based override (P1 stamina/HP, P2 primary/secondary stats) applied
-        // on top of the legacy player_classlevelstats-sourced PlayerLevelInfo for a given target
-        // level. Used by both InitStatsForLevel() (login) and GiveLevel() (in-session level-up) so
-        // the two paths can never drift apart again -- see fork-journal.md 2026-07-02 GiveLevel gap.
+        // ExpectedStat.db2 override on player_classlevelstats PlayerLevelInfo. Shared by
+        // InitStatsForLevel (login) and GiveLevel (in-session) so those paths stay the same.
         void ApplyRetailStatOverridesForLevel(uint8 level, PlayerLevelInfo& info) const;
 
         // .cheat command related
@@ -3039,19 +3036,19 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         UF::CTROptions BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const;
         void SetChromieTimeExpansion(uint32 uiExpansionId);
-        /// ContentTuning Chromie outdoor MinLevelSquish (campaign CTs use 10).
+        /// Outdoor Chromie ContentTuning MinLevelSquish (campaign rows use 10).
         static uint32 GetChromieTimeStartLevel();
-        /// PROVISIONAL: first level at which Chromie start/re-enter from present is refused
-        /// (Blizzard support 275056). Stay-in change uses CanSelectChromieTimeExpansion().
+        /// First level that refuses Chromie start or re-enter from the present (Blizzard support 275056).
+        /// Changing campaign while already in Chromie Time uses CanSelectChromieTimeExpansion().
         static uint32 GetChromieTimeSelectLockLevel();
-        /// ContentTuning Chromie max band: 1 + GetMaxLevelForExpansion(CURRENT_EXPANSION - 1).
+        /// Chromie max: 1 + GetMaxLevelForExpansion(CURRENT_EXPANSION - 1).
         static uint32 GetChromieTimeEndLevel();
-        /// Left Exile's Reach (capital arrival quest rewarded). Blizzard news: Chromie at L10 OR after ER.
+        /// Left Exile's Reach (capital arrival quest rewarded). Chromie at level 10 or after Exile's Reach.
         bool HasCompletedExilesReach() const;
-        /// PROVISIONAL Midnight model: start/re-enter locked at select-lock; stay-in may change
-        /// until end band. See chromie-time-polish-start-gates-handoff.md.
+        /// Start and re-enter from the present lock at GetChromieTimeSelectLockLevel(). Already in a
+        /// campaign may change timelines until GetChromieTimeEndLevel(). Not confirmed by sniff.
         bool CanSelectChromieTimeExpansion() const;
-        /// Clear Chromie UF/CTR; optional capital teleport to faction Chromie (end-level kick).
+        /// Clear Chromie update fields and CTR. Optional teleport to the faction Chromie in the capital.
         void RemoveFromChromieTime(bool teleportToCapital = false);
 
         bool HasDataFlagAccount(uint32 dataFlagId) const;

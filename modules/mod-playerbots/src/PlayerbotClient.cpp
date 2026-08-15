@@ -22,6 +22,7 @@
 #include "GossipDef.h"
 #include "LootItemType.h"
 #include "Log.h"
+#include "Map.h"
 #include "MovementInfo.h"
 #include "MovementPackets.h"
 #include "Object.h"
@@ -238,6 +239,113 @@ namespace
             }
         }
     }
+
+    // Finished quests put a ? on the map. That blob uses ObjectiveIndex -1.
+    // 32 is the starter. A polygon of points is an incomplete objective, not turn-in.
+    Optional<Position> GetFinishedQuestMapMarker(uint32 questId, uint32 mapId, Position const& from)
+    {
+        QuestPOIData const* poiData = sObjectMgr->GetQuestPOIData(int32(questId));
+        if (!poiData)
+            return {};
+
+        Optional<Position> best;
+        float bestDist = std::numeric_limits<float>::max();
+
+        for (QuestPOIBlobData const& blob : poiData->Blobs)
+        {
+            if (blob.ObjectiveIndex != -1 || blob.MapID != int32(mapId) || blob.Points.empty())
+                continue;
+
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            for (QuestPOIBlobPoint const& point : blob.Points)
+            {
+                x += float(point.X);
+                y += float(point.Y);
+                z += float(point.Z);
+            }
+
+            float const count = float(blob.Points.size());
+            Position marker;
+            marker.Relocate(x / count, y / count, z / count);
+            float const dist = from.GetExactDist(marker);
+            if (dist >= bestDist)
+                continue;
+
+            bestDist = dist;
+            best = marker;
+        }
+
+        return best;
+    }
+
+    void CollectCreatureEnderEntries(uint32 questId, std::unordered_set<uint32>& out)
+    {
+        for (auto const& rel : sObjectMgr->GetCreatureQuestInvolvedRelationReverseBounds(questId))
+            out.insert(rel.second);
+    }
+
+    bool CreatureIsUsableEnder(Player const* player, Creature const* creature, std::unordered_set<uint32> const& enderEntries)
+    {
+        if (!player || !creature || !creature->IsAlive())
+            return false;
+        if (!enderEntries.contains(creature->GetEntry()))
+            return false;
+        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
+            return false;
+        if (!player->InSamePhase(creature))
+            return false;
+        if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+            return false;
+        return true;
+    }
+
+    Optional<PlayerbotClient::QuestTarget> MakeTurnInTarget(Player* player, Creature* creature, int32 questId)
+    {
+        if (!player || !creature || !questId)
+            return {};
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+            return {};
+
+        PlayerbotClient::QuestTarget target;
+        target.NpcGuid = creature->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        target.QuestId = questId;
+        target.TurnIn = true;
+        return target;
+    }
+
+    Creature* FindLivingEnderOnMap(Player* player, std::unordered_set<uint32> const& enderEntries, Optional<Position> const& marker)
+    {
+        if (!player || !player->GetMap() || enderEntries.empty())
+            return nullptr;
+
+        Creature* best = nullptr;
+        float bestDist = std::numeric_limits<float>::max();
+
+        for (auto const& pair : player->GetMap()->GetCreatureBySpawnIdStore())
+        {
+            Creature* creature = pair.second;
+            if (!CreatureIsUsableEnder(player, creature, enderEntries))
+                continue;
+            if (marker && creature->GetExactDist(*marker) > 40.0f)
+                continue;
+
+            float const dist = player->GetExactDist(creature);
+            if (dist >= bestDist)
+                continue;
+
+            bestDist = dist;
+            best = creature;
+        }
+
+        return best;
+    }
 }
 
 Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind)
@@ -310,6 +418,78 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
         return {};
 
     return best;
+}
+
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    Map* map = player->GetMap();
+    QuestTarget best;
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (auto const& [questId, status] : player->getQuestStatusMap())
+    {
+        if (status.Status != QUEST_STATUS_COMPLETE)
+            continue;
+
+        std::unordered_set<uint32> enderEntries;
+        CollectCreatureEnderEntries(questId, enderEntries);
+        if (enderEntries.empty())
+            continue;
+
+        Optional<Position> marker = GetFinishedQuestMapMarker(questId, map->GetId(), *player);
+        if (marker && !map->IsGridLoaded(*marker))
+            map->LoadGrid(marker->GetPositionX(), marker->GetPositionY());
+
+        Creature* creature = FindLivingEnderOnMap(player, enderEntries, marker);
+        if (!creature)
+            continue;
+
+        Optional<QuestTarget> target = MakeTurnInTarget(player, creature, int32(questId));
+        if (!target)
+            continue;
+
+        float const dist = player->GetExactDist(target->Pos);
+        if (dist >= bestDist)
+            continue;
+
+        bestDist = dist;
+        best = *target;
+    }
+
+    if (best.NpcGuid.IsEmpty())
+        return {};
+
+    return best;
+}
+
+bool PlayerbotClient::HasLogCompleteTurnInOnThisMap(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return false;
+
+    uint32 const mapId = player->GetMap()->GetId();
+
+    for (auto const& [questId, status] : player->getQuestStatusMap())
+    {
+        if (status.Status != QUEST_STATUS_COMPLETE)
+            continue;
+
+        std::unordered_set<uint32> enderEntries;
+        CollectCreatureEnderEntries(questId, enderEntries);
+        if (enderEntries.empty())
+            continue;
+
+        if (GetFinishedQuestMapMarker(questId, mapId, *player))
+            return true;
+
+        if (FindLivingEnderOnMap(player, enderEntries, {}))
+            return true;
+    }
+
+    return false;
 }
 
 Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip)

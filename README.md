@@ -34,7 +34,7 @@ When a job lands, add a short entry on the parent that owns it, with a completio
 ### On `evry` only
 
 - **modules** (~95%) — Drop-in folders at `modules/<name>/` (code, `conf/`, `data/sql/`). CMake `MODULES=static` (default) or `none`. Module `.conf.dist` copies to a runtime `modules/` directory next to the server. `mod-example` is the template.
-- **playerbots** (~40%) — In-process bots as real `Player` rows and an empty-socket `WorldSession`, brought in through `World::AddSession`. They only act by queueing real client packets. They walk the navmesh to stand beside questgivers, then nearby turn-in, incomplete kill objectives (select and melee swing in melee range), then nearby accept. Runtime keys live in `modules/mod-playerbots.conf` next to the server.
+- **playerbots** (~50%) — In-process bots as real `Player` rows and an empty-socket `WorldSession`, brought in through `World::AddSession`. They only act by queueing real client packets. They walk the navmesh to stand beside questgivers. Nearby turn-in stays a 40-yard search. Finished log quests walk to the map marker (`creature_questender` / quest POI) and turn in before kills or new accepts. Incomplete kill objectives (select and melee swing in melee range), then nearby accept. Runtime keys live in `modules/mod-playerbots.conf` next to the server.
 
 ## Requirements
 

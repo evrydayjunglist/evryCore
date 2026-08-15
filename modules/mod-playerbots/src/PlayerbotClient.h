@@ -68,6 +68,8 @@ namespace PlayerbotClient
     void QueueAttackStop(WorldSession* session);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind);
+    Optional<QuestTarget> FindLogCompleteTurnIn(Player* player);
+    bool HasLogCompleteTurnInOnThisMap(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
     bool TryInteractQuest(Player* player, QuestTarget const& target);

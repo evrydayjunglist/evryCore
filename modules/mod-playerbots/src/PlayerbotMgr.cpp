@@ -258,11 +258,31 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             bot.QuestInteractQueued = true;
             bot.QuestInteractWaitMs = 0;
         }
-        else if (bot.QuestArriveWaitMs >= 5000)
+        else
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} arrived but cannot interact with {}.",
-                player->GetName(), bot.QuestTarget.NpcGuid.ToString());
-            bot.QuestSearchFailed = true;
+            Creature* creature = ObjectAccessor::GetCreature(*player, bot.QuestTarget.NpcGuid);
+            if (creature && creature->IsAlive()
+                && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
+            {
+                Position standPos;
+                float const standDistance = creature->GetCombatReach() + 1.0f;
+                if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
+                    && bot.Walker.Start(player, standPos, bot.QuestTarget.StopDistance))
+                {
+                    bot.QuestTarget.Pos = standPos;
+                    bot.QuestArriveWaitMs = 0;
+                    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
+                        player->GetName(), bot.QuestTarget.NpcGuid.ToString());
+                    return;
+                }
+            }
+
+            if (bot.QuestArriveWaitMs >= 5000)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} arrived but cannot interact with {}.",
+                    player->GetName(), bot.QuestTarget.NpcGuid.ToString());
+                bot.QuestSearchFailed = true;
+            }
         }
         return;
     }
@@ -273,6 +293,24 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::TurnIn))
     {
         BeginQuestTarget(bot, player, *turnIn);
+        return;
+    }
+
+    if (Optional<PlayerbotClient::QuestTarget> logTurnIn = PlayerbotClient::FindLogCompleteTurnIn(player))
+    {
+        BeginQuestTarget(bot, player, *logTurnIn);
+        return;
+    }
+
+    if (PlayerbotClient::HasLogCompleteTurnInOnThisMap(player))
+    {
+        bot.QuestSearchEmptyMs += diff;
+        if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has a finished quest on this map but no living ender to walk to. The quest is not skipped.",
+                player->GetName());
+            bot.QuestSearchFailed = true;
+        }
         return;
     }
 
@@ -311,7 +349,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     bot.QuestSearchEmptyMs += diff;
     if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
     {
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no nearby turn-in, kill target, or quest to accept (talk {:.0f} yards, kill {:.0f} yards). The quest is not skipped.",
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no nearby turn-in, log turn-in, kill target, or quest to accept (talk {:.0f} yards, kill {:.0f} yards). The quest is not skipped.",
             player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
         bot.QuestSearchFailed = true;
     }

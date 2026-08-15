@@ -19,6 +19,7 @@
 #include "PlayerbotMgr.h"
 #include "Playerbots.h"
 #include "ScriptMgr.h"
+#include "WorldSession.h"
 
 class PlayerbotsWorldScript : public WorldScript
 {
@@ -28,6 +29,11 @@ public:
     void OnStartup() override
     {
         sPlayerbotMgr->Start();
+    }
+
+    void OnUpdate(uint32 diff) override
+    {
+        sPlayerbotMgr->Update(diff);
     }
 };
 

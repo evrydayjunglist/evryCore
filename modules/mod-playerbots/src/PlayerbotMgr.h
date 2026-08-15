@@ -19,17 +19,17 @@
 #define EVRY_MOD_PLAYERBOT_MGR_H
 
 #include "Playerbots.h"
-#include <memory>
 #include <unordered_set>
 #include <vector>
 
 class Player;
-class WorldSession;
 
 struct PlayerbotRecord
 {
     PlayerbotAccount Account;
-    std::unique_ptr<WorldSession> Session;
+    bool EnumQueued = false;
+    bool LoginQueued = false;
+    bool ContinueLoginCalled = false;
     bool FirstQuestQueued = false;
 };
 
@@ -42,11 +42,13 @@ public:
     ~PlayerbotMgr();
 
     void Start();
+    void Update(uint32 diff);
     bool IsBotAccount(uint32 accountId) const;
     void OnBotLogin(Player* player);
 
 private:
     void TryLogin(PlayerbotRecord& bot);
+    void UpdateLogin(PlayerbotRecord& bot);
 
     std::vector<PlayerbotRecord> _bots;
     std::unordered_set<uint32> _accountIds;

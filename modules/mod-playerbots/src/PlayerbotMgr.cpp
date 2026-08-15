@@ -67,6 +67,12 @@ void PlayerbotMgr::Start()
     }
 }
 
+void PlayerbotMgr::Update(uint32 /*diff*/)
+{
+    for (PlayerbotRecord& bot : _bots)
+        UpdateLogin(bot);
+}
+
 bool PlayerbotMgr::IsBotAccount(uint32 accountId) const
 {
     return _accountIds.contains(accountId);
@@ -92,17 +98,49 @@ void PlayerbotMgr::OnBotLogin(Player* player)
 
 void PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
 {
-    bot.Session = PlayerbotFactory::MakeSession(bot.Account);
-
+    std::unique_ptr<WorldSession> session = PlayerbotFactory::MakeSession(bot.Account);
     TC_LOG_INFO(PLAYERBOTS_LOG,
-        "mod-playerbots: constructed WorldSession for account {} with an empty socket. PlayerDisconnected={} remote address '{}'. expireTime in the constructor is 1 minute after socket loss.",
-        bot.Account.AccountId, bot.Session->PlayerDisconnected(), bot.Session->GetRemoteAddress());
-
-    // WorldSession::Update returns false when the realm socket is null, and World::UpdateSessions
-    // deletes that session on the same tick. Packets are only read while a realm socket exists.
-    // HandlePlayerLoginOpcode only sends ConnectToInstance; HandleContinuePlayerLogin runs after
-    // an instance socket is attached. AddSession is not called until those seams are discussed.
-    TC_LOG_ERROR(PLAYERBOTS_LOG,
-        "mod-playerbots: session for account {} does not stay up with an empty socket. Not calling World::AddSession. Discuss the WorldSession::Update and HandlePlayerLoginOpcode seams before changing game.",
+        "mod-playerbots: constructed WorldSession for account {} with an empty socket. Calling World::AddSession.",
         bot.Account.AccountId);
+    sWorld->AddSession(session.release());
+}
+
+void PlayerbotMgr::UpdateLogin(PlayerbotRecord& bot)
+{
+    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+    if (!session)
+        return;
+
+    if (session->IsInQueue())
+        return;
+
+    if (!bot.EnumQueued)
+    {
+        PlayerbotClient::QueueEnumCharacters(session);
+        bot.EnumQueued = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} queued CMSG_ENUM_CHARACTERS.", bot.Account.AccountId);
+        return;
+    }
+
+    if (!bot.LoginQueued)
+    {
+        if (!session->IsLegitCharacterForAccount(bot.Account.CharacterGuid))
+            return;
+
+        PlayerbotClient::QueuePlayerLogin(session, bot.Account.CharacterGuid);
+        bot.LoginQueued = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} queued CMSG_PLAYER_LOGIN for {}.",
+            bot.Account.AccountId, bot.Account.CharacterGuid.ToString());
+        return;
+    }
+
+    if (bot.ContinueLoginCalled)
+        return;
+
+    if (!session->PlayerLoading())
+        return;
+
+    session->HandleContinuePlayerLogin();
+    bot.ContinueLoginCalled = true;
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} called HandleContinuePlayerLogin.", bot.Account.AccountId);
 }

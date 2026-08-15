@@ -217,6 +217,45 @@ bool IsFirstFactoryRace(ChrRacesEntry const* raceEntry)
     return true;
 }
 
+void AppendNameGenRace(std::vector<uint8>& races, uint8 race)
+{
+    if (!race)
+        return;
+
+    if (std::ranges::find(races, race) == races.end())
+        races.push_back(race);
+}
+
+// NameGen.db2 has no rows for Horde/Alliance pandaren (26/25). Those names are stored
+// under pandaren (24). Follow NeutralRaceID and RaceRelated so we use the same name
+// table a create-screen random name would need, without inventing names.
+std::vector<uint8> NameGenRaces(uint8 race)
+{
+    std::vector<uint8> races;
+    AppendNameGenRace(races, race);
+    if (ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(race))
+    {
+        if (raceEntry->NeutralRaceID > 0)
+            AppendNameGenRace(races, uint8(raceEntry->NeutralRaceID));
+        if (raceEntry->RaceRelated > 0)
+            AppendNameGenRace(races, uint8(raceEntry->RaceRelated));
+    }
+
+    return races;
+}
+
+std::string RandomNameGenName(uint8 race, uint8 sex)
+{
+    for (uint8 nameRace : NameGenRaces(race))
+    {
+        std::string name = sDB2Manager.GetNameGenEntry(nameRace, sex);
+        if (!name.empty())
+            return name;
+    }
+
+    return {};
+}
+
 std::vector<RaceClassSex> CollectCombos(WorldSession* session)
 {
     std::vector<RaceClassSex> combos;
@@ -236,6 +275,9 @@ std::vector<RaceClassSex> CollectCombos(WorldSession* session)
 
             for (uint8 sex : { uint8(GENDER_MALE), uint8(GENDER_FEMALE) })
             {
+                if (RandomNameGenName(uint8(raceEntry->ID), sex).empty())
+                    continue;
+
                 WorldPackets::Character::CharacterCreateInfo probe;
                 probe.Race = raceEntry->ID;
                 probe.Class = classEntry->ID;
@@ -243,7 +285,7 @@ std::vector<RaceClassSex> CollectCombos(WorldSession* session)
                 if (!FillDefaultCustomizations(session, probe))
                     continue;
 
-                combos.push_back({ raceEntry->ID, classEntry->ID, sex });
+                combos.push_back({ uint8(raceEntry->ID), uint8(classEntry->ID), sex });
             }
         }
     }
@@ -255,7 +297,7 @@ bool PickName(uint8 race, uint8 sex, std::string& name)
 {
     for (uint32 attempt = 0; attempt < 40; ++attempt)
     {
-        name = sDB2Manager.GetNameGenEntry(race, sex);
+        name = RandomNameGenName(race, sex);
         if (name.empty())
             continue;
 
@@ -306,7 +348,8 @@ bool CreateCharacter(WorldSession* session, PlayerbotAccount& account)
 
     if (!PickName(createInfo.Race, createInfo.Sex, createInfo.Name))
     {
-        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: could not find a free character name.");
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: could not find a free character name for race {} sex {}.",
+            uint32(createInfo.Race), uint32(createInfo.Sex));
         return false;
     }
 
@@ -346,8 +389,14 @@ bool CreateCharacter(WorldSession* session, PlayerbotAccount& account)
     realmChars->setUInt32(2, sRealmList->GetCurrentRealmId().Realm);
     loginTransaction->Append(realmChars);
 
-    CharacterDatabase.DirectCommitTransaction(characterTransaction);
-    LoginDatabase.DirectCommitTransaction(loginTransaction);
+    TransactionCallback characterCommit = CharacterDatabase.AsyncCommitTransaction(characterTransaction);
+    if (!characterCommit.m_future.get())
+    {
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: character save failed for {}.", createInfo.Name);
+        return false;
+    }
+
+    LoginDatabase.CommitTransaction(loginTransaction);
 
     sScriptMgr->OnPlayerCreate(newChar.get());
     sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), session->GetAccountId(), newChar->GetName(),
@@ -446,10 +495,8 @@ bool PlayerbotFactory::EnsureAccount(PlayerbotAccount& account)
         return false;
     }
 
-    LoginDatabasePreparedStatement* expansion = LoginDatabase.GetPreparedStatement(LOGIN_UPD_EXPANSION);
-    expansion->setUInt8(0, account.Expansion);
-    expansion->setUInt32(1, account.AccountId);
-    LoginDatabase.DirectExecute(expansion);
+    LoginDatabase.DirectPExecute("UPDATE account SET expansion = {} WHERE id = {}",
+        uint32(account.Expansion), account.AccountId);
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: created Battlenet account {} with game account {} (id {}).",
         account.BattlenetEmail, account.AccountName, account.AccountId);

@@ -39,6 +39,17 @@ PlayerbotMgr::~PlayerbotMgr() = default;
 
 void PlayerbotMgr::Start()
 {
+    if (sConfigMgr->GetBoolDefault(PLAYERBOTS_REGENERATE_CHARACTERS, false))
+    {
+        uint32 deleted = PlayerbotFactory::DeleteAllBotCharacters();
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: Playerbots.RegenerateCharacters is 1. Deleted {} bot character(s). Battlenet accounts were kept. "
+            "Set Playerbots.RegenerateCharacters to 0, then start worldserver again. This process is stopping so those new bots are not created and wiped on the next boot.",
+            deleted);
+        World::StopNow(SHUTDOWN_EXIT_CODE);
+        return;
+    }
+
     if (!sConfigMgr->GetBoolDefault(PLAYERBOTS_ENABLE, false))
     {
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: disabled.");

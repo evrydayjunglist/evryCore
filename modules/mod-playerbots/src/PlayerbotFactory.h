@@ -29,6 +29,8 @@ namespace PlayerbotFactory
     std::unique_ptr<WorldSession> MakeSession(PlayerbotAccount const& account);
     bool EnsureAccount(PlayerbotAccount& account);
     bool EnsureCharacter(PlayerbotAccount& account);
+    // Delete every character on PLAYERBOTn@PLAYERBOTS.LOCAL. Leaves the login accounts.
+    uint32 DeleteAllBotCharacters();
 }
 
 #endif

@@ -24,6 +24,7 @@
 
 inline constexpr char const* PLAYERBOTS_ENABLE = "Playerbots.Enable";
 inline constexpr char const* PLAYERBOTS_COUNT = "Playerbots.Count";
+inline constexpr char const* PLAYERBOTS_REGENERATE_CHARACTERS = "Playerbots.RegenerateCharacters";
 inline constexpr char const* PLAYERBOTS_LOG = "module.playerbots";
 
 struct PlayerbotAccount

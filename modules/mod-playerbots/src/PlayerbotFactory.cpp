@@ -27,8 +27,10 @@
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "DBCEnums.h"
+#include "Duration.h"
 #include "Log.h"
 #include "MotionMaster.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "RaceMask.h"
@@ -42,6 +44,7 @@
 #include <algorithm>
 #include <array>
 #include <ranges>
+#include <thread>
 #include <vector>
 
 namespace
@@ -513,4 +516,69 @@ bool PlayerbotFactory::EnsureCharacter(PlayerbotAccount& account)
         return false;
 
     return CreateCharacter(session.get(), account);
+}
+
+uint32 PlayerbotFactory::DeleteAllBotCharacters()
+{
+    QueryResult accounts = LoginDatabase.Query(
+        "SELECT email FROM battlenet_accounts WHERE email LIKE 'PLAYERBOT%@PLAYERBOTS.LOCAL'");
+    if (!accounts)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: no PLAYERBOTn@PLAYERBOTS.LOCAL accounts. Nothing to delete.");
+        return 0;
+    }
+
+    uint32 deleted = 0;
+    do
+    {
+        std::string email = (*accounts)[0].GetString();
+        LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_GAME_ACCOUNT_LIST_SMALL);
+        loginStmt->setString(0, email);
+        PreparedQueryResult games = LoginDatabase.Query(loginStmt);
+        if (!games)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: Battlenet account {} has no game account.", email);
+            continue;
+        }
+
+        do
+        {
+            uint32 accountId = (*games)[0].GetUInt32();
+            CharacterDatabasePreparedStatement* charStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
+            charStmt->setUInt32(0, accountId);
+            PreparedQueryResult chars = CharacterDatabase.Query(charStmt);
+            if (!chars)
+                continue;
+
+            do
+            {
+                ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>((*chars)[0].GetUInt64());
+                if (ObjectAccessor::FindPlayer(guid))
+                {
+                    TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} is in the world; not deleting that character.",
+                        guid.ToString());
+                    continue;
+                }
+
+                CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(guid);
+                std::string name = cache ? cache->Name : std::string("<unknown>");
+                Player::DeleteFromDB(guid, accountId, true, true);
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: deleted {} {} on account {} ({}).",
+                    name, guid.ToString(), accountId, email);
+                ++deleted;
+            } while (chars->NextRow());
+        } while (games->NextRow());
+    } while (accounts->NextRow());
+
+    for (uint32 i = 0; i < 200; ++i)
+    {
+        if (!CharacterDatabase.QueueSize() && !LoginDatabase.QueueSize())
+            break;
+        std::this_thread::sleep_for(Milliseconds(50));
+    }
+
+    if (CharacterDatabase.QueueSize() || LoginDatabase.QueueSize())
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: character delete is still queued after waiting. The process is stopping anyway.");
+
+    return deleted;
 }

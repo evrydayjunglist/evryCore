@@ -43,6 +43,7 @@ struct PlayerbotRecord
     bool CombatSwingSent = false;
     PlayerbotClient::QuestTarget QuestTarget;
     PlayerbotClient::CombatTarget CombatTarget;
+    PlayerbotClient::GameObjectTarget GameObjectTarget;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     PlayerbotWalker Walker;
 };
@@ -68,6 +69,7 @@ private:
     void ClearCombat(PlayerbotRecord& bot, Player* player);
     bool UpdateCombat(PlayerbotRecord& bot, Player* player);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);
+    bool BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::GameObjectTarget const& target);
 
     std::vector<PlayerbotRecord> _bots;
     std::unordered_set<uint32> _accountIds;

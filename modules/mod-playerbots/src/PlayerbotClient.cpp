@@ -18,6 +18,7 @@
 #include "PlayerbotClient.h"
 #include "Creature.h"
 #include "CreatureData.h"
+#include "GameObject.h"
 #include "GameTime.h"
 #include "GossipDef.h"
 #include "LootItemType.h"
@@ -33,10 +34,12 @@
 #include "PlayerbotMovement.h"
 #include "Playerbots.h"
 #include "QuestDef.h"
+#include "SharedDefines.h"
 #include "Unit.h"
 #include "UnitDefines.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <algorithm>
 #include <limits>
 #include <unordered_set>
 #include <vector>
@@ -176,6 +179,16 @@ void PlayerbotClient::QueueAttackStop(WorldSession* session)
     session->QueuePacket(WorldPacket(CMSG_ATTACK_STOP));
 }
 
+void PlayerbotClient::QueueGameObjUse(WorldSession* session, ObjectGuid guid)
+{
+    if (!session || guid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_GAME_OBJ_USE);
+    packet << guid;
+    session->QueuePacket(std::move(packet));
+}
+
 namespace
 {
     bool CreatureGivesMonsterCredit(Creature const* creature, uint32 creditEntry)
@@ -236,6 +249,189 @@ namespace
                 credit.QuestId = int32(questId);
                 credit.CreditEntry = uint32(objective.ObjectID);
                 out.push_back(credit);
+            }
+        }
+    }
+
+    struct IncompleteGameObjectCredit
+    {
+        int32 QuestId = 0;
+        uint32 GoEntry = 0;
+        uint32 ObjectiveId = 0;
+        int8 StorageIndex = 0;
+    };
+
+    void CollectIncompleteGameObjectCredits(Player* player, std::vector<IncompleteGameObjectCredit>& out)
+    {
+        if (!player)
+            return;
+
+        for (auto const& [questId, status] : player->getQuestStatusMap())
+        {
+            if (status.Status != QUEST_STATUS_INCOMPLETE)
+                continue;
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            if (!quest)
+                continue;
+
+            for (QuestObjective const& objective : quest->GetObjectives())
+            {
+                if (objective.Type != QUEST_OBJECTIVE_GAMEOBJECT || objective.ObjectID <= 0)
+                    continue;
+                if (objective.Flags & QUEST_OBJECTIVE_FLAG_OPTIONAL)
+                    continue;
+                if (objective.Flags & QUEST_OBJECTIVE_FLAG_HIDDEN)
+                    continue;
+                if (!player->IsQuestObjectiveCompletable(questId, objective.ID))
+                    continue;
+                if (player->IsQuestObjectiveComplete(questId, objective.ID))
+                    continue;
+
+                IncompleteGameObjectCredit credit;
+                credit.QuestId = int32(questId);
+                credit.GoEntry = uint32(objective.ObjectID);
+                credit.ObjectiveId = objective.ID;
+                credit.StorageIndex = objective.StorageIndex;
+                out.push_back(credit);
+            }
+        }
+    }
+
+    struct ObjectivePoiBlob
+    {
+        std::vector<Position> Points;
+        Position Centroid;
+        float Radius = 40.0f;
+    };
+
+    bool BlobMatchesGameObjectObjective(QuestPOIBlobData const& blob, IncompleteGameObjectCredit const& credit, uint32 mapId)
+    {
+        if (blob.MapID != int32(mapId) || blob.Points.empty())
+            return false;
+        // Finished quests put a ? on the map. That blob uses ObjectiveIndex -1.
+        // 32 is the starter. A polygon of points is an incomplete objective, not turn-in.
+        if (blob.ObjectiveIndex == -1 || blob.ObjectiveIndex == 32)
+            return false;
+        if (blob.QuestObjectiveID == int32(credit.ObjectiveId))
+            return true;
+        if (blob.QuestObjectID == int32(credit.GoEntry))
+            return true;
+        return blob.ObjectiveIndex == credit.StorageIndex;
+    }
+
+    void CollectGameObjectObjectivePoiBlobs(IncompleteGameObjectCredit const& credit, uint32 mapId, std::vector<ObjectivePoiBlob>& out)
+    {
+        QuestPOIData const* poiData = sObjectMgr->GetQuestPOIData(credit.QuestId);
+        if (!poiData)
+            return;
+
+        for (QuestPOIBlobData const& blob : poiData->Blobs)
+        {
+            if (!BlobMatchesGameObjectObjective(blob, credit, mapId))
+                continue;
+
+            ObjectivePoiBlob area;
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            for (QuestPOIBlobPoint const& point : blob.Points)
+            {
+                Position pos;
+                pos.Relocate(float(point.X), float(point.Y), float(point.Z));
+                area.Points.push_back(pos);
+                x += pos.GetPositionX();
+                y += pos.GetPositionY();
+                z += pos.GetPositionZ();
+            }
+
+            float const count = float(area.Points.size());
+            area.Centroid.Relocate(x / count, y / count, z / count);
+
+            float radius = 0.0f;
+            for (Position const& pos : area.Points)
+                radius = std::max(radius, area.Centroid.GetExactDist(pos));
+            area.Radius = std::max(radius, 40.0f);
+            out.push_back(area);
+        }
+    }
+
+    bool GameObjectIsUsableForObjective(Player const* player, GameObject const* go, uint32 entry)
+    {
+        if (!player || !go || !go->IsInWorld() || !go->isSpawned())
+            return false;
+        if (go->GetEntry() != entry)
+            return false;
+
+        GameObjectTemplate const* info = go->GetGOInfo();
+        if (!info || info->IconName == "Point")
+            return false;
+        if (go->HasFlag(GO_FLAG_IN_USE) || go->HasFlag(GO_FLAG_NOT_SELECTABLE))
+            return false;
+        if (go->GetGoState() != GO_STATE_READY)
+            return false;
+        if (!player->InSamePhase(go))
+            return false;
+        if (go->IsPrivateObject() && !go->CheckPrivateObjectOwnerVisibility(player))
+            return false;
+        if (!player->CanSeeOrDetect(go))
+            return false;
+        if (!go->ActivateToQuest(player))
+            return false;
+        return true;
+    }
+
+    bool GameObjectIsInPoiArea(GameObject const* go, std::vector<ObjectivePoiBlob> const& blobs)
+    {
+        if (!go || blobs.empty())
+            return false;
+
+        for (ObjectivePoiBlob const& blob : blobs)
+        {
+            if (go->GetExactDist(blob.Centroid) <= blob.Radius + 5.0f)
+                return true;
+        }
+
+        return false;
+    }
+
+    float GameObjectStandDistance(GameObject const* go)
+    {
+        float size = 1.0f;
+        if (go && go->GetGOInfo())
+            size = std::max(go->GetGOInfo()->size, 1.0f);
+        return size + 1.0f;
+    }
+
+    Optional<PlayerbotClient::GameObjectTarget> MakeGameObjectUseTarget(Player* player, GameObject* go, int32 questId)
+    {
+        if (!player || !go || !questId)
+            return {};
+
+        Position standPos;
+        if (!PlayerbotWalker::PickApproachPosition(player, go, GameObjectStandDistance(go), standPos))
+            return {};
+
+        PlayerbotClient::GameObjectTarget target;
+        target.GoGuid = go->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        target.QuestId = questId;
+        target.GoEntry = go->GetEntry();
+        return target;
+    }
+
+    void LoadPoiGrids(Map* map, std::vector<ObjectivePoiBlob> const& blobs)
+    {
+        if (!map)
+            return;
+
+        for (ObjectivePoiBlob const& blob : blobs)
+        {
+            for (Position const& point : blob.Points)
+            {
+                if (!map->IsGridLoaded(point))
+                    map->LoadGrid(point.GetPositionX(), point.GetPositionY());
             }
         }
     }
@@ -583,6 +779,140 @@ bool PlayerbotClient::CombatTargetStillNeeded(Player* player, CombatTarget const
     return false;
 }
 
+Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    Map* map = player->GetMap();
+    uint32 const mapId = map->GetId();
+
+    std::vector<IncompleteGameObjectCredit> credits;
+    CollectIncompleteGameObjectCredits(player, credits);
+    if (credits.empty())
+        return {};
+
+    GameObjectTarget bestGoTarget;
+    float bestGoDist = std::numeric_limits<float>::max();
+    bool haveGo = false;
+    Position bestMarker;
+    IncompleteGameObjectCredit const* bestMarkerCredit = nullptr;
+    float bestMarkerDist = std::numeric_limits<float>::max();
+    bool haveMarker = false;
+
+    for (IncompleteGameObjectCredit const& credit : credits)
+    {
+        std::vector<ObjectivePoiBlob> blobs;
+        CollectGameObjectObjectivePoiBlobs(credit, mapId, blobs);
+        if (blobs.empty())
+            continue;
+
+        LoadPoiGrids(map, blobs);
+
+        for (ObjectivePoiBlob const& blob : blobs)
+        {
+            for (Position const& point : blob.Points)
+            {
+                float const dist = player->GetExactDist(point);
+                if (dist >= bestMarkerDist)
+                    continue;
+
+                bestMarkerDist = dist;
+                bestMarker = point;
+                bestMarkerCredit = &credit;
+                haveMarker = true;
+            }
+        }
+
+        for (auto const& pair : map->GetGameObjectBySpawnIdStore())
+        {
+            GameObject* go = pair.second;
+            if (!go || skip.contains(go->GetGUID()))
+                continue;
+            if (!GameObjectIsUsableForObjective(player, go, credit.GoEntry))
+                continue;
+            if (!GameObjectIsInPoiArea(go, blobs))
+                continue;
+
+            float const dist = player->GetExactDist(go);
+            if (dist >= bestGoDist)
+                continue;
+
+            Optional<GameObjectTarget> target = MakeGameObjectUseTarget(player, go, credit.QuestId);
+            if (!target)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+                    player->GetName(), go->GetGUID().ToString());
+                continue;
+            }
+
+            bestGoDist = dist;
+            bestGoTarget = *target;
+            haveGo = true;
+        }
+    }
+
+    if (haveGo)
+        return bestGoTarget;
+
+    if (!haveMarker || !bestMarkerCredit)
+        return {};
+
+    GameObjectTarget target;
+    target.Pos = bestMarker;
+    target.StopDistance = 0.25f;
+    target.QuestId = bestMarkerCredit->QuestId;
+    target.GoEntry = bestMarkerCredit->GoEntry;
+    return target;
+}
+
+bool PlayerbotClient::HasLogIncompleteGameObjectOnThisMap(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return false;
+
+    uint32 const mapId = player->GetMap()->GetId();
+    std::vector<IncompleteGameObjectCredit> credits;
+    CollectIncompleteGameObjectCredits(player, credits);
+
+    for (IncompleteGameObjectCredit const& credit : credits)
+    {
+        std::vector<ObjectivePoiBlob> blobs;
+        CollectGameObjectObjectivePoiBlobs(credit, mapId, blobs);
+        if (!blobs.empty())
+            return true;
+    }
+
+    return false;
+}
+
+bool PlayerbotClient::GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target)
+{
+    if (!player || target.QuestId <= 0 || !target.GoEntry)
+        return false;
+    if (player->GetQuestStatus(uint32(target.QuestId)) != QUEST_STATUS_INCOMPLETE)
+        return false;
+
+    Quest const* quest = sObjectMgr->GetQuestTemplate(uint32(target.QuestId));
+    if (!quest)
+        return false;
+
+    for (QuestObjective const& objective : quest->GetObjectives())
+    {
+        if (objective.Type != QUEST_OBJECTIVE_GAMEOBJECT)
+            continue;
+        if (uint32(objective.ObjectID) != target.GoEntry)
+            continue;
+        if (!player->IsQuestObjectiveCompletable(uint32(target.QuestId), objective.ID))
+            continue;
+        if (player->IsQuestObjectiveComplete(uint32(target.QuestId), objective.ID))
+            continue;
+        return true;
+    }
+
+    return false;
+}
+
 bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target)
 {
     if (!player || !player->IsInWorld() || !player->GetSession() || target.NpcGuid.IsEmpty() || !target.QuestId)
@@ -632,5 +962,19 @@ bool PlayerbotClient::TryMeleeAttack(Player* player, ObjectGuid creatureGuid)
     QueueAttackSwing(player->GetSession(), creatureGuid);
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_ATTACK_SWING on {}.",
         player->GetName(), creatureGuid.ToString());
+    return true;
+}
+
+bool PlayerbotClient::TryUseGameObject(Player* player, GameObjectTarget const& target)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || target.GoGuid.IsEmpty())
+        return false;
+
+    if (!player->GetGameObjectIfCanInteractWith(target.GoGuid))
+        return false;
+
+    QueueGameObjUse(player->GetSession(), target.GoGuid);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_GAME_OBJ_USE on {} for quest {}.",
+        player->GetName(), target.GoGuid.ToString(), target.QuestId);
     return true;
 }

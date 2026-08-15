@@ -54,6 +54,15 @@ namespace PlayerbotClient
         uint32 CreditEntry = 0;
     };
 
+    struct GameObjectTarget
+    {
+        ObjectGuid GoGuid;
+        Position Pos;
+        float StopDistance = 0.25f;
+        int32 QuestId = 0;
+        uint32 GoEntry = 0;
+    };
+
     void QueueEnumCharacters(WorldSession* session);
     void QueuePlayerLogin(WorldSession* session, ObjectGuid characterGuid);
     void QueueCompleteCinematic(WorldSession* session);
@@ -66,14 +75,19 @@ namespace PlayerbotClient
     void QueueSetSelection(WorldSession* session, ObjectGuid guid);
     void QueueAttackSwing(WorldSession* session, ObjectGuid victim);
     void QueueAttackStop(WorldSession* session);
+    void QueueGameObjUse(WorldSession* session, ObjectGuid guid);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind);
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player);
     bool HasLogCompleteTurnInOnThisMap(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
+    Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
+    bool HasLogIncompleteGameObjectOnThisMap(Player* player);
+    bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);
     bool TryInteractQuest(Player* player, QuestTarget const& target);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
+    bool TryUseGameObject(Player* player, GameObjectTarget const& target);
 }
 
 #endif

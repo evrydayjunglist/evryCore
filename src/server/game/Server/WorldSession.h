@@ -1220,6 +1220,8 @@ class TC_GAME_API WorldSession
         void SendTimeSync();
         void RegisterTimeSync(uint32 counter);
         uint32 AdjustClientMovementTime(uint32 time) const;
+        // Oldest pending SMSG_TIME_SYNC_REQUEST counter, skipping the special init-mover and resume counters.
+        bool GetOldestPendingTimeSyncCounter(uint32& sequenceIndex) const;
 
         static constexpr uint32 SPECIAL_INIT_ACTIVE_MOVER_TIME_SYNC_COUNTER = 0xFFFFFFFF;
         static constexpr uint32 SPECIAL_RESUME_COMMS_TIME_SYNC_COUNTER      = 0xFFFFFFFE;

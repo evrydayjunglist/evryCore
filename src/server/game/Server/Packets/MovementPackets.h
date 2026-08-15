@@ -834,6 +834,7 @@ namespace WorldPackets
 }
 
 ByteBuffer& operator>>(ByteBuffer& data, MovementInfo& movementInfo);
+ByteBuffer& operator<<(ByteBuffer& data, MovementInfo const& movementInfo);
 
 ByteBuffer& operator<<(ByteBuffer& data, MovementInfo::TransportInfo const& transportInfo);
 

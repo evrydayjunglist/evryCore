@@ -1841,3 +1841,17 @@ void WorldSession::RegisterTimeSync(uint32 counter)
 {
     _pendingTimeSyncRequests[counter] = getMSTime();
 }
+
+bool WorldSession::GetOldestPendingTimeSyncCounter(uint32& sequenceIndex) const
+{
+    for (auto const& [counter, _] : _pendingTimeSyncRequests)
+    {
+        if (counter == SPECIAL_INIT_ACTIVE_MOVER_TIME_SYNC_COUNTER || counter == SPECIAL_RESUME_COMMS_TIME_SYNC_COUNTER)
+            continue;
+
+        sequenceIndex = counter;
+        return true;
+    }
+
+    return false;
+}

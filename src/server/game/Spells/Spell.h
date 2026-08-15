@@ -460,6 +460,7 @@ class TC_GAME_API Spell
         void EffectUpdateInteractions();
         void EffectSkipQuestLine();
         void EffectLearnWarbandScene();
+        void EffectSetChromieTime();
         void EffectSetPlayerDataElementAccount();
         void EffectSetPlayerDataElementCharacter();
         void EffectSetPlayerDataFlagAccount();

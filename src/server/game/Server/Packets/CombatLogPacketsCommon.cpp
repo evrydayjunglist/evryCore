@@ -89,10 +89,22 @@ bool ContentTuningParams::GenerateDataForUnits<Creature, Player>(Creature* attac
         ScalingHealthItemLevelCurveID = contentTuning->HealthItemLevelCurveID;
         ScalingHealthPrimaryStatCurveID = contentTuning->HealthPrimaryStatCurveID;
         TargetContentTuningID = contentTuning->ID;
+        // Retail Echo damage logs: PlayerContentTuningID matches the creature ContentTuning (70), not 0.
+        PlayerContentTuningID = contentTuning->ID;
+        TargetHealingContentTuningID = contentTuning->ID;
     }
     TargetLevel = target->GetLevel();
     Expansion = creatureDifficulty->HealthScalingExpansion;
     TargetScalingLevelDelta = int8(attacker->m_unitData->ScalingLevelDelta);
+    if (attacker->HasScalableLevels())
+        Flags = 0; // clear default NO_LEVEL_SCALING | NO_ITEM_LEVEL_SCALING
+
+    Stats const primaryStat = target->GetPrimaryStat();
+    float const expectedPrimary = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerPrimaryStat,
+        target->GetLevel(), -2, 0, Classes(target->GetClass()), 0);
+    if (expectedPrimary > 0.0f)
+        PlayerPrimaryStatToExpectedRatio = float(target->GetStat(primaryStat)) / expectedPrimary;
+
     return true;
 }
 
@@ -111,10 +123,21 @@ bool ContentTuningParams::GenerateDataForUnits<Player, Creature>(Player* attacke
         ScalingHealthItemLevelCurveID = contentTuning->HealthItemLevelCurveID;
         ScalingHealthPrimaryStatCurveID = contentTuning->HealthPrimaryStatCurveID;
         TargetContentTuningID = contentTuning->ID;
+        PlayerContentTuningID = contentTuning->ID;
+        TargetHealingContentTuningID = contentTuning->ID;
     }
     TargetLevel = target->GetLevel();
     Expansion = creatureDifficulty->HealthScalingExpansion;
     TargetScalingLevelDelta = int8(target->m_unitData->ScalingLevelDelta);
+    if (target->HasScalableLevels())
+        Flags = 0;
+
+    Stats const primaryStat = attacker->GetPrimaryStat();
+    float const expectedPrimary = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerPrimaryStat,
+        attacker->GetLevel(), -2, 0, Classes(attacker->GetClass()), 0);
+    if (expectedPrimary > 0.0f)
+        PlayerPrimaryStatToExpectedRatio = float(attacker->GetStat(primaryStat)) / expectedPrimary;
+
     return true;
 }
 

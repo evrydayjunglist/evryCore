@@ -41,6 +41,7 @@
 #include "CharacterPackets.h"
 #include "CharmInfo.h"
 #include "Chat.h"
+#include "ChromieTimePackets.h"
 #include "ChatPackets.h"
 #include "ChatTextBuilder.h"
 #include "CinematicMgr.h"
@@ -2211,6 +2212,11 @@ void Player::GiveLevel(uint8 level)
     PlayerLevelInfo info;
     sObjectMgr->GetPlayerLevelInfo(GetRace(), GetClass(), level, &info);
 
+    // GiveLevel used to copy player_classlevelstats onto the character (Monk level 2 stamina 69).
+    // That overwrote the ExpectedStat values InitStatsForLevel already set at login, so stamina,
+    // health, and at current-expansion levels STR/AGI/INT, dropped until the next login.
+    ApplyRetailStatOverridesForLevel(level, info);
+
     uint32 basemana = 0;
     sObjectMgr->GetPlayerClassLevelInfo(GetClass(), level, basemana);
 
@@ -2293,6 +2299,11 @@ void Player::GiveLevel(uint8 level)
     if (IsMaxLevel())
         UpdateCriteria(CriteriaType::ReachMaxLevel);
 
+    // Chromie Time end level. Silent clear — do not cast confirmation spell 335807.
+    // Wiki also teleports to the capital; coords are world Chromie 167032 (Stormwind / Orgrimmar embassy).
+    if (m_activePlayerData->UiChromieTimeExpansionID && level >= GetChromieTimeEndLevel())
+        RemoveFromChromieTime(true);
+
     PushQuests();
 
     sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
@@ -2337,6 +2348,77 @@ void Player::InitTalentForLevel()
         SendTalentsInfoData(); // update at client
 }
 
+// ExpectedStat.db2 override on top of the player_classlevelstats PlayerLevelInfo for `level`.
+// Shared by InitStatsForLevel (login) and GiveLevel (in-session) so those paths stay the same.
+// Without this, a level-up reverted stamina and health to the old SQL curve until relog.
+// Owner sniff: Pandaren Monk MaxHealth 292 at login, 71 after leveling 1 to 2 (legacy stamina 69).
+void Player::ApplyRetailStatOverridesForLevel(uint8 level, PlayerLevelInfo& info) const
+{
+    // Base stamina and health from ExpectedStat.PlayerHealth, same path as Creature::GetMaxHealthByLevel.
+    // Replaces player_classlevelstats.sta. Call sites SetCreateHealth(0).
+    // contentTuningId 0 matches retail at levels 1, 8, and 80.
+    float expectedPlayerHealth = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerHealth,
+        level, -2, 0, Classes(GetClass()), 0);
+
+    // Midnight 12.0 health squish. Naked level 80 MaxHealth 46540/46520/46500 (Warrior/Mage/Demon Hunter)
+    // vs ExpectedStat.PlayerHealth 51710.81, about 0.9. ExpansionID 11 and ContentTuningXExpected
+    // row swaps did not match, so this is a sniff constant, not a DB2 row. Apply only at
+    // CURRENT_EXPANSION (level 80+); levels 1 and 8 already match the unsquished formula.
+    // Constant from level 80; re-derive if a level 90 sniff lands.
+    if (Trinity::GetExpansionForLevel(level) == CURRENT_EXPANSION)
+        expectedPlayerHealth *= 0.9f;
+
+    if (GtHpPerStaEntry const* hpPerSta = sHpPerStaGameTable.GetRow(level))
+        info.stats[STAT_STAMINA] = std::max<int32>(int32(std::round(expectedPlayerHealth / hpPerSta->Health)), 1);
+
+    // Per-class STR/AGI/INT from ExpectedStat. Same CURRENT_EXPANSION check as the health squish:
+    // PlayerSecondaryStat is 0 for levels 1-9 (ExpansionID -2), so applying it earlier would zero
+    // secondary stats. Leave player_classlevelstats below CURRENT_EXPANSION.
+    if (Trinity::GetExpansionForLevel(level) == CURRENT_EXPANSION)
+    {
+        float expectedPrimaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerPrimaryStat,
+            level, -2, 0, Classes(GetClass()), 0);
+        float expectedSecondaryStat = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::PlayerSecondaryStat,
+            level, -2, 0, Classes(GetClass()), 0);
+
+        // Naked level 80 primary stat is about 0.382 of the raw curve across Warrior, Paladin, Rogue,
+        // Priest, Mage, and Demon Hunter (spread 0.374-0.388). One shared constant, any class.
+        constexpr float PRIMARY_STAT_SQUISH = 0.382f;
+
+        Stats primaryStat = GetPrimaryStat();
+        info.stats[primaryStat] = std::max<int32>(int32(std::round(expectedPrimaryStat * PRIMARY_STAT_SQUISH)), 1);
+
+        // Retail splits PlayerSecondaryStat per class, not per primary-stat type. Warrior and Paladin
+        // both use STR but split very differently (~1% vs ~66% at level 80). Weights are
+        // observed secondary / PlayerSecondaryStat(80)=486.3374 from naked level 80 sniffs of those
+        // six classes. Which stat wins is stable with a second level for three classes; magnitude
+        // drifts (Paladin ~4% from 1 to 80, Rogue ~40%, Priest over 50%), so this is most accurate
+        // at 80-90. Hunter, Shaman, Warlock, Monk, Druid, Death Knight, and Evoker use the average
+        // of the six sniffed classes until those classes are sniffed.
+        struct SecondaryStatWeights { float strength, agility, intellect; };
+        SecondaryStatWeights secondaryWeights = [](Classes unitClass) -> SecondaryStatWeights
+        {
+            switch (unitClass)
+            {
+                case CLASS_WARRIOR:      return { 0.0f,     0.22208f, 0.22003f }; // STR primary
+                case CLASS_PALADIN:      return { 0.0f,     0.11104f, 0.32285f }; // STR primary
+                case CLASS_ROGUE:        return { 0.26523f, 0.0f,     0.22414f }; // AGI primary
+                case CLASS_DEMON_HUNTER: return { 0.26523f, 0.0f,     0.33101f }; // AGI primary
+                case CLASS_PRIEST:       return { 0.19123f, 0.27554f, 0.0f     }; // INT primary
+                case CLASS_MAGE:         return { 0.14804f, 0.22003f, 0.0f     }; // INT primary
+                default:                 return { 0.23304f, 0.23304f, 0.23304f }; // untested -- neutral average fallback
+            }
+        }(Classes(GetClass()));
+
+        if (primaryStat != STAT_STRENGTH)
+            info.stats[STAT_STRENGTH] = std::max<int32>(int32(std::round(expectedSecondaryStat * secondaryWeights.strength)), 1);
+        if (primaryStat != STAT_AGILITY)
+            info.stats[STAT_AGILITY] = std::max<int32>(int32(std::round(expectedSecondaryStat * secondaryWeights.agility)), 1);
+        if (primaryStat != STAT_INTELLECT)
+            info.stats[STAT_INTELLECT] = std::max<int32>(int32(std::round(expectedSecondaryStat * secondaryWeights.intellect)), 1);
+    }
+}
+
 void Player::InitStatsForLevel(bool reapplyMods)
 {
     if (reapplyMods)                                        //reapply stats values only on .reset stats (level) command
@@ -2358,6 +2440,11 @@ void Player::InitStatsForLevel(bool reapplyMods)
     if (m_activePlayerData->XP >= m_activePlayerData->NextLevelXP)
         SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::XP), m_activePlayerData->NextLevelXP - 1);
 
+    // LoadFromDB calls SetXP() before InitStatsForLevel(), when NextLevelXP is still 0, so the
+    // <50% XP -> ScalingPlayerLevelDelta -1 rule never applied. Recompute now that NextLevelXP
+    // is valid (also covers CreatePlayer / other InitStatsForLevel callers).
+    SetXP(m_activePlayerData->XP);
+
     // reset before any aura state sources (health set/aura apply)
     SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::AuraState), 0);
 
@@ -2374,6 +2461,8 @@ void Player::InitStatsForLevel(bool reapplyMods)
 
     // reset size before reapply auras
     SetObjectScale(1.0f);
+
+    ApplyRetailStatOverridesForLevel(GetLevel(), info);
 
     // save base values (bonuses already included in stored stats
     for (uint8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
@@ -14077,6 +14166,12 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
     switch (gossipOptionNpc)
     {
         case GossipOptionNpc::None:
+            // Retail leaves Chromie Time via gossip SpellID (e.g. 335807 / effect 277 MiscValue 0)
+            if (item->SpellID)
+            {
+                PlayerTalkClass->SendCloseGossip();
+                CastSpell(this, uint32(*item->SpellID), true);
+            }
             break;
         case GossipOptionNpc::Vendor:
             GetSession()->SendListInventory(guid);
@@ -14158,8 +14253,6 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
         case GossipOptionNpc::GarrisonTradeskillNpc: // NYI
             break;
         case GossipOptionNpc::GarrisonRecruitment: // NYI
-            break;
-        case GossipOptionNpc::ChromieTimeNpc: // NYI
             break;
         case GossipOptionNpc::RuneforgeLegendaryCrafting: // NYI
             break;
@@ -18813,6 +18906,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadCUFProfiles(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CUF_PROFILES));
 
     _LoadPlayerData(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_DATA_ELEMENTS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_DATA_FLAGS));
+    _LoadChromieTime(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CHROMIE_TIME));
 
     std::unique_ptr<Garrison> garrison = std::make_unique<Garrison>(this);
     if (garrison->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_GARRISON),
@@ -20763,6 +20857,7 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
     _SaveCUFProfiles(trans);
     _SavePlayerData(trans);
     _SaveCharacterBankTabSettings(trans);
+    _SaveChromieTime(trans);
     if (_garrison)
         _garrison->SaveToDB(trans);
 
@@ -21707,6 +21802,38 @@ void Player::_SaveCharacterBankTabSettings(CharacterDatabaseTransaction trans) c
         stmt->setInt32(5, *tabSetting.DepositFlags);
         trans->Append(stmt);
     }
+}
+
+void Player::_LoadChromieTime(PreparedQueryResult result)
+{
+    if (!result)
+        return;
+
+    uint32 uiExpansionId = result->Fetch()[0].GetUInt32();
+    if (!uiExpansionId)
+        return;
+
+    // Do not restore Chromie Time past the ContentTuning end level (update field stays 0, save deletes the row).
+    if (GetLevel() >= GetChromieTimeEndLevel())
+        return;
+
+    SetChromieTimeExpansion(uiExpansionId);
+}
+
+void Player::_SaveChromieTime(CharacterDatabaseTransaction trans) const
+{
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_CHROMIE_TIME);
+    stmt->setUInt64(0, GetGUID().GetCounter());
+    trans->Append(stmt);
+
+    int32 uiExpansionId = m_activePlayerData->UiChromieTimeExpansionID;
+    if (uiExpansionId <= 0)
+        return;
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_CHROMIE_TIME);
+    stmt->setUInt64(0, GetGUID().GetCounter());
+    stmt->setUInt32(1, uint32(uiExpansionId));
+    trans->Append(stmt);
 }
 
 void Player::outDebugValues() const
@@ -30335,6 +30462,140 @@ void Player::SetDataElementCharacter(uint32 dataElementId, std::variant<int64, f
     }
 
     _playerDataElementsNeedSave.insert(dataElementId);
+}
+
+UF::CTROptions Player::BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const
+{
+    UF::CTROptions options = *m_playerData->CtrOptions;
+    options.FactionGroup = GetFactionGroupForRace(GetRace());
+
+    if (uiExpansionId)
+    {
+        if (UIChromieTimeExpansionInfoEntry const* info = sUIChromieTimeExpansionInfoStore.LookupEntry(uiExpansionId))
+            options.ChromieTimeExpansionMask = uint32(info->ExpansionMask);
+        else
+            options.ChromieTimeExpansionMask = 0;
+
+        if (options.ConditionalFlags.empty())
+            options.ConditionalFlags.push_back(1u);
+        else
+            options.ConditionalFlags[0] |= 1u;
+    }
+    else
+    {
+        options.ChromieTimeExpansionMask = 0;
+        if (!options.ConditionalFlags.empty())
+            options.ConditionalFlags[0] &= ~1u;
+    }
+
+    return options;
+}
+
+uint32 Player::GetChromieTimeStartLevel()
+{
+    // UIChromieTimeExpansionInfo ContentTuning rows (e.g. 1700/1736): MinLevelSquish = 10.
+    // Blizzard news: available at level 10 or after finishing Exile's Reach (see HasCompletedExilesReach).
+    return 10u;
+}
+
+uint32 Player::GetChromieTimeSelectLockLevel()
+{
+    // Blizzard support 275056 (Timewalking Campaign No Longer Available): the option to choose
+    // is removed at level 68. That applies to start and re-enter from the present. Scaling while
+    // already in Chromie Time still uses GetChromieTimeEndLevel() from ContentTuning.
+    // Not confirmed that Midnight's article body was updated; forums still report about 68.
+    return 68u;
+}
+
+uint32 Player::GetChromieTimeEndLevel()
+{
+    // ContentTuning Chromie MaxLevelSquish=1 + MaxLevelType PrevExpansionMaxLevel
+    return 1u + GetMaxLevelForExpansion(uint32(std::max(int32(CURRENT_EXPANSION) - 1, 0)));
+}
+
+bool Player::HasCompletedExilesReach() const
+{
+    // Capital arrival after leaving map 2175 — not achievement 14222 (that CriteriaTree is the
+    // old Alliance/Horde Battle for Azeroth starter: Nation of Kul Tiras / Mission Statement).
+    constexpr uint32 QUEST_WELCOME_TO_STORMWIND = 59583;
+    constexpr uint32 QUEST_WELCOME_TO_ORGRIMMAR = 60343;
+
+    return IsQuestRewarded(QUEST_WELCOME_TO_STORMWIND) || IsQuestRewarded(QUEST_WELCOME_TO_ORGRIMMAR);
+}
+
+bool Player::CanSelectChromieTimeExpansion() const
+{
+    uint32 const level = GetLevel();
+
+    // Blizzard news 23574988: available at level 10 or after completing Exile's Reach.
+    // Racial starters never reward Welcome to Stormwind or Orgrimmar — they still need level 10.
+    if (level < GetChromieTimeStartLevel() && !HasCompletedExilesReach())
+        return false;
+
+    // Past the ContentTuning Chromie end level — refuse select; kick clears on level-up when already in.
+    if (level >= GetChromieTimeEndLevel())
+        return false;
+
+    // Not confirmed by sniff. Start and re-enter from the present lock at
+    // GetChromieTimeSelectLockLevel() (68). Already in a campaign may change timelines until
+    // the end level. Blizzard support 275056 talks about the "option to choose"; ContentTuning
+    // max is about 81. Reports: leveled to 80 while in Chromie Time; a level 70 alt could not
+    // start; changing while in at 70. Other reports: no swap after about 70. Revisit if a
+    // retail sniff contradicts this.
+    if (!m_activePlayerData->UiChromieTimeExpansionID && level >= GetChromieTimeSelectLockLevel())
+        return false;
+
+    return true;
+}
+
+void Player::SetChromieTimeExpansion(uint32 uiExpansionId)
+{
+    if (uiExpansionId && !sUIChromieTimeExpansionInfoStore.LookupEntry(uiExpansionId))
+        return;
+
+    UF::CTROptions const& current = *m_playerData->CtrOptions;
+    UF::CTROptions options = BuildCtrOptionsForChromieTime(uiExpansionId);
+
+    // Leaving and selecting: SMSG_SET_CTR_OPTIONS (from → to) with Chromie CTR changes.
+    // Skip during load (not in world) and when nothing changed.
+    if (IsInWorld() && (current != options || m_activePlayerData->UiChromieTimeExpansionID != int32(uiExpansionId)))
+    {
+        WorldPackets::ChromieTime::SetCtrOptions setCtrOptions;
+        setCtrOptions.From.ConditionalFlags = current.ConditionalFlags;
+        setCtrOptions.From.FactionGroup = int8(current.FactionGroup);
+        setCtrOptions.From.ChromieTimeExpansionMask = current.ChromieTimeExpansionMask;
+        setCtrOptions.To.ConditionalFlags = options.ConditionalFlags;
+        setCtrOptions.To.FactionGroup = int8(options.FactionGroup);
+        setCtrOptions.To.ChromieTimeExpansionMask = options.ChromieTimeExpansionMask;
+        SendDirectMessage(setCtrOptions.Write());
+    }
+
+    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData)
+        .ModifyValue(&UF::ActivePlayerData::UiChromieTimeExpansionID), int32(uiExpansionId));
+
+    auto ctrOptions = m_values.ModifyValue(&Player::m_playerData).ModifyValue(&UF::PlayerData::CtrOptions);
+    SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::FactionGroup), options.FactionGroup);
+    SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::ChromieTimeExpansionMask), options.ChromieTimeExpansionMask);
+    SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::ConditionalFlags), std::move(options.ConditionalFlags));
+}
+
+void Player::RemoveFromChromieTime(bool teleportToCapital /*= false*/)
+{
+    if (!m_activePlayerData->UiChromieTimeExpansionID)
+        return;
+
+    SetChromieTimeExpansion(0);
+
+    if (!teleportToCapital || !IsInWorld())
+        return;
+
+    // Kick to the capital near Chromie 167032 — not on her, the hourglass, or the campfire.
+    // Orgrimmar: Chromie (1557.18,-4216.54) faces about northeast toward bonfire GO 204676 (1558.98,-4212.85);
+    //      stand southwest of the pedestal at ground Z, facing Chromie. Stormwind: no campfire on the pad.
+    if (GetTeamId() == TEAM_ALLIANCE)
+        TeleportTo(0, -8196.72f, 742.37f, 76.50f, 4.57677f); // ~3 yd from Chromie, face her (o+π)
+    else
+        TeleportTo(1, 1554.80f, -4219.20f, 54.25f, 0.95f);   // clear of hourglass 350063 + bonfire 204676
 }
 
 bool Player::HasDataFlagAccount(uint32 dataFlagId) const

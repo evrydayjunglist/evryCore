@@ -60,6 +60,7 @@ struct ItemTemplate;
 struct Loot;
 struct Mail;
 struct MapEntry;
+struct PlayerLevelInfo;
 struct PvpTalentEntry;
 struct QuestPackageItemEntry;
 struct RewardPackEntry;
@@ -1024,6 +1025,7 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_DATA_ELEMENTS,
     PLAYER_LOGIN_QUERY_LOAD_DATA_FLAGS,
     PLAYER_LOGIN_QUERY_LOAD_BANK_TAB_SETTINGS,
+    PLAYER_LOGIN_QUERY_LOAD_CHROMIE_TIME,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -1333,6 +1335,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool IsMaxLevel() const;
 
         void InitStatsForLevel(bool reapplyMods = false);
+
+        // ExpectedStat.db2 override on player_classlevelstats PlayerLevelInfo. Shared by
+        // InitStatsForLevel (login) and GiveLevel (in-session) so those paths stay the same.
+        void ApplyRetailStatOverridesForLevel(uint8 level, PlayerLevelInfo& info) const;
 
         // .cheat command related
         bool GetCommandStatus(uint32 command) const { return (_activeCheats & command) != 0; }
@@ -3028,6 +3034,23 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         std::variant<int64, float> GetDataElementCharacter(uint32 dataElementId) const;
         void SetDataElementCharacter(uint32 dataElementId, std::variant<int64, float> value);
 
+        UF::CTROptions BuildCtrOptionsForChromieTime(uint32 uiExpansionId) const;
+        void SetChromieTimeExpansion(uint32 uiExpansionId);
+        /// Outdoor Chromie ContentTuning MinLevelSquish (campaign rows use 10).
+        static uint32 GetChromieTimeStartLevel();
+        /// First level that refuses Chromie start or re-enter from the present (Blizzard support 275056).
+        /// Changing campaign while already in Chromie Time uses CanSelectChromieTimeExpansion().
+        static uint32 GetChromieTimeSelectLockLevel();
+        /// Chromie max: 1 + GetMaxLevelForExpansion(CURRENT_EXPANSION - 1).
+        static uint32 GetChromieTimeEndLevel();
+        /// Left Exile's Reach (capital arrival quest rewarded). Chromie at level 10 or after Exile's Reach.
+        bool HasCompletedExilesReach() const;
+        /// Start and re-enter from the present lock at GetChromieTimeSelectLockLevel(). Already in a
+        /// campaign may change timelines until GetChromieTimeEndLevel(). Not confirmed by sniff.
+        bool CanSelectChromieTimeExpansion() const;
+        /// Clear Chromie update fields and CTR. Optional teleport to the faction Chromie in the capital.
+        void RemoveFromChromieTime(bool teleportToCapital = false);
+
         bool HasDataFlagAccount(uint32 dataFlagId) const;
         void SetDataFlagAccount(uint32 dataFlagId, bool on);
 
@@ -3160,6 +3183,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _LoadCUFProfiles(PreparedQueryResult result);
         void _LoadPlayerData(PreparedQueryResult elementsResult, PreparedQueryResult flagsResult);
         void _LoadCharacterBankTabSettings(PreparedQueryResult result);
+        void _LoadChromieTime(PreparedQueryResult result);
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/
@@ -3190,6 +3214,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _SaveCUFProfiles(CharacterDatabaseTransaction trans);
         void _SavePlayerData(CharacterDatabaseTransaction trans);
         void _SaveCharacterBankTabSettings(CharacterDatabaseTransaction trans) const;
+        void _SaveChromieTime(CharacterDatabaseTransaction trans) const;
 
         /*********************************************************/
         /***              ENVIRONMENTAL SYSTEM                 ***/

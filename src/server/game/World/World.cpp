@@ -1725,6 +1725,9 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading UIMap quests...");
     sObjectMgr->LoadUiMapQuests();
 
+    TC_LOG_INFO("server.loading", "Loading Chromie Time expansion quests...");
+    sObjectMgr->LoadChromieTimeExpansionQuests();
+
     TC_LOG_INFO("server.loading", "Loading Jump Charge Params...");
     sObjectMgr->LoadJumpChargeParams();
 

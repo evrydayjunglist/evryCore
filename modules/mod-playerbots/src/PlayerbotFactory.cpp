@@ -304,15 +304,16 @@ CreateFilters LoadCreateFilters()
                 continue;
             }
 
+            bool accepted = false;
             for (ChrRacesEntry const* raceEntry : hits)
             {
                 if (!IsFirstFactoryRace(raceEntry))
-                {
-                    TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: race '{}' is not a Horde level-1 race this factory creates. Skipping it.", name);
                     continue;
-                }
                 filter.Races.insert(uint8(raceEntry->ID));
+                accepted = true;
             }
+            if (!accepted)
+                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: race '{}' is not a Horde level-1 race this factory creates. Skipping it.", name);
         }
     }
 
@@ -342,15 +343,16 @@ CreateFilters LoadCreateFilters()
                 continue;
             }
 
+            bool accepted = false;
             for (ChrClassesEntry const* classEntry : hits)
             {
                 if (!IsFirstFactoryClass(classEntry->ID))
-                {
-                    TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: class '{}' is not a level-1 class this factory creates. Skipping it.", name);
                     continue;
-                }
                 filter.Classes.insert(classEntry->ID);
+                accepted = true;
             }
+            if (!accepted)
+                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: class '{}' is not a level-1 class this factory creates. Skipping it.", name);
         }
     }
 

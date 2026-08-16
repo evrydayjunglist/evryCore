@@ -706,6 +706,13 @@ namespace
         }
     }
 
+    bool PlayerCanSeeOrDetect(Player const* player, WorldObject const* obj)
+    {
+        if (!player || !obj)
+            return false;
+        return player->CanSeeOrDetect(obj);
+    }
+
     bool GameObjectIsSelectable(Player const* player, GameObject const* go)
     {
         if (!player || !go || !go->IsInWorld() || !go->isSpawned())
@@ -722,7 +729,7 @@ namespace
             return false;
         if (go->IsPrivateObject() && !go->CheckPrivateObjectOwnerVisibility(player))
             return false;
-        if (!player->CanSeeOrDetect(go))
+        if (!PlayerCanSeeOrDetect(player, go))
             return false;
         return true;
     }
@@ -1509,6 +1516,8 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
     {
         if (!creature || skip.contains(creature->GetGUID()))
             continue;
+        if (!PlayerCanSeeOrDetect(player, creature))
+            continue;
         if (!creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
             continue;
 
@@ -1636,6 +1645,8 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
     for (Creature* creature : nearby)
     {
         if (!creature || skip.contains(creature->GetGUID()))
+            continue;
+        if (!PlayerCanSeeOrDetect(player, creature))
             continue;
         if (!player->IsValidAttackTarget(creature))
             continue;
@@ -2437,6 +2448,8 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseIte
     for (Creature* creature : nearby)
     {
         if (!creature || skip.contains(creature->GetGUID()))
+            continue;
+        if (!PlayerCanSeeOrDetect(player, creature))
             continue;
 
         IncompleteMonsterCredit const* matched = nullptr;

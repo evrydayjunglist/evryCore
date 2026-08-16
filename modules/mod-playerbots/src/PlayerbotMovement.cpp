@@ -180,6 +180,14 @@ namespace
     }
 }
 
+void PlayerbotWalker::Stop(Player* player)
+{
+    if (_state == State::Moving && player && player->GetSession())
+        QueueMove(player, player->GetPosition(), false, false);
+
+    Reset();
+}
+
 void PlayerbotWalker::Reset()
 {
     _state = State::Idle;

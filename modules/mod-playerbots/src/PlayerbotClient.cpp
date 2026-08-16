@@ -508,7 +508,7 @@ namespace
 
     Optional<PlayerbotClient::CombatTarget> MakeCombatTarget(Player* player, Creature* creature, int32 questId, uint32 creditEntry)
     {
-        if (!player || !creature || !questId || !creditEntry)
+        if (!player || !creature)
             return {};
 
         Position standPos;
@@ -756,6 +756,8 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
                 continue;
             if (kind == QuestSearchKind::Accept && !isAccept)
                 continue;
+            if (kind == QuestSearchKind::Talk && !isTurnIn && !isAccept)
+                continue;
             if (!isTurnIn && !isAccept)
                 continue;
 
@@ -790,7 +792,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
     return best;
 }
 
-Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Player* player)
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Player* player, int32 skipQuestId)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -802,6 +804,8 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
     for (auto const& [questId, status] : player->getQuestStatusMap())
     {
         if (status.Status != QUEST_STATUS_COMPLETE)
+            continue;
+        if (skipQuestId && int32(questId) == skipQuestId)
             continue;
 
         std::unordered_set<uint32> enderEntries;
@@ -833,33 +837,6 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         return {};
 
     return best;
-}
-
-bool PlayerbotClient::HasLogCompleteTurnInOnThisMap(Player* player)
-{
-    if (!player || !player->IsInWorld() || !player->GetMap())
-        return false;
-
-    uint32 const mapId = player->GetMap()->GetId();
-
-    for (auto const& [questId, status] : player->getQuestStatusMap())
-    {
-        if (status.Status != QUEST_STATUS_COMPLETE)
-            continue;
-
-        std::unordered_set<uint32> enderEntries;
-        CollectCreatureEnderEntries(questId, enderEntries);
-        if (enderEntries.empty())
-            continue;
-
-        if (GetFinishedQuestMapMarker(questId, mapId, *player))
-            return true;
-
-        if (FindLivingEnderOnMap(player, enderEntries, {}))
-            return true;
-    }
-
-    return false;
 }
 
 Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip)
@@ -921,10 +898,76 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
     return best;
 }
 
+Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindAttackerTarget(Player* player)
+{
+    if (!player || !player->IsInWorld())
+        return {};
+
+    Creature* best = nullptr;
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (Unit* attacker : player->getAttackers())
+    {
+        Creature* creature = attacker ? attacker->ToCreature() : nullptr;
+        if (!creature || !creature->IsAlive())
+            continue;
+        if (!player->IsValidAttackTarget(creature))
+            continue;
+
+        float const dist = player->GetExactDist(creature);
+        if (dist >= bestDist)
+            continue;
+
+        bestDist = dist;
+        best = creature;
+    }
+
+    if (!best)
+        return {};
+
+    std::vector<IncompleteItemCredit> itemCredits;
+    CollectIncompleteItemCredits(player, itemCredits);
+    std::vector<IncompleteMonsterCredit> monsterCredits;
+    CollectIncompleteMonsterCredits(player, monsterCredits);
+
+    int32 questId = 0;
+    uint32 creditEntry = 0;
+    uint32 itemId = 0;
+    for (IncompleteItemCredit const& credit : itemCredits)
+    {
+        if (!CreatureDropsQuestItem(best, credit.ItemId))
+            continue;
+        questId = credit.QuestId;
+        itemId = credit.ItemId;
+        creditEntry = best->GetEntry();
+        break;
+    }
+    if (!itemId)
+    {
+        for (IncompleteMonsterCredit const& credit : monsterCredits)
+        {
+            if (!CreatureGivesMonsterCredit(best, credit.CreditEntry))
+                continue;
+            questId = credit.QuestId;
+            creditEntry = credit.CreditEntry;
+            break;
+        }
+    }
+
+    Optional<CombatTarget> target = MakeCombatTarget(player, best, questId, creditEntry);
+    if (!target)
+        return {};
+
+    target->ItemId = itemId;
+    return target;
+}
+
 bool PlayerbotClient::CombatTargetStillNeeded(Player* player, CombatTarget const& target)
 {
-    if (!player || target.QuestId <= 0)
+    if (!player)
         return false;
+    if (target.QuestId <= 0)
+        return true;
     if (player->GetQuestStatus(uint32(target.QuestId)) != QUEST_STATUS_INCOMPLETE)
         return false;
 
@@ -968,7 +1011,7 @@ bool PlayerbotClient::CombatTargetStillNeeded(Player* player, CombatTarget const
     return false;
 }
 
-Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
+Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -998,18 +1041,22 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
 
         LoadPoiGrids(map, blobs);
 
-        for (ObjectivePoiBlob const& blob : blobs)
+        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.CreditEntry == skipEntry);
+        if (!skipMarker)
         {
-            for (Position const& point : blob.Points)
+            for (ObjectivePoiBlob const& blob : blobs)
             {
-                float const dist = player->GetExactDist(point);
-                if (dist >= bestMarkerDist)
-                    continue;
+                for (Position const& point : blob.Points)
+                {
+                    float const dist = player->GetExactDist(point);
+                    if (dist >= bestMarkerDist)
+                        continue;
 
-                bestMarkerDist = dist;
-                bestMarker = point;
-                bestMarkerCredit = &credit;
-                haveMarker = true;
+                    bestMarkerDist = dist;
+                    bestMarker = point;
+                    bestMarkerCredit = &credit;
+                    haveMarker = true;
+                }
             }
         }
 
@@ -1063,27 +1110,65 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
     return target;
 }
 
-bool PlayerbotClient::HasLogIncompleteMonsterOnThisMap(Player* player)
+Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip)
 {
-    if (!player || !player->IsInWorld() || !player->GetMap())
-        return false;
+    if (!player || !player->IsInWorld())
+        return {};
 
-    uint32 const mapId = player->GetMap()->GetId();
-    std::vector<IncompleteMonsterCredit> credits;
-    CollectIncompleteMonsterCredits(player, credits);
+    std::vector<IncompleteItemCredit> credits;
+    CollectIncompleteItemCredits(player, credits);
+    if (credits.empty())
+        return {};
 
-    for (IncompleteMonsterCredit const& credit : credits)
+    std::vector<Creature*> nearby;
+    FindCreatureOptions options;
+    options.IsAlive = FindCreatureAliveState::Dead;
+    player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+
+    ItemLootTarget best;
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (Creature* creature : nearby)
     {
-        std::vector<ObjectivePoiBlob> blobs;
-        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.CreditEntry), credit.StorageIndex, blobs);
-        if (!blobs.empty())
-            return true;
+        if (!creature || skip.contains(creature->GetGUID()))
+            continue;
+
+        IncompleteItemCredit const* matched = nullptr;
+        for (IncompleteItemCredit const& credit : credits)
+        {
+            if (!CreatureDropsQuestItem(creature, credit.ItemId))
+                continue;
+            if (!CorpseHasQuestItemFor(player, creature, credit.ItemId))
+                continue;
+            matched = &credit;
+            break;
+        }
+        if (!matched)
+            continue;
+
+        float const dist = player->GetExactDist(creature);
+        if (dist >= bestDist)
+            continue;
+
+        Optional<ItemLootTarget> target = MakeItemLootTarget(player, creature, matched->QuestId, matched->ItemId, true);
+        if (!target)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that corpse.",
+                player->GetName(), creature->GetGUID().ToString());
+            continue;
+        }
+
+        bestDist = dist;
+        best = *target;
     }
 
-    return false;
+    if (best.CreatureGuid.IsEmpty())
+        return {};
+
+    return best;
 }
 
-Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
+Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -1116,18 +1201,22 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
 
         LoadPoiGrids(map, blobs);
 
-        for (ObjectivePoiBlob const& blob : blobs)
+        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.ItemId == skipEntry);
+        if (!skipMarker)
         {
-            for (Position const& point : blob.Points)
+            for (ObjectivePoiBlob const& blob : blobs)
             {
-                float const dist = player->GetExactDist(point);
-                if (dist >= bestMarkerDist)
-                    continue;
+                for (Position const& point : blob.Points)
+                {
+                    float const dist = player->GetExactDist(point);
+                    if (dist >= bestMarkerDist)
+                        continue;
 
-                bestMarkerDist = dist;
-                bestMarker = point;
-                bestMarkerCredit = &credit;
-                haveMarker = true;
+                    bestMarkerDist = dist;
+                    bestMarker = point;
+                    bestMarkerCredit = &credit;
+                    haveMarker = true;
+                }
             }
         }
 
@@ -1203,26 +1292,6 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
     return target;
 }
 
-bool PlayerbotClient::HasLogIncompleteItemOnThisMap(Player* player)
-{
-    if (!player || !player->IsInWorld() || !player->GetMap())
-        return false;
-
-    uint32 const mapId = player->GetMap()->GetId();
-    std::vector<IncompleteItemCredit> credits;
-    CollectIncompleteItemCredits(player, credits);
-
-    for (IncompleteItemCredit const& credit : credits)
-    {
-        std::vector<ObjectivePoiBlob> blobs;
-        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.ItemId), credit.StorageIndex, blobs);
-        if (!blobs.empty())
-            return true;
-    }
-
-    return false;
-}
-
 bool PlayerbotClient::ItemLootTargetStillNeeded(Player* player, ItemLootTarget const& target)
 {
     if (!player || target.QuestId <= 0 || !target.ItemId)
@@ -1262,7 +1331,64 @@ PlayerbotClient::CombatTarget PlayerbotClient::CombatTargetFromItemLoot(ItemLoot
     return combat;
 }
 
-Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
+Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange)
+{
+    if (!player || !player->IsInWorld())
+        return {};
+
+    std::vector<IncompleteGameObjectCredit> credits;
+    CollectIncompleteGameObjectCredits(player, credits);
+    if (credits.empty())
+        return {};
+
+    std::vector<GameObject*> nearby;
+    player->GetGameObjectListWithOptionsInGrid(nearby, range, {});
+
+    GameObjectTarget best;
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (GameObject* go : nearby)
+    {
+        if (!go || skip.contains(go->GetGUID()))
+            continue;
+
+        IncompleteGameObjectCredit const* matched = nullptr;
+        for (IncompleteGameObjectCredit const& credit : credits)
+        {
+            if (!GameObjectIsUsableForObjective(player, go, credit.GoEntry))
+                continue;
+            matched = &credit;
+            break;
+        }
+        if (!matched)
+            continue;
+
+        if (mustBeInUseRange && !player->GetGameObjectIfCanInteractWith(go->GetGUID()))
+            continue;
+
+        float const dist = player->GetExactDist(go);
+        if (dist >= bestDist)
+            continue;
+
+        Optional<GameObjectTarget> target = MakeGameObjectUseTarget(player, go, matched->QuestId);
+        if (!target)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+                player->GetName(), go->GetGUID().ToString());
+            continue;
+        }
+
+        bestDist = dist;
+        best = *target;
+    }
+
+    if (best.GoGuid.IsEmpty())
+        return {};
+
+    return best;
+}
+
+Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -1292,18 +1418,22 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
 
         LoadPoiGrids(map, blobs);
 
-        for (ObjectivePoiBlob const& blob : blobs)
+        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.GoEntry == skipEntry);
+        if (!skipMarker)
         {
-            for (Position const& point : blob.Points)
+            for (ObjectivePoiBlob const& blob : blobs)
             {
-                float const dist = player->GetExactDist(point);
-                if (dist >= bestMarkerDist)
-                    continue;
+                for (Position const& point : blob.Points)
+                {
+                    float const dist = player->GetExactDist(point);
+                    if (dist >= bestMarkerDist)
+                        continue;
 
-                bestMarkerDist = dist;
-                bestMarker = point;
-                bestMarkerCredit = &credit;
-                haveMarker = true;
+                    bestMarkerDist = dist;
+                    bestMarker = point;
+                    bestMarkerCredit = &credit;
+                    haveMarker = true;
+                }
             }
         }
 
@@ -1347,26 +1477,6 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
     target.QuestId = bestMarkerCredit->QuestId;
     target.GoEntry = bestMarkerCredit->GoEntry;
     return target;
-}
-
-bool PlayerbotClient::HasLogIncompleteGameObjectOnThisMap(Player* player)
-{
-    if (!player || !player->IsInWorld() || !player->GetMap())
-        return false;
-
-    uint32 const mapId = player->GetMap()->GetId();
-    std::vector<IncompleteGameObjectCredit> credits;
-    CollectIncompleteGameObjectCredits(player, credits);
-
-    for (IncompleteGameObjectCredit const& credit : credits)
-    {
-        std::vector<ObjectivePoiBlob> blobs;
-        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.GoEntry), credit.StorageIndex, blobs);
-        if (!blobs.empty())
-            return true;
-    }
-
-    return false;
 }
 
 bool PlayerbotClient::GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target)

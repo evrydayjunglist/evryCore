@@ -33,7 +33,8 @@ namespace PlayerbotClient
     enum class QuestSearchKind
     {
         TurnIn,
-        Accept
+        Accept,
+        Talk
     };
 
     struct QuestTarget
@@ -93,21 +94,20 @@ namespace PlayerbotClient
     void QueueLootRelease(WorldSession* session, ObjectGuid unitGuid);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind);
-    Optional<QuestTarget> FindLogCompleteTurnIn(Player* player);
-    bool HasLogCompleteTurnInOnThisMap(Player* player);
+    Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, int32 skipQuestId = 0);
+    Optional<CombatTarget> FindAttackerTarget(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
-    Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
-    bool HasLogIncompleteMonsterOnThisMap(Player* player);
+    Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
-    Optional<ItemLootTarget> FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
-    bool HasLogIncompleteItemOnThisMap(Player* player);
+    Optional<ItemLootTarget> FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
+    Optional<ItemLootTarget> FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool ItemLootTargetStillNeeded(Player* player, ItemLootTarget const& target);
     CombatTarget CombatTargetFromItemLoot(ItemLootTarget const& target);
     bool TryOpenLoot(Player* player, ObjectGuid creatureGuid);
     bool TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid creatureGuid, uint32 itemId);
     bool HasOpenLootOn(Player* player, ObjectGuid creatureGuid);
-    Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
-    bool HasLogIncompleteGameObjectOnThisMap(Player* player);
+    Optional<GameObjectTarget> FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
+    Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);
     bool TryInteractQuest(Player* player, QuestTarget const& target);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);

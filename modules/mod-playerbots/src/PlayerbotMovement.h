@@ -30,6 +30,7 @@ class PlayerbotWalker
 public:
     bool Start(Player* player, Position const& destination, float stopDistance);
     void Update(Player* player, uint32 diff);
+    void Stop(Player* player);
     void Reset();
 
     // Stand next to the target. Max interact range can land in a campfire on the way.

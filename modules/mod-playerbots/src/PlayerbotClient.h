@@ -24,6 +24,7 @@
 #include "UnitDefines.h"
 #include <unordered_set>
 
+class Creature;
 class Item;
 class Player;
 class WorldSession;
@@ -113,6 +114,7 @@ namespace PlayerbotClient
     void QueueUseItem(Player* player, Item* item, ObjectGuid unitTarget, uint32 spellId);
     void QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid);
     void QueueLootItem(WorldSession* session, ObjectGuid lootObj, uint8 lootListId);
+    void QueueLootMoney(WorldSession* session);
     void QueueLootRelease(WorldSession* session, ObjectGuid unitGuid);
     void QueueRepopRequest(WorldSession* session);
     void QueueReclaimCorpse(WorldSession* session, ObjectGuid corpseGuid);
@@ -125,12 +127,14 @@ namespace PlayerbotClient
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
     Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
+    Optional<ItemLootTarget> MakeCorpseLootTarget(Player* player, Creature* creature);
     Optional<ItemLootTarget> FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<ItemLootTarget> FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool ItemLootTargetStillNeeded(Player* player, ItemLootTarget const& target);
     CombatTarget CombatTargetFromItemLoot(ItemLootTarget const& target);
     bool TryOpenLoot(Player* player, ObjectGuid creatureGuid);
     bool TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid lootOwner, uint32 itemId);
+    bool TryTakeAllFromOpenLoot(Player* player, ObjectGuid lootOwner);
     bool HasOpenLootOn(Player* player, ObjectGuid lootOwner);
     bool PlayerHasResurrectionSickness(Player const* player);
     bool CorpseReclaimDelayFinished(Player const* player);

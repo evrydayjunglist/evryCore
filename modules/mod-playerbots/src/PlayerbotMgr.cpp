@@ -243,6 +243,25 @@ void PlayerbotMgr::ReplyTimeSync(WorldSession* session)
         session->GetAccountId(), sequenceIndex);
 }
 
+void PlayerbotMgr::ReplyTeleportAcks(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    if (player->IsBeingTeleportedNear() && player->GetTeleportState() == TeleportState::WaitingForTeleportAck)
+    {
+        PlayerbotClient::QueueMoveTeleportAck(player);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_TELEPORT_ACK.", player->GetName());
+        return;
+    }
+
+    if (player->GetTeleportState() == TeleportState::WaitingForWorldPortAck)
+    {
+        PlayerbotClient::QueueWorldPortResponse(player->GetSession());
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_WORLD_PORT_RESPONSE.", player->GetName());
+    }
+}
+
 void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 {
     if (!bot.ContinueLoginCalled)
@@ -253,7 +272,12 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
 
     Player* player = session->GetPlayer();
-    if (!player || !player->IsInWorld())
+    if (!player)
+        return;
+
+    ReplyTeleportAcks(player);
+
+    if (!player->IsInWorld())
         return;
 
     ReplyTimeSync(session);

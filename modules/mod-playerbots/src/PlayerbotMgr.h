@@ -97,6 +97,7 @@ private:
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
     void ReplyTimeSync(WorldSession* session);
+    void ReplyTeleportAcks(Player* player);
     bool UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff);
     void BeginDeath(PlayerbotRecord& bot, Player* player);
     void ClearDeath(PlayerbotRecord& bot);

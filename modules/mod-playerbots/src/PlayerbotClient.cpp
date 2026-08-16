@@ -109,6 +109,54 @@ void PlayerbotClient::QueueMoveInitActiveMoverComplete(WorldSession* session, ui
     session->QueuePacket(std::move(packet));
 }
 
+namespace
+{
+    // Unit keeps the movement sequence on a protected counter. SendTeleportPacket writes that
+    // value as SMSG_MOVE_TELEPORT SequenceIndex and then increments it.
+    struct UnitMovementCounterAccess : Unit
+    {
+        UnitMovementCounterAccess() = delete;
+        uint32 Read() const { return m_movementCounter; }
+    };
+
+    uint32 UnitMovementCounter(Unit const* unit)
+    {
+        return static_cast<UnitMovementCounterAccess const*>(unit)->Read();
+    }
+}
+
+void PlayerbotClient::QueueMoveTeleportAck(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    Unit const* mover = player->GetUnitBeingMoved();
+    if (!mover)
+        mover = player;
+
+    // Echo SequenceIndex. After SendTeleportPacket the counter is one past that value.
+    uint32 const counter = UnitMovementCounter(player);
+    int32 const ackIndex = counter ? int32(counter - 1) : 0;
+    int32 const moveTime = int32(GameTime::GetGameTimeMS());
+
+    WorldPacket packet(CMSG_MOVE_TELEPORT_ACK);
+    packet << mover->GetGUID();
+    packet << ackIndex;
+    packet << moveTime;
+    packet.SetReceiveTime(GameTime::Now());
+    player->GetSession()->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueWorldPortResponse(WorldSession* session)
+{
+    if (!session)
+        return;
+
+    WorldPacket packet(CMSG_WORLD_PORT_RESPONSE);
+    packet.SetReceiveTime(GameTime::Now());
+    session->QueuePacket(std::move(packet));
+}
+
 void PlayerbotClient::QueueMovement(WorldSession* session, OpcodeClient opcode, MovementInfo const& movementInfo)
 {
     if (!session)

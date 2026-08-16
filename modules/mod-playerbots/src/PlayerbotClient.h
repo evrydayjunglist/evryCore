@@ -111,6 +111,8 @@ namespace PlayerbotClient
     void QueueCompleteCinematic(WorldSession* session);
     void QueueTimeSyncResponse(WorldSession* session, uint32 sequenceIndex, uint32 clientTime);
     void QueueMoveInitActiveMoverComplete(WorldSession* session, uint32 ticks);
+    void QueueMoveTeleportAck(Player* player);
+    void QueueWorldPortResponse(WorldSession* session);
     void QueueMovement(WorldSession* session, OpcodeClient opcode, MovementInfo const& movementInfo);
     void QueueQuestGiverAcceptQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);
     void QueueQuestGiverCompleteQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);

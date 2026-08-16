@@ -22,6 +22,7 @@
 #include "CharacterPackets.h"
 #include "ClientBuildInfo.h"
 #include "Common.h"
+#include "Config.h"
 #include "Containers.h"
 #include "CryptoRandom.h"
 #include "DatabaseEnv.h"
@@ -44,7 +45,10 @@
 #include <algorithm>
 #include <array>
 #include <ranges>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -220,6 +224,139 @@ bool IsFirstFactoryRace(ChrRacesEntry const* raceEntry)
     return true;
 }
 
+std::string NormalizeListName(std::string_view text)
+{
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text)
+    {
+        if (c == ' ' || c == '-' || c == '\'' || c == '_')
+            continue;
+        out.push_back(charToLower(c));
+    }
+    return out;
+}
+
+std::string_view TrimNameToken(std::string_view text)
+{
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r'))
+        text.remove_prefix(1);
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r'))
+        text.remove_suffix(1);
+    return text;
+}
+
+bool LocalizedNameMatches(LocalizedString const& loc, std::string const& needle)
+{
+    char const* en = loc.Str[LOCALE_enUS];
+    if (!en || !*en)
+        return false;
+    return NormalizeListName(en) == needle;
+}
+
+std::vector<std::string> ParseNameList(std::string const& raw)
+{
+    std::vector<std::string> names;
+    for (std::string_view token : Trinity::Tokenize(raw, ',', false))
+    {
+        std::string_view trimmed = TrimNameToken(token);
+        if (!trimmed.empty())
+            names.emplace_back(trimmed);
+    }
+    return names;
+}
+
+struct CreateFilters
+{
+    bool LimitRaces = false;
+    bool LimitClasses = false;
+    std::unordered_set<uint8> Races;
+    std::unordered_set<uint8> Classes;
+};
+
+CreateFilters LoadCreateFilters()
+{
+    CreateFilters filter;
+
+    std::vector<std::string> raceNames = ParseNameList(sConfigMgr->GetStringDefault(PLAYERBOTS_RACES, ""));
+    if (!raceNames.empty())
+    {
+        filter.LimitRaces = true;
+        for (std::string const& name : raceNames)
+        {
+            std::string const needle = NormalizeListName(name);
+            std::vector<ChrRacesEntry const*> hits;
+            for (ChrRacesEntry const* raceEntry : sChrRacesStore)
+            {
+                if (!raceEntry)
+                    continue;
+                bool const match = LocalizedNameMatches(raceEntry->Name, needle)
+                    || LocalizedNameMatches(raceEntry->NameFemale, needle)
+                    || LocalizedNameMatches(raceEntry->NameLowercase, needle)
+                    || (raceEntry->ClientFileString && NormalizeListName(raceEntry->ClientFileString) == needle);
+                if (match)
+                    hits.push_back(raceEntry);
+            }
+
+            if (hits.empty())
+            {
+                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: unknown race name '{}'. Skipping it.", name);
+                continue;
+            }
+
+            for (ChrRacesEntry const* raceEntry : hits)
+            {
+                if (!IsFirstFactoryRace(raceEntry))
+                {
+                    TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: race '{}' is not a Horde level-1 race this factory creates. Skipping it.", name);
+                    continue;
+                }
+                filter.Races.insert(uint8(raceEntry->ID));
+            }
+        }
+    }
+
+    std::vector<std::string> classNames = ParseNameList(sConfigMgr->GetStringDefault(PLAYERBOTS_CLASSES, ""));
+    if (!classNames.empty())
+    {
+        filter.LimitClasses = true;
+        for (std::string const& name : classNames)
+        {
+            std::string const needle = NormalizeListName(name);
+            std::vector<ChrClassesEntry const*> hits;
+            for (ChrClassesEntry const* classEntry : sChrClassesStore)
+            {
+                if (!classEntry)
+                    continue;
+                bool const match = LocalizedNameMatches(classEntry->Name, needle)
+                    || LocalizedNameMatches(classEntry->NameMale, needle)
+                    || LocalizedNameMatches(classEntry->NameFemale, needle)
+                    || (classEntry->Filename && NormalizeListName(classEntry->Filename) == needle);
+                if (match)
+                    hits.push_back(classEntry);
+            }
+
+            if (hits.empty())
+            {
+                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: unknown class name '{}'. Skipping it.", name);
+                continue;
+            }
+
+            for (ChrClassesEntry const* classEntry : hits)
+            {
+                if (!IsFirstFactoryClass(classEntry->ID))
+                {
+                    TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: class '{}' is not a level-1 class this factory creates. Skipping it.", name);
+                    continue;
+                }
+                filter.Classes.insert(classEntry->ID);
+            }
+        }
+    }
+
+    return filter;
+}
+
 void AppendNameGenRace(std::vector<uint8>& races, uint8 race)
 {
     if (!race)
@@ -259,7 +396,7 @@ std::string RandomNameGenName(uint8 race, uint8 sex)
     return {};
 }
 
-std::vector<RaceClassSex> CollectCombos(WorldSession* session)
+std::vector<RaceClassSex> CollectCombos(WorldSession* session, CreateFilters const& filter)
 {
     std::vector<RaceClassSex> combos;
 
@@ -267,10 +404,14 @@ std::vector<RaceClassSex> CollectCombos(WorldSession* session)
     {
         if (!IsFirstFactoryRace(raceEntry))
             continue;
+        if (filter.LimitRaces && !filter.Races.contains(uint8(raceEntry->ID)))
+            continue;
 
         for (ChrClassesEntry const* classEntry : sChrClassesStore)
         {
             if (!classEntry || !IsFirstFactoryClass(classEntry->ID))
+                continue;
+            if (filter.LimitClasses && !filter.Classes.contains(classEntry->ID))
                 continue;
 
             if (!PassesCreateChecks(session, raceEntry->ID, classEntry->ID))
@@ -329,10 +470,14 @@ bool PickName(uint8 race, uint8 sex, std::string& name)
 
 bool CreateCharacter(WorldSession* session, PlayerbotAccount& account)
 {
-    std::vector<RaceClassSex> combos = CollectCombos(session);
+    CreateFilters const filter = LoadCreateFilters();
+    if (filter.LimitRaces || filter.LimitClasses)
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: generation is limited by Playerbots.Races and Playerbots.Classes. Those keys do not change an existing bot character.");
+
+    std::vector<RaceClassSex> combos = CollectCombos(session, filter);
     if (combos.empty())
     {
-        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: no Horde level-1 race/class combo passed the same checks HandleCharCreateOpcode uses.");
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: no legal Horde level-1 race/class combo to create. Check Playerbots.Races and Playerbots.Classes in modules/mod-playerbots.conf next to the server (empty means no filter). Those keys only apply when a new bot character is created.");
         return false;
     }
 

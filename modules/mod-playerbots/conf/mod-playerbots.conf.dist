@@ -27,6 +27,41 @@ Playerbots.Enable = 0
 Playerbots.Count = 1
 
 #
+#    Playerbots.Races
+#        Description: Comma-separated English race names for new bot characters.
+#                     Empty means any Horde level-1 race the factory already allows.
+#                     Names match the character create screen (Tauren, Orc, Blood Elf).
+#                     Spaces and capitalization do not matter. Only used when a new
+#                     bot character is created. Existing bots are not changed.
+#                     A name that is not a Horde level-1 factory race is skipped
+#                     and logged. If nothing legal remains, no character is created.
+#        Default:     "" (no filter)
+#
+#        Example:     Tauren
+#                     Tauren, Orc
+#
+
+Playerbots.Races =
+
+#
+#    Playerbots.Classes
+#        Description: Comma-separated English class names for new bot characters.
+#                     Empty means any level-1 class the factory already allows.
+#                     Names match the character create screen (Warrior, Hunter, Shaman).
+#                     Spaces and capitalization do not matter. Only used when a new
+#                     bot character is created. Existing bots are not changed.
+#                     Death Knight, Demon Hunter, Evoker, and similar are skipped
+#                     and logged. If the race and class lists have no legal combo,
+#                     no character is created.
+#        Default:     "" (no filter)
+#
+#        Example:     Warrior
+#                     Warrior, Hunter
+#
+
+Playerbots.Classes =
+
+#
 #    Playerbots.RegenerateCharacters
 #        Description: On the next worldserver start, delete every character on
 #                     PLAYERBOTn@PLAYERBOTS.LOCAL through the same path as a

@@ -482,7 +482,11 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     {
         bot.LookedForOtherYellowOnFace = true;
         if (TryLeaveFaceForOtherYellow(bot, player))
+        {
+            // Begin* clears the flag. Keep it: one look per hill, not one per Start.
+            bot.LookedForOtherYellowOnFace = true;
             return;
+        }
     }
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
@@ -1587,13 +1591,14 @@ bool PlayerbotMgr::TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, 
     if (foundGuid.IsEmpty() && skipPos.GetExactDist(foundPos) <= 5.0f)
         return false;
 
+    // Finder already skipped extraSkipGuid for this pick. Do not mark that spawn unreachable:
+    // mmap's first step was steep; she has not failed the walk around it.
     if (!extraSkipGuid.IsEmpty())
-        bot.UnreachableGuids.insert(extraSkipGuid);
-    RememberFailedYellow(bot, skipPos);
-
-    char const* what = foundGuid.IsEmpty() ? "another yellow of the same objective" : "another spawn of the same objective";
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} this approach is a face. Walking to {}.",
-        player->GetName(), what);
+    {
+        char const* what = foundGuid.IsEmpty() ? "another yellow of the same objective" : "another spawn of the same objective";
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} this approach is a face. Walking to {}.",
+            player->GetName(), what);
+    }
 
     if (kind == 1)
         return BeginGameObjectTarget(bot, player, *go);

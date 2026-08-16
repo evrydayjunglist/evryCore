@@ -45,6 +45,16 @@ namespace
     constexpr uint32 REFUSED_PATH_TYPES = PATHFIND_NOPATH | PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH;
     constexpr float SPELL_FOCUS_AVOID_RADIUS = 2.5f;
     constexpr float VIA_EXTRA_CLEARANCE = 1.0f;
+    constexpr float MAX_WALKABLE_SLOPE_DEGREES = 35.0f;
+
+    float GroundedStepDegrees(Position const& from, Position const& to)
+    {
+        float const dx = to.GetPositionX() - from.GetPositionX();
+        float const dy = to.GetPositionY() - from.GetPositionY();
+        float const run = std::sqrt(dx * dx + dy * dy);
+        float const rise = std::fabs(to.GetPositionZ() - from.GetPositionZ());
+        return std::atan2(rise, run) * (180.0f / float(M_PI));
+    }
 
     struct AvoidCircle
     {
@@ -200,6 +210,8 @@ void PlayerbotWalker::Reset()
     _stuckMs = 0;
     _logMs = 0;
     _lastProgressPos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    _lastGrounded.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    _repathedFromSlope = false;
 }
 
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out)
@@ -382,6 +394,11 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     _stuckMs = 0;
     _logMs = 0;
     _lastProgressPos = player->GetPosition();
+    float x = player->GetPositionX();
+    float y = player->GetPositionY();
+    float z = player->GetPositionZ();
+    player->UpdateAllowedPositionZ(x, y, z);
+    _lastGrounded.Relocate(x, y, z, player->GetOrientation());
     _state = State::Moving;
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk. {} points, length to destination {:.1f} yards.",
@@ -419,6 +436,14 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         Position grounded;
         grounded.Relocate(next.GetPositionX(), next.GetPositionY(), z, next.GetOrientation());
 
+        // Last grounded feet to this tick's grounded feet. 35° every heartbeat, including talk.
+        float const degrees = GroundedStepDegrees(_lastGrounded, grounded);
+        if (degrees > MAX_WALKABLE_SLOPE_DEGREES)
+        {
+            RefuseSteepStep(player, degrees);
+            return;
+        }
+
         bool const arrived = grounded.GetExactDist(_destination) <= _stopDistance || (_pointIndex + 1 >= _path.size());
         if (arrived)
         {
@@ -430,6 +455,8 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         }
 
         QueueMove(player, grounded, true, false);
+        _lastGrounded = grounded;
+        _repathedFromSlope = false;
 
         if (player->GetExactDist2d(_lastProgressPos) > 0.25f)
         {
@@ -533,6 +560,35 @@ Position PlayerbotWalker::Advance(float distance)
     Position pos;
     pos.Relocate(point.x, point.y, point.z, orientation);
     return pos;
+}
+
+void PlayerbotWalker::RefuseSteepStep(Player* player, float degrees)
+{
+    QueueMove(player, _lastGrounded, false, false);
+
+    Position const destination = _destination;
+    float const stopDistance = _stopDistance;
+    Position const feet = _lastGrounded;
+
+    if (_repathedFromSlope)
+    {
+        _state = State::Failed;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking: this step is still {:.0f} degrees after repathing from her feet.",
+            player->GetName(), degrees);
+        return;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped: this step is {:.0f} degrees, steeper than 35. Repathing from her feet.",
+        player->GetName(), degrees);
+
+    if (!Start(player, destination, stopDistance))
+        return;
+
+    if (!IsMoving())
+        return;
+
+    _lastGrounded = feet;
+    _repathedFromSlope = true;
 }
 
 void PlayerbotWalker::Fail(Player* player, char const* reason)

@@ -239,8 +239,30 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.Walker.Reset();
     }
 
+    int32 skipFailedQuestId = 0;
+    uint32 skipFailedEntry = 0;
     if (bot.Walker.HasFailed())
+    {
+        if (bot.GameObjectTarget.QuestId)
+        {
+            skipFailedQuestId = bot.GameObjectTarget.QuestId;
+            skipFailedEntry = bot.GameObjectTarget.GoEntry;
+        }
+        else if (bot.CombatTarget.QuestId)
+        {
+            skipFailedQuestId = bot.CombatTarget.QuestId;
+            skipFailedEntry = bot.CombatTarget.CreditEntry;
+        }
+        else if (bot.ItemLootTarget.QuestId)
+        {
+            skipFailedQuestId = bot.ItemLootTarget.QuestId;
+            skipFailedEntry = bot.ItemLootTarget.ItemId;
+        }
+        else if (bot.QuestTarget.QuestId)
+            skipFailedQuestId = bot.QuestTarget.QuestId;
+
         RecoverFailedWalk(bot, player);
+    }
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
     {
@@ -458,7 +480,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (TryImmediateWorld(bot, player, false))
         return;
 
-    if (TryMapYellow(bot, player))
+    if (TryMapYellow(bot, player, skipFailedQuestId, skipFailedEntry))
         return;
 
     bot.QuestSearchEmptyMs += diff;

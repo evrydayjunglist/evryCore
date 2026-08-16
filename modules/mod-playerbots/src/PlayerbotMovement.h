@@ -52,6 +52,7 @@ private:
 
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
     Position Advance(float distance);
+    void RefuseSteepStep(Player* player, float degrees);
     void Fail(Player* player, char const* reason);
 
     State _state = State::Idle;
@@ -64,6 +65,8 @@ private:
     uint32 _stuckMs = 0;
     uint32 _logMs = 0;
     Position _lastProgressPos;
+    Position _lastGrounded;
+    bool _repathedFromSlope = false;
 };
 
 #endif

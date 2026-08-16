@@ -54,8 +54,13 @@ private:
     Position Advance(float distance);
     Position PeekGroundedStep(Player* player, float distance);
     bool FirstGroundedStepIsLegal(Player* player);
+    bool StepTowardDestIsLegal(Player* player) const;
+    bool BuildMmapPath(Player* player, Position const& from, Position const& destination, std::vector<G3D::Vector3>& outPath);
+    bool TryCommitMmap(Player* player, Position const& from, bool alreadyMoving);
     bool FindLipSidestep(Player* player, Position& out) const;
-    bool TryLipDetour(Player* player);
+    bool ContinueContour(Player* player, bool alreadyMoving);
+    bool WalkLegalDestStep(Player* player, bool alreadyMoving);
+    void ApplyContourPath(Player* player, Position const& side, bool alreadyMoving);
     void RefuseSteepStep(Player* player, Position const& attempted);
     void Fail(Player* player, char const* reason);
     void FailNoLegalRing(Player* player);
@@ -73,6 +78,9 @@ private:
     Position _lastGrounded;
     bool _contouring = false;
     uint32 _lipSteps = 0;
+    float _lipDestDist = 0.0f;
+    float _contourDirX = 0.0f;
+    float _contourDirY = 0.0f;
 };
 
 #endif

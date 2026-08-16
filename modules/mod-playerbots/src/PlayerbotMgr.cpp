@@ -37,6 +37,7 @@ namespace
     constexpr float LOOT_SEARCH_RANGE = 10.0f;
     constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
+    constexpr uint32 VENDOR_RETRY_MS = 60000;
     constexpr uint32 RELEASE_WAIT_MS = 3000;
     constexpr uint32 GHOST_SETTLE_MS = 500;
     constexpr uint32 PACKET_RETRY_MS = 2000;
@@ -80,6 +81,26 @@ namespace
             return InInteractRange(player, creature);
         }
 
+        return false;
+    }
+
+    bool CurrentWalkIsFartherThan(PlayerbotRecord const& bot, Player* player, float range)
+    {
+        if (!player)
+            return false;
+
+        if (!bot.VendorTarget.NpcGuid.IsEmpty())
+            return player->GetExactDist(bot.VendorTarget.Pos) > range;
+        if (!bot.QuestTarget.NpcGuid.IsEmpty())
+            return player->GetExactDist(bot.QuestTarget.Pos) > range;
+        if (bot.GameObjectTarget.QuestId)
+            return player->GetExactDist(bot.GameObjectTarget.Pos) > range;
+        if (bot.UseItemOnUnitTarget.QuestId)
+            return player->GetExactDist(bot.UseItemOnUnitTarget.Pos) > range;
+        if (bot.CombatTarget.QuestId || !bot.CombatTarget.CreatureGuid.IsEmpty())
+            return player->GetExactDist(bot.CombatTarget.Pos) > range;
+        if (bot.ItemLootTarget.QuestId || bot.ItemLootTarget.LootCorpse)
+            return player->GetExactDist(bot.ItemLootTarget.Pos) > range;
         return false;
     }
 }
@@ -254,6 +275,14 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (UpdateDeath(bot, player, diff))
         return;
 
+    if (bot.VendorRetryMs)
+    {
+        if (bot.VendorRetryMs > diff)
+            bot.VendorRetryMs -= diff;
+        else
+            bot.VendorRetryMs = 0;
+    }
+
     if (bot.Walker.IsMoving())
         bot.Walker.Update(player, diff);
 
@@ -272,6 +301,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.UseItemOnUnitTarget = {};
         bot.ItemLootTarget = {};
         bot.LootOpenSent = false;
+        ClearVendor(bot);
         bot.UnreachableGuids.clear();
         bot.Walker.Reset();
     }
@@ -586,13 +616,27 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
     }
 
+    if (!bot.VendorTarget.NpcGuid.IsEmpty() && !bot.Walker.IsMoving())
+    {
+        if (UpdateVendor(bot, player, diff))
+            return;
+    }
+
     if (bot.Walker.IsMoving())
     {
         TryImmediateWorld(bot, player, true);
+        if (bot.Walker.IsMoving()
+            && bot.VendorTarget.NpcGuid.IsEmpty()
+            && CurrentWalkIsFartherThan(bot, player, QUEST_SEARCH_RANGE)
+            && TryBeginVendor(bot, player))
+            return;
         return;
     }
 
     if (TryImmediateWorld(bot, player, false))
+        return;
+
+    if (TryBeginVendor(bot, player))
         return;
 
     if (TryMapYellow(bot, player, skipFailedQuestId, skipFailedEntry))
@@ -639,6 +683,8 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
 
     ClearCombat(bot, player);
     ClearItemLoot(bot);
+    ClearVendor(bot);
+    bot.VendorRetryMs = 0;
     bot.QuestInteractQueued = false;
     bot.QuestArriveWaitMs = 0;
     bot.QuestInteractWaitMs = 0;
@@ -1083,6 +1129,11 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
             bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
         ClearItemLoot(bot);
     }
+    else if (!bot.VendorTarget.NpcGuid.IsEmpty())
+    {
+        bot.UnreachableGuids.insert(bot.VendorTarget.NpcGuid);
+        ClearVendor(bot);
+    }
     else if (!bot.QuestTarget.NpcGuid.IsEmpty())
         bot.UnreachableGuids.insert(bot.QuestTarget.NpcGuid);
 
@@ -1348,6 +1399,7 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
 
     ClearCombat(bot, player);
     ClearItemLoot(bot);
+    ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = target;
     bot.GameObjectTarget = {};
@@ -1386,6 +1438,7 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
 
     ClearCombat(bot, player);
     ClearItemLoot(bot);
+    ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = target;
@@ -1432,6 +1485,7 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
 
     ClearCombat(bot, player);
     ClearItemLoot(bot);
+    ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
@@ -1478,6 +1532,7 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
 
     ClearCombat(bot, player);
     ClearItemLoot(bot);
+    ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
@@ -1725,6 +1780,7 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
         bot.Walker.Stop(player);
 
     ClearCombat(bot, player);
+    ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
@@ -1775,4 +1831,152 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
     }
 
     return true;
+}
+
+void PlayerbotMgr::ClearVendor(PlayerbotRecord& bot)
+{
+    bot.VendorTarget = {};
+    bot.VendorListSent = false;
+    bot.VendorActed = false;
+}
+
+bool PlayerbotMgr::TryBeginVendor(PlayerbotRecord& bot, Player* player)
+{
+    if (bot.VendorRetryMs)
+        return false;
+    if (!bot.VendorTarget.NpcGuid.IsEmpty())
+        return false;
+    if (!PlayerbotClient::NeedsVendor(player))
+        return false;
+
+    bool const preferRepair = PlayerbotClient::EquippedGearNeedsRepair(player);
+    Optional<PlayerbotClient::VendorTarget> found = PlayerbotClient::FindNearestVendor(player, bot.UnreachableGuids, preferRepair);
+    if (!found)
+    {
+        bot.VendorRetryMs = VENDOR_RETRY_MS;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} needs a vendor but none is reachable on this map yet.",
+            player->GetName());
+        return false;
+    }
+
+    return BeginVendorTarget(bot, player, *found);
+}
+
+bool PlayerbotMgr::BeginVendorTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::VendorTarget const& target)
+{
+    if (bot.Walker.IsMoving())
+        bot.Walker.Stop(player);
+
+    ClearCombat(bot, player);
+    ClearItemLoot(bot);
+    bot.QuestSearchEmptyMs = 0;
+    bot.QuestTarget = {};
+    bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = {};
+    bot.CombatTarget = {};
+    bot.VendorTarget = target;
+    bot.VendorListSent = false;
+    bot.VendorActed = false;
+    bot.Walker.Reset();
+
+    if (player->GetExactDist(bot.VendorTarget.Pos) <= bot.VendorTarget.StopDistance
+        && PlayerbotClient::TryOpenVendor(player, bot.VendorTarget.NpcGuid))
+    {
+        bot.VendorListSent = true;
+        bot.QuestArriveWaitMs = 0;
+        return true;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to vendor {}{}.",
+        player->GetName(), bot.VendorTarget.NpcGuid.ToString(),
+        bot.VendorTarget.CanRepair ? " (can repair)" : "");
+    bot.QuestArriveWaitMs = 0;
+    if (!bot.Walker.Start(player, bot.VendorTarget.Pos, bot.VendorTarget.StopDistance))
+    {
+        bot.UnreachableGuids.insert(bot.VendorTarget.NpcGuid);
+        ClearVendor(bot);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    return true;
+}
+
+bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    if (bot.VendorTarget.NpcGuid.IsEmpty() || !player->GetSession())
+    {
+        ClearVendor(bot);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    if (!bot.VendorListSent)
+    {
+        bot.QuestArriveWaitMs += diff;
+        if (PlayerbotClient::TryOpenVendor(player, bot.VendorTarget.NpcGuid))
+        {
+            bot.VendorListSent = true;
+            bot.QuestArriveWaitMs = 0;
+            return true;
+        }
+
+        Creature* creature = ObjectAccessor::GetCreature(*player, bot.VendorTarget.NpcGuid);
+        if (creature && creature->IsAlive()
+            && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
+        {
+            Position standPos;
+            float const standDistance = creature->GetCombatReach() + 1.0f;
+            if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
+                && bot.Walker.Start(player, standPos, bot.VendorTarget.StopDistance))
+            {
+                bot.VendorTarget.Pos = standPos;
+                bot.QuestArriveWaitMs = 0;
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of vendor {} and is walking the rest of the way.",
+                    player->GetName(), bot.VendorTarget.NpcGuid.ToString());
+                return true;
+            }
+        }
+
+        if (bot.QuestArriveWaitMs < 5000)
+            return true;
+
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} arrived but cannot open the shop at {}. Looking for other work.",
+            player->GetName(), bot.VendorTarget.NpcGuid.ToString());
+        bot.UnreachableGuids.insert(bot.VendorTarget.NpcGuid);
+        ClearVendor(bot);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    bot.QuestArriveWaitMs += diff;
+    if (!bot.VendorActed)
+    {
+        if (bot.QuestArriveWaitMs < QUEST_CHAIN_PAUSE_MS)
+            return true;
+
+        bool const repair = PlayerbotClient::EquippedGearNeedsRepair(player);
+        if (!PlayerbotClient::TryVendorTrade(player, bot.VendorTarget.NpcGuid, repair))
+        {
+            bot.UnreachableGuids.insert(bot.VendorTarget.NpcGuid);
+            ClearVendor(bot);
+            bot.Walker.Reset();
+            return false;
+        }
+
+        bot.VendorActed = true;
+        bot.QuestArriveWaitMs = 0;
+        return true;
+    }
+
+    if (bot.QuestArriveWaitMs < QUEST_CHAIN_PAUSE_MS)
+        return true;
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} finished at the vendor. Returning to questing.",
+        player->GetName());
+    ClearVendor(bot);
+    if (PlayerbotClient::NeedsVendor(player))
+        bot.VendorRetryMs = VENDOR_RETRY_MS;
+    bot.Walker.Reset();
+    return false;
 }

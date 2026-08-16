@@ -71,6 +71,10 @@ struct PlayerbotRecord
     PlayerbotClient::GameObjectTarget GameObjectTarget;
     PlayerbotClient::UseItemOnUnitTarget UseItemOnUnitTarget;
     PlayerbotClient::ItemLootTarget ItemLootTarget;
+    PlayerbotClient::VendorTarget VendorTarget;
+    bool VendorListSent = false;
+    bool VendorActed = false;
+    uint32 VendorRetryMs = 0;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     PlayerbotWalker Walker;
 };
@@ -113,6 +117,10 @@ private:
     bool BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target);
     bool BeginItemLootTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);
     bool BeginItemWork(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);
+    void ClearVendor(PlayerbotRecord& bot);
+    bool BeginVendorTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::VendorTarget const& target);
+    bool UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 diff);
+    bool TryBeginVendor(PlayerbotRecord& bot, Player* player);
 
     std::vector<PlayerbotRecord> _bots;
     std::unordered_set<uint32> _accountIds;

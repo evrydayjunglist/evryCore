@@ -98,6 +98,14 @@ namespace PlayerbotClient
         float StopDistance = 0.25f;
     };
 
+    struct VendorTarget
+    {
+        ObjectGuid NpcGuid;
+        Position Pos;
+        float StopDistance = 0.25f;
+        bool CanRepair = false;
+    };
+
     void QueueEnumCharacters(WorldSession* session);
     void QueuePlayerLogin(WorldSession* session, ObjectGuid characterGuid);
     void QueueCompleteCinematic(WorldSession* session);
@@ -120,6 +128,9 @@ namespace PlayerbotClient
     void QueueReclaimCorpse(WorldSession* session, ObjectGuid corpseGuid);
     void QueueSpiritHealerActivate(WorldSession* session, ObjectGuid healerGuid);
     void QueueStandStateChange(WorldSession* session, UnitStandStateType standState);
+    void QueueListInventory(WorldSession* session, ObjectGuid vendorGuid);
+    void QueueSellAllJunkItems(WorldSession* session, ObjectGuid vendorGuid);
+    void QueueRepairItem(WorldSession* session, ObjectGuid vendorGuid);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind);
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
@@ -143,6 +154,13 @@ namespace PlayerbotClient
     Optional<Position> PickCorpseStandPosition(Player* player);
     Optional<SpiritHealerTarget> FindSpiritHealer(Player* player, Position const& nearPos);
     bool TrySpiritHealer(Player* player, ObjectGuid healerGuid);
+    bool HasSellableJunk(Player const* player);
+    bool BagsNeedVendor(Player const* player);
+    bool EquippedGearNeedsRepair(Player const* player);
+    bool NeedsVendor(Player const* player);
+    Optional<VendorTarget> FindNearestVendor(Player* player, std::unordered_set<ObjectGuid> const& skip, bool preferRepair);
+    bool TryOpenVendor(Player* player, ObjectGuid vendorGuid);
+    bool TryVendorTrade(Player* player, ObjectGuid vendorGuid, bool repair);
     Optional<GameObjectTarget> FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);

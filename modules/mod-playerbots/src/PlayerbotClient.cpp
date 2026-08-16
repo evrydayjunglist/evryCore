@@ -17,6 +17,7 @@
 
 #include "PlayerbotClient.h"
 #include "ConditionMgr.h"
+#include "Containers.h"
 #include "Corpse.h"
 #include "Creature.h"
 #include "CreatureData.h"
@@ -337,6 +338,39 @@ void PlayerbotClient::QueueStandStateChange(WorldSession* session, UnitStandStat
 
     WorldPacket packet(CMSG_STAND_STATE_CHANGE);
     packet << uint8(standState);
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueListInventory(WorldSession* session, ObjectGuid vendorGuid)
+{
+    if (!session || vendorGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_LIST_INVENTORY);
+    packet << vendorGuid;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueSellAllJunkItems(WorldSession* session, ObjectGuid vendorGuid)
+{
+    if (!session || vendorGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_SELL_ALL_JUNK_ITEMS);
+    packet << vendorGuid;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueRepairItem(WorldSession* session, ObjectGuid vendorGuid)
+{
+    if (!session || vendorGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_REPAIR_ITEM);
+    packet << vendorGuid;
+    packet << ObjectGuid();
+    packet.WriteBit(false);
+    packet.FlushBits();
     session->QueuePacket(std::move(packet));
 }
 
@@ -2527,5 +2561,281 @@ bool PlayerbotClient::TrySpiritHealer(Player* player, ObjectGuid healerGuid)
     QueueSpiritHealerActivate(player->GetSession(), healerGuid);
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_SPIRIT_HEALER_ACTIVATE on {}.",
         player->GetName(), healerGuid.ToString());
+    return true;
+}
+
+namespace
+{
+    constexpr uint32 VENDOR_DURABILITY_PCT = 20;
+    constexpr uint32 VENDOR_BAG_FREE_SLOTS = 1;
+    constexpr uint32 VENDOR_LOAD_ATTEMPTS = 16;
+
+    struct VendorSpawn
+    {
+        ObjectGuid::LowType SpawnId = 0;
+        uint32 MapId = 0;
+        uint32 Faction = 0;
+        Position Pos;
+        bool CanRepair = false;
+        bool NoSell = false;
+    };
+
+    std::vector<VendorSpawn> g_vendorSpawns;
+    bool g_vendorSpawnsReady = false;
+
+    void EnsureVendorSpawns()
+    {
+        if (g_vendorSpawnsReady)
+            return;
+
+        g_vendorSpawnsReady = true;
+        for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+        {
+            CreatureTemplate const* info = sObjectMgr->GetCreatureTemplate(data.id);
+            if (!info)
+                continue;
+
+            uint64 const npcFlags = data.npcflag.value_or(info->npcflag);
+            if (!(npcFlags & uint64(UNIT_NPC_FLAG_VENDOR)))
+                continue;
+
+            VendorSpawn spawn;
+            spawn.SpawnId = spawnId;
+            spawn.MapId = data.mapId;
+            spawn.Faction = info->faction;
+            spawn.Pos = data.spawnPoint;
+            spawn.CanRepair = (npcFlags & uint64(UNIT_NPC_FLAG_REPAIR)) != 0;
+            spawn.NoSell = (info->flags_extra & CREATURE_FLAG_EXTRA_NO_SELL_VENDOR) != 0;
+            g_vendorSpawns.push_back(spawn);
+        }
+    }
+
+    bool VendorIsUsable(Player const* player, Creature const* creature, bool needSell)
+    {
+        if (!player || !creature || !creature->IsAlive())
+            return false;
+        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_VENDOR))
+            return false;
+        if (needSell)
+        {
+            CreatureTemplate const* info = creature->GetCreatureTemplate();
+            if (info && (info->flags_extra & CREATURE_FLAG_EXTRA_NO_SELL_VENDOR))
+                return false;
+        }
+        if (!player->InSamePhase(creature))
+            return false;
+        if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+            return false;
+        if (creature->GetReactionTo(player) <= REP_UNFRIENDLY)
+            return false;
+        if (creature->IsInCombat() && !creature->IsInteractionAllowedInCombat())
+            return false;
+        return true;
+    }
+
+    Optional<PlayerbotClient::VendorTarget> MakeVendorTarget(Player* player, Creature* creature)
+    {
+        if (!player || !creature)
+            return {};
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+            return {};
+
+        PlayerbotClient::VendorTarget target;
+        target.NpcGuid = creature->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        target.CanRepair = creature->HasNpcFlag(UNIT_NPC_FLAG_REPAIR);
+        return target;
+    }
+
+    Creature* LoadVendorCreature(Player* player, VendorSpawn const& spawn, std::unordered_set<ObjectGuid> const& skip, bool needSell)
+    {
+        if (!player || !player->GetMap())
+            return nullptr;
+
+        Map* map = player->GetMap();
+        if (!map->IsGridLoaded(spawn.Pos))
+            map->LoadGrid(spawn.Pos.GetPositionX(), spawn.Pos.GetPositionY());
+
+        for (auto const& pair : Trinity::Containers::MapEqualRange(map->GetCreatureBySpawnIdStore(), spawn.SpawnId))
+        {
+            Creature* creature = pair.second;
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (!VendorIsUsable(player, creature, needSell))
+                continue;
+            return creature;
+        }
+
+        return nullptr;
+    }
+
+    bool VendorFactionOk(Player const* player, uint32 faction)
+    {
+        FactionTemplateEntry const* fac = sFactionTemplateStore.LookupEntry(faction);
+        return WorldObject::GetFactionReactionTo(fac, player) > REP_UNFRIENDLY;
+    }
+}
+
+bool PlayerbotClient::HasSellableJunk(Player const* player)
+{
+    if (!player)
+        return false;
+
+    bool found = false;
+    player->ForEachItem(ItemSearchLocation::Inventory, [player, &found](Item* item)
+    {
+        if (item->GetQuality() != ITEM_QUALITY_POOR)
+            return ItemSearchCallbackResult::Continue;
+        if (item->IsRefundable())
+            return ItemSearchCallbackResult::Continue;
+        if (item->GetTemplate() && item->GetTemplate()->GetClass() == ITEM_CLASS_QUEST)
+            return ItemSearchCallbackResult::Continue;
+        if (!player->CanSellItemToVendor(item, item->GetCount()))
+            found = true;
+        return found ? ItemSearchCallbackResult::Stop : ItemSearchCallbackResult::Continue;
+    });
+    return found;
+}
+
+bool PlayerbotClient::BagsNeedVendor(Player const* player)
+{
+    if (!player)
+        return false;
+    if (player->GetFreeInventorySlotCount(ItemSearchLocation::Inventory) > VENDOR_BAG_FREE_SLOTS)
+        return false;
+    return HasSellableJunk(player);
+}
+
+bool PlayerbotClient::EquippedGearNeedsRepair(Player const* player)
+{
+    if (!player)
+        return false;
+
+    bool need = false;
+    player->ForEachItem(ItemSearchLocation::Equipment, [&need](Item* item)
+    {
+        uint32 const maxDurability = *item->m_itemData->MaxDurability;
+        if (!maxDurability)
+            return ItemSearchCallbackResult::Continue;
+
+        uint32 const durability = *item->m_itemData->Durability;
+        if (!durability || durability * 100 < maxDurability * VENDOR_DURABILITY_PCT)
+        {
+            need = true;
+            return ItemSearchCallbackResult::Stop;
+        }
+        return ItemSearchCallbackResult::Continue;
+    });
+    return need;
+}
+
+bool PlayerbotClient::NeedsVendor(Player const* player)
+{
+    return BagsNeedVendor(player) || EquippedGearNeedsRepair(player);
+}
+
+Optional<PlayerbotClient::VendorTarget> PlayerbotClient::FindNearestVendor(Player* player, std::unordered_set<ObjectGuid> const& skip, bool preferRepair)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    EnsureVendorSpawns();
+
+    Map* map = player->GetMap();
+    bool const needSell = BagsNeedVendor(player);
+    std::vector<VendorSpawn const*> candidates;
+    candidates.reserve(64);
+
+    for (VendorSpawn const& spawn : g_vendorSpawns)
+    {
+        if (spawn.MapId != map->GetId())
+            continue;
+        if (needSell && spawn.NoSell)
+            continue;
+        if (!VendorFactionOk(player, spawn.Faction))
+            continue;
+        candidates.push_back(&spawn);
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [player](VendorSpawn const* a, VendorSpawn const* b)
+    {
+        return player->GetExactDist(a->Pos) < player->GetExactDist(b->Pos);
+    });
+
+    auto tryLoad = [&](Optional<bool> mustRepair) -> Optional<VendorTarget>
+    {
+        uint32 attempts = 0;
+        for (VendorSpawn const* spawn : candidates)
+        {
+            if (mustRepair && spawn->CanRepair != *mustRepair)
+                continue;
+            if (attempts >= VENDOR_LOAD_ATTEMPTS)
+                break;
+            ++attempts;
+
+            Creature* creature = LoadVendorCreature(player, *spawn, skip, needSell);
+            if (!creature)
+                continue;
+
+            Optional<VendorTarget> target = MakeVendorTarget(player, creature);
+            if (!target)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside vendor {} without standing in a spell focus. Skipping that npc.",
+                    player->GetName(), creature->GetGUID().ToString());
+                continue;
+            }
+            return target;
+        }
+        return {};
+    };
+
+    if (preferRepair)
+    {
+        if (Optional<VendorTarget> repair = tryLoad(true))
+            return repair;
+        return tryLoad(false);
+    }
+
+    return tryLoad(Optional<bool>{});
+}
+
+bool PlayerbotClient::TryOpenVendor(Player* player, ObjectGuid vendorGuid)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || vendorGuid.IsEmpty())
+        return false;
+
+    if (!player->GetNPCIfCanInteractWith(vendorGuid, UNIT_NPC_FLAG_VENDOR, UNIT_NPC_FLAG_2_NONE))
+        return false;
+
+    QueueSetSelection(player->GetSession(), vendorGuid);
+    QueueListInventory(player->GetSession(), vendorGuid);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_LIST_INVENTORY on {}.",
+        player->GetName(), vendorGuid.ToString());
+    return true;
+}
+
+bool PlayerbotClient::TryVendorTrade(Player* player, ObjectGuid vendorGuid, bool repair)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || vendorGuid.IsEmpty())
+        return false;
+
+    if (!player->GetNPCIfCanInteractWith(vendorGuid, UNIT_NPC_FLAG_VENDOR, UNIT_NPC_FLAG_2_NONE))
+        return false;
+
+    QueueSellAllJunkItems(player->GetSession(), vendorGuid);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SELL_ALL_JUNK_ITEMS at {}.",
+        player->GetName(), vendorGuid.ToString());
+
+    if (repair && player->GetNPCIfCanInteractWith(vendorGuid, UNIT_NPC_FLAG_REPAIR, UNIT_NPC_FLAG_2_NONE))
+    {
+        QueueRepairItem(player->GetSession(), vendorGuid);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_REPAIR_ITEM (repair all) at {}.",
+            player->GetName(), vendorGuid.ToString());
+    }
+
     return true;
 }

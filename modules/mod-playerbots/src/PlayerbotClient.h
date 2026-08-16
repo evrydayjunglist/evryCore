@@ -52,6 +52,7 @@ namespace PlayerbotClient
         float StopDistance = 0.25f;
         int32 QuestId = 0;
         uint32 CreditEntry = 0;
+        uint32 ItemId = 0;
     };
 
     struct GameObjectTarget
@@ -61,6 +62,17 @@ namespace PlayerbotClient
         float StopDistance = 0.25f;
         int32 QuestId = 0;
         uint32 GoEntry = 0;
+    };
+
+    struct ItemLootTarget
+    {
+        ObjectGuid CreatureGuid;
+        Position Pos;
+        float StopDistance = 0.25f;
+        int32 QuestId = 0;
+        uint32 ItemId = 0;
+        uint32 CreatureEntry = 0;
+        bool LootCorpse = false;
     };
 
     void QueueEnumCharacters(WorldSession* session);
@@ -76,6 +88,9 @@ namespace PlayerbotClient
     void QueueAttackSwing(WorldSession* session, ObjectGuid victim);
     void QueueAttackStop(WorldSession* session);
     void QueueGameObjUse(WorldSession* session, ObjectGuid guid);
+    void QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid);
+    void QueueLootItem(WorldSession* session, ObjectGuid lootObj, uint8 lootListId);
+    void QueueLootRelease(WorldSession* session, ObjectGuid unitGuid);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind);
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player);
@@ -84,6 +99,13 @@ namespace PlayerbotClient
     Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
     bool HasLogIncompleteMonsterOnThisMap(Player* player);
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
+    Optional<ItemLootTarget> FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
+    bool HasLogIncompleteItemOnThisMap(Player* player);
+    bool ItemLootTargetStillNeeded(Player* player, ItemLootTarget const& target);
+    CombatTarget CombatTargetFromItemLoot(ItemLootTarget const& target);
+    bool TryOpenLoot(Player* player, ObjectGuid creatureGuid);
+    bool TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid creatureGuid, uint32 itemId);
+    bool HasOpenLootOn(Player* player, ObjectGuid creatureGuid);
     Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
     bool HasLogIncompleteGameObjectOnThisMap(Player* player);
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);

@@ -229,6 +229,8 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.QuestSearchEmptyMs = 0;
         bot.QuestTarget = {};
         bot.GameObjectTarget = {};
+        bot.ItemLootTarget = {};
+        bot.LootOpenSent = false;
         bot.UnreachableGuids.clear();
         bot.Walker.Reset();
     }
@@ -250,6 +252,13 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             if (!bot.CombatTarget.CreatureGuid.IsEmpty())
                 bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
             ClearCombat(bot, player);
+            bot.Walker.Reset();
+        }
+        else if (bot.ItemLootTarget.QuestId)
+        {
+            if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
+                bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+            ClearItemLoot(bot);
             bot.Walker.Reset();
         }
         else
@@ -402,30 +411,54 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
     }
 
+    if (bot.Walker.HasArrived() && bot.ItemLootTarget.QuestId && bot.ItemLootTarget.CreatureGuid.IsEmpty())
+    {
+        if (!PlayerbotClient::ItemLootTargetStillNeeded(player, bot.ItemLootTarget))
+        {
+            ClearItemLoot(bot);
+            bot.Walker.Reset();
+            return;
+        }
+
+        if (bot.QuestArriveWaitMs == 0)
+            bot.UnreachableGuids.clear();
+
+        bot.QuestArriveWaitMs += diff;
+        if (Optional<PlayerbotClient::ItemLootTarget> found = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids))
+        {
+            if (!found->CreatureGuid.IsEmpty())
+            {
+                if (!found->LootCorpse)
+                    BeginCombatTarget(bot, player, PlayerbotClient::CombatTargetFromItemLoot(*found));
+                else
+                    BeginItemLootTarget(bot, player, *found);
+                return;
+            }
+        }
+
+        if (bot.QuestArriveWaitMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the item map marker but no spawned creature is there yet. The quest is not skipped.",
+                player->GetName());
+            bot.QuestSearchFailed = true;
+            ClearItemLoot(bot);
+            bot.Walker.Reset();
+        }
+        return;
+    }
+
+    if (bot.ItemLootTarget.QuestId && !bot.ItemLootTarget.CreatureGuid.IsEmpty() && bot.ItemLootTarget.LootCorpse)
+    {
+        if (UpdateItemLoot(bot, player, diff))
+            return;
+    }
+
     if (bot.QuestSearchFailed)
         return;
 
     if (Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::TurnIn))
     {
         BeginQuestTarget(bot, player, *turnIn);
-        return;
-    }
-
-    if (Optional<PlayerbotClient::QuestTarget> logTurnIn = PlayerbotClient::FindLogCompleteTurnIn(player))
-    {
-        BeginQuestTarget(bot, player, *logTurnIn);
-        return;
-    }
-
-    if (PlayerbotClient::HasLogCompleteTurnInOnThisMap(player))
-    {
-        bot.QuestSearchEmptyMs += diff;
-        if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
-        {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has a finished quest on this map but no living ender to walk to. The quest is not skipped.",
-                player->GetName());
-            bot.QuestSearchFailed = true;
-        }
         return;
     }
 
@@ -471,6 +504,45 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
     }
 
+    if (Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids))
+    {
+        if (!item->CreatureGuid.IsEmpty() && !item->LootCorpse)
+            BeginCombatTarget(bot, player, PlayerbotClient::CombatTargetFromItemLoot(*item));
+        else
+            BeginItemLootTarget(bot, player, *item);
+        return;
+    }
+
+    if (PlayerbotClient::HasLogIncompleteItemOnThisMap(player))
+    {
+        bot.QuestSearchEmptyMs += diff;
+        if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has an incomplete item objective on this map but no spawned creature to walk to. The quest is not skipped.",
+                player->GetName());
+            bot.QuestSearchFailed = true;
+        }
+        return;
+    }
+
+    if (Optional<PlayerbotClient::QuestTarget> logTurnIn = PlayerbotClient::FindLogCompleteTurnIn(player))
+    {
+        BeginQuestTarget(bot, player, *logTurnIn);
+        return;
+    }
+
+    if (PlayerbotClient::HasLogCompleteTurnInOnThisMap(player))
+    {
+        bot.QuestSearchEmptyMs += diff;
+        if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has a finished quest on this map but no living ender to walk to. The quest is not skipped.",
+                player->GetName());
+            bot.QuestSearchFailed = true;
+        }
+        return;
+    }
+
     if (Optional<PlayerbotClient::QuestTarget> accept = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Accept))
     {
         BeginQuestTarget(bot, player, *accept);
@@ -480,7 +552,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     bot.QuestSearchEmptyMs += diff;
     if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
     {
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no nearby turn-in, log turn-in, gameobject objective, kill map marker, nearby kill, or quest to accept (talk {:.0f} yards, kill {:.0f} yards). The quest is not skipped.",
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no nearby turn-in, log turn-in, gameobject objective, kill map marker, nearby kill, item map marker, or quest to accept (talk {:.0f} yards, kill {:.0f} yards). The quest is not skipped.",
             player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
         bot.QuestSearchFailed = true;
     }
@@ -498,8 +570,38 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
 bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
 {
     Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
-    if (!creature || !creature->IsAlive() || !player->IsValidAttackTarget(creature)
-        || !PlayerbotClient::CombatTargetStillNeeded(player, bot.CombatTarget))
+    if (!creature || !PlayerbotClient::CombatTargetStillNeeded(player, bot.CombatTarget))
+    {
+        ClearCombat(bot, player);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    if (!creature->IsAlive())
+    {
+        if (bot.CombatTarget.ItemId)
+        {
+            PlayerbotClient::ItemLootTarget loot;
+            loot.CreatureGuid = bot.CombatTarget.CreatureGuid;
+            loot.Pos = bot.CombatTarget.Pos;
+            loot.StopDistance = bot.CombatTarget.StopDistance;
+            loot.QuestId = bot.CombatTarget.QuestId;
+            loot.ItemId = bot.CombatTarget.ItemId;
+            loot.CreatureEntry = bot.CombatTarget.CreditEntry;
+            loot.LootCorpse = true;
+            ClearCombat(bot, player);
+            bot.ItemLootTarget = loot;
+            bot.LootOpenSent = false;
+            bot.Walker.Reset();
+            return true;
+        }
+
+        ClearCombat(bot, player);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    if (!player->IsValidAttackTarget(creature))
     {
         ClearCombat(bot, player);
         bot.Walker.Reset();
@@ -551,6 +653,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
 bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target)
 {
     ClearCombat(bot, player);
+    ClearItemLoot(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = target;
     bot.GameObjectTarget = {};
@@ -576,6 +679,7 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
 bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::GameObjectTarget const& target)
 {
     ClearCombat(bot, player);
+    ClearItemLoot(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = target;
@@ -621,6 +725,7 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
 bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target)
 {
     ClearCombat(bot, player);
+    ClearItemLoot(bot);
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
@@ -637,8 +742,9 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
             return true;
         }
 
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (kill).",
-            player->GetName(), bot.CombatTarget.CreatureGuid.ToString(), bot.CombatTarget.QuestId);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} ({}).",
+            player->GetName(), bot.CombatTarget.CreatureGuid.ToString(), bot.CombatTarget.QuestId,
+            bot.CombatTarget.ItemId ? "item" : "kill");
     }
     else
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to the kill map marker for quest {}.",
@@ -657,6 +763,160 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
 
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the kill map marker for quest {}. The quest is not skipped.",
             player->GetName(), bot.CombatTarget.QuestId);
+        bot.QuestSearchFailed = true;
+        return true;
+    }
+
+    return true;
+}
+
+void PlayerbotMgr::ClearItemLoot(PlayerbotRecord& bot)
+{
+    bot.ItemLootTarget = {};
+    bot.LootOpenSent = false;
+}
+
+bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    if (!PlayerbotClient::ItemLootTargetStillNeeded(player, bot.ItemLootTarget))
+    {
+        ClearItemLoot(bot);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    Creature* creature = ObjectAccessor::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
+    if (!creature)
+    {
+        bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+        ClearItemLoot(bot);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    if (creature->IsAlive())
+    {
+        BeginCombatTarget(bot, player, PlayerbotClient::CombatTargetFromItemLoot(bot.ItemLootTarget));
+        return true;
+    }
+
+    if (!player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
+    {
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
+            || player->GetExactDist(standPos) <= bot.ItemLootTarget.StopDistance)
+        {
+            bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+            ClearItemLoot(bot);
+            bot.Walker.Reset();
+            return false;
+        }
+
+        bot.ItemLootTarget.Pos = standPos;
+        if (!bot.Walker.Start(player, standPos, bot.ItemLootTarget.StopDistance))
+        {
+            bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+            ClearItemLoot(bot);
+            bot.Walker.Reset();
+            return false;
+        }
+
+        return true;
+    }
+
+    if (!bot.LootOpenSent)
+    {
+        if (!PlayerbotClient::TryOpenLoot(player, bot.ItemLootTarget.CreatureGuid))
+        {
+            bot.QuestArriveWaitMs += diff;
+            if (bot.QuestArriveWaitMs >= QUEST_SEARCH_RETRY_MS)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot open loot on {}.",
+                    player->GetName(), bot.ItemLootTarget.CreatureGuid.ToString());
+                bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+                ClearItemLoot(bot);
+                bot.Walker.Reset();
+                return false;
+            }
+            return true;
+        }
+
+        bot.LootOpenSent = true;
+        bot.QuestArriveWaitMs = 0;
+        return true;
+    }
+
+    bot.QuestArriveWaitMs += diff;
+    if (PlayerbotClient::TryTakeQuestItemFromOpenLoot(player, bot.ItemLootTarget.CreatureGuid, bot.ItemLootTarget.ItemId))
+    {
+        bot.QuestInteractQueued = true;
+        bot.QuestInteractWaitMs = 0;
+        return true;
+    }
+
+    if (PlayerbotClient::HasOpenLootOn(player, bot.ItemLootTarget.CreatureGuid))
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} opened loot on {} but the quest item is not in it. Skipping that corpse.",
+            player->GetName(), bot.ItemLootTarget.CreatureGuid.ToString());
+        PlayerbotClient::QueueLootRelease(player->GetSession(), bot.ItemLootTarget.CreatureGuid);
+        bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+        ClearItemLoot(bot);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    if (bot.QuestArriveWaitMs >= QUEST_SEARCH_RETRY_MS)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} opened loot on {} but no loot window appeared. Skipping that corpse.",
+            player->GetName(), bot.ItemLootTarget.CreatureGuid.ToString());
+        bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+        ClearItemLoot(bot);
+        bot.Walker.Reset();
+        return false;
+    }
+
+    return true;
+}
+
+bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target)
+{
+    ClearCombat(bot, player);
+    bot.QuestSearchEmptyMs = 0;
+    bot.QuestTarget = {};
+    bot.GameObjectTarget = {};
+    bot.CombatTarget = {};
+    bot.ItemLootTarget = target;
+    bot.LootOpenSent = false;
+    bot.Walker.Reset();
+
+    if (!bot.ItemLootTarget.CreatureGuid.IsEmpty() && bot.ItemLootTarget.LootCorpse
+        && player->GetExactDist(bot.ItemLootTarget.Pos) <= bot.ItemLootTarget.StopDistance)
+    {
+        bot.QuestArriveWaitMs = 0;
+        return UpdateItemLoot(bot, player, 0);
+    }
+
+    if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (loot).",
+            player->GetName(), bot.ItemLootTarget.CreatureGuid.ToString(), bot.ItemLootTarget.QuestId);
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to the item map marker for quest {}.",
+            player->GetName(), bot.ItemLootTarget.QuestId);
+
+    bot.QuestArriveWaitMs = 0;
+    if (!bot.Walker.Start(player, bot.ItemLootTarget.Pos, bot.ItemLootTarget.StopDistance))
+    {
+        if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
+        {
+            bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+            ClearItemLoot(bot);
+            bot.Walker.Reset();
+            return true;
+        }
+
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the item map marker for quest {}. The quest is not skipped.",
+            player->GetName(), bot.ItemLootTarget.QuestId);
         bot.QuestSearchFailed = true;
         return true;
     }

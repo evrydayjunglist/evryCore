@@ -41,9 +41,11 @@ struct PlayerbotRecord
     uint32 QuestInteractWaitMs = 0;
     uint32 QuestSearchEmptyMs = 0;
     bool CombatSwingSent = false;
+    bool LootOpenSent = false;
     PlayerbotClient::QuestTarget QuestTarget;
     PlayerbotClient::CombatTarget CombatTarget;
     PlayerbotClient::GameObjectTarget GameObjectTarget;
+    PlayerbotClient::ItemLootTarget ItemLootTarget;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     PlayerbotWalker Walker;
 };
@@ -68,9 +70,12 @@ private:
     void ReplyTimeSync(WorldSession* session);
     void ClearCombat(PlayerbotRecord& bot, Player* player);
     bool UpdateCombat(PlayerbotRecord& bot, Player* player);
+    void ClearItemLoot(PlayerbotRecord& bot);
+    bool UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);
     bool BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::GameObjectTarget const& target);
     bool BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target);
+    bool BeginItemLootTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);
 
     std::vector<PlayerbotRecord> _bots;
     std::unordered_set<uint32> _accountIds;

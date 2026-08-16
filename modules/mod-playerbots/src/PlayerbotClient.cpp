@@ -18,9 +18,11 @@
 #include "PlayerbotClient.h"
 #include "Creature.h"
 #include "CreatureData.h"
+#include "DBCEnums.h"
 #include "GameObject.h"
 #include "GameTime.h"
 #include "GossipDef.h"
+#include "Loot.h"
 #include "LootItemType.h"
 #include "Log.h"
 #include "Map.h"
@@ -189,6 +191,40 @@ void PlayerbotClient::QueueGameObjUse(WorldSession* session, ObjectGuid guid)
     session->QueuePacket(std::move(packet));
 }
 
+void PlayerbotClient::QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid)
+{
+    if (!session || creatureGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_LOOT_UNIT);
+    packet << creatureGuid;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueLootItem(WorldSession* session, ObjectGuid lootObj, uint8 lootListId)
+{
+    if (!session || lootObj.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_LOOT_ITEM);
+    packet << uint32(1);
+    packet << lootObj;
+    packet << uint8(lootListId);
+    packet.WriteBit(false); // IsSoftInteract stays false
+    packet.FlushBits();
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueLootRelease(WorldSession* session, ObjectGuid unitGuid)
+{
+    if (!session || unitGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_LOOT_RELEASE);
+    packet << unitGuid;
+    session->QueuePacket(std::move(packet));
+}
+
 namespace
 {
     bool CreatureGivesMonsterCredit(Creature const* creature, uint32 creditEntry)
@@ -295,6 +331,51 @@ namespace
                 IncompleteGameObjectCredit credit;
                 credit.QuestId = int32(questId);
                 credit.GoEntry = uint32(objective.ObjectID);
+                credit.ObjectiveId = objective.ID;
+                credit.StorageIndex = objective.StorageIndex;
+                out.push_back(credit);
+            }
+        }
+    }
+
+    struct IncompleteItemCredit
+    {
+        int32 QuestId = 0;
+        uint32 ItemId = 0;
+        uint32 ObjectiveId = 0;
+        int8 StorageIndex = 0;
+    };
+
+    void CollectIncompleteItemCredits(Player* player, std::vector<IncompleteItemCredit>& out)
+    {
+        if (!player)
+            return;
+
+        for (auto const& [questId, status] : player->getQuestStatusMap())
+        {
+            if (status.Status != QUEST_STATUS_INCOMPLETE)
+                continue;
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            if (!quest)
+                continue;
+
+            for (QuestObjective const& objective : quest->GetObjectives())
+            {
+                if (objective.Type != QUEST_OBJECTIVE_ITEM || objective.ObjectID <= 0)
+                    continue;
+                if (objective.Flags & QUEST_OBJECTIVE_FLAG_OPTIONAL)
+                    continue;
+                if (objective.Flags & QUEST_OBJECTIVE_FLAG_HIDDEN)
+                    continue;
+                if (!player->IsQuestObjectiveCompletable(questId, objective.ID))
+                    continue;
+                if (player->IsQuestObjectiveComplete(questId, objective.ID))
+                    continue;
+
+                IncompleteItemCredit credit;
+                credit.QuestId = int32(questId);
+                credit.ItemId = uint32(objective.ObjectID);
                 credit.ObjectiveId = objective.ID;
                 credit.StorageIndex = objective.StorageIndex;
                 out.push_back(credit);
@@ -441,6 +522,76 @@ namespace
         target.StopDistance = 0.25f;
         target.QuestId = questId;
         target.CreditEntry = creditEntry;
+        return target;
+    }
+
+    bool CreatureDropsQuestItem(Creature const* creature, uint32 itemId)
+    {
+        if (!creature || !itemId)
+            return false;
+
+        Difficulty difficulty = DIFFICULTY_NONE;
+        if (Map const* map = creature->GetMap())
+            difficulty = map->GetDifficultyID();
+
+        auto hasItem = [itemId](std::vector<uint32> const* items)
+        {
+            if (!items)
+                return false;
+            for (uint32 id : *items)
+            {
+                if (id == itemId)
+                    return true;
+            }
+            return false;
+        };
+
+        if (hasItem(sObjectMgr->GetCreatureQuestItemList(creature->GetEntry(), difficulty)))
+            return true;
+        if (difficulty != DIFFICULTY_NONE)
+            return hasItem(sObjectMgr->GetCreatureQuestItemList(creature->GetEntry(), DIFFICULTY_NONE));
+        return false;
+    }
+
+    bool CorpseHasQuestItemFor(Player const* player, Creature const* creature, uint32 itemId)
+    {
+        if (!player || !creature || !itemId)
+            return false;
+        if (!player->isAllowedToLoot(creature))
+            return false;
+
+        Loot const* loot = creature->GetLootForPlayer(player);
+        if (!loot)
+            return false;
+
+        for (LootItem const& item : loot->items)
+        {
+            if (item.is_looted || item.itemid != itemId)
+                continue;
+            return true;
+        }
+
+        return false;
+    }
+
+    Optional<PlayerbotClient::ItemLootTarget> MakeItemLootTarget(Player* player, Creature* creature, int32 questId, uint32 itemId, bool lootCorpse)
+    {
+        if (!player || !creature || !questId || !itemId)
+            return {};
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+            return {};
+
+        PlayerbotClient::ItemLootTarget target;
+        target.CreatureGuid = creature->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        target.QuestId = questId;
+        target.ItemId = itemId;
+        target.CreatureEntry = creature->GetEntry();
+        target.LootCorpse = lootCorpse;
         return target;
     }
 
@@ -772,13 +923,33 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
 
 bool PlayerbotClient::CombatTargetStillNeeded(Player* player, CombatTarget const& target)
 {
-    if (!player || target.QuestId <= 0 || !target.CreditEntry)
+    if (!player || target.QuestId <= 0)
         return false;
     if (player->GetQuestStatus(uint32(target.QuestId)) != QUEST_STATUS_INCOMPLETE)
         return false;
 
     Quest const* quest = sObjectMgr->GetQuestTemplate(uint32(target.QuestId));
     if (!quest)
+        return false;
+
+    if (target.ItemId)
+    {
+        for (QuestObjective const& objective : quest->GetObjectives())
+        {
+            if (objective.Type != QUEST_OBJECTIVE_ITEM)
+                continue;
+            if (uint32(objective.ObjectID) != target.ItemId)
+                continue;
+            if (!player->IsQuestObjectiveCompletable(uint32(target.QuestId), objective.ID))
+                continue;
+            if (player->IsQuestObjectiveComplete(uint32(target.QuestId), objective.ID))
+                continue;
+            return true;
+        }
+        return false;
+    }
+
+    if (!target.CreditEntry)
         return false;
 
     for (QuestObjective const& objective : quest->GetObjectives())
@@ -910,6 +1081,185 @@ bool PlayerbotClient::HasLogIncompleteMonsterOnThisMap(Player* player)
     }
 
     return false;
+}
+
+Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    Map* map = player->GetMap();
+    uint32 const mapId = map->GetId();
+
+    std::vector<IncompleteItemCredit> credits;
+    CollectIncompleteItemCredits(player, credits);
+    if (credits.empty())
+        return {};
+
+    ItemLootTarget bestCorpse;
+    float bestCorpseDist = std::numeric_limits<float>::max();
+    bool haveCorpse = false;
+    ItemLootTarget bestAlive;
+    float bestAliveDist = std::numeric_limits<float>::max();
+    bool haveAlive = false;
+    Position bestMarker;
+    IncompleteItemCredit const* bestMarkerCredit = nullptr;
+    float bestMarkerDist = std::numeric_limits<float>::max();
+    bool haveMarker = false;
+
+    for (IncompleteItemCredit const& credit : credits)
+    {
+        std::vector<ObjectivePoiBlob> blobs;
+        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.ItemId), credit.StorageIndex, blobs);
+        if (blobs.empty())
+            continue;
+
+        LoadPoiGrids(map, blobs);
+
+        for (ObjectivePoiBlob const& blob : blobs)
+        {
+            for (Position const& point : blob.Points)
+            {
+                float const dist = player->GetExactDist(point);
+                if (dist >= bestMarkerDist)
+                    continue;
+
+                bestMarkerDist = dist;
+                bestMarker = point;
+                bestMarkerCredit = &credit;
+                haveMarker = true;
+            }
+        }
+
+        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        {
+            Creature* creature = pair.second;
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (!player->InSamePhase(creature))
+                continue;
+            if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+                continue;
+            if (!CreatureDropsQuestItem(creature, credit.ItemId))
+                continue;
+            if (!PositionIsInPoiArea(*creature, blobs))
+                continue;
+
+            float const dist = player->GetExactDist(creature);
+
+            if (!creature->IsAlive())
+            {
+                if (!CorpseHasQuestItemFor(player, creature, credit.ItemId))
+                    continue;
+                if (dist >= bestCorpseDist)
+                    continue;
+
+                Optional<ItemLootTarget> target = MakeItemLootTarget(player, creature, credit.QuestId, credit.ItemId, true);
+                if (!target)
+                {
+                    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that corpse.",
+                        player->GetName(), creature->GetGUID().ToString());
+                    continue;
+                }
+
+                bestCorpseDist = dist;
+                bestCorpse = *target;
+                haveCorpse = true;
+                continue;
+            }
+
+            if (!player->IsValidAttackTarget(creature))
+                continue;
+            if (dist >= bestAliveDist)
+                continue;
+
+            Optional<ItemLootTarget> target = MakeItemLootTarget(player, creature, credit.QuestId, credit.ItemId, false);
+            if (!target)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+                    player->GetName(), creature->GetGUID().ToString());
+                continue;
+            }
+
+            bestAliveDist = dist;
+            bestAlive = *target;
+            haveAlive = true;
+        }
+    }
+
+    if (haveCorpse)
+        return bestCorpse;
+    if (haveAlive)
+        return bestAlive;
+
+    if (!haveMarker || !bestMarkerCredit)
+        return {};
+
+    ItemLootTarget target;
+    target.Pos = bestMarker;
+    target.StopDistance = 0.25f;
+    target.QuestId = bestMarkerCredit->QuestId;
+    target.ItemId = bestMarkerCredit->ItemId;
+    return target;
+}
+
+bool PlayerbotClient::HasLogIncompleteItemOnThisMap(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return false;
+
+    uint32 const mapId = player->GetMap()->GetId();
+    std::vector<IncompleteItemCredit> credits;
+    CollectIncompleteItemCredits(player, credits);
+
+    for (IncompleteItemCredit const& credit : credits)
+    {
+        std::vector<ObjectivePoiBlob> blobs;
+        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.ItemId), credit.StorageIndex, blobs);
+        if (!blobs.empty())
+            return true;
+    }
+
+    return false;
+}
+
+bool PlayerbotClient::ItemLootTargetStillNeeded(Player* player, ItemLootTarget const& target)
+{
+    if (!player || target.QuestId <= 0 || !target.ItemId)
+        return false;
+    if (player->GetQuestStatus(uint32(target.QuestId)) != QUEST_STATUS_INCOMPLETE)
+        return false;
+
+    Quest const* quest = sObjectMgr->GetQuestTemplate(uint32(target.QuestId));
+    if (!quest)
+        return false;
+
+    for (QuestObjective const& objective : quest->GetObjectives())
+    {
+        if (objective.Type != QUEST_OBJECTIVE_ITEM)
+            continue;
+        if (uint32(objective.ObjectID) != target.ItemId)
+            continue;
+        if (!player->IsQuestObjectiveCompletable(uint32(target.QuestId), objective.ID))
+            continue;
+        if (player->IsQuestObjectiveComplete(uint32(target.QuestId), objective.ID))
+            continue;
+        return true;
+    }
+
+    return false;
+}
+
+PlayerbotClient::CombatTarget PlayerbotClient::CombatTargetFromItemLoot(ItemLootTarget const& target)
+{
+    CombatTarget combat;
+    combat.CreatureGuid = target.CreatureGuid;
+    combat.Pos = target.Pos;
+    combat.StopDistance = target.StopDistance;
+    combat.QuestId = target.QuestId;
+    combat.CreditEntry = target.CreatureEntry;
+    combat.ItemId = target.ItemId;
+    return combat;
 }
 
 Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
@@ -1110,4 +1460,64 @@ bool PlayerbotClient::TryUseGameObject(Player* player, GameObjectTarget const& t
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_GAME_OBJ_USE on {} for quest {}.",
         player->GetName(), target.GoGuid.ToString(), target.QuestId);
     return true;
+}
+
+bool PlayerbotClient::TryOpenLoot(Player* player, ObjectGuid creatureGuid)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty())
+        return false;
+
+    Creature* creature = ObjectAccessor::GetCreature(*player, creatureGuid);
+    if (!creature || creature->IsAlive())
+        return false;
+    if (!player->isAllowedToLoot(creature))
+        return false;
+    if (!player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
+        return false;
+
+    QueueLootUnit(player->GetSession(), creatureGuid);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_LOOT_UNIT on {}.",
+        player->GetName(), creatureGuid.ToString());
+    return true;
+}
+
+bool PlayerbotClient::TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid creatureGuid, uint32 itemId)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty() || !itemId)
+        return false;
+
+    for (std::pair<ObjectGuid const, Loot*> const& view : player->GetAELootView())
+    {
+        Loot* loot = view.second;
+        if (!loot || loot->GetOwnerGUID() != creatureGuid)
+            continue;
+
+        for (LootItem const& item : loot->items)
+        {
+            if (item.is_looted || item.itemid != itemId)
+                continue;
+
+            QueueLootItem(player->GetSession(), view.first, uint8(item.LootListId));
+            QueueLootRelease(player->GetSession(), creatureGuid);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_LOOT_ITEM and CMSG_LOOT_RELEASE on {} for item {}.",
+                player->GetName(), creatureGuid.ToString(), itemId);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool PlayerbotClient::HasOpenLootOn(Player* player, ObjectGuid creatureGuid)
+{
+    if (!player || creatureGuid.IsEmpty())
+        return false;
+
+    for (std::pair<ObjectGuid const, Loot*> const& view : player->GetAELootView())
+    {
+        if (view.second && view.second->GetOwnerGUID() == creatureGuid)
+            return true;
+    }
+
+    return false;
 }

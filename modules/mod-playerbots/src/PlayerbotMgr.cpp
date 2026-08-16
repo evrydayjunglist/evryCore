@@ -25,6 +25,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotFactory.h"
+#include "Unit.h"
 #include "UnitDefines.h"
 #include "World.h"
 #include "WorldSession.h"
@@ -102,6 +103,42 @@ namespace
         if (bot.ItemLootTarget.QuestId || bot.ItemLootTarget.LootCorpse)
             return player->GetExactDist(bot.ItemLootTarget.Pos) > range;
         return false;
+    }
+
+    bool CreatureIsHittingPlayer(Player const* player, ObjectGuid guid)
+    {
+        if (!player || guid.IsEmpty())
+            return false;
+
+        for (Unit* attacker : player->getAttackers())
+        {
+            if (attacker && attacker->GetGUID() == guid)
+                return true;
+        }
+
+        return false;
+    }
+
+    // Stay on this fight after a close-in walk fails: in melee, or this creature is hitting her.
+    bool KeepCombatAfterFailedWalk(Player* player, ObjectGuid creatureGuid)
+    {
+        if (!player || creatureGuid.IsEmpty())
+            return false;
+
+        if (CreatureIsHittingPlayer(player, creatureGuid))
+            return true;
+
+        Creature* creature = ObjectAccessor::GetCreature(*player, creatureGuid);
+        return creature && player->IsWithinMeleeRange(creature);
+    }
+
+    void LogStayOnCombatWalkFail(Player const* player, ObjectGuid creatureGuid)
+    {
+        if (!player)
+            return;
+
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} close-in walk failed; staying on {}.",
+            player->GetName(), creatureGuid.ToString());
     }
 }
 
@@ -1141,9 +1178,14 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
     }
     else if (bot.CombatTarget.QuestId || !bot.CombatTarget.CreatureGuid.IsEmpty())
     {
-        if (!bot.CombatTarget.CreatureGuid.IsEmpty())
-            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
-        ClearCombat(bot, player);
+        if (KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid))
+            LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
+        else
+        {
+            if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+                bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            ClearCombat(bot, player);
+        }
     }
     else if (bot.ItemLootTarget.QuestId || bot.ItemLootTarget.LootCorpse)
     {
@@ -1366,11 +1408,20 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
 
     if (player->IsWithinMeleeRange(creature))
     {
+        if (bot.Walker.IsMoving())
+            bot.Walker.Stop(player);
+
         if (player->GetVictim() == creature && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
             return true;
 
-        if (!bot.CombatSwingSent && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
+        bool const reswing = bot.CombatSwingSent;
+        if (PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
+        {
+            if (reswing)
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} re-queued CMSG_ATTACK_SWING on {} because auto-attack was not running.",
+                    player->GetName(), bot.CombatTarget.CreatureGuid.ToString());
             bot.CombatSwingSent = true;
+        }
 
         return true;
     }
@@ -1386,32 +1437,32 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
     if (bot.Walker.IsMoving())
         return true;
 
+    auto failCloseInWalk = [&]()
+    {
+        if (KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid))
+        {
+            LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
+            bot.Walker.Reset();
+            return true;
+        }
+
+        bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+        ClearCombat(bot, player);
+        bot.Walker.Reset();
+        return false;
+    };
+
     Position standPos;
     float const standDistance = creature->GetCombatReach() + 1.0f;
     if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
-    {
-        bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
-        ClearCombat(bot, player);
-        bot.Walker.Reset();
-        return false;
-    }
+        return failCloseInWalk();
 
     bot.CombatTarget.Pos = standPos;
     if (player->GetExactDist(standPos) <= bot.CombatTarget.StopDistance)
-    {
-        bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
-        ClearCombat(bot, player);
-        bot.Walker.Reset();
-        return false;
-    }
+        return failCloseInWalk();
 
     if (!bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance))
-    {
-        bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
-        ClearCombat(bot, player);
-        bot.Walker.Reset();
-        return false;
-    }
+        return failCloseInWalk();
 
     return true;
 }
@@ -1589,6 +1640,16 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.QuestArriveWaitMs = 0;
     if (!bot.Walker.Start(player, bot.CombatTarget.Pos, bot.CombatTarget.StopDistance))
     {
+        if (KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid))
+        {
+            LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
+            bot.Walker.Reset();
+            Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
+            if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
+                bot.CombatSwingSent = true;
+            return true;
+        }
+
         if (!bot.CombatTarget.CreatureGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
         else

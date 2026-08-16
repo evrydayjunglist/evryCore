@@ -767,18 +767,28 @@ namespace
         if (!player || !creature)
             return {};
 
-        Position standPos;
-        float const standDistance = creature->GetCombatReach() + 1.0f;
-        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
-            return {};
-
         PlayerbotClient::CombatTarget target;
         target.CreatureGuid = creature->GetGUID();
-        target.Pos = standPos;
         target.StopDistance = 0.25f;
         target.QuestId = questId;
         target.CreditEntry = creditEntry;
-        return target;
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+        {
+            target.Pos = standPos;
+            return target;
+        }
+
+        // Already in melee: swing from her feet. Do not require a walkable stand point.
+        if (player->IsWithinMeleeRange(creature))
+        {
+            target.Pos = player->GetPosition();
+            return target;
+        }
+
+        return {};
     }
 
     uint32 HeldQuestStartItem(Player* player, uint32 questId)
@@ -1369,7 +1379,16 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindAttackerTarget(Play
 
     Optional<CombatTarget> target = MakeCombatTarget(player, best, questId, creditEntry);
     if (!target)
-        return {};
+    {
+        CombatTarget fallback;
+        fallback.CreatureGuid = best->GetGUID();
+        fallback.Pos = player->GetPosition();
+        fallback.StopDistance = 0.25f;
+        fallback.QuestId = questId;
+        fallback.CreditEntry = creditEntry;
+        fallback.ItemId = itemId;
+        return fallback;
+    }
 
     target->ItemId = itemId;
     return target;

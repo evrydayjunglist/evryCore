@@ -38,6 +38,7 @@ namespace
     constexpr float QUEST_SEARCH_RANGE = 40.0f;
     constexpr float COMBAT_SEARCH_RANGE = 150.0f;
     constexpr float LOOT_SEARCH_RANGE = 10.0f;
+    constexpr uint32 COMBAT_CAST_RETRY_MS = 100;
     constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
     constexpr uint32 VENDOR_RETRY_MS = 60000;
@@ -424,7 +425,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
     {
-        if (UpdateCombat(bot, player))
+        if (UpdateCombat(bot, player, diff))
             return;
     }
 
@@ -1469,10 +1470,11 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
     bot.CombatSwingSent = false;
     bot.CombatCastSpellId = 0;
     bot.CombatCastPending = false;
+    bot.CombatCastWaitMs = 0;
     bot.CombatFacingWait = false;
 }
 
-bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
+bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff)
 {
     Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
     if (!creature)
@@ -1512,9 +1514,6 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
         bot.Walker.Reset();
         return false;
     }
-
-    bot.CombatCastPending = false;
-    bot.CombatFacingWait = false;
 
     bool const inMelee = player->IsWithinMeleeRange(creature);
     if (!inMelee)
@@ -1577,6 +1576,32 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
         return true;
     };
 
+    // Facing packet from last tick has already been processed this world update.
+    if (bot.CombatFacingWait)
+        bot.CombatFacingWait = false;
+
+    if (bot.CombatCastPending)
+    {
+        if (PlayerbotClient::CombatCastHasStarted(player, bot.CombatCastSpellId))
+        {
+            bot.CombatCastPending = false;
+            bot.CombatCastWaitMs = 0;
+        }
+        else
+        {
+            bot.CombatCastWaitMs += diff;
+            if (bot.CombatCastWaitMs < COMBAT_CAST_RETRY_MS)
+            {
+                swingIfMelee();
+                return true;
+            }
+
+            bot.CombatCastPending = false;
+            bot.CombatCastSpellId = 0;
+            bot.CombatCastWaitMs = 0;
+        }
+    }
+
     PlayerbotClient::CombatSpellPick const pick = PlayerbotClient::PickCombatDamageSpell(player, creature);
 
     if (pick.Press)
@@ -1592,6 +1617,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
         {
             bot.CombatCastSpellId = pick.Press->Id;
             bot.CombatCastPending = true;
+            bot.CombatCastWaitMs = 0;
         }
 
         swingIfMelee();
@@ -1792,6 +1818,7 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.CombatSwingSent = false;
     bot.CombatCastSpellId = 0;
     bot.CombatCastPending = false;
+    bot.CombatCastWaitMs = 0;
     bot.CombatFacingWait = false;
     bot.Walker.Reset();
 

@@ -187,6 +187,7 @@ namespace PlayerbotClient
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
     bool TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId);
     CombatSpellPick PickCombatDamageSpell(Player* player, Unit* target);
+    bool CombatCastHasStarted(Player const* player, uint32 spellId);
     bool CombatSpellIsMelee(SpellInfo const* spellInfo);
     float CombatSpellMaxRange(Player const* player, Unit const* target, SpellInfo const* spellInfo);
     bool TryUseGameObject(Player* player, GameObjectTarget const& target);

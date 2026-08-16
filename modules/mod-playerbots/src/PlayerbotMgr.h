@@ -55,6 +55,7 @@ struct PlayerbotRecord
     bool CombatSwingSent = false;
     uint32 CombatCastSpellId = 0;
     bool CombatCastPending = false;
+    uint32 CombatCastWaitMs = 0;
     bool CombatFacingWait = false;
     bool LootOpenSent = false;
     PlayerbotDeathWork Death = PlayerbotDeathWork::None;
@@ -113,7 +114,7 @@ private:
     bool TryClickFromHere(PlayerbotRecord& bot, Player* player);
     bool TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId = 0, uint32 skipEntry = 0);
     void ClearCombat(PlayerbotRecord& bot, Player* player);
-    bool UpdateCombat(PlayerbotRecord& bot, Player* player);
+    bool UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff);
     void ClearItemLoot(PlayerbotRecord& bot);
     bool UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);

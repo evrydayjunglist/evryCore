@@ -24,6 +24,7 @@
 #include "CreatureData.h"
 #include "DBCEnums.h"
 #include "DB2Stores.h"
+#include "Duration.h"
 #include "GameObject.h"
 #include "GameTime.h"
 #include "GossipDef.h"
@@ -1041,6 +1042,10 @@ namespace
                     return true;
         }
 
+        if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+            if (generic->GetSpellInfo() && generic->GetSpellInfo()->Id == spellInfo->Id)
+                return true;
+
         if (spellInfo->IsAutoRepeatRangedSpell())
         {
             if (Spell const* repeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
@@ -1056,10 +1061,9 @@ namespace
         if (!player || !spellInfo || !player->GetSpellHistory())
             return false;
 
-        if (!player->CanRequestSpellCast(spellInfo, player))
-            return false;
-
-        if (player->GetSpellHistory()->HasGlobalCooldown(spellInfo))
+        // Wait until GCD is actually up. CanRequestSpellCast allows a 400 ms early
+        // queue; that is one pending press on a real client, not a press every tick.
+        if (player->GetSpellHistory()->GetRemainingGlobalCooldown(spellInfo) > 0ms)
             return false;
 
         if (!player->GetSpellHistory()->IsReady(spellInfo))
@@ -1074,10 +1078,42 @@ namespace
             return SPELL_FAILED_UNKNOWN;
 
         Spell* look = new Spell(player, spellInfo, TRIGGERED_NONE);
+        look->m_fromClient = true;
         look->m_targets.SetUnitTarget(target);
         SpellCastResult const result = look->CheckCast(true);
+        if (result != SPELL_CAST_OK)
+        {
+            delete look;
+            return result;
+        }
+
+        // Spell::prepare fills m_powerCost before CheckCast. That member is not
+        // writable from the module, so CheckPower inside CheckCast sees an empty
+        // cost. Match that check here with the same CalcPowerCost.
+        for (SpellPowerCost const& cost : spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask(), look))
+        {
+            if (cost.Power == POWER_HEALTH)
+            {
+                if (int64(player->GetHealth()) <= cost.Amount)
+                {
+                    delete look;
+                    return SPELL_FAILED_CASTER_AURASTATE;
+                }
+                continue;
+            }
+
+            if (cost.Power >= MAX_POWERS || cost.Power == POWER_RUNES)
+                continue;
+
+            if (int32(player->GetPower(cost.Power)) < cost.Amount)
+            {
+                delete look;
+                return SPELL_FAILED_NO_POWER;
+            }
+        }
+
         delete look;
-        return result;
+        return SPELL_CAST_OK;
     }
 
     bool CreatureIsInInteractRange(Player const* player, Creature const* creature)
@@ -2565,6 +2601,21 @@ float PlayerbotClient::CombatSpellMaxRange(Player const* player, Unit const* tar
         return player->GetMeleeRange(target);
 
     return spellInfo->GetMaxRange(false, player) + player->GetCombatReach() + target->GetCombatReach();
+}
+
+bool PlayerbotClient::CombatCastHasStarted(Player const* player, uint32 spellId)
+{
+    if (!player || !player->GetSpellHistory() || !player->GetMap() || !spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+    if (!spellInfo)
+        return false;
+
+    if (player->GetSpellHistory()->GetRemainingGlobalCooldown(spellInfo) > 0ms)
+        return true;
+
+    return CombatSpellAlreadyQueued(player, spellInfo);
 }
 
 PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* player, Unit* target)

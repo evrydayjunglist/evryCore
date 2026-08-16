@@ -1162,7 +1162,7 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
         Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
         Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
         Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
-        Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindLogCompleteTurnIn(player, skipQuestId);
+        Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindLogCompleteTurnIn(player, bot.UnreachableGuids, skipQuestId);
 
         float bestDist = std::numeric_limits<float>::max();
         uint8 kind = 0;

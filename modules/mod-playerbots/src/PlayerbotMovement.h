@@ -52,7 +52,8 @@ private:
 
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
     Position Advance(float distance);
-    void RefuseSteepStep(Player* player, float degrees);
+    Position PeekGroundedStep(Player* player, float distance);
+    void RefuseSteepStep(Player* player, Position const& attempted);
     void Fail(Player* player, char const* reason);
 
     State _state = State::Idle;

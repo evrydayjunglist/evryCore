@@ -46,14 +46,33 @@ namespace
     constexpr float SPELL_FOCUS_AVOID_RADIUS = 2.5f;
     constexpr float VIA_EXTRA_CLEARANCE = 1.0f;
     constexpr float MAX_WALKABLE_SLOPE_DEGREES = 35.0f;
+    // One heartbeat. A curb, stair, or house slab. Longer than this is a cliff.
+    constexpr float MAX_DOWN_STEP_YARDS = 2.0f;
 
-    float GroundedStepDegrees(Position const& from, Position const& to)
+    struct GroundedStep
     {
+        float run = 0.0f;
+        float rise = 0.0f;
+        float degrees = 0.0f;
+    };
+
+    GroundedStep MeasureGroundedStep(Position const& from, Position const& to)
+    {
+        GroundedStep step;
         float const dx = to.GetPositionX() - from.GetPositionX();
         float const dy = to.GetPositionY() - from.GetPositionY();
-        float const run = std::sqrt(dx * dx + dy * dy);
-        float const rise = std::fabs(to.GetPositionZ() - from.GetPositionZ());
-        return std::atan2(rise, run) * (180.0f / float(M_PI));
+        step.run = std::sqrt(dx * dx + dy * dy);
+        step.rise = to.GetPositionZ() - from.GetPositionZ();
+        step.degrees = std::atan2(std::fabs(step.rise), step.run) * (180.0f / float(M_PI));
+        return step;
+    }
+
+    bool GroundedStepIsLegal(GroundedStep const& step)
+    {
+        if (step.rise > 0.0f)
+            return step.degrees <= MAX_WALKABLE_SLOPE_DEGREES;
+
+        return -step.rise <= MAX_DOWN_STEP_YARDS;
     }
 
     struct AvoidCircle
@@ -399,6 +418,23 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     float z = player->GetPositionZ();
     player->UpdateAllowedPositionZ(x, y, z);
     _lastGrounded.Relocate(x, y, z, player->GetOrientation());
+
+    float const speed = player->GetSpeed(MOVE_RUN);
+    float const stepLen = speed * (float(HEARTBEAT_INTERVAL_MS) / 1000.0f);
+    Position const first = PeekGroundedStep(player, stepLen);
+    GroundedStep const firstStep = MeasureGroundedStep(_lastGrounded, first);
+    if (!GroundedStepIsLegal(firstStep))
+    {
+        _state = State::Failed;
+        if (firstStep.rise > 0.0f)
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is not starting this walk: the first step is {:.0f} degrees up, steeper than 35.",
+                player->GetName(), firstStep.degrees);
+        else
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is not starting this walk: the first step drops {:.1f} yards, a cliff rather than a curb.",
+                player->GetName(), -firstStep.rise);
+        return false;
+    }
+
     _state = State::Moving;
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk. {} points, length to destination {:.1f} yards.",
@@ -427,8 +463,8 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
     while (_heartbeatMs >= HEARTBEAT_INTERVAL_MS && _state == State::Moving)
     {
         _heartbeatMs -= HEARTBEAT_INTERVAL_MS;
-        float const step = speed * (float(HEARTBEAT_INTERVAL_MS) / 1000.0f);
-        Position const next = Advance(step);
+        float const stepLen = speed * (float(HEARTBEAT_INTERVAL_MS) / 1000.0f);
+        Position const next = Advance(stepLen);
 
         float z = next.GetPositionZ();
         player->UpdateAllowedPositionZ(next.GetPositionX(), next.GetPositionY(), z);
@@ -436,11 +472,11 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         Position grounded;
         grounded.Relocate(next.GetPositionX(), next.GetPositionY(), z, next.GetOrientation());
 
-        // Last grounded feet to this tick's grounded feet. 35° every heartbeat, including talk.
-        float const degrees = GroundedStepDegrees(_lastGrounded, grounded);
-        if (degrees > MAX_WALKABLE_SLOPE_DEGREES)
+        // Last grounded feet to this tick's grounded feet. 35° up, short down, including talk.
+        GroundedStep const groundedStep = MeasureGroundedStep(_lastGrounded, grounded);
+        if (!GroundedStepIsLegal(groundedStep))
         {
-            RefuseSteepStep(player, degrees);
+            RefuseSteepStep(player, grounded);
             return;
         }
 
@@ -562,24 +598,49 @@ Position PlayerbotWalker::Advance(float distance)
     return pos;
 }
 
-void PlayerbotWalker::RefuseSteepStep(Player* player, float degrees)
+Position PlayerbotWalker::PeekGroundedStep(Player* player, float distance)
+{
+    size_t const savedIndex = _pointIndex;
+    float const savedProgress = _segmentProgress;
+    Position next = Advance(distance);
+    _pointIndex = savedIndex;
+    _segmentProgress = savedProgress;
+
+    float z = next.GetPositionZ();
+    player->UpdateAllowedPositionZ(next.GetPositionX(), next.GetPositionY(), z);
+
+    Position grounded;
+    grounded.Relocate(next.GetPositionX(), next.GetPositionY(), z, next.GetOrientation());
+    return grounded;
+}
+
+void PlayerbotWalker::RefuseSteepStep(Player* player, Position const& attempted)
 {
     QueueMove(player, _lastGrounded, false, false);
 
     Position const destination = _destination;
     float const stopDistance = _stopDistance;
     Position const feet = _lastGrounded;
+    GroundedStep const step = MeasureGroundedStep(_lastGrounded, attempted);
 
     if (_repathedFromSlope)
     {
         _state = State::Failed;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking: this step is still {:.0f} degrees after repathing from her feet.",
-            player->GetName(), degrees);
+        if (step.rise > 0.0f)
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking: this step is still {:.0f} degrees up after repathing from her feet.",
+                player->GetName(), step.degrees);
+        else
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking: this step still drops {:.1f} yards after repathing from her feet.",
+                player->GetName(), -step.rise);
         return;
     }
 
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped: this step is {:.0f} degrees, steeper than 35. Repathing from her feet.",
-        player->GetName(), degrees);
+    if (step.rise > 0.0f)
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped: this step is {:.0f} degrees up, steeper than 35. Repathing from her feet.",
+            player->GetName(), step.degrees);
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped: this step drops {:.1f} yards, longer than a curb. Repathing from her feet.",
+            player->GetName(), -step.rise);
 
     if (!Start(player, destination, stopDistance))
         return;

@@ -992,7 +992,7 @@ namespace
         return target;
     }
 
-    Creature* FindLivingEnderOnMap(Player* player, std::unordered_set<uint32> const& enderEntries, Optional<Position> const& marker)
+    Creature* FindLivingEnderOnMap(Player* player, std::unordered_set<uint32> const& enderEntries, Optional<Position> const& marker, std::unordered_set<ObjectGuid> const& skip)
     {
         if (!player || !player->GetMap() || enderEntries.empty())
             return nullptr;
@@ -1003,6 +1003,8 @@ namespace
         for (auto const& pair : player->GetMap()->GetCreatureBySpawnIdStore())
         {
             Creature* creature = pair.second;
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
             if (!CreatureIsUsableEnder(player, creature, enderEntries))
                 continue;
             if (marker && creature->GetExactDist(*marker) > 40.0f)
@@ -1094,7 +1096,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
     return best;
 }
 
-Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Player* player, int32 skipQuestId)
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -1119,7 +1121,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         if (marker && !map->IsGridLoaded(*marker))
             map->LoadGrid(marker->GetPositionX(), marker->GetPositionY());
 
-        Creature* creature = FindLivingEnderOnMap(player, enderEntries, marker);
+        Creature* creature = FindLivingEnderOnMap(player, enderEntries, marker, skip);
         if (!creature)
             continue;
 

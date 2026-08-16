@@ -713,6 +713,14 @@ namespace
         return player->CanSeeOrDetect(obj);
     }
 
+    // Terrain and spawned objects. This is the same ray the core uses for a player. It is not stealth or phase.
+    bool PlayerHasLineOfSight(Player const* player, WorldObject const* obj)
+    {
+        if (!player || !obj)
+            return false;
+        return player->IsWithinLOSInMap(obj);
+    }
+
     bool GameObjectIsSelectable(Player const* player, GameObject const* go)
     {
         if (!player || !go || !go->IsInWorld() || !go->isSpawned())
@@ -1520,6 +1528,8 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
             continue;
         if (!creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
             continue;
+        if (!PlayerHasLineOfSight(player, creature))
+            continue;
 
         player->PrepareQuestMenu(creature->GetGUID());
         QuestMenu& menu = player->PlayerTalkClass->GetQuestMenu();
@@ -1663,6 +1673,8 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
             }
         }
         if (!matched)
+            continue;
+        if (!PlayerHasLineOfSight(player, creature))
             continue;
 
         float const dist = player->GetExactDist(creature);
@@ -2273,6 +2285,8 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindNearbyGameObjec
         }
         if (!matched)
             continue;
+        if (!PlayerHasLineOfSight(player, go))
+            continue;
 
         if (mustBeInUseRange && !player->GetGameObjectIfCanInteractWith(go->GetGUID()))
             continue;
@@ -2472,6 +2486,8 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseIte
             continue;
 
         if (mustBeInUseRange && !CreatureIsInInteractRange(player, creature))
+            continue;
+        if (!PlayerHasLineOfSight(player, creature))
             continue;
 
         float const dist = player->GetExactDist(creature);

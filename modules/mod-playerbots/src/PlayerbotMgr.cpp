@@ -140,6 +140,16 @@ namespace
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} close-in walk failed; staying on {}.",
             player->GetName(), creatureGuid.ToString());
     }
+
+    void StopWalkToClick(PlayerbotRecord& bot, Player* player, ObjectGuid const& guid)
+    {
+        if (!bot.Walker.IsMoving() || !player)
+            return;
+
+        bot.Walker.Stop(player);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking to click {} from here.",
+            player->GetName(), guid.ToString());
+    }
 }
 
 PlayerbotMgr* PlayerbotMgr::instance()
@@ -344,9 +354,6 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             bot.VendorRetryMs = 0;
     }
 
-    if (bot.Walker.IsMoving())
-        bot.Walker.Update(player, diff);
-
     if (bot.QuestInteractQueued)
     {
         bot.QuestInteractWaitMs += diff;
@@ -366,6 +373,22 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.UnreachableGuids.clear();
         bot.Walker.Reset();
     }
+
+    // Click from here before this tick's step. Do not heartbeat into a lip a player would already click over.
+    if (bot.CombatTarget.CreatureGuid.IsEmpty() && bot.Walker.IsMoving())
+    {
+        if (Optional<PlayerbotClient::CombatTarget> attacker = PlayerbotClient::FindAttackerTarget(player))
+        {
+            BeginCombatTarget(bot, player, *attacker);
+            return;
+        }
+
+        if (TryClickFromHere(bot, player))
+            return;
+    }
+
+    if (bot.Walker.IsMoving())
+        bot.Walker.Update(player, diff);
 
     int32 skipFailedQuestId = 0;
     uint32 skipFailedEntry = 0;
@@ -1271,6 +1294,85 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
     return BeginCombatTarget(bot, player, *kill);
 }
 
+bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
+{
+    if (!player)
+        return false;
+
+    // Same interact helpers the arrive path uses. Do not require the 0.25-yard stand pin.
+
+    if (!bot.QuestTarget.NpcGuid.IsEmpty())
+    {
+        if (!PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
+            return false;
+
+        StopWalkToClick(bot, player, bot.QuestTarget.NpcGuid);
+        bot.QuestInteractQueued = true;
+        bot.QuestInteractWaitMs = 0;
+        return true;
+    }
+
+    if (!bot.GameObjectTarget.GoGuid.IsEmpty())
+    {
+        if (!PlayerbotClient::TryUseGameObject(player, bot.GameObjectTarget))
+            return false;
+
+        StopWalkToClick(bot, player, bot.GameObjectTarget.GoGuid);
+        bot.QuestInteractQueued = true;
+        bot.QuestInteractWaitMs = 0;
+        return true;
+    }
+
+    if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
+    {
+        if (!PlayerbotClient::TryUseItemOnUnit(player, bot.UseItemOnUnitTarget))
+            return false;
+
+        StopWalkToClick(bot, player, bot.UseItemOnUnitTarget.CreatureGuid);
+        bot.QuestInteractQueued = true;
+        bot.QuestInteractWaitMs = 0;
+        return true;
+    }
+
+    if (bot.ItemLootTarget.LootCorpse
+        || (bot.ItemLootTarget.QuestId && !bot.ItemLootTarget.GoGuid.IsEmpty()))
+    {
+        bool canClick = false;
+        ObjectGuid clickGuid;
+        if (!bot.ItemLootTarget.GoGuid.IsEmpty())
+        {
+            clickGuid = bot.ItemLootTarget.GoGuid;
+            canClick = player->GetGameObjectIfCanInteractWith(clickGuid) != nullptr;
+        }
+        else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
+        {
+            clickGuid = bot.ItemLootTarget.CreatureGuid;
+            Creature* creature = ObjectAccessor::GetCreature(*player, clickGuid);
+            canClick = InInteractRange(player, creature);
+        }
+
+        if (!canClick)
+            return false;
+
+        StopWalkToClick(bot, player, clickGuid);
+        bot.QuestArriveWaitMs = 0;
+        return UpdateItemLoot(bot, player, 0);
+    }
+
+    if (!bot.VendorTarget.NpcGuid.IsEmpty())
+    {
+        if (!PlayerbotClient::TryOpenVendor(player, bot.VendorTarget.NpcGuid))
+            return false;
+
+        StopWalkToClick(bot, player, bot.VendorTarget.NpcGuid);
+        bot.VendorListSent = true;
+        bot.QuestArriveWaitMs = 0;
+        return true;
+    }
+
+    return false;
+}
+
 bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId, uint32 skipEntry)
 {
     for (int32 attempt = 0; attempt < 5; ++attempt)
@@ -1482,13 +1584,8 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
     bot.CombatTarget = {};
     bot.Walker.Reset();
 
-    if (player->GetExactDist(bot.QuestTarget.Pos) <= bot.QuestTarget.StopDistance
-        && PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
-    {
-        bot.QuestInteractQueued = true;
-        bot.QuestInteractWaitMs = 0;
+    if (TryClickFromHere(bot, player))
         return true;
-    }
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} ({}).",
         player->GetName(), bot.QuestTarget.NpcGuid.ToString(), bot.QuestTarget.QuestId,
@@ -1521,14 +1618,8 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
     bot.CombatTarget = {};
     bot.Walker.Reset();
 
-    if (!bot.GameObjectTarget.GoGuid.IsEmpty()
-        && player->GetExactDist(bot.GameObjectTarget.Pos) <= bot.GameObjectTarget.StopDistance
-        && PlayerbotClient::TryUseGameObject(player, bot.GameObjectTarget))
-    {
-        bot.QuestInteractQueued = true;
-        bot.QuestInteractWaitMs = 0;
+    if (TryClickFromHere(bot, player))
         return true;
-    }
 
     if (!bot.GameObjectTarget.GoGuid.IsEmpty())
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (use).",
@@ -1568,14 +1659,8 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
     bot.CombatTarget = {};
     bot.Walker.Reset();
 
-    if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty()
-        && player->GetExactDist(bot.UseItemOnUnitTarget.Pos) <= bot.UseItemOnUnitTarget.StopDistance
-        && PlayerbotClient::TryUseItemOnUnit(player, bot.UseItemOnUnitTarget))
-    {
-        bot.QuestInteractQueued = true;
-        bot.QuestInteractWaitMs = 0;
+    if (TryClickFromHere(bot, player))
         return true;
-    }
 
     if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (use item).",
@@ -1723,8 +1808,7 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
             return true;
         }
 
-        if (bot.Walker.IsMoving())
-            bot.Walker.Stop(player);
+        StopWalkToClick(bot, player, lootOwner);
 
         if (!bot.LootOpenSent)
         {
@@ -1771,6 +1855,9 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
         lootOwner = bot.ItemLootTarget.CreatureGuid;
         if (!player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
         {
+            if (bot.Walker.IsMoving())
+                return true;
+
             Position standPos;
             float const standDistance = creature->GetCombatReach() + 1.0f;
             if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
@@ -1793,6 +1880,8 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
 
             return true;
         }
+
+        StopWalkToClick(bot, player, lootOwner);
 
         if (!bot.LootOpenSent)
         {
@@ -1875,13 +1964,16 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
     bot.LootOpenSent = false;
     bot.Walker.Reset();
 
-    bool const atStand = player->GetExactDist(bot.ItemLootTarget.Pos) <= bot.ItemLootTarget.StopDistance;
-    if (atStand && !bot.ItemLootTarget.GoGuid.IsEmpty())
+    bool canClick = false;
+    if (!bot.ItemLootTarget.GoGuid.IsEmpty())
+        canClick = player->GetGameObjectIfCanInteractWith(bot.ItemLootTarget.GoGuid) != nullptr;
+    else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty() && bot.ItemLootTarget.LootCorpse)
     {
-        bot.QuestArriveWaitMs = 0;
-        return UpdateItemLoot(bot, player, 0);
+        Creature* creature = ObjectAccessor::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
+        canClick = InInteractRange(player, creature);
     }
-    if (atStand && !bot.ItemLootTarget.CreatureGuid.IsEmpty() && bot.ItemLootTarget.LootCorpse)
+
+    if (canClick)
     {
         bot.QuestArriveWaitMs = 0;
         return UpdateItemLoot(bot, player, 0);
@@ -1964,13 +2056,8 @@ bool PlayerbotMgr::BeginVendorTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.VendorActed = false;
     bot.Walker.Reset();
 
-    if (player->GetExactDist(bot.VendorTarget.Pos) <= bot.VendorTarget.StopDistance
-        && PlayerbotClient::TryOpenVendor(player, bot.VendorTarget.NpcGuid))
-    {
-        bot.VendorListSent = true;
-        bot.QuestArriveWaitMs = 0;
+    if (TryClickFromHere(bot, player))
         return true;
-    }
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to vendor {}{}.",
         player->GetName(), bot.VendorTarget.NpcGuid.ToString(),

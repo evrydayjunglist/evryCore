@@ -107,6 +107,7 @@ private:
     bool UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32 diff);
     void RecoverFailedWalk(PlayerbotRecord& bot, Player* player);
     bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking);
+    bool TryClickFromHere(PlayerbotRecord& bot, Player* player);
     bool TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId = 0, uint32 skipEntry = 0);
     void ClearCombat(PlayerbotRecord& bot, Player* player);
     bool UpdateCombat(PlayerbotRecord& bot, Player* player);

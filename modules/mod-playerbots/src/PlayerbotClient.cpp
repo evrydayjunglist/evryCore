@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotClient.h"
+#include "ConditionMgr.h"
 #include "Corpse.h"
 #include "Creature.h"
 #include "CreatureData.h"
@@ -714,6 +715,23 @@ namespace
         }
 
         return 0;
+    }
+
+    bool ItemSpellCanTargetCreature(Player* player, uint32 itemId, Creature const* creature)
+    {
+        if (!player || !itemId || !creature)
+            return false;
+
+        Item* item = player->GetItemByEntry(itemId);
+        if (!item)
+            return false;
+
+        uint32 const spellId = GetItemOnUseSpellId(item);
+        if (!spellId)
+            return false;
+
+        // Same caster / unit-target order Spell::CheckCast uses for CONDITION_SOURCE_TYPE_SPELL.
+        return sConditionMgr->IsObjectMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_SPELL, spellId, player, creature);
     }
 
     bool CreatureIsInInteractRange(Player const* player, Creature const* creature)
@@ -1904,6 +1922,9 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseIte
         if (!matched)
             continue;
 
+        if (!ItemSpellCanTargetCreature(player, itemId, creature))
+            continue;
+
         if (mustBeInUseRange && !CreatureIsInInteractRange(player, creature))
             continue;
 
@@ -1964,26 +1985,7 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
 
         LoadPoiGrids(map, blobs);
 
-        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.CreditEntry == skipEntry);
-        if (!skipMarker)
-        {
-            for (ObjectivePoiBlob const& blob : blobs)
-            {
-                for (Position const& point : blob.Points)
-                {
-                    float const dist = player->GetExactDist(point);
-                    if (dist >= bestMarkerDist)
-                        continue;
-
-                    bestMarkerDist = dist;
-                    bestMarker = point;
-                    bestMarkerCredit = &credit;
-                    bestMarkerItemId = itemId;
-                    haveMarker = true;
-                }
-            }
-        }
-
+        bool sawSpawnForCredit = false;
         for (auto const& pair : map->GetCreatureBySpawnIdStore())
         {
             Creature* creature = pair.second;
@@ -1998,6 +2000,10 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
             if (!CreatureGivesMonsterCredit(creature, credit.CreditEntry))
                 continue;
             if (!PositionIsInPoiArea(*creature, blobs))
+                continue;
+
+            sawSpawnForCredit = true;
+            if (!ItemSpellCanTargetCreature(player, itemId, creature))
                 continue;
 
             float const dist = player->GetExactDist(creature);
@@ -2015,6 +2021,27 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
             bestCreatureDist = dist;
             bestCreatureTarget = *target;
             haveCreature = true;
+        }
+
+        // Markers are for a missing spawn. If matching creatures are up and the item would not take any of them, look for other work instead of camping the yellow.
+        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.CreditEntry == skipEntry);
+        if (!skipMarker && !sawSpawnForCredit)
+        {
+            for (ObjectivePoiBlob const& blob : blobs)
+            {
+                for (Position const& point : blob.Points)
+                {
+                    float const dist = player->GetExactDist(point);
+                    if (dist >= bestMarkerDist)
+                        continue;
+
+                    bestMarkerDist = dist;
+                    bestMarker = point;
+                    bestMarkerCredit = &credit;
+                    bestMarkerItemId = itemId;
+                    haveMarker = true;
+                }
+            }
         }
     }
 
@@ -2041,6 +2068,13 @@ bool PlayerbotClient::UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUn
         return false;
     if (!player->HasItemCount(target.ItemId))
         return false;
+
+    if (!target.CreatureGuid.IsEmpty())
+    {
+        Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
+        if (creature && !ItemSpellCanTargetCreature(player, target.ItemId, creature))
+            return false;
+    }
 
     Quest const* quest = sObjectMgr->GetQuestTemplate(uint32(target.QuestId));
     if (!quest || quest->GetSrcItemId() != target.ItemId)
@@ -2137,6 +2171,8 @@ bool PlayerbotClient::TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const
     if (!creature || !creature->IsAlive())
         return false;
     if (!CreatureIsInInteractRange(player, creature))
+        return false;
+    if (!ItemSpellCanTargetCreature(player, target.ItemId, creature))
         return false;
 
     Item* item = player->GetItemByEntry(target.ItemId);

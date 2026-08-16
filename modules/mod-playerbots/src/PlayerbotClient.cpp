@@ -484,11 +484,9 @@ namespace
         }
     }
 
-    bool GameObjectIsUsableForObjective(Player const* player, GameObject const* go, uint32 entry)
+    bool GameObjectIsSelectable(Player const* player, GameObject const* go)
     {
         if (!player || !go || !go->IsInWorld() || !go->isSpawned())
-            return false;
-        if (go->GetEntry() != entry)
             return false;
 
         GameObjectTemplate const* info = go->GetGOInfo();
@@ -504,7 +502,66 @@ namespace
             return false;
         if (!player->CanSeeOrDetect(go))
             return false;
+        return true;
+    }
+
+    bool GameObjectIsUsableForObjective(Player const* player, GameObject const* go, uint32 entry)
+    {
+        if (!GameObjectIsSelectable(player, go))
+            return false;
+        if (go->GetEntry() != entry)
+            return false;
         if (!go->ActivateToQuest(player))
+            return false;
+        return true;
+    }
+
+    bool GameObjectGivesQuestItem(GameObject const* go, uint32 itemId)
+    {
+        if (!go || !itemId)
+            return false;
+
+        std::vector<uint32> const* items = sObjectMgr->GetGameObjectQuestItemList(go->GetEntry());
+        if (!items)
+            return false;
+
+        for (uint32 id : *items)
+        {
+            if (id == itemId)
+                return true;
+        }
+
+        return false;
+    }
+
+    bool GameObjectLootStillHasQuestItem(Player const* player, GameObject const* go, uint32 itemId)
+    {
+        if (!player || !go || !itemId)
+            return false;
+
+        Loot const* loot = go->GetLootForPlayer(player);
+        if (!loot)
+            return true;
+
+        for (LootItem const& item : loot->items)
+        {
+            if (item.is_looted || item.itemid != itemId)
+                continue;
+            return true;
+        }
+
+        return false;
+    }
+
+    bool GameObjectIsUsableForItemObjective(Player const* player, GameObject const* go, uint32 itemId)
+    {
+        if (!GameObjectIsSelectable(player, go))
+            return false;
+        if (!GameObjectGivesQuestItem(go, itemId))
+            return false;
+        if (!go->ActivateToQuest(player))
+            return false;
+        if (!GameObjectLootStillHasQuestItem(player, go, itemId))
             return false;
         return true;
     }
@@ -681,6 +738,25 @@ namespace
         target.ItemId = itemId;
         target.CreatureEntry = creature->GetEntry();
         target.LootCorpse = lootCorpse;
+        return target;
+    }
+
+    Optional<PlayerbotClient::ItemLootTarget> MakeItemLootTargetFromGameObject(Player* player, GameObject* go, int32 questId, uint32 itemId)
+    {
+        if (!player || !go || !questId || !itemId)
+            return {};
+
+        Position standPos;
+        if (!PlayerbotWalker::PickApproachPosition(player, go, GameObjectStandDistance(go), standPos))
+            return {};
+
+        PlayerbotClient::ItemLootTarget target;
+        target.GoGuid = go->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        target.QuestId = questId;
+        target.ItemId = itemId;
+        target.GoEntry = go->GetEntry();
         return target;
     }
 
@@ -1199,7 +1275,7 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
     return target;
 }
 
-Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip)
+Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange)
 {
     if (!player || !player->IsInWorld())
         return {};
@@ -1209,15 +1285,15 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
     if (credits.empty())
         return {};
 
-    std::vector<Creature*> nearby;
-    FindCreatureOptions options;
-    options.IsAlive = FindCreatureAliveState::Dead;
-    player->GetCreatureListWithOptionsInGrid(nearby, range, options);
-
     ItemLootTarget best;
     float bestDist = std::numeric_limits<float>::max();
 
-    for (Creature* creature : nearby)
+    std::vector<Creature*> nearbyCreatures;
+    FindCreatureOptions options;
+    options.IsAlive = FindCreatureAliveState::Dead;
+    player->GetCreatureListWithOptionsInGrid(nearbyCreatures, range, options);
+
+    for (Creature* creature : nearbyCreatures)
     {
         if (!creature || skip.contains(creature->GetGUID()))
             continue;
@@ -1251,7 +1327,45 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
         best = *target;
     }
 
-    if (best.CreatureGuid.IsEmpty())
+    std::vector<GameObject*> nearbyGo;
+    player->GetGameObjectListWithOptionsInGrid(nearbyGo, range, {});
+
+    for (GameObject* go : nearbyGo)
+    {
+        if (!go || skip.contains(go->GetGUID()))
+            continue;
+
+        IncompleteItemCredit const* matched = nullptr;
+        for (IncompleteItemCredit const& credit : credits)
+        {
+            if (!GameObjectIsUsableForItemObjective(player, go, credit.ItemId))
+                continue;
+            matched = &credit;
+            break;
+        }
+        if (!matched)
+            continue;
+
+        if (mustBeInUseRange && !player->GetGameObjectIfCanInteractWith(go->GetGUID()))
+            continue;
+
+        float const dist = player->GetExactDist(go);
+        if (dist >= bestDist)
+            continue;
+
+        Optional<ItemLootTarget> target = MakeItemLootTargetFromGameObject(player, go, matched->QuestId, matched->ItemId);
+        if (!target)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+                player->GetName(), go->GetGUID().ToString());
+            continue;
+        }
+
+        bestDist = dist;
+        best = *target;
+    }
+
+    if (best.CreatureGuid.IsEmpty() && best.GoGuid.IsEmpty())
         return {};
 
     return best;
@@ -1273,6 +1387,9 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
     ItemLootTarget bestCorpse;
     float bestCorpseDist = std::numeric_limits<float>::max();
     bool haveCorpse = false;
+    ItemLootTarget bestGo;
+    float bestGoDist = std::numeric_limits<float>::max();
+    bool haveGo = false;
     ItemLootTarget bestAlive;
     float bestAliveDist = std::numeric_limits<float>::max();
     bool haveAlive = false;
@@ -1363,10 +1480,39 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
             bestAlive = *target;
             haveAlive = true;
         }
+
+        for (auto const& pair : map->GetGameObjectBySpawnIdStore())
+        {
+            GameObject* go = pair.second;
+            if (!go || skip.contains(go->GetGUID()))
+                continue;
+            if (!GameObjectIsUsableForItemObjective(player, go, credit.ItemId))
+                continue;
+            if (!PositionIsInPoiArea(*go, blobs))
+                continue;
+
+            float const dist = player->GetExactDist(go);
+            if (dist >= bestGoDist)
+                continue;
+
+            Optional<ItemLootTarget> target = MakeItemLootTargetFromGameObject(player, go, credit.QuestId, credit.ItemId);
+            if (!target)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+                    player->GetName(), go->GetGUID().ToString());
+                continue;
+            }
+
+            bestGoDist = dist;
+            bestGo = *target;
+            haveGo = true;
+        }
     }
 
     if (haveCorpse)
         return bestCorpse;
+    if (haveGo)
+        return bestGo;
     if (haveAlive)
         return bestAlive;
 
@@ -1680,15 +1826,15 @@ bool PlayerbotClient::TryOpenLoot(Player* player, ObjectGuid creatureGuid)
     return true;
 }
 
-bool PlayerbotClient::TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid creatureGuid, uint32 itemId)
+bool PlayerbotClient::TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid lootOwner, uint32 itemId)
 {
-    if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty() || !itemId)
+    if (!player || !player->IsInWorld() || !player->GetSession() || lootOwner.IsEmpty() || !itemId)
         return false;
 
     for (std::pair<ObjectGuid const, Loot*> const& view : player->GetAELootView())
     {
         Loot* loot = view.second;
-        if (!loot || loot->GetOwnerGUID() != creatureGuid)
+        if (!loot || loot->GetOwnerGUID() != lootOwner)
             continue;
 
         for (LootItem const& item : loot->items)
@@ -1697,9 +1843,9 @@ bool PlayerbotClient::TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid cr
                 continue;
 
             QueueLootItem(player->GetSession(), view.first, uint8(item.LootListId));
-            QueueLootRelease(player->GetSession(), creatureGuid);
+            QueueLootRelease(player->GetSession(), lootOwner);
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_LOOT_ITEM and CMSG_LOOT_RELEASE on {} for item {}.",
-                player->GetName(), creatureGuid.ToString(), itemId);
+                player->GetName(), lootOwner.ToString(), itemId);
             return true;
         }
     }
@@ -1707,14 +1853,14 @@ bool PlayerbotClient::TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid cr
     return false;
 }
 
-bool PlayerbotClient::HasOpenLootOn(Player* player, ObjectGuid creatureGuid)
+bool PlayerbotClient::HasOpenLootOn(Player* player, ObjectGuid lootOwner)
 {
-    if (!player || creatureGuid.IsEmpty())
+    if (!player || lootOwner.IsEmpty())
         return false;
 
     for (std::pair<ObjectGuid const, Loot*> const& view : player->GetAELootView())
     {
-        if (view.second && view.second->GetOwnerGUID() == creatureGuid)
+        if (view.second && view.second->GetOwnerGUID() == lootOwner)
             return true;
     }
 

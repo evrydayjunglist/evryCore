@@ -69,11 +69,13 @@ namespace PlayerbotClient
     struct ItemLootTarget
     {
         ObjectGuid CreatureGuid;
+        ObjectGuid GoGuid;
         Position Pos;
         float StopDistance = 0.25f;
         int32 QuestId = 0;
         uint32 ItemId = 0;
         uint32 CreatureEntry = 0;
+        uint32 GoEntry = 0;
         bool LootCorpse = false;
     };
 
@@ -111,13 +113,13 @@ namespace PlayerbotClient
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
     Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
-    Optional<ItemLootTarget> FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
+    Optional<ItemLootTarget> FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<ItemLootTarget> FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool ItemLootTargetStillNeeded(Player* player, ItemLootTarget const& target);
     CombatTarget CombatTargetFromItemLoot(ItemLootTarget const& target);
     bool TryOpenLoot(Player* player, ObjectGuid creatureGuid);
-    bool TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid creatureGuid, uint32 itemId);
-    bool HasOpenLootOn(Player* player, ObjectGuid creatureGuid);
+    bool TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid lootOwner, uint32 itemId);
+    bool HasOpenLootOn(Player* player, ObjectGuid lootOwner);
     bool PlayerHasResurrectionSickness(Player const* player);
     bool CorpseReclaimDelayFinished(Player const* player);
     bool IsWithinCorpseReclaimRange(Player const* player);

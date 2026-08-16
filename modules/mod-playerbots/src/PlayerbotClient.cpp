@@ -1139,7 +1139,7 @@ namespace
     }
 }
 
-Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind)
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind, std::unordered_set<ObjectGuid> const& skip)
 {
     if (!player || !player->IsInWorld())
         return {};
@@ -1154,7 +1154,9 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
 
     for (Creature* creature : nearby)
     {
-        if (!creature || !creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
+        if (!creature || skip.contains(creature->GetGUID()))
+            continue;
+        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
             continue;
 
         player->PrepareQuestMenu(creature->GetGUID());

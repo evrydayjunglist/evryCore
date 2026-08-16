@@ -134,7 +134,7 @@ namespace PlayerbotClient
     void QueueSellAllJunkItems(WorldSession* session, ObjectGuid vendorGuid);
     void QueueRepairItem(WorldSession* session, ObjectGuid vendorGuid);
 
-    Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind);
+    Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind, std::unordered_set<ObjectGuid> const& skip);
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<CombatTarget> FindAttackerTarget(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);

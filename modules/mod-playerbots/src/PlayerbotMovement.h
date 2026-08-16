@@ -53,8 +53,12 @@ private:
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
     Position Advance(float distance);
     Position PeekGroundedStep(Player* player, float distance);
+    bool FirstGroundedStepIsLegal(Player* player);
+    bool FindLipSidestep(Player* player, Position& out) const;
+    bool TryLipDetour(Player* player);
     void RefuseSteepStep(Player* player, Position const& attempted);
     void Fail(Player* player, char const* reason);
+    void FailNoLegalRing(Player* player);
 
     State _state = State::Idle;
     std::vector<G3D::Vector3> _path;
@@ -67,7 +71,8 @@ private:
     uint32 _logMs = 0;
     Position _lastProgressPos;
     Position _lastGrounded;
-    bool _repathedFromSlope = false;
+    bool _contouring = false;
+    uint32 _lipSteps = 0;
 };
 
 #endif

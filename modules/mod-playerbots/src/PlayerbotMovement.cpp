@@ -29,6 +29,7 @@
 #include "PlayerbotClient.h"
 #include "Playerbots.h"
 #include "SharedDefines.h"
+#include "Unit.h"
 #include "UnitDefines.h"
 #include "WorldSession.h"
 #include <algorithm>
@@ -48,6 +49,20 @@ namespace
     constexpr float MAX_WALKABLE_SLOPE_DEGREES = 35.0f;
     // One heartbeat. A curb, stair, or house slab. Longer than this is a cliff.
     constexpr float MAX_DOWN_STEP_YARDS = 2.0f;
+    // Small patch around her feet. Living tiles mark 55° as ordinary ground; mmap walks her into a face a player would step around.
+    constexpr float LIP_LOOK_RADIUS = 4.0f;
+    constexpr float LIP_LOOK_CELL = 1.0f;
+    constexpr float LIP_MIN_DEST_DOT = -0.15f;
+    constexpr uint32 LIP_MAX_STEPS = 8;
+    constexpr int32 LIP_LOOK_DIRECTIONS = 16;
+
+    float HeartbeatStepLen(Player const* player)
+    {
+        if (!player)
+            return LIP_LOOK_CELL;
+
+        return player->GetSpeed(MOVE_RUN) * (float(HEARTBEAT_INTERVAL_MS) / 1000.0f);
+    }
 
     struct GroundedStep
     {
@@ -230,7 +245,8 @@ void PlayerbotWalker::Reset()
     _logMs = 0;
     _lastProgressPos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     _lastGrounded.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
-    _repathedFromSlope = false;
+    _contouring = false;
+    _lipSteps = 0;
 }
 
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out)
@@ -304,7 +320,14 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
 
 bool PlayerbotWalker::Start(Player* player, Position const& destination, float stopDistance)
 {
+    uint32 const savedLipSteps = (_destination.GetExactDist(destination) < 1.0f) ? _lipSteps : 0;
+    bool const startFromLastGrounded = _contouring && _state == State::Moving;
+    Position from;
+    if (startFromLastGrounded)
+        from = _lastGrounded;
+
     Reset();
+    _lipSteps = savedLipSteps;
 
     if (!player || !player->IsInWorld() || !player->GetSession())
     {
@@ -312,10 +335,20 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
         return false;
     }
 
+    if (!startFromLastGrounded)
+    {
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        float z = player->GetPositionZ();
+        player->UpdateAllowedPositionZ(x, y, z);
+        from.Relocate(x, y, z, player->GetOrientation());
+    }
+
     _destination = destination;
     _stopDistance = stopDistance;
+    _lastGrounded = from;
 
-    if (player->GetExactDist(destination) <= stopDistance)
+    if (from.GetExactDist(destination) <= stopDistance)
     {
         _state = State::Arrived;
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is already in range of the walk destination.", player->GetName());
@@ -326,7 +359,8 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     CollectSpellFocusAvoids(player, 50.0f, avoids);
 
     PathGenerator generator(player);
-    bool const calculated = generator.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+    bool const calculated = generator.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
+        destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
     if (!calculated || !PathIsWalkable(generator))
     {
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the destination (type {}). The bot is standing still.",
@@ -339,8 +373,8 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     if (AvoidCircle const* hit = FirstHitAvoid(path, avoids))
     {
         bool detoured = false;
-        float dx = destination.GetPositionX() - player->GetPositionX();
-        float dy = destination.GetPositionY() - player->GetPositionY();
+        float dx = destination.GetPositionX() - from.GetPositionX();
+        float dy = destination.GetPositionY() - from.GetPositionY();
         float const len = std::sqrt(dx * dx + dy * dy);
         if (len > 0.01f)
         {
@@ -353,7 +387,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
                 float const sign = i == 0 ? 1.0f : -1.0f;
                 float x = hit->x + px * offset * sign;
                 float y = hit->y + py * offset * sign;
-                float z = player->GetPositionZ();
+                float z = from.GetPositionZ();
                 player->UpdateAllowedPositionZ(x, y, z);
                 vias[i].Relocate(x, y, z);
             }
@@ -364,7 +398,8 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
                     continue;
 
                 PathGenerator toVia(player);
-                if (!toVia.CalculatePath(via.GetPositionX(), via.GetPositionY(), via.GetPositionZ(), false) || !PathIsWalkable(toVia))
+                if (!toVia.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
+                    via.GetPositionX(), via.GetPositionY(), via.GetPositionZ(), false) || !PathIsWalkable(toVia))
                     continue;
                 if (PathHitsAvoid(toVia.GetPath(), avoids))
                     continue;
@@ -412,35 +447,25 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     _heartbeatMs = 0;
     _stuckMs = 0;
     _logMs = 0;
-    _lastProgressPos = player->GetPosition();
-    float x = player->GetPositionX();
-    float y = player->GetPositionY();
-    float z = player->GetPositionZ();
-    player->UpdateAllowedPositionZ(x, y, z);
-    _lastGrounded.Relocate(x, y, z, player->GetOrientation());
+    _lastProgressPos = from;
+    _contouring = false;
 
-    float const speed = player->GetSpeed(MOVE_RUN);
-    float const stepLen = speed * (float(HEARTBEAT_INTERVAL_MS) / 1000.0f);
-    Position const first = PeekGroundedStep(player, stepLen);
-    GroundedStep const firstStep = MeasureGroundedStep(_lastGrounded, first);
-    if (!GroundedStepIsLegal(firstStep))
+    if (!FirstGroundedStepIsLegal(player))
     {
-        _state = State::Failed;
-        if (firstStep.rise > 0.0f)
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is not starting this walk: the first step is {:.0f} degrees up, steeper than 35.",
-                player->GetName(), firstStep.degrees);
-        else
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is not starting this walk: the first step drops {:.1f} yards, a cliff rather than a curb.",
-                player->GetName(), -firstStep.rise);
+        if (TryLipDetour(player))
+            return true;
+
+        FailNoLegalRing(player);
         return false;
     }
 
+    _lipSteps = 0;
     _state = State::Moving;
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk. {} points, length to destination {:.1f} yards.",
-        player->GetName(), uint32(_path.size()), player->GetExactDist(destination));
+        player->GetName(), uint32(_path.size()), from.GetExactDist(destination));
 
-    QueueMove(player, player->GetPosition(), true, true);
+    QueueMove(player, from, true, true);
     return true;
 }
 
@@ -480,8 +505,30 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             return;
         }
 
-        bool const arrived = grounded.GetExactDist(_destination) <= _stopDistance || (_pointIndex + 1 >= _path.size());
-        if (arrived)
+        _lastGrounded = grounded;
+
+        bool const atDest = grounded.GetExactDist(_destination) <= _stopDistance;
+        bool const pathDone = _pointIndex + 1 >= _path.size();
+        if (atDest)
+        {
+            QueueMove(player, grounded, false, false);
+            _state = State::Arrived;
+            _contouring = false;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
+                player->GetName(), grounded.GetPositionX(), grounded.GetPositionY(), grounded.GetPositionZ());
+            return;
+        }
+
+        if (_contouring && pathDone)
+        {
+            Position const destination = _destination;
+            float const stopDistance = _stopDistance;
+            if (!Start(player, destination, stopDistance))
+                return;
+            return;
+        }
+
+        if (pathDone)
         {
             QueueMove(player, grounded, false, false);
             _state = State::Arrived;
@@ -491,12 +538,10 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         }
 
         QueueMove(player, grounded, true, false);
-        _lastGrounded = grounded;
-        _repathedFromSlope = false;
 
-        if (player->GetExactDist2d(_lastProgressPos) > 0.25f)
+        if (grounded.GetExactDist2d(_lastProgressPos) > 0.25f)
         {
-            _lastProgressPos = player->GetPosition();
+            _lastProgressPos = grounded;
             _stuckMs = 0;
         }
     }
@@ -614,42 +659,145 @@ Position PlayerbotWalker::PeekGroundedStep(Player* player, float distance)
     return grounded;
 }
 
-void PlayerbotWalker::RefuseSteepStep(Player* player, Position const& attempted)
+bool PlayerbotWalker::FirstGroundedStepIsLegal(Player* player)
+{
+    if (!player)
+        return false;
+
+    Position const first = PeekGroundedStep(player, HeartbeatStepLen(player));
+    return GroundedStepIsLegal(MeasureGroundedStep(_lastGrounded, first));
+}
+
+bool PlayerbotWalker::FindLipSidestep(Player* player, Position& out) const
+{
+    if (!player)
+        return false;
+
+    Position const& feet = _lastGrounded;
+    float destDx = _destination.GetPositionX() - feet.GetPositionX();
+    float destDy = _destination.GetPositionY() - feet.GetPositionY();
+    float const destLen = std::sqrt(destDx * destDx + destDy * destDy);
+    if (destLen < 0.01f)
+        return false;
+
+    destDx /= destLen;
+    destDy /= destLen;
+
+    float const stepLen = HeartbeatStepLen(player);
+    if (stepLen < 0.05f)
+        return false;
+
+    Position best;
+    float bestScore = -std::numeric_limits<float>::max();
+    bool found = false;
+    int const rings = int(LIP_LOOK_RADIUS / LIP_LOOK_CELL);
+
+    for (int32 ring = 1; ring <= rings; ++ring)
+    {
+        float const dist = float(ring) * LIP_LOOK_CELL;
+        for (int32 dir = 0; dir < LIP_LOOK_DIRECTIONS; ++dir)
+        {
+            float const ang = float(dir) * (2.0f * float(M_PI)) / float(LIP_LOOK_DIRECTIONS);
+            float const c = std::cos(ang);
+            float const s = std::sin(ang);
+
+            float const firstDist = std::min(stepLen, dist);
+            float fx = feet.GetPositionX() + c * firstDist;
+            float fy = feet.GetPositionY() + s * firstDist;
+            float fz = feet.GetPositionZ();
+            player->UpdateAllowedPositionZ(fx, fy, fz);
+            Position first;
+            first.Relocate(fx, fy, fz);
+            if (!GroundedStepIsLegal(MeasureGroundedStep(feet, first)))
+                continue;
+
+            float x = feet.GetPositionX() + c * dist;
+            float y = feet.GetPositionY() + s * dist;
+            float z = feet.GetPositionZ();
+            player->UpdateAllowedPositionZ(x, y, z);
+            Position cell;
+            cell.Relocate(x, y, z, ang);
+            if (dist > firstDist + 0.01f && !GroundedStepIsLegal(MeasureGroundedStep(feet, cell)))
+                continue;
+
+            float const destDot = c * destDx + s * destDy;
+            if (destDot < LIP_MIN_DEST_DOT)
+                continue;
+
+            float const side = 1.0f - std::fabs(destDot);
+            float const near = (ring == 1) ? 1.0f : (1.0f - float(ring - 1) / float(rings));
+            float const score = destDot * 1.5f + side * 1.0f + near * 0.75f;
+            if (!found || score > bestScore)
+            {
+                best = cell;
+                bestScore = score;
+                found = true;
+            }
+        }
+    }
+
+    if (!found)
+        return false;
+
+    out = best;
+    return true;
+}
+
+bool PlayerbotWalker::TryLipDetour(Player* player)
+{
+    if (!player || !player->GetSession())
+        return false;
+    if (_lipSteps >= LIP_MAX_STEPS)
+        return false;
+
+    Position side;
+    if (!FindLipSidestep(player, side))
+        return false;
+
+    _path.clear();
+    _path.push_back(G3D::Vector3(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ()));
+    _path.push_back(G3D::Vector3(side.GetPositionX(), side.GetPositionY(), side.GetPositionZ()));
+    _pointIndex = 0;
+    _segmentProgress = 0.0f;
+    _heartbeatMs = 0;
+    _stuckMs = 0;
+    _logMs = 0;
+    _lastProgressPos = _lastGrounded;
+    _contouring = true;
+
+    if (!FirstGroundedStepIsLegal(player))
+    {
+        _contouring = false;
+        _path.clear();
+        return false;
+    }
+
+    ++_lipSteps;
+    _state = State::Moving;
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} local look found a way around.", player->GetName());
+    QueueMove(player, _lastGrounded, true, true);
+    return true;
+}
+
+void PlayerbotWalker::RefuseSteepStep(Player* player, Position const& /*attempted*/)
 {
     QueueMove(player, _lastGrounded, false, false);
 
-    Position const destination = _destination;
-    float const stopDistance = _stopDistance;
-    Position const feet = _lastGrounded;
-    GroundedStep const step = MeasureGroundedStep(_lastGrounded, attempted);
-
-    if (_repathedFromSlope)
-    {
-        _state = State::Failed;
-        if (step.rise > 0.0f)
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking: this step is still {:.0f} degrees up after repathing from her feet.",
-                player->GetName(), step.degrees);
-        else
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking: this step still drops {:.1f} yards after repathing from her feet.",
-                player->GetName(), -step.rise);
+    if (TryLipDetour(player))
         return;
-    }
 
-    if (step.rise > 0.0f)
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped: this step is {:.0f} degrees up, steeper than 35. Repathing from her feet.",
-            player->GetName(), step.degrees);
+    FailNoLegalRing(player);
+}
+
+void PlayerbotWalker::FailNoLegalRing(Player* player)
+{
+    _state = State::Failed;
+    _contouring = false;
+    if (player)
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no legal ring around this steep ground. Looking for other work.",
+            player->GetName());
     else
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped: this step drops {:.1f} yards, longer than a curb. Repathing from her feet.",
-            player->GetName(), -step.rise);
-
-    if (!Start(player, destination, stopDistance))
-        return;
-
-    if (!IsMoving())
-        return;
-
-    _lastGrounded = feet;
-    _repathedFromSlope = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: no legal ring around this steep ground. Looking for other work.");
 }
 
 void PlayerbotWalker::Fail(Player* player, char const* reason)

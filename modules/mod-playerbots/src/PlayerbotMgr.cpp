@@ -1211,7 +1211,7 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
 {
     Optional<PlayerbotClient::QuestTarget> talk;
     if (!walking || !CurrentWalkIsInReach(bot, player))
-        talk = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Talk);
+        talk = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Talk, bot.UnreachableGuids);
 
     Optional<PlayerbotClient::ItemLootTarget> loot = PlayerbotClient::FindNearbyItemLootTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, walking);
     Optional<PlayerbotClient::GameObjectTarget> go;

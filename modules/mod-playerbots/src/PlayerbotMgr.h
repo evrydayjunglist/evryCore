@@ -80,6 +80,8 @@ struct PlayerbotRecord
     bool VendorActed = false;
     uint32 VendorRetryMs = 0;
     std::unordered_set<ObjectGuid> UnreachableGuids;
+    std::vector<Position> UnreachablePositions;
+    bool LookedForOtherYellowOnFace = false;
     PlayerbotWalker Walker;
 };
 
@@ -113,6 +115,8 @@ private:
     bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking);
     bool TryClickFromHere(PlayerbotRecord& bot, Player* player);
     bool TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId = 0, uint32 skipEntry = 0);
+    bool TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, int32 questId, uint32 entry, Position const& skipPos, ObjectGuid extraSkipGuid);
+    bool TryLeaveFaceForOtherYellow(PlayerbotRecord& bot, Player* player);
     void ClearCombat(PlayerbotRecord& bot, Player* player);
     bool UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff);
     void ClearItemLoot(PlayerbotRecord& bot);

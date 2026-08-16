@@ -802,6 +802,81 @@ namespace
         return false;
     }
 
+    constexpr float SKIP_YELLOW_YARDS = 5.0f;
+
+    bool BlobContains(ObjectivePoiBlob const& blob, Position const& pos)
+    {
+        return pos.GetExactDist(blob.Centroid) <= blob.Radius + 5.0f;
+    }
+
+    bool PointIsSkipped(Position const& point, PlayerbotClient::MapYellowFilter const& filter)
+    {
+        if (filter.SkipPos && point.GetExactDist(*filter.SkipPos) <= SKIP_YELLOW_YARDS)
+            return true;
+
+        if (filter.SkipPositions)
+        {
+            for (Position const& skip : *filter.SkipPositions)
+            {
+                if (point.GetExactDist(skip) <= SKIP_YELLOW_YARDS)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool KeepThisCredit(int32 questId, uint32 entry, PlayerbotClient::MapYellowFilter const& filter)
+    {
+        if (!filter.KeepQuest)
+            return true;
+        if (filter.QuestId && questId != filter.QuestId)
+            return false;
+        if (filter.Entry && entry != filter.Entry)
+            return false;
+        return true;
+    }
+
+    bool SkipAllMarkersForCredit(int32 questId, uint32 entry, PlayerbotClient::MapYellowFilter const& filter)
+    {
+        if (filter.KeepQuest || !filter.QuestId)
+            return false;
+        if (questId != filter.QuestId)
+            return false;
+        if (filter.Entry && entry != filter.Entry)
+            return false;
+        return true;
+    }
+
+    int MarkerBlobRank(ObjectivePoiBlob const& blob, PlayerbotClient::MapYellowFilter const& filter)
+    {
+        if (!filter.KeepQuest)
+            return 1;
+
+        if (filter.SkipPos && BlobContains(blob, *filter.SkipPos))
+            return 0;
+
+        if (filter.SkipPositions)
+        {
+            for (Position const& skip : *filter.SkipPositions)
+            {
+                if (BlobContains(blob, skip))
+                    return 0;
+            }
+        }
+
+        return 1;
+    }
+
+    bool BetterMarker(int rank, float dist, int bestRank, float bestDist, bool have)
+    {
+        if (!have)
+            return true;
+        if (rank != bestRank)
+            return rank < bestRank;
+        return dist < bestDist;
+    }
+
     float GameObjectStandDistance(GameObject const* go)
     {
         float size = 1.0f;
@@ -1723,7 +1798,7 @@ bool PlayerbotClient::CombatTargetStillNeeded(Player* player, CombatTarget const
     return false;
 }
 
-Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
+Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -1742,11 +1817,14 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
     Position bestMarker;
     IncompleteMonsterCredit const* bestMarkerCredit = nullptr;
     float bestMarkerDist = std::numeric_limits<float>::max();
+    int bestMarkerRank = 2;
     bool haveMarker = false;
 
     for (IncompleteMonsterCredit const& credit : credits)
     {
         if (HeldQuestStartItem(player, uint32(credit.QuestId)))
+            continue;
+        if (!KeepThisCredit(credit.QuestId, credit.CreditEntry, filter))
             continue;
 
         std::vector<ObjectivePoiBlob> blobs;
@@ -1756,17 +1834,21 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
 
         LoadPoiGrids(map, blobs);
 
-        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.CreditEntry == skipEntry);
-        if (!skipMarker)
+        if (!SkipAllMarkersForCredit(credit.QuestId, credit.CreditEntry, filter))
         {
             for (ObjectivePoiBlob const& blob : blobs)
             {
+                int const rank = MarkerBlobRank(blob, filter);
                 for (Position const& point : blob.Points)
                 {
-                    float const dist = player->GetExactDist(point);
-                    if (dist >= bestMarkerDist)
+                    if (PointIsSkipped(point, filter))
                         continue;
 
+                    float const dist = player->GetExactDist(point);
+                    if (!BetterMarker(rank, dist, bestMarkerRank, bestMarkerDist, haveMarker))
+                        continue;
+
+                    bestMarkerRank = rank;
                     bestMarkerDist = dist;
                     bestMarker = point;
                     bestMarkerCredit = &credit;
@@ -1779,6 +1861,8 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
         {
             Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (PointIsSkipped(*creature, filter))
                 continue;
             if (!creature->IsAlive())
                 continue;
@@ -1931,7 +2015,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
     return best;
 }
 
-Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
+Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -1956,10 +2040,14 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
     Position bestMarker;
     IncompleteItemCredit const* bestMarkerCredit = nullptr;
     float bestMarkerDist = std::numeric_limits<float>::max();
+    int bestMarkerRank = 2;
     bool haveMarker = false;
 
     for (IncompleteItemCredit const& credit : credits)
     {
+        if (!KeepThisCredit(credit.QuestId, credit.ItemId, filter))
+            continue;
+
         std::vector<ObjectivePoiBlob> blobs;
         CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.ItemId), credit.StorageIndex, blobs);
         if (blobs.empty())
@@ -1967,17 +2055,21 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
 
         LoadPoiGrids(map, blobs);
 
-        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.ItemId == skipEntry);
-        if (!skipMarker)
+        if (!SkipAllMarkersForCredit(credit.QuestId, credit.ItemId, filter))
         {
             for (ObjectivePoiBlob const& blob : blobs)
             {
+                int const rank = MarkerBlobRank(blob, filter);
                 for (Position const& point : blob.Points)
                 {
-                    float const dist = player->GetExactDist(point);
-                    if (dist >= bestMarkerDist)
+                    if (PointIsSkipped(point, filter))
                         continue;
 
+                    float const dist = player->GetExactDist(point);
+                    if (!BetterMarker(rank, dist, bestMarkerRank, bestMarkerDist, haveMarker))
+                        continue;
+
+                    bestMarkerRank = rank;
                     bestMarkerDist = dist;
                     bestMarker = point;
                     bestMarkerCredit = &credit;
@@ -1990,6 +2082,8 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
         {
             Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (PointIsSkipped(*creature, filter))
                 continue;
             if (!player->InSamePhase(creature))
                 continue;
@@ -2045,6 +2139,8 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
         {
             GameObject* go = pair.second;
             if (!go || skip.contains(go->GetGUID()))
+                continue;
+            if (PointIsSkipped(*go, filter))
                 continue;
             if (!GameObjectIsUsableForItemObjective(player, go, credit.ItemId))
                 continue;
@@ -2192,7 +2288,7 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindNearbyGameObjec
     return best;
 }
 
-Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
+Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -2211,10 +2307,14 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
     Position bestMarker;
     IncompleteGameObjectCredit const* bestMarkerCredit = nullptr;
     float bestMarkerDist = std::numeric_limits<float>::max();
+    int bestMarkerRank = 2;
     bool haveMarker = false;
 
     for (IncompleteGameObjectCredit const& credit : credits)
     {
+        if (!KeepThisCredit(credit.QuestId, credit.GoEntry, filter))
+            continue;
+
         std::vector<ObjectivePoiBlob> blobs;
         CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.GoEntry), credit.StorageIndex, blobs);
         if (blobs.empty())
@@ -2222,17 +2322,21 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
 
         LoadPoiGrids(map, blobs);
 
-        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.GoEntry == skipEntry);
-        if (!skipMarker)
+        if (!SkipAllMarkersForCredit(credit.QuestId, credit.GoEntry, filter))
         {
             for (ObjectivePoiBlob const& blob : blobs)
             {
+                int const rank = MarkerBlobRank(blob, filter);
                 for (Position const& point : blob.Points)
                 {
-                    float const dist = player->GetExactDist(point);
-                    if (dist >= bestMarkerDist)
+                    if (PointIsSkipped(point, filter))
                         continue;
 
+                    float const dist = player->GetExactDist(point);
+                    if (!BetterMarker(rank, dist, bestMarkerRank, bestMarkerDist, haveMarker))
+                        continue;
+
+                    bestMarkerRank = rank;
                     bestMarkerDist = dist;
                     bestMarker = point;
                     bestMarkerCredit = &credit;
@@ -2245,6 +2349,8 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
         {
             GameObject* go = pair.second;
             if (!go || skip.contains(go->GetGUID()))
+                continue;
+            if (PointIsSkipped(*go, filter))
                 continue;
             if (!GameObjectIsUsableForObjective(player, go, credit.GoEntry))
                 continue;
@@ -2377,7 +2483,7 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseIte
     return best;
 }
 
-Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
+Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -2397,12 +2503,15 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
     IncompleteMonsterCredit const* bestMarkerCredit = nullptr;
     uint32 bestMarkerItemId = 0;
     float bestMarkerDist = std::numeric_limits<float>::max();
+    int bestMarkerRank = 2;
     bool haveMarker = false;
 
     for (IncompleteMonsterCredit const& credit : credits)
     {
         uint32 const itemId = HeldQuestStartItem(player, uint32(credit.QuestId));
         if (!itemId)
+            continue;
+        if (!KeepThisCredit(credit.QuestId, credit.CreditEntry, filter))
             continue;
 
         std::vector<ObjectivePoiBlob> blobs;
@@ -2417,6 +2526,8 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
         {
             Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (PointIsSkipped(*creature, filter))
                 continue;
             if (!creature->IsAlive())
                 continue;
@@ -2451,17 +2562,21 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
         }
 
         // Markers are for a missing spawn. If matching creatures are up and the item would not take any of them, look for other work instead of camping the yellow.
-        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.CreditEntry == skipEntry);
-        if (!skipMarker && !sawSpawnForCredit)
+        if (!SkipAllMarkersForCredit(credit.QuestId, credit.CreditEntry, filter) && !sawSpawnForCredit)
         {
             for (ObjectivePoiBlob const& blob : blobs)
             {
+                int const rank = MarkerBlobRank(blob, filter);
                 for (Position const& point : blob.Points)
                 {
-                    float const dist = player->GetExactDist(point);
-                    if (dist >= bestMarkerDist)
+                    if (PointIsSkipped(point, filter))
                         continue;
 
+                    float const dist = player->GetExactDist(point);
+                    if (!BetterMarker(rank, dist, bestMarkerRank, bestMarkerDist, haveMarker))
+                        continue;
+
+                    bestMarkerRank = rank;
                     bestMarkerDist = dist;
                     bestMarker = point;
                     bestMarkerCredit = &credit;

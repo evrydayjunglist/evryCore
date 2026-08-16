@@ -32,6 +32,7 @@
 #include "WorldSession.h"
 #include <algorithm>
 #include <limits>
+#include <unordered_set>
 
 namespace
 {
@@ -152,6 +153,28 @@ namespace
         bot.Walker.Stop(player);
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking to click {} from here.",
             player->GetName(), guid.ToString());
+    }
+
+    void ClearUnreachable(PlayerbotRecord& bot)
+    {
+        bot.UnreachableGuids.clear();
+        bot.UnreachablePositions.clear();
+    }
+
+    void RememberFailedYellow(PlayerbotRecord& bot, Position const& pos)
+    {
+        bot.UnreachablePositions.push_back(pos);
+    }
+
+    PlayerbotClient::MapYellowFilter MakeMapYellowFilter(PlayerbotRecord const& bot, int32 questId, uint32 entry, bool keepQuest, Position const* skipPos)
+    {
+        PlayerbotClient::MapYellowFilter filter;
+        filter.QuestId = questId;
+        filter.Entry = entry;
+        filter.KeepQuest = keepQuest;
+        filter.SkipPos = skipPos;
+        filter.SkipPositions = &bot.UnreachablePositions;
+        return filter;
     }
 }
 
@@ -373,7 +396,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.ItemLootTarget = {};
         bot.LootOpenSent = false;
         ClearVendor(bot);
+        bot.LookedForOtherYellowOnFace = false;
         bot.UnreachableGuids.clear();
+        bot.UnreachablePositions.clear();
         bot.Walker.Reset();
     }
 
@@ -395,32 +420,69 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     int32 skipFailedQuestId = 0;
     uint32 skipFailedEntry = 0;
+    int32 sameObjectiveQuestId = 0;
+    uint32 sameObjectiveEntry = 0;
+    Position sameObjectiveSkipPos;
+    bool retrySameObjective = false;
     if (bot.Walker.HasFailed())
     {
+        bool const keepCombat = KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid)
+            && bot.GameObjectTarget.QuestId == 0
+            && bot.UseItemOnUnitTarget.QuestId == 0
+            && bot.ItemLootTarget.QuestId == 0
+            && bot.QuestTarget.NpcGuid.IsEmpty()
+            && bot.VendorTarget.NpcGuid.IsEmpty();
+
         if (bot.GameObjectTarget.QuestId)
         {
             skipFailedQuestId = bot.GameObjectTarget.QuestId;
             skipFailedEntry = bot.GameObjectTarget.GoEntry;
+            sameObjectiveQuestId = skipFailedQuestId;
+            sameObjectiveEntry = skipFailedEntry;
+            sameObjectiveSkipPos = bot.GameObjectTarget.Pos;
+            retrySameObjective = true;
         }
         else if (bot.UseItemOnUnitTarget.QuestId)
         {
             skipFailedQuestId = bot.UseItemOnUnitTarget.QuestId;
             skipFailedEntry = bot.UseItemOnUnitTarget.CreditEntry;
+            sameObjectiveQuestId = skipFailedQuestId;
+            sameObjectiveEntry = skipFailedEntry;
+            sameObjectiveSkipPos = bot.UseItemOnUnitTarget.Pos;
+            retrySameObjective = true;
         }
         else if (bot.CombatTarget.QuestId)
         {
             skipFailedQuestId = bot.CombatTarget.QuestId;
             skipFailedEntry = bot.CombatTarget.CreditEntry;
+            if (!keepCombat)
+            {
+                sameObjectiveQuestId = skipFailedQuestId;
+                sameObjectiveEntry = skipFailedEntry;
+                sameObjectiveSkipPos = bot.CombatTarget.Pos;
+                retrySameObjective = true;
+            }
         }
         else if (bot.ItemLootTarget.QuestId)
         {
             skipFailedQuestId = bot.ItemLootTarget.QuestId;
             skipFailedEntry = bot.ItemLootTarget.ItemId;
+            sameObjectiveQuestId = skipFailedQuestId;
+            sameObjectiveEntry = skipFailedEntry;
+            sameObjectiveSkipPos = bot.ItemLootTarget.Pos;
+            retrySameObjective = true;
         }
         else if (bot.QuestTarget.QuestId)
             skipFailedQuestId = bot.QuestTarget.QuestId;
 
         RecoverFailedWalk(bot, player);
+    }
+
+    if (bot.Walker.IsMoving() && bot.Walker.StartedOnAFace() && !bot.LookedForOtherYellowOnFace)
+    {
+        bot.LookedForOtherYellowOnFace = true;
+        if (TryLeaveFaceForOtherYellow(bot, player))
+            return;
     }
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
@@ -637,7 +699,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                 return;
 
             if (bot.QuestArriveWaitMs == 0)
-                bot.UnreachableGuids.clear();
+                ClearUnreachable(bot);
 
             bot.QuestArriveWaitMs += diff;
             if (Optional<PlayerbotClient::CombatTarget> found = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids))
@@ -677,7 +739,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                 return;
 
             if (bot.QuestArriveWaitMs == 0)
-                bot.UnreachableGuids.clear();
+                ClearUnreachable(bot);
 
             bot.QuestArriveWaitMs += diff;
             if (Optional<PlayerbotClient::ItemLootTarget> found = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids))
@@ -719,6 +781,10 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             return;
         return;
     }
+
+    if (retrySameObjective
+        && TrySameObjectiveYellow(bot, player, sameObjectiveQuestId, sameObjectiveEntry, sameObjectiveSkipPos, ObjectGuid::Empty))
+        return;
 
     if (TryImmediateWorld(bot, player, false))
         return;
@@ -779,7 +845,8 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = {};
-    bot.UnreachableGuids.clear();
+    bot.LookedForOtherYellowOnFace = false;
+    ClearUnreachable(bot);
     bot.Walker.Reset();
 }
 
@@ -1192,12 +1259,14 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
 {
     if (bot.GameObjectTarget.QuestId)
     {
+        RememberFailedYellow(bot, bot.GameObjectTarget.Pos);
         if (!bot.GameObjectTarget.GoGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.GameObjectTarget.GoGuid);
         bot.GameObjectTarget = {};
     }
     else if (bot.UseItemOnUnitTarget.QuestId)
     {
+        RememberFailedYellow(bot, bot.UseItemOnUnitTarget.Pos);
         if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
         bot.UseItemOnUnitTarget = {};
@@ -1208,6 +1277,7 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
             LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
         else
         {
+            RememberFailedYellow(bot, bot.CombatTarget.Pos);
             if (!bot.CombatTarget.CreatureGuid.IsEmpty())
                 bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
             ClearCombat(bot, player);
@@ -1215,6 +1285,7 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
     }
     else if (bot.ItemLootTarget.QuestId || bot.ItemLootTarget.LootCorpse)
     {
+        RememberFailedYellow(bot, bot.ItemLootTarget.Pos);
         if (!bot.ItemLootTarget.GoGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.ItemLootTarget.GoGuid);
         else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
@@ -1230,6 +1301,7 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
         bot.UnreachableGuids.insert(bot.QuestTarget.NpcGuid);
 
     bot.QuestTarget = {};
+    bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 }
 
@@ -1378,12 +1450,14 @@ bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
 
 bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId, uint32 skipEntry)
 {
+    PlayerbotClient::MapYellowFilter filter = MakeMapYellowFilter(bot, skipQuestId, skipEntry, false, nullptr);
+
     for (int32 attempt = 0; attempt < 5; ++attempt)
     {
-        Optional<PlayerbotClient::GameObjectTarget> go = PlayerbotClient::FindLogIncompleteGameObjectTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
-        Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
-        Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
-        Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
+        Optional<PlayerbotClient::GameObjectTarget> go = PlayerbotClient::FindLogIncompleteGameObjectTarget(player, bot.UnreachableGuids, filter);
+        Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids, filter);
+        Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids, filter);
+        Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, filter);
         Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindLogCompleteTurnIn(player, bot.UnreachableGuids, skipQuestId);
 
         float bestDist = std::numeric_limits<float>::max();
@@ -1410,48 +1484,171 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
         if (!kind)
             return false;
 
-        int32 nextSkipQuest = skipQuestId;
-        uint32 nextSkipEntry = skipEntry;
         bool started = false;
+        Position failedPos;
         if (kind == 1)
         {
-            nextSkipQuest = go->QuestId;
-            nextSkipEntry = go->GoEntry;
+            failedPos = go->Pos;
             started = BeginGameObjectTarget(bot, player, *go);
         }
         else if (kind == 2)
         {
-            nextSkipQuest = useItem->QuestId;
-            nextSkipEntry = useItem->CreditEntry;
+            failedPos = useItem->Pos;
             started = BeginUseItemOnUnitTarget(bot, player, *useItem);
         }
         else if (kind == 3)
         {
-            nextSkipQuest = kill->QuestId;
-            nextSkipEntry = kill->CreditEntry;
+            failedPos = kill->Pos;
             started = BeginCombatTarget(bot, player, *kill);
         }
         else if (kind == 4)
         {
-            nextSkipQuest = item->QuestId;
-            nextSkipEntry = item->ItemId;
+            failedPos = item->Pos;
             started = BeginItemWork(bot, player, *item);
         }
         else
         {
-            nextSkipQuest = turnIn->QuestId;
-            nextSkipEntry = 0;
+            failedPos = turnIn->Pos;
             started = BeginQuestTarget(bot, player, *turnIn);
         }
 
         if (started)
             return true;
 
-        skipQuestId = nextSkipQuest;
-        skipEntry = nextSkipEntry;
+        RememberFailedYellow(bot, failedPos);
     }
 
     return false;
+}
+
+bool PlayerbotMgr::TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, int32 questId, uint32 entry, Position const& skipPos, ObjectGuid extraSkipGuid)
+{
+    if (!player || !questId)
+        return false;
+
+    std::unordered_set<ObjectGuid> skip = bot.UnreachableGuids;
+    if (!extraSkipGuid.IsEmpty())
+        skip.insert(extraSkipGuid);
+
+    PlayerbotClient::MapYellowFilter filter = MakeMapYellowFilter(bot, questId, entry, true, &skipPos);
+
+    Optional<PlayerbotClient::GameObjectTarget> go = PlayerbotClient::FindLogIncompleteGameObjectTarget(player, skip, filter);
+    Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, skip, filter);
+    Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindLogIncompleteMonsterTarget(player, skip, filter);
+    Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, skip, filter);
+
+    float bestDist = std::numeric_limits<float>::max();
+    uint8 kind = 0;
+    auto consider = [&](float dist, uint8 nextKind)
+    {
+        if (dist >= bestDist)
+            return;
+        bestDist = dist;
+        kind = nextKind;
+    };
+
+    if (go)
+        consider(player->GetExactDist(go->Pos), 1);
+    if (useItem)
+        consider(player->GetExactDist(useItem->Pos), 2);
+    if (kill)
+        consider(player->GetExactDist(kill->Pos), 3);
+    if (item)
+        consider(player->GetExactDist(item->Pos), 4);
+
+    if (!kind)
+        return false;
+
+    ObjectGuid foundGuid;
+    Position foundPos;
+    if (kind == 1)
+    {
+        foundGuid = go->GoGuid;
+        foundPos = go->Pos;
+    }
+    else if (kind == 2)
+    {
+        foundGuid = useItem->CreatureGuid;
+        foundPos = useItem->Pos;
+    }
+    else if (kind == 3)
+    {
+        foundGuid = kill->CreatureGuid;
+        foundPos = kill->Pos;
+    }
+    else
+    {
+        foundGuid = !item->GoGuid.IsEmpty() ? item->GoGuid : item->CreatureGuid;
+        foundPos = item->Pos;
+    }
+
+    if (!extraSkipGuid.IsEmpty() && foundGuid == extraSkipGuid)
+        return false;
+    if (foundGuid.IsEmpty() && skipPos.GetExactDist(foundPos) <= 5.0f)
+        return false;
+
+    if (!extraSkipGuid.IsEmpty())
+        bot.UnreachableGuids.insert(extraSkipGuid);
+    RememberFailedYellow(bot, skipPos);
+
+    char const* what = foundGuid.IsEmpty() ? "another yellow of the same objective" : "another spawn of the same objective";
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} this approach is a face. Walking to {}.",
+        player->GetName(), what);
+
+    if (kind == 1)
+        return BeginGameObjectTarget(bot, player, *go);
+    if (kind == 2)
+        return BeginUseItemOnUnitTarget(bot, player, *useItem);
+    if (kind == 3)
+        return BeginCombatTarget(bot, player, *kill);
+    return BeginItemWork(bot, player, *item);
+}
+
+bool PlayerbotMgr::TryLeaveFaceForOtherYellow(PlayerbotRecord& bot, Player* player)
+{
+    if (!player)
+        return false;
+
+    if (KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid))
+        return false;
+
+    int32 questId = 0;
+    uint32 entry = 0;
+    Position skipPos;
+    ObjectGuid skipGuid;
+
+    if (bot.GameObjectTarget.QuestId)
+    {
+        questId = bot.GameObjectTarget.QuestId;
+        entry = bot.GameObjectTarget.GoEntry;
+        skipPos = bot.GameObjectTarget.Pos;
+        skipGuid = bot.GameObjectTarget.GoGuid;
+    }
+    else if (bot.UseItemOnUnitTarget.QuestId)
+    {
+        questId = bot.UseItemOnUnitTarget.QuestId;
+        entry = bot.UseItemOnUnitTarget.CreditEntry;
+        skipPos = bot.UseItemOnUnitTarget.Pos;
+        skipGuid = bot.UseItemOnUnitTarget.CreatureGuid;
+    }
+    else if (bot.CombatTarget.QuestId)
+    {
+        questId = bot.CombatTarget.QuestId;
+        entry = bot.CombatTarget.CreditEntry;
+        skipPos = bot.CombatTarget.Pos;
+        skipGuid = bot.CombatTarget.CreatureGuid;
+    }
+    else if (bot.ItemLootTarget.QuestId)
+    {
+        questId = bot.ItemLootTarget.QuestId;
+        entry = bot.ItemLootTarget.ItemId;
+        skipPos = bot.ItemLootTarget.Pos;
+        skipGuid = !bot.ItemLootTarget.GoGuid.IsEmpty() ? bot.ItemLootTarget.GoGuid : bot.ItemLootTarget.CreatureGuid;
+    }
+    else
+        return false;
+
+    return TrySameObjectiveYellow(bot, player, questId, entry, skipPos, skipGuid);
 }
 
 bool PlayerbotMgr::BeginItemWork(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target)
@@ -1699,6 +1896,7 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = {};
     bot.CombatTarget = {};
+    bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
     if (TryClickFromHere(bot, player))
@@ -1733,6 +1931,7 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
     bot.GameObjectTarget = target;
     bot.UseItemOnUnitTarget = {};
     bot.CombatTarget = {};
+    bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
     if (TryClickFromHere(bot, player))
@@ -1774,6 +1973,7 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = target;
     bot.CombatTarget = {};
+    bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
     if (TryClickFromHere(bot, player))
@@ -1820,6 +2020,7 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.CombatCastPending = false;
     bot.CombatCastWaitMs = 0;
     bot.CombatFacingWait = false;
+    bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
@@ -2083,6 +2284,7 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
     bot.CombatTarget = {};
     bot.ItemLootTarget = target;
     bot.LootOpenSent = false;
+    bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
     bool canClick = false;
@@ -2175,6 +2377,7 @@ bool PlayerbotMgr::BeginVendorTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.VendorTarget = target;
     bot.VendorListSent = false;
     bot.VendorActed = false;
+    bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
     if (TryClickFromHere(bot, player))

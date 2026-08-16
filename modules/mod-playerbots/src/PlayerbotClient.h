@@ -23,6 +23,7 @@
 #include "Position.h"
 #include "UnitDefines.h"
 #include <unordered_set>
+#include <vector>
 
 class Creature;
 class Item;
@@ -118,6 +119,16 @@ namespace PlayerbotClient
         bool WalkCloser = false;
     };
 
+    // KeepQuest: only this quest and entry. Otherwise QuestId/Entry skip that objective's map markers.
+    struct MapYellowFilter
+    {
+        int32 QuestId = 0;
+        uint32 Entry = 0;
+        bool KeepQuest = false;
+        Position const* SkipPos = nullptr;
+        std::vector<Position> const* SkipPositions = nullptr;
+    };
+
     void QueueEnumCharacters(WorldSession* session);
     void QueuePlayerLogin(WorldSession* session, ObjectGuid characterGuid);
     void QueueCompleteCinematic(WorldSession* session);
@@ -152,11 +163,11 @@ namespace PlayerbotClient
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<CombatTarget> FindAttackerTarget(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
-    Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
+    Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
     Optional<ItemLootTarget> MakeCorpseLootTarget(Player* player, Creature* creature);
     Optional<ItemLootTarget> FindNearbyItemLootTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
-    Optional<ItemLootTarget> FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
+    Optional<ItemLootTarget> FindLogIncompleteItemTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool ItemLootTargetStillNeeded(Player* player, ItemLootTarget const& target);
     CombatTarget CombatTargetFromItemLoot(ItemLootTarget const& target);
     bool TryOpenLoot(Player* player, ObjectGuid creatureGuid);
@@ -178,10 +189,10 @@ namespace PlayerbotClient
     bool TryOpenVendor(Player* player, ObjectGuid vendorGuid);
     bool TryVendorTrade(Player* player, ObjectGuid vendorGuid, bool repair);
     Optional<GameObjectTarget> FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
-    Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
+    Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);
     Optional<UseItemOnUnitTarget> FindNearbyUseItemOnUnitTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
-    Optional<UseItemOnUnitTarget> FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
+    Optional<UseItemOnUnitTarget> FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUnitTarget const& target);
     bool TryInteractQuest(Player* player, QuestTarget const& target);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);

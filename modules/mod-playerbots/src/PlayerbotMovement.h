@@ -40,6 +40,7 @@ public:
     bool IsMoving() const { return _state == State::Moving; }
     bool HasArrived() const { return _state == State::Arrived; }
     bool HasFailed() const { return _state == State::Failed; }
+    bool StartedOnAFace() const { return _startedOnAFace; }
 
 private:
     enum class State
@@ -77,6 +78,7 @@ private:
     Position _lastProgressPos;
     Position _lastGrounded;
     bool _contouring = false;
+    bool _startedOnAFace = false;
     uint32 _lipSteps = 0;
     float _lipDestDist = 0.0f;
     float _contourDirX = 0.0f;

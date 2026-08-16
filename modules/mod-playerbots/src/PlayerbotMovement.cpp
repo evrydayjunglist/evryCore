@@ -248,6 +248,7 @@ void PlayerbotWalker::Reset()
     _lastProgressPos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     _lastGrounded.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     _contouring = false;
+    _startedOnAFace = false;
     _lipSteps = 0;
     _lipDestDist = 0.0f;
     _contourDirX = 0.0f;
@@ -388,6 +389,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     _logMs = 0;
     _lastProgressPos = from;
     _contouring = false;
+    _startedOnAFace = false;
 
     if (FirstGroundedStepIsLegal(player))
     {
@@ -403,6 +405,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     }
 
     // Mmap's first step is a face. That is not unreachable. Walk legal ground beside it.
+    _startedOnAFace = true;
     if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, false))
         return true;
     if (ContinueContour(player, false))
@@ -757,6 +760,7 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
     }
 
     _contouring = false;
+    _startedOnAFace = false;
     _lipSteps = 0;
     _lipDestDist = 0.0f;
     _contourDirX = 0.0f;

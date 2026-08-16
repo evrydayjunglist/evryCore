@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotClient.h"
+#include "Common.h"
 #include "ConditionMgr.h"
 #include "Containers.h"
 #include "Corpse.h"
@@ -44,7 +45,9 @@
 #include "QuestDef.h"
 #include "SharedDefines.h"
 #include "Spell.h"
+#include "SpellAuraDefines.h"
 #include "SpellDefines.h"
+#include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Unit.h"
@@ -301,6 +304,68 @@ void PlayerbotClient::QueueUseItem(Player* player, Item* item, ObjectGuid unitTa
     packet.WriteBits(0, 7);      // Name length
     packet.FlushBits();
     player->GetSession()->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueCastSpell(Player* player, ObjectGuid unitTarget, uint32 spellId)
+{
+    if (!player || !player->GetSession() || !player->GetMap() || unitTarget.IsEmpty() || !spellId)
+        return;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+    int32 visualId = 0;
+    if (spellInfo)
+        visualId = int32(player->GetCastSpellXSpellVisualId(spellInfo));
+
+    ObjectGuid const castId = ObjectGuid::Create<HighGuid::Cast>(SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), spellId,
+        player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
+
+    WorldPacket packet(CMSG_CAST_SPELL);
+    packet << castId;
+    packet << uint8(0);          // SendCastFlags
+    packet << int32(0);          // Misc[0]
+    packet << int32(0);          // Misc[1]
+    packet << int32(0);          // Misc[2]
+    packet << int32(spellId);
+    packet << int32(visualId);   // SpellXSpellVisualID
+    packet << int32(0);          // ScriptVisualID
+    packet << float(0.0f);       // MissileTrajectory.Pitch
+    packet << float(0.0f);       // MissileTrajectory.Speed
+    packet << ObjectGuid();      // CraftingNPC
+    packet << uint32(0);         // ExtraCurrencyCosts size
+    packet << uint32(0);         // CraftingReagents size
+    packet << uint32(0);         // RemovedReagents size
+    packet << uint8(0);          // CraftingCastFlags
+
+    packet.WriteBit(false);      // ReceiveTime
+    packet.WriteBit(false);      // MoveUpdate
+    packet.WriteBits(0, 2);      // Weight size
+    packet.WriteBit(false);      // CraftingOrderID
+
+    packet << uint32(TARGET_FLAG_UNIT);
+    packet << unitTarget;
+    packet << ObjectGuid();      // Item
+    packet << ObjectGuid();      // HousingGUID
+    packet.WriteBit(false);      // HousingIsResident
+    packet.WriteBit(false);      // SrcLocation
+    packet.WriteBit(false);      // DstLocation
+    packet.WriteBit(false);      // Orientation
+    packet.WriteBit(false);      // MapID
+    packet.WriteBits(0, 7);      // Name length
+    packet.FlushBits();
+    player->GetSession()->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueSetFacing(Player* player, WorldObject const* lookAt)
+{
+    if (!player || !player->GetSession() || !lookAt)
+        return;
+
+    MovementInfo info = player->m_movementInfo;
+    info.guid = player->GetGUID();
+    info.time = GameTime::GetGameTimeMS();
+    info.pos = player->GetPosition();
+    info.pos.SetOrientation(player->GetAbsoluteAngle(lookAt));
+    QueueMovement(player->GetSession(), CMSG_MOVE_SET_FACING, info);
 }
 
 void PlayerbotClient::QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid)
@@ -836,6 +901,183 @@ namespace
 
         // Same caster / unit-target order Spell::CheckCast uses for CONDITION_SOURCE_TYPE_SPELL.
         return sConditionMgr->IsObjectMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_SPELL, spellId, player, creature);
+    }
+
+    char const* CombatSpellName(SpellInfo const* spellInfo)
+    {
+        if (spellInfo && spellInfo->SpellName)
+        {
+            char const* name = (*spellInfo->SpellName)[DEFAULT_LOCALE];
+            if (name && name[0])
+                return name;
+        }
+
+        return "unknown";
+    }
+
+    bool SpellHasCombatDamage(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        if (spellInfo->IsAutoRepeatRangedSpell() || spellInfo->HasAttribute(SPELL_ATTR0_CU_CHARGE))
+            return true;
+
+        if (spellInfo->HasAttribute(SPELL_ATTR0_USES_RANGED_SLOT) && !spellInfo->IsPositive())
+            return true;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            switch (effect.Effect)
+            {
+                case SPELL_EFFECT_SCHOOL_DAMAGE:
+                case SPELL_EFFECT_WEAPON_DAMAGE:
+                case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+                case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+                case SPELL_EFFECT_ENVIRONMENTAL_DAMAGE:
+                case SPELL_EFFECT_HEALTH_LEECH:
+                case SPELL_EFFECT_DAMAGE_FROM_MAX_HEALTH_PCT:
+                case SPELL_EFFECT_ATTACK:
+                    return true;
+                case SPELL_EFFECT_APPLY_AURA:
+                case SPELL_EFFECT_APPLY_AREA_AURA_ENEMY:
+                case SPELL_EFFECT_PERSISTENT_AREA_AURA:
+                    switch (effect.ApplyAuraName)
+                    {
+                        case SPELL_AURA_PERIODIC_DAMAGE:
+                        case SPELL_AURA_PERIODIC_DAMAGE_PERCENT:
+                        case SPELL_AURA_PERIODIC_LEECH:
+                        case SPELL_AURA_PERIODIC_WEAPON_PERCENT_DAMAGE:
+                            return true;
+                        default:
+                            break;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    bool CombatSpellIsUtility(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return true;
+
+        if (spellInfo->IsProfession() || spellInfo->HasAttribute(SPELL_ATTR0_IS_TRADESKILL))
+            return true;
+
+        if (spellInfo->HasAttribute(SPELL_ATTR0_DO_NOT_DISPLAY_SPELLBOOK_AURA_ICON_COMBAT_LOG)
+            || spellInfo->HasAttribute(SPELL_ATTR4_NOT_IN_SPELLBOOK))
+            return true;
+
+        if (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->HasAura(SPELL_AURA_MOD_SHAPESHIFT)
+            || spellInfo->HasAura(SPELL_AURA_SCHOOL_ABSORB))
+            return true;
+
+        if (spellInfo->HasEffect(SPELL_EFFECT_INTERRUPT_CAST) || spellInfo->HasEffect(SPELL_EFFECT_SUMMON)
+            || spellInfo->HasEffect(SPELL_EFFECT_SUMMON_PET) || spellInfo->HasEffect(SPELL_EFFECT_TELEPORT_UNITS)
+            || spellInfo->HasEffect(SPELL_EFFECT_TRANS_DOOR) || spellInfo->HasEffect(SPELL_EFFECT_LEAP)
+            || spellInfo->HasEffect(SPELL_EFFECT_JUMP) || spellInfo->HasEffect(SPELL_EFFECT_JUMP_DEST)
+            || spellInfo->HasEffect(SPELL_EFFECT_LEAP_BACK) || spellInfo->HasEffect(SPELL_EFFECT_PICKPOCKET)
+            || spellInfo->HasEffect(SPELL_EFFECT_TRADE_SKILL) || spellInfo->HasEffect(SPELL_EFFECT_ATTACK_ME))
+            return true;
+
+        if (spellInfo->HasAttribute(SPELL_ATTR0_CU_AURA_CC) || spellInfo->HasAttribute(SPELL_ATTR0_CU_PICKPOCKET))
+            return true;
+
+        if (spellInfo->HasAura(SPELL_AURA_MOD_STUN) || spellInfo->HasAura(SPELL_AURA_MOD_FEAR)
+            || spellInfo->HasAura(SPELL_AURA_MOD_CONFUSE) || spellInfo->HasAura(SPELL_AURA_MOD_SILENCE)
+            || spellInfo->HasAura(SPELL_AURA_MOD_ROOT) || spellInfo->HasAura(SPELL_AURA_MOD_ROOT_2))
+            return true;
+
+        if (spellInfo->HasAura(SPELL_AURA_MOD_DECREASE_SPEED)
+            && !spellInfo->HasEffect(SPELL_EFFECT_SCHOOL_DAMAGE)
+            && !spellInfo->HasAura(SPELL_AURA_PERIODIC_DAMAGE))
+            return true;
+
+        switch (spellInfo->GetSpellSpecific())
+        {
+            case SPELL_SPECIFIC_FOOD:
+            case SPELL_SPECIFIC_DRINK:
+            case SPELL_SPECIFIC_FOOD_AND_DRINK:
+                return true;
+            default:
+                break;
+        }
+
+        return false;
+    }
+
+    bool CombatDamageSpellIsEligible(Player const* player, SpellInfo const* spellInfo)
+    {
+        if (!player || !spellInfo)
+            return false;
+
+        if (spellInfo->IsPassive() || spellInfo->IsPositive())
+            return false;
+
+        if (CombatSpellIsUtility(spellInfo) || !SpellHasCombatDamage(spellInfo))
+            return false;
+
+        return player->HasActiveSpell(spellInfo->Id);
+    }
+
+    bool CombatSpellAlreadyQueued(Player const* player, SpellInfo const* spellInfo)
+    {
+        if (!player || !spellInfo)
+            return false;
+
+        if (spellInfo->IsNextMeleeSwingSpell())
+        {
+            if (Spell const* melee = player->GetCurrentSpell(CURRENT_MELEE_SPELL))
+                if (melee->GetSpellInfo() && melee->GetSpellInfo()->Id == spellInfo->Id)
+                    return true;
+        }
+
+        if (spellInfo->IsAutoRepeatRangedSpell())
+        {
+            if (Spell const* repeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+                if (repeat->GetSpellInfo() && repeat->GetSpellInfo()->Id == spellInfo->Id)
+                    return true;
+        }
+
+        return false;
+    }
+
+    bool CombatSpellIsReady(Player const* player, SpellInfo const* spellInfo)
+    {
+        if (!player || !spellInfo || !player->GetSpellHistory())
+            return false;
+
+        if (!player->CanRequestSpellCast(spellInfo, player))
+            return false;
+
+        if (player->GetSpellHistory()->HasGlobalCooldown(spellInfo))
+            return false;
+
+        if (!player->GetSpellHistory()->IsReady(spellInfo))
+            return false;
+
+        return true;
+    }
+
+    SpellCastResult CheckCombatSpellCast(Player* player, Unit* target, SpellInfo const* spellInfo)
+    {
+        if (!player || !target || !spellInfo)
+            return SPELL_FAILED_UNKNOWN;
+
+        Spell* look = new Spell(player, spellInfo, TRIGGERED_NONE);
+        look->m_targets.SetUnitTarget(target);
+        SpellCastResult const result = look->CheckCast(true);
+        delete look;
+        return result;
     }
 
     bool CreatureIsInInteractRange(Player const* player, Creature const* creature)
@@ -2294,6 +2536,122 @@ bool PlayerbotClient::TryMeleeAttack(Player* player, ObjectGuid creatureGuid)
     QueueAttackSwing(player->GetSession(), creatureGuid);
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_ATTACK_SWING on {}.",
         player->GetName(), creatureGuid.ToString());
+    return true;
+}
+
+bool PlayerbotClient::CombatSpellIsMelee(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    if (spellInfo->IsNextMeleeSwingSpell())
+        return true;
+
+    if (spellInfo->HasAttribute(SPELL_ATTR0_CU_CHARGE))
+        return false;
+
+    if (spellInfo->IsRangedWeaponSpell() || spellInfo->IsAutoRepeatRangedSpell())
+        return false;
+
+    return spellInfo->RangeEntry && (spellInfo->RangeEntry->Flags & SPELL_RANGE_MELEE);
+}
+
+float PlayerbotClient::CombatSpellMaxRange(Player const* player, Unit const* target, SpellInfo const* spellInfo)
+{
+    if (!player || !target || !spellInfo)
+        return 0.0f;
+
+    if (CombatSpellIsMelee(spellInfo))
+        return player->GetMeleeRange(target);
+
+    return spellInfo->GetMaxRange(false, player) + player->GetCombatReach() + target->GetCombatReach();
+}
+
+PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* player, Unit* target)
+{
+    CombatSpellPick pick;
+    if (!player || !target || !player->GetMap())
+        return pick;
+
+    bool const casting = player->IsNonMeleeSpellCast(false, false, true);
+    float approachRange = 0.0f;
+
+    for (auto const& [spellId, playerSpell] : player->GetSpellMap())
+    {
+        if (playerSpell.state == PLAYERSPELL_REMOVED || !playerSpell.active || playerSpell.disabled)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+        if (!CombatDamageSpellIsEligible(player, spellInfo))
+            continue;
+
+        bool const melee = CombatSpellIsMelee(spellInfo);
+        bool const inRange = melee ? player->IsWithinMeleeRange(target)
+            : player->GetExactDist(target) <= CombatSpellMaxRange(player, target, spellInfo);
+
+        if (casting || !CombatSpellIsReady(player, spellInfo) || CombatSpellAlreadyQueued(player, spellInfo))
+        {
+            if (inRange)
+                pick.KnownInRange = true;
+            continue;
+        }
+
+        if (melee && !inRange)
+        {
+            float const range = CombatSpellMaxRange(player, target, spellInfo);
+            if (!pick.Approach || range > approachRange)
+            {
+                pick.Approach = spellInfo;
+                approachRange = range;
+            }
+            pick.WalkCloser = true;
+            continue;
+        }
+
+        SpellCastResult const result = CheckCombatSpellCast(player, target, spellInfo);
+        if (result == SPELL_CAST_OK)
+        {
+            pick.Press = spellInfo;
+            pick.KnownInRange = true;
+            break;
+        }
+
+        if (inRange)
+            pick.KnownInRange = true;
+
+        if (result == SPELL_FAILED_UNIT_NOT_INFRONT && !pick.Face)
+            pick.Face = spellInfo;
+        else if (result == SPELL_FAILED_OUT_OF_RANGE)
+        {
+            float const range = CombatSpellMaxRange(player, target, spellInfo);
+            if (!pick.Approach || range > approachRange)
+            {
+                pick.Approach = spellInfo;
+                approachRange = range;
+            }
+        }
+        else if (result == SPELL_FAILED_LINE_OF_SIGHT)
+            pick.WalkCloser = true;
+    }
+
+    return pick;
+}
+
+bool PlayerbotClient::TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || !player->GetMap() || creatureGuid.IsEmpty() || !spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+    if (!spellInfo)
+        return false;
+
+    if (player->GetTarget() != creatureGuid)
+        QueueSetSelection(player->GetSession(), creatureGuid);
+
+    QueueCastSpell(player, creatureGuid, spellId);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on {}.",
+        player->GetName(), CombatSpellName(spellInfo), spellId, creatureGuid.ToString());
     return true;
 }
 

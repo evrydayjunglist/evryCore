@@ -27,6 +27,9 @@
 class Creature;
 class Item;
 class Player;
+class SpellInfo;
+class Unit;
+class WorldObject;
 class WorldSession;
 struct MovementInfo;
 enum OpcodeClient : uint32;
@@ -106,6 +109,15 @@ namespace PlayerbotClient
         bool CanRepair = false;
     };
 
+    struct CombatSpellPick
+    {
+        SpellInfo const* Press = nullptr;
+        SpellInfo const* Face = nullptr;
+        SpellInfo const* Approach = nullptr;
+        bool KnownInRange = false;
+        bool WalkCloser = false;
+    };
+
     void QueueEnumCharacters(WorldSession* session);
     void QueuePlayerLogin(WorldSession* session, ObjectGuid characterGuid);
     void QueueCompleteCinematic(WorldSession* session);
@@ -122,6 +134,8 @@ namespace PlayerbotClient
     void QueueAttackStop(WorldSession* session);
     void QueueGameObjUse(WorldSession* session, ObjectGuid guid);
     void QueueUseItem(Player* player, Item* item, ObjectGuid unitTarget, uint32 spellId);
+    void QueueCastSpell(Player* player, ObjectGuid unitTarget, uint32 spellId);
+    void QueueSetFacing(Player* player, WorldObject const* lookAt);
     void QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid);
     void QueueLootItem(WorldSession* session, ObjectGuid lootObj, uint8 lootListId);
     void QueueLootMoney(WorldSession* session);
@@ -171,6 +185,10 @@ namespace PlayerbotClient
     bool UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUnitTarget const& target);
     bool TryInteractQuest(Player* player, QuestTarget const& target);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
+    bool TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId);
+    CombatSpellPick PickCombatDamageSpell(Player* player, Unit* target);
+    bool CombatSpellIsMelee(SpellInfo const* spellInfo);
+    float CombatSpellMaxRange(Player const* player, Unit const* target, SpellInfo const* spellInfo);
     bool TryUseGameObject(Player* player, GameObjectTarget const& target);
     bool TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target);
 }

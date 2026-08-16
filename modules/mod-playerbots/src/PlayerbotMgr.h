@@ -53,6 +53,9 @@ struct PlayerbotRecord
     uint32 QuestInteractWaitMs = 0;
     uint32 QuestSearchEmptyMs = 0;
     bool CombatSwingSent = false;
+    uint32 CombatCastSpellId = 0;
+    bool CombatCastPending = false;
+    bool CombatFacingWait = false;
     bool LootOpenSent = false;
     PlayerbotDeathWork Death = PlayerbotDeathWork::None;
     uint32 DeathWaitMs = 0;

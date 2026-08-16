@@ -25,10 +25,12 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotFactory.h"
+#include "SpellInfo.h"
 #include "Unit.h"
 #include "UnitDefines.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
 #include <limits>
 
 namespace
@@ -1465,6 +1467,9 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
 
     bot.CombatTarget = {};
     bot.CombatSwingSent = false;
+    bot.CombatCastSpellId = 0;
+    bot.CombatCastPending = false;
+    bot.CombatFacingWait = false;
 }
 
 bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
@@ -1508,13 +1513,23 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
         return false;
     }
 
-    if (player->IsWithinMeleeRange(creature))
+    bot.CombatCastPending = false;
+    bot.CombatFacingWait = false;
+
+    bool const inMelee = player->IsWithinMeleeRange(creature);
+    if (!inMelee)
+        bot.CombatSwingSent = false;
+
+    auto swingIfMelee = [&]()
     {
+        if (!inMelee)
+            return;
+
         if (bot.Walker.IsMoving())
             bot.Walker.Stop(player);
 
         if (player->GetVictim() == creature && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
-            return true;
+            return;
 
         bool const reswing = bot.CombatSwingSent;
         if (PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
@@ -1524,7 +1539,114 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
                     player->GetName(), bot.CombatTarget.CreatureGuid.ToString());
             bot.CombatSwingSent = true;
         }
+    };
 
+    auto failCloseInWalk = [&]()
+    {
+        if (KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid))
+        {
+            LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
+            bot.Walker.Reset();
+            swingIfMelee();
+            return true;
+        }
+
+        bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+        ClearCombat(bot, player);
+        bot.Walker.Reset();
+        return false;
+    };
+
+    auto startMeleeApproach = [&]()
+    {
+        if (bot.Walker.IsMoving())
+            return true;
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+            return failCloseInWalk();
+
+        bot.CombatTarget.Pos = standPos;
+        if (player->GetExactDist(standPos) <= bot.CombatTarget.StopDistance)
+            return failCloseInWalk();
+
+        if (!bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance))
+            return failCloseInWalk();
+
+        return true;
+    };
+
+    PlayerbotClient::CombatSpellPick const pick = PlayerbotClient::PickCombatDamageSpell(player, creature);
+
+    if (pick.Press)
+    {
+        if (bot.Walker.IsMoving())
+        {
+            bot.Walker.Stop(player);
+            swingIfMelee();
+            return true;
+        }
+
+        if (PlayerbotClient::TryCombatCast(player, bot.CombatTarget.CreatureGuid, pick.Press->Id))
+        {
+            bot.CombatCastSpellId = pick.Press->Id;
+            bot.CombatCastPending = true;
+        }
+
+        swingIfMelee();
+        return true;
+    }
+
+    if (pick.Face)
+    {
+        if (bot.Walker.IsMoving())
+        {
+            bot.Walker.Stop(player);
+            swingIfMelee();
+            return true;
+        }
+
+        PlayerbotClient::QueueSetFacing(player, creature);
+        bot.CombatFacingWait = true;
+        swingIfMelee();
+        return true;
+    }
+
+    if (pick.Approach && !PlayerbotClient::CombatSpellIsMelee(pick.Approach) && !pick.WalkCloser)
+    {
+        if (bot.Walker.IsMoving())
+        {
+            swingIfMelee();
+            return true;
+        }
+
+        Position dest = creature->GetPosition();
+        float const stop = std::max(1.0f, PlayerbotClient::CombatSpellMaxRange(player, creature, pick.Approach) - 1.0f);
+        bot.CombatTarget.Pos = dest;
+        if (player->GetExactDist(dest) <= stop)
+        {
+            swingIfMelee();
+            return true;
+        }
+
+        if (!bot.Walker.Start(player, dest, stop))
+            return failCloseInWalk();
+
+        return true;
+    }
+
+    if (pick.KnownInRange && !pick.WalkCloser)
+    {
+        if (bot.Walker.IsMoving())
+            bot.Walker.Stop(player);
+        swingIfMelee();
+        return true;
+    }
+
+    if (inMelee)
+    {
+        swingIfMelee();
         return true;
     }
 
@@ -1535,38 +1657,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player)
         return false;
     }
 
-    bot.CombatSwingSent = false;
-    if (bot.Walker.IsMoving())
-        return true;
-
-    auto failCloseInWalk = [&]()
-    {
-        if (KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid))
-        {
-            LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
-            bot.Walker.Reset();
-            return true;
-        }
-
-        bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
-        ClearCombat(bot, player);
-        bot.Walker.Reset();
-        return false;
-    };
-
-    Position standPos;
-    float const standDistance = creature->GetCombatReach() + 1.0f;
-    if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
-        return failCloseInWalk();
-
-    bot.CombatTarget.Pos = standPos;
-    if (player->GetExactDist(standPos) <= bot.CombatTarget.StopDistance)
-        return failCloseInWalk();
-
-    if (!bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance))
-        return failCloseInWalk();
-
-    return true;
+    return startMeleeApproach();
 }
 
 bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target)
@@ -1699,6 +1790,9 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.UseItemOnUnitTarget = {};
     bot.CombatTarget = target;
     bot.CombatSwingSent = false;
+    bot.CombatCastSpellId = 0;
+    bot.CombatCastPending = false;
+    bot.CombatFacingWait = false;
     bot.Walker.Reset();
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())

@@ -245,9 +245,10 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             bot.GameObjectTarget = {};
             bot.Walker.Reset();
         }
-        else if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+        else if (bot.CombatTarget.QuestId)
         {
-            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+                bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
             ClearCombat(bot, player);
             bot.Walker.Reset();
         }
@@ -368,6 +369,39 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
     }
 
+    if (bot.Walker.HasArrived() && bot.CombatTarget.QuestId && bot.CombatTarget.CreatureGuid.IsEmpty())
+    {
+        if (!PlayerbotClient::CombatTargetStillNeeded(player, bot.CombatTarget))
+        {
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
+            return;
+        }
+
+        if (bot.QuestArriveWaitMs == 0)
+            bot.UnreachableGuids.clear();
+
+        bot.QuestArriveWaitMs += diff;
+        if (Optional<PlayerbotClient::CombatTarget> found = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids))
+        {
+            if (!found->CreatureGuid.IsEmpty())
+            {
+                BeginCombatTarget(bot, player, *found);
+                return;
+            }
+        }
+
+        if (bot.QuestArriveWaitMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the kill map marker but no spawned creature is there yet. The quest is not skipped.",
+                player->GetName());
+            bot.QuestSearchFailed = true;
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
+        }
+        return;
+    }
+
     if (bot.QuestSearchFailed)
         return;
 
@@ -415,27 +449,24 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindNearbyMonsterObjectiveTarget(player, COMBAT_SEARCH_RANGE, bot.UnreachableGuids))
     {
-        bot.QuestSearchEmptyMs = 0;
-        bot.QuestTarget = {};
-        bot.GameObjectTarget = {};
-        bot.CombatTarget = *kill;
-        bot.CombatSwingSent = false;
+        BeginCombatTarget(bot, player, *kill);
+        return;
+    }
 
-        Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
-        if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
-        {
-            bot.CombatSwingSent = true;
-            return;
-        }
+    if (Optional<PlayerbotClient::CombatTarget> killPoi = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids))
+    {
+        BeginCombatTarget(bot, player, *killPoi);
+        return;
+    }
 
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (kill).",
-            player->GetName(), bot.CombatTarget.CreatureGuid.ToString(), bot.CombatTarget.QuestId);
-        bot.QuestArriveWaitMs = 0;
-        if (!bot.Walker.Start(player, bot.CombatTarget.Pos, bot.CombatTarget.StopDistance))
+    if (PlayerbotClient::HasLogIncompleteMonsterOnThisMap(player))
+    {
+        bot.QuestSearchEmptyMs += diff;
+        if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
         {
-            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
-            ClearCombat(bot, player);
-            bot.Walker.Reset();
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has an incomplete kill objective on this map but no spawned creature to walk to. The quest is not skipped.",
+                player->GetName());
+            bot.QuestSearchFailed = true;
         }
         return;
     }
@@ -449,7 +480,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     bot.QuestSearchEmptyMs += diff;
     if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
     {
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no nearby turn-in, log turn-in, gameobject objective, kill target, or quest to accept (talk {:.0f} yards, kill {:.0f} yards). The quest is not skipped.",
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no nearby turn-in, log turn-in, gameobject objective, kill map marker, nearby kill, or quest to accept (talk {:.0f} yards, kill {:.0f} yards). The quest is not skipped.",
             player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
         bot.QuestSearchFailed = true;
     }
@@ -580,6 +611,52 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
 
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the gameobject map marker for quest {}. The quest is not skipped.",
             player->GetName(), bot.GameObjectTarget.QuestId);
+        bot.QuestSearchFailed = true;
+        return true;
+    }
+
+    return true;
+}
+
+bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target)
+{
+    ClearCombat(bot, player);
+    bot.QuestSearchEmptyMs = 0;
+    bot.QuestTarget = {};
+    bot.GameObjectTarget = {};
+    bot.CombatTarget = target;
+    bot.CombatSwingSent = false;
+    bot.Walker.Reset();
+
+    if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+    {
+        Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
+        if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
+        {
+            bot.CombatSwingSent = true;
+            return true;
+        }
+
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (kill).",
+            player->GetName(), bot.CombatTarget.CreatureGuid.ToString(), bot.CombatTarget.QuestId);
+    }
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to the kill map marker for quest {}.",
+            player->GetName(), bot.CombatTarget.QuestId);
+
+    bot.QuestArriveWaitMs = 0;
+    if (!bot.Walker.Start(player, bot.CombatTarget.Pos, bot.CombatTarget.StopDistance))
+    {
+        if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+        {
+            bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
+            return true;
+        }
+
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the kill map marker for quest {}. The quest is not skipped.",
+            player->GetName(), bot.CombatTarget.QuestId);
         bot.QuestSearchFailed = true;
         return true;
     }

@@ -70,6 +70,7 @@ private:
     bool UpdateCombat(PlayerbotRecord& bot, Player* player);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);
     bool BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::GameObjectTarget const& target);
+    bool BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target);
 
     std::vector<PlayerbotRecord> _bots;
     std::unordered_set<uint32> _accountIds;

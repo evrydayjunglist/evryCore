@@ -216,6 +216,8 @@ namespace
     {
         int32 QuestId = 0;
         uint32 CreditEntry = 0;
+        uint32 ObjectiveId = 0;
+        int8 StorageIndex = 0;
     };
 
     void CollectIncompleteMonsterCredits(Player* player, std::vector<IncompleteMonsterCredit>& out)
@@ -248,6 +250,8 @@ namespace
                 IncompleteMonsterCredit credit;
                 credit.QuestId = int32(questId);
                 credit.CreditEntry = uint32(objective.ObjectID);
+                credit.ObjectiveId = objective.ID;
+                credit.StorageIndex = objective.StorageIndex;
                 out.push_back(credit);
             }
         }
@@ -305,30 +309,30 @@ namespace
         float Radius = 40.0f;
     };
 
-    bool BlobMatchesGameObjectObjective(QuestPOIBlobData const& blob, IncompleteGameObjectCredit const& credit, uint32 mapId)
+    // Finished quests put a ? on the map. That blob uses ObjectiveIndex -1.
+    // 32 is the starter. A polygon of points is an incomplete objective, not turn-in.
+    bool BlobMatchesIncompleteObjective(QuestPOIBlobData const& blob, uint32 mapId, uint32 objectiveId, int32 objectId, int8 storageIndex)
     {
         if (blob.MapID != int32(mapId) || blob.Points.empty())
             return false;
-        // Finished quests put a ? on the map. That blob uses ObjectiveIndex -1.
-        // 32 is the starter. A polygon of points is an incomplete objective, not turn-in.
         if (blob.ObjectiveIndex == -1 || blob.ObjectiveIndex == 32)
             return false;
-        if (blob.QuestObjectiveID == int32(credit.ObjectiveId))
+        if (blob.QuestObjectiveID == int32(objectiveId))
             return true;
-        if (blob.QuestObjectID == int32(credit.GoEntry))
+        if (blob.QuestObjectID == objectId)
             return true;
-        return blob.ObjectiveIndex == credit.StorageIndex;
+        return blob.ObjectiveIndex == storageIndex;
     }
 
-    void CollectGameObjectObjectivePoiBlobs(IncompleteGameObjectCredit const& credit, uint32 mapId, std::vector<ObjectivePoiBlob>& out)
+    void CollectObjectivePoiBlobs(int32 questId, uint32 mapId, uint32 objectiveId, int32 objectId, int8 storageIndex, std::vector<ObjectivePoiBlob>& out)
     {
-        QuestPOIData const* poiData = sObjectMgr->GetQuestPOIData(credit.QuestId);
+        QuestPOIData const* poiData = sObjectMgr->GetQuestPOIData(questId);
         if (!poiData)
             return;
 
         for (QuestPOIBlobData const& blob : poiData->Blobs)
         {
-            if (!BlobMatchesGameObjectObjective(blob, credit, mapId))
+            if (!BlobMatchesIncompleteObjective(blob, mapId, objectiveId, objectId, storageIndex))
                 continue;
 
             ObjectivePoiBlob area;
@@ -381,14 +385,14 @@ namespace
         return true;
     }
 
-    bool GameObjectIsInPoiArea(GameObject const* go, std::vector<ObjectivePoiBlob> const& blobs)
+    bool PositionIsInPoiArea(Position const& pos, std::vector<ObjectivePoiBlob> const& blobs)
     {
-        if (!go || blobs.empty())
+        if (blobs.empty())
             return false;
 
         for (ObjectivePoiBlob const& blob : blobs)
         {
-            if (go->GetExactDist(blob.Centroid) <= blob.Radius + 5.0f)
+            if (pos.GetExactDist(blob.Centroid) <= blob.Radius + 5.0f)
                 return true;
         }
 
@@ -418,6 +422,25 @@ namespace
         target.StopDistance = 0.25f;
         target.QuestId = questId;
         target.GoEntry = go->GetEntry();
+        return target;
+    }
+
+    Optional<PlayerbotClient::CombatTarget> MakeCombatTarget(Player* player, Creature* creature, int32 questId, uint32 creditEntry)
+    {
+        if (!player || !creature || !questId || !creditEntry)
+            return {};
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+            return {};
+
+        PlayerbotClient::CombatTarget target;
+        target.CreatureGuid = creature->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        target.QuestId = questId;
+        target.CreditEntry = creditEntry;
         return target;
     }
 
@@ -729,9 +752,8 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
         if (dist >= bestDist)
             continue;
 
-        Position standPos;
-        float const standDistance = creature->GetCombatReach() + 1.0f;
-        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+        Optional<CombatTarget> target = MakeCombatTarget(player, creature, matched->QuestId, matched->CreditEntry);
+        if (!target)
         {
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
                 player->GetName(), creature->GetGUID().ToString());
@@ -739,11 +761,7 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
         }
 
         bestDist = dist;
-        best.CreatureGuid = creature->GetGUID();
-        best.Pos = standPos;
-        best.StopDistance = 0.25f;
-        best.QuestId = matched->QuestId;
-        best.CreditEntry = matched->CreditEntry;
+        best = *target;
     }
 
     if (best.CreatureGuid.IsEmpty())
@@ -779,6 +797,121 @@ bool PlayerbotClient::CombatTargetStillNeeded(Player* player, CombatTarget const
     return false;
 }
 
+Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    Map* map = player->GetMap();
+    uint32 const mapId = map->GetId();
+
+    std::vector<IncompleteMonsterCredit> credits;
+    CollectIncompleteMonsterCredits(player, credits);
+    if (credits.empty())
+        return {};
+
+    CombatTarget bestCreatureTarget;
+    float bestCreatureDist = std::numeric_limits<float>::max();
+    bool haveCreature = false;
+    Position bestMarker;
+    IncompleteMonsterCredit const* bestMarkerCredit = nullptr;
+    float bestMarkerDist = std::numeric_limits<float>::max();
+    bool haveMarker = false;
+
+    for (IncompleteMonsterCredit const& credit : credits)
+    {
+        std::vector<ObjectivePoiBlob> blobs;
+        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.CreditEntry), credit.StorageIndex, blobs);
+        if (blobs.empty())
+            continue;
+
+        LoadPoiGrids(map, blobs);
+
+        for (ObjectivePoiBlob const& blob : blobs)
+        {
+            for (Position const& point : blob.Points)
+            {
+                float const dist = player->GetExactDist(point);
+                if (dist >= bestMarkerDist)
+                    continue;
+
+                bestMarkerDist = dist;
+                bestMarker = point;
+                bestMarkerCredit = &credit;
+                haveMarker = true;
+            }
+        }
+
+        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        {
+            Creature* creature = pair.second;
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (!creature->IsAlive())
+                continue;
+            if (!player->IsValidAttackTarget(creature))
+                continue;
+            if (!player->InSamePhase(creature))
+                continue;
+            if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+                continue;
+            if (!CreatureGivesMonsterCredit(creature, credit.CreditEntry))
+                continue;
+            if (!PositionIsInPoiArea(*creature, blobs))
+                continue;
+
+            float const dist = player->GetExactDist(creature);
+            if (dist >= bestCreatureDist)
+                continue;
+
+            Optional<CombatTarget> target = MakeCombatTarget(player, creature, credit.QuestId, credit.CreditEntry);
+            if (!target)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+                    player->GetName(), creature->GetGUID().ToString());
+                continue;
+            }
+
+            bestCreatureDist = dist;
+            bestCreatureTarget = *target;
+            haveCreature = true;
+        }
+    }
+
+    if (haveCreature)
+        return bestCreatureTarget;
+
+    if (!haveMarker || !bestMarkerCredit)
+        return {};
+
+    CombatTarget target;
+    target.Pos = bestMarker;
+    target.StopDistance = 0.25f;
+    target.QuestId = bestMarkerCredit->QuestId;
+    target.CreditEntry = bestMarkerCredit->CreditEntry;
+    return target;
+}
+
+bool PlayerbotClient::HasLogIncompleteMonsterOnThisMap(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return false;
+
+    uint32 const mapId = player->GetMap()->GetId();
+    std::vector<IncompleteMonsterCredit> credits;
+    CollectIncompleteMonsterCredits(player, credits);
+
+    for (IncompleteMonsterCredit const& credit : credits)
+    {
+        std::vector<ObjectivePoiBlob> blobs;
+        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.CreditEntry), credit.StorageIndex, blobs);
+        if (!blobs.empty())
+            return true;
+    }
+
+    return false;
+}
+
 Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
@@ -803,7 +936,7 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
     for (IncompleteGameObjectCredit const& credit : credits)
     {
         std::vector<ObjectivePoiBlob> blobs;
-        CollectGameObjectObjectivePoiBlobs(credit, mapId, blobs);
+        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.GoEntry), credit.StorageIndex, blobs);
         if (blobs.empty())
             continue;
 
@@ -831,7 +964,7 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
                 continue;
             if (!GameObjectIsUsableForObjective(player, go, credit.GoEntry))
                 continue;
-            if (!GameObjectIsInPoiArea(go, blobs))
+            if (!PositionIsInPoiArea(*go, blobs))
                 continue;
 
             float const dist = player->GetExactDist(go);
@@ -878,7 +1011,7 @@ bool PlayerbotClient::HasLogIncompleteGameObjectOnThisMap(Player* player)
     for (IncompleteGameObjectCredit const& credit : credits)
     {
         std::vector<ObjectivePoiBlob> blobs;
-        CollectGameObjectObjectivePoiBlobs(credit, mapId, blobs);
+        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.GoEntry), credit.StorageIndex, blobs);
         if (!blobs.empty())
             return true;
     }

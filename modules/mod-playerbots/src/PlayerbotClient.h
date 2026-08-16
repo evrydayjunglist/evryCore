@@ -81,6 +81,8 @@ namespace PlayerbotClient
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player);
     bool HasLogCompleteTurnInOnThisMap(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
+    Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
+    bool HasLogIncompleteMonsterOnThisMap(Player* player);
     bool CombatTargetStillNeeded(Player* player, CombatTarget const& target);
     Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip);
     bool HasLogIncompleteGameObjectOnThisMap(Player* player);

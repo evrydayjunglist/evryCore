@@ -43,6 +43,45 @@ namespace
     constexpr uint32 CAMPED_WAIT_MS = 20000;
     constexpr uint32 GHOST_WAIT_LONG_MS = 180000;
     constexpr uint32 GHOST_GIVE_UP_MS = 300000;
+
+    bool InInteractRange(Player const* player, Creature const* creature)
+    {
+        if (!player || !creature)
+            return false;
+
+        return player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f);
+    }
+
+    // True when the current walk is already a talk, or already standing in range to use, loot, or click.
+    // A 40-yard ! may stop a long walk. It should not pull her off a click she can finish from here.
+    bool CurrentWalkIsInReach(PlayerbotRecord const& bot, Player* player)
+    {
+        if (!player)
+            return false;
+
+        if (!bot.QuestTarget.NpcGuid.IsEmpty())
+            return true;
+
+        if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
+        {
+            Creature* creature = ObjectAccessor::GetCreature(*player, bot.UseItemOnUnitTarget.CreatureGuid);
+            return InInteractRange(player, creature);
+        }
+
+        if (!bot.GameObjectTarget.GoGuid.IsEmpty())
+            return player->GetGameObjectIfCanInteractWith(bot.GameObjectTarget.GoGuid) != nullptr;
+
+        if (!bot.ItemLootTarget.GoGuid.IsEmpty())
+            return player->GetGameObjectIfCanInteractWith(bot.ItemLootTarget.GoGuid) != nullptr;
+
+        if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
+        {
+            Creature* creature = ObjectAccessor::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
+            return InInteractRange(player, creature);
+        }
+
+        return false;
+    }
 }
 
 PlayerbotMgr* PlayerbotMgr::instance()
@@ -1053,13 +1092,20 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
 
 bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking)
 {
-    Optional<PlayerbotClient::QuestTarget> talk = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Talk);
+    Optional<PlayerbotClient::QuestTarget> talk;
+    if (!walking || !CurrentWalkIsInReach(bot, player))
+        talk = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Talk);
+
     Optional<PlayerbotClient::ItemLootTarget> loot = PlayerbotClient::FindNearbyItemLootTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, walking);
-    Optional<PlayerbotClient::GameObjectTarget> go = PlayerbotClient::FindNearbyGameObjectObjectiveTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, walking);
-    Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindNearbyUseItemOnUnitTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, true);
+    Optional<PlayerbotClient::GameObjectTarget> go;
+    Optional<PlayerbotClient::UseItemOnUnitTarget> useItem;
     Optional<PlayerbotClient::CombatTarget> kill;
     if (!walking)
+    {
+        go = PlayerbotClient::FindNearbyGameObjectObjectiveTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, false);
+        useItem = PlayerbotClient::FindNearbyUseItemOnUnitTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, true);
         kill = PlayerbotClient::FindNearbyMonsterObjectiveTarget(player, COMBAT_SEARCH_RANGE, bot.UnreachableGuids);
+    }
 
     if (talk && talk->NpcGuid == bot.QuestTarget.NpcGuid)
         talk.reset();

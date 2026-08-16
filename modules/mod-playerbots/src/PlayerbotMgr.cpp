@@ -230,6 +230,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.QuestSearchEmptyMs = 0;
         bot.QuestTarget = {};
         bot.GameObjectTarget = {};
+        bot.UseItemOnUnitTarget = {};
         bot.ItemLootTarget = {};
         bot.LootOpenSent = false;
         bot.UnreachableGuids.clear();
@@ -244,6 +245,11 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         {
             skipFailedQuestId = bot.GameObjectTarget.QuestId;
             skipFailedEntry = bot.GameObjectTarget.GoEntry;
+        }
+        else if (bot.UseItemOnUnitTarget.QuestId)
+        {
+            skipFailedQuestId = bot.UseItemOnUnitTarget.QuestId;
+            skipFailedEntry = bot.UseItemOnUnitTarget.CreditEntry;
         }
         else if (bot.CombatTarget.QuestId)
         {
@@ -391,6 +397,77 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
     }
 
+    if (bot.Walker.HasArrived() && bot.UseItemOnUnitTarget.QuestId)
+    {
+        if (!PlayerbotClient::UseItemOnUnitTargetStillNeeded(player, bot.UseItemOnUnitTarget))
+        {
+            bot.UseItemOnUnitTarget = {};
+            bot.Walker.Reset();
+        }
+        else if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
+        {
+            bot.QuestArriveWaitMs += diff;
+            if (PlayerbotClient::TryUseItemOnUnit(player, bot.UseItemOnUnitTarget))
+            {
+                bot.QuestInteractQueued = true;
+                bot.QuestInteractWaitMs = 0;
+                return;
+            }
+
+            Creature* creature = ObjectAccessor::GetCreature(*player, bot.UseItemOnUnitTarget.CreatureGuid);
+            if (creature && creature->IsAlive() && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
+            {
+                Position standPos;
+                float const standDistance = creature->GetCombatReach() + 1.0f;
+                if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
+                    && bot.Walker.Start(player, standPos, bot.UseItemOnUnitTarget.StopDistance))
+                {
+                    bot.UseItemOnUnitTarget.Pos = standPos;
+                    bot.QuestArriveWaitMs = 0;
+                    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
+                        player->GetName(), bot.UseItemOnUnitTarget.CreatureGuid.ToString());
+                    return;
+                }
+            }
+
+            if (bot.QuestArriveWaitMs < 5000)
+                return;
+
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} arrived but cannot use the quest item on {}. Looking for other work.",
+                player->GetName(), bot.UseItemOnUnitTarget.CreatureGuid.ToString());
+            bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
+            bot.UseItemOnUnitTarget = {};
+            bot.Walker.Reset();
+        }
+        else
+        {
+            if (TryImmediateWorld(bot, player, false))
+                return;
+
+            bot.QuestArriveWaitMs += diff;
+            if (Optional<PlayerbotClient::UseItemOnUnitTarget> found = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids))
+            {
+                if (!found->CreatureGuid.IsEmpty())
+                {
+                    BeginUseItemOnUnitTarget(bot, player, *found);
+                    return;
+                }
+            }
+
+            if (bot.QuestArriveWaitMs < QUEST_SEARCH_RETRY_MS)
+                return;
+
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the map marker but no spawned creature is there yet. Looking for other work.",
+                player->GetName());
+            int32 const skipQuestId = bot.UseItemOnUnitTarget.QuestId;
+            uint32 const skipEntry = bot.UseItemOnUnitTarget.CreditEntry;
+            bot.UseItemOnUnitTarget = {};
+            bot.Walker.Reset();
+            if (TryMapYellow(bot, player, skipQuestId, skipEntry))
+                return;
+        }
+    }
+
     if (bot.Walker.HasArrived() && bot.CombatTarget.QuestId && bot.CombatTarget.CreatureGuid.IsEmpty())
     {
         if (!PlayerbotClient::CombatTargetStillNeeded(player, bot.CombatTarget))
@@ -529,6 +606,7 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = {};
     bot.UnreachableGuids.clear();
     bot.Walker.Reset();
 }
@@ -946,6 +1024,12 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
             bot.UnreachableGuids.insert(bot.GameObjectTarget.GoGuid);
         bot.GameObjectTarget = {};
     }
+    else if (bot.UseItemOnUnitTarget.QuestId)
+    {
+        if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
+            bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
+        bot.UseItemOnUnitTarget = {};
+    }
     else if (bot.CombatTarget.QuestId || !bot.CombatTarget.CreatureGuid.IsEmpty())
     {
         if (!bot.CombatTarget.CreatureGuid.IsEmpty())
@@ -972,6 +1056,7 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
     Optional<PlayerbotClient::QuestTarget> talk = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Talk);
     Optional<PlayerbotClient::ItemLootTarget> loot = PlayerbotClient::FindNearbyItemLootTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, walking);
     Optional<PlayerbotClient::GameObjectTarget> go = PlayerbotClient::FindNearbyGameObjectObjectiveTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, walking);
+    Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindNearbyUseItemOnUnitTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, true);
     Optional<PlayerbotClient::CombatTarget> kill;
     if (!walking)
         kill = PlayerbotClient::FindNearbyMonsterObjectiveTarget(player, COMBAT_SEARCH_RANGE, bot.UnreachableGuids);
@@ -983,6 +1068,8 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
         loot.reset();
     if (go && !bot.GameObjectTarget.GoGuid.IsEmpty() && go->GoGuid == bot.GameObjectTarget.GoGuid)
         go.reset();
+    if (useItem && !bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty() && useItem->CreatureGuid == bot.UseItemOnUnitTarget.CreatureGuid)
+        useItem.reset();
     if (kill && !bot.CombatTarget.CreatureGuid.IsEmpty() && kill->CreatureGuid == bot.CombatTarget.CreatureGuid)
         kill.reset();
 
@@ -1002,8 +1089,10 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
         consider(player->GetExactDist(loot->Pos), 2);
     if (go)
         consider(player->GetExactDist(go->Pos), 3);
+    if (useItem)
+        consider(player->GetExactDist(useItem->Pos), 4);
     if (kill)
-        consider(player->GetExactDist(kill->Pos), 4);
+        consider(player->GetExactDist(kill->Pos), 5);
 
     if (!kind)
         return false;
@@ -1014,14 +1103,17 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
         return BeginItemWork(bot, player, *loot);
     if (kind == 3)
         return BeginGameObjectTarget(bot, player, *go);
+    if (kind == 4)
+        return BeginUseItemOnUnitTarget(bot, player, *useItem);
     return BeginCombatTarget(bot, player, *kill);
 }
 
 bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId, uint32 skipEntry)
 {
-    for (int32 attempt = 0; attempt < 4; ++attempt)
+    for (int32 attempt = 0; attempt < 5; ++attempt)
     {
         Optional<PlayerbotClient::GameObjectTarget> go = PlayerbotClient::FindLogIncompleteGameObjectTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
+        Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
         Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
         Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, skipQuestId, skipEntry);
         Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindLogCompleteTurnIn(player, skipQuestId);
@@ -1038,12 +1130,14 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
 
         if (go)
             consider(player->GetExactDist(go->Pos), 1);
+        if (useItem)
+            consider(player->GetExactDist(useItem->Pos), 2);
         if (kill)
-            consider(player->GetExactDist(kill->Pos), 2);
+            consider(player->GetExactDist(kill->Pos), 3);
         if (item)
-            consider(player->GetExactDist(item->Pos), 3);
+            consider(player->GetExactDist(item->Pos), 4);
         if (turnIn)
-            consider(player->GetExactDist(turnIn->Pos), 4);
+            consider(player->GetExactDist(turnIn->Pos), 5);
 
         if (!kind)
             return false;
@@ -1059,11 +1153,17 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
         }
         else if (kind == 2)
         {
+            nextSkipQuest = useItem->QuestId;
+            nextSkipEntry = useItem->CreditEntry;
+            started = BeginUseItemOnUnitTarget(bot, player, *useItem);
+        }
+        else if (kind == 3)
+        {
             nextSkipQuest = kill->QuestId;
             nextSkipEntry = kill->CreditEntry;
             started = BeginCombatTarget(bot, player, *kill);
         }
-        else if (kind == 3)
+        else if (kind == 4)
         {
             nextSkipQuest = item->QuestId;
             nextSkipEntry = item->ItemId;
@@ -1205,6 +1305,7 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = target;
     bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = {};
     bot.CombatTarget = {};
     bot.Walker.Reset();
 
@@ -1242,6 +1343,7 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = target;
+    bot.UseItemOnUnitTarget = {};
     bot.CombatTarget = {};
     bot.Walker.Reset();
 
@@ -1277,6 +1379,52 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
     return true;
 }
 
+bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::UseItemOnUnitTarget const& target)
+{
+    if (bot.Walker.IsMoving())
+        bot.Walker.Stop(player);
+
+    ClearCombat(bot, player);
+    ClearItemLoot(bot);
+    bot.QuestSearchEmptyMs = 0;
+    bot.QuestTarget = {};
+    bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = target;
+    bot.CombatTarget = {};
+    bot.Walker.Reset();
+
+    if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty()
+        && player->GetExactDist(bot.UseItemOnUnitTarget.Pos) <= bot.UseItemOnUnitTarget.StopDistance
+        && PlayerbotClient::TryUseItemOnUnit(player, bot.UseItemOnUnitTarget))
+    {
+        bot.QuestInteractQueued = true;
+        bot.QuestInteractWaitMs = 0;
+        return true;
+    }
+
+    if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} (use item).",
+            player->GetName(), bot.UseItemOnUnitTarget.CreatureGuid.ToString(), bot.UseItemOnUnitTarget.QuestId);
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to the map marker for quest {} (use item).",
+            player->GetName(), bot.UseItemOnUnitTarget.QuestId);
+
+    bot.QuestArriveWaitMs = 0;
+    if (!bot.Walker.Start(player, bot.UseItemOnUnitTarget.Pos, bot.UseItemOnUnitTarget.StopDistance))
+    {
+        if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
+            bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
+        else
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the map marker for quest {}. Looking for other work.",
+                player->GetName(), bot.UseItemOnUnitTarget.QuestId);
+        bot.UseItemOnUnitTarget = {};
+        bot.Walker.Reset();
+        return false;
+    }
+
+    return true;
+}
+
 bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target)
 {
     if (bot.Walker.IsMoving())
@@ -1287,6 +1435,7 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = {};
     bot.CombatTarget = target;
     bot.CombatSwingSent = false;
     bot.Walker.Reset();
@@ -1523,6 +1672,7 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
     bot.QuestSearchEmptyMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = {};
     bot.CombatTarget = {};
     bot.ItemLootTarget = target;
     bot.LootOpenSent = false;

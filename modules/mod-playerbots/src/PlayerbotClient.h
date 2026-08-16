@@ -24,6 +24,7 @@
 #include "UnitDefines.h"
 #include <unordered_set>
 
+class Item;
 class Player;
 class WorldSession;
 struct MovementInfo;
@@ -66,6 +67,16 @@ namespace PlayerbotClient
         uint32 GoEntry = 0;
     };
 
+    struct UseItemOnUnitTarget
+    {
+        ObjectGuid CreatureGuid;
+        Position Pos;
+        float StopDistance = 0.25f;
+        int32 QuestId = 0;
+        uint32 CreditEntry = 0;
+        uint32 ItemId = 0;
+    };
+
     struct ItemLootTarget
     {
         ObjectGuid CreatureGuid;
@@ -99,6 +110,7 @@ namespace PlayerbotClient
     void QueueAttackSwing(WorldSession* session, ObjectGuid victim);
     void QueueAttackStop(WorldSession* session);
     void QueueGameObjUse(WorldSession* session, ObjectGuid guid);
+    void QueueUseItem(Player* player, Item* item, ObjectGuid unitTarget, uint32 spellId);
     void QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid);
     void QueueLootItem(WorldSession* session, ObjectGuid lootObj, uint8 lootListId);
     void QueueLootRelease(WorldSession* session, ObjectGuid unitGuid);
@@ -130,9 +142,13 @@ namespace PlayerbotClient
     Optional<GameObjectTarget> FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);
+    Optional<UseItemOnUnitTarget> FindNearbyUseItemOnUnitTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
+    Optional<UseItemOnUnitTarget> FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
+    bool UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUnitTarget const& target);
     bool TryInteractQuest(Player* player, QuestTarget const& target);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
     bool TryUseGameObject(Player* player, GameObjectTarget const& target);
+    bool TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target);
 }
 
 #endif

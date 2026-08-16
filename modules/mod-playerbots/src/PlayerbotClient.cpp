@@ -24,6 +24,8 @@
 #include "GameObject.h"
 #include "GameTime.h"
 #include "GossipDef.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "Loot.h"
 #include "LootItemType.h"
 #include "Log.h"
@@ -39,6 +41,10 @@
 #include "Playerbots.h"
 #include "QuestDef.h"
 #include "SharedDefines.h"
+#include "Spell.h"
+#include "SpellDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "Unit.h"
 #include "UnitDefines.h"
 #include "WorldPacket.h"
@@ -191,6 +197,59 @@ void PlayerbotClient::QueueGameObjUse(WorldSession* session, ObjectGuid guid)
     WorldPacket packet(CMSG_GAME_OBJ_USE);
     packet << guid;
     session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueUseItem(Player* player, Item* item, ObjectGuid unitTarget, uint32 spellId)
+{
+    if (!player || !player->GetSession() || !player->GetMap() || !item || unitTarget.IsEmpty() || !spellId)
+        return;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+    int32 visualId = 0;
+    if (spellInfo)
+        visualId = int32(player->GetCastSpellXSpellVisualId(spellInfo));
+
+    ObjectGuid const castId = ObjectGuid::Create<HighGuid::Cast>(SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), spellId,
+        player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
+
+    WorldPacket packet(CMSG_USE_ITEM);
+    packet << uint8(item->GetBagSlot());
+    packet << uint8(item->GetSlot());
+    packet << item->GetGUID();
+
+    packet << castId;
+    packet << uint8(0);          // SendCastFlags
+    packet << int32(0);          // Misc[0]
+    packet << int32(0);          // Misc[1]
+    packet << int32(0);          // Misc[2]
+    packet << int32(spellId);
+    packet << int32(visualId);   // SpellXSpellVisualID
+    packet << int32(0);          // ScriptVisualID
+    packet << float(0.0f);       // MissileTrajectory.Pitch
+    packet << float(0.0f);       // MissileTrajectory.Speed
+    packet << ObjectGuid();      // CraftingNPC
+    packet << uint32(0);         // ExtraCurrencyCosts size
+    packet << uint32(0);         // CraftingReagents size
+    packet << uint32(0);         // RemovedReagents size
+    packet << uint8(0);          // CraftingCastFlags
+
+    packet.WriteBit(false);      // ReceiveTime
+    packet.WriteBit(false);      // MoveUpdate
+    packet.WriteBits(0, 2);      // Weight size
+    packet.WriteBit(false);      // CraftingOrderID
+
+    packet << uint32(TARGET_FLAG_UNIT);
+    packet << unitTarget;
+    packet << ObjectGuid();      // Item
+    packet << ObjectGuid();      // HousingGUID
+    packet.WriteBit(false);      // HousingIsResident
+    packet.WriteBit(false);      // SrcLocation
+    packet.WriteBit(false);      // DstLocation
+    packet.WriteBit(false);      // Orientation
+    packet.WriteBit(false);      // MapID
+    packet.WriteBits(0, 7);      // Name length
+    packet.FlushBits();
+    player->GetSession()->QueuePacket(std::move(packet));
 }
 
 void PlayerbotClient::QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid)
@@ -411,6 +470,8 @@ namespace
                     continue;
                 if (objective.Flags & QUEST_OBJECTIVE_FLAG_HIDDEN)
                     continue;
+                if (objective.Flags2 & QUEST_OBJECTIVE_FLAG_2_QUEST_BOUND_ITEM)
+                    continue;
                 if (!player->IsQuestObjectiveCompletable(questId, objective.ID))
                     continue;
                 if (player->IsQuestObjectiveComplete(questId, objective.ID))
@@ -622,6 +683,64 @@ namespace
         target.StopDistance = 0.25f;
         target.QuestId = questId;
         target.CreditEntry = creditEntry;
+        return target;
+    }
+
+    uint32 HeldQuestStartItem(Player* player, uint32 questId)
+    {
+        if (!player || !questId)
+            return 0;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+            return 0;
+
+        uint32 const itemId = quest->GetSrcItemId();
+        if (!itemId || !player->HasItemCount(itemId))
+            return 0;
+
+        return itemId;
+    }
+
+    uint32 GetItemOnUseSpellId(Item const* item)
+    {
+        if (!item)
+            return 0;
+
+        for (ItemEffectEntry const* effect : item->GetEffects())
+        {
+            if (effect && effect->SpellID > 0 && effect->TriggerType == ITEM_SPELLTRIGGER_ON_USE)
+                return uint32(effect->SpellID);
+        }
+
+        return 0;
+    }
+
+    bool CreatureIsInInteractRange(Player const* player, Creature const* creature)
+    {
+        if (!player || !creature)
+            return false;
+
+        return player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f);
+    }
+
+    Optional<PlayerbotClient::UseItemOnUnitTarget> MakeUseItemOnUnitTarget(Player* player, Creature* creature, int32 questId, uint32 creditEntry, uint32 itemId)
+    {
+        if (!player || !creature || !questId || !itemId)
+            return {};
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+            return {};
+
+        PlayerbotClient::UseItemOnUnitTarget target;
+        target.CreatureGuid = creature->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        target.QuestId = questId;
+        target.CreditEntry = creditEntry;
+        target.ItemId = itemId;
         return target;
     }
 
@@ -1032,6 +1151,8 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
         IncompleteMonsterCredit const* matched = nullptr;
         for (IncompleteMonsterCredit const& credit : credits)
         {
+            if (HeldQuestStartItem(player, uint32(credit.QuestId)))
+                continue;
             if (CreatureGivesMonsterCredit(creature, credit.CreditEntry))
             {
                 matched = &credit;
@@ -1199,6 +1320,9 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
 
     for (IncompleteMonsterCredit const& credit : credits)
     {
+        if (HeldQuestStartItem(player, uint32(credit.QuestId)))
+            continue;
+
         std::vector<ObjectivePoiBlob> blobs;
         CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.CreditEntry), credit.StorageIndex, blobs);
         if (blobs.empty())
@@ -1741,6 +1865,203 @@ bool PlayerbotClient::GameObjectTargetStillNeeded(Player* player, GameObjectTarg
     return false;
 }
 
+Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseItemOnUnitTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange)
+{
+    if (!player || !player->IsInWorld())
+        return {};
+
+    std::vector<IncompleteMonsterCredit> credits;
+    CollectIncompleteMonsterCredits(player, credits);
+    if (credits.empty())
+        return {};
+
+    std::vector<Creature*> nearby;
+    FindCreatureOptions options;
+    options.IsAlive = FindCreatureAliveState::Alive;
+    player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+
+    UseItemOnUnitTarget best;
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (Creature* creature : nearby)
+    {
+        if (!creature || skip.contains(creature->GetGUID()))
+            continue;
+
+        IncompleteMonsterCredit const* matched = nullptr;
+        uint32 itemId = 0;
+        for (IncompleteMonsterCredit const& credit : credits)
+        {
+            uint32 const startItem = HeldQuestStartItem(player, uint32(credit.QuestId));
+            if (!startItem)
+                continue;
+            if (!CreatureGivesMonsterCredit(creature, credit.CreditEntry))
+                continue;
+            matched = &credit;
+            itemId = startItem;
+            break;
+        }
+        if (!matched)
+            continue;
+
+        if (mustBeInUseRange && !CreatureIsInInteractRange(player, creature))
+            continue;
+
+        float const dist = player->GetExactDist(creature);
+        if (dist >= bestDist)
+            continue;
+
+        Optional<UseItemOnUnitTarget> target = MakeUseItemOnUnitTarget(player, creature, matched->QuestId, matched->CreditEntry, itemId);
+        if (!target)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+                player->GetName(), creature->GetGUID().ToString());
+            continue;
+        }
+
+        bestDist = dist;
+        best = *target;
+    }
+
+    if (best.CreatureGuid.IsEmpty())
+        return {};
+
+    return best;
+}
+
+Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, uint32 skipEntry)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    Map* map = player->GetMap();
+    uint32 const mapId = map->GetId();
+
+    std::vector<IncompleteMonsterCredit> credits;
+    CollectIncompleteMonsterCredits(player, credits);
+    if (credits.empty())
+        return {};
+
+    UseItemOnUnitTarget bestCreatureTarget;
+    float bestCreatureDist = std::numeric_limits<float>::max();
+    bool haveCreature = false;
+    Position bestMarker;
+    IncompleteMonsterCredit const* bestMarkerCredit = nullptr;
+    uint32 bestMarkerItemId = 0;
+    float bestMarkerDist = std::numeric_limits<float>::max();
+    bool haveMarker = false;
+
+    for (IncompleteMonsterCredit const& credit : credits)
+    {
+        uint32 const itemId = HeldQuestStartItem(player, uint32(credit.QuestId));
+        if (!itemId)
+            continue;
+
+        std::vector<ObjectivePoiBlob> blobs;
+        CollectObjectivePoiBlobs(credit.QuestId, mapId, credit.ObjectiveId, int32(credit.CreditEntry), credit.StorageIndex, blobs);
+        if (blobs.empty())
+            continue;
+
+        LoadPoiGrids(map, blobs);
+
+        bool const skipMarker = skipQuestId && credit.QuestId == skipQuestId && (!skipEntry || credit.CreditEntry == skipEntry);
+        if (!skipMarker)
+        {
+            for (ObjectivePoiBlob const& blob : blobs)
+            {
+                for (Position const& point : blob.Points)
+                {
+                    float const dist = player->GetExactDist(point);
+                    if (dist >= bestMarkerDist)
+                        continue;
+
+                    bestMarkerDist = dist;
+                    bestMarker = point;
+                    bestMarkerCredit = &credit;
+                    bestMarkerItemId = itemId;
+                    haveMarker = true;
+                }
+            }
+        }
+
+        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        {
+            Creature* creature = pair.second;
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (!creature->IsAlive())
+                continue;
+            if (!player->InSamePhase(creature))
+                continue;
+            if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+                continue;
+            if (!CreatureGivesMonsterCredit(creature, credit.CreditEntry))
+                continue;
+            if (!PositionIsInPoiArea(*creature, blobs))
+                continue;
+
+            float const dist = player->GetExactDist(creature);
+            if (dist >= bestCreatureDist)
+                continue;
+
+            Optional<UseItemOnUnitTarget> target = MakeUseItemOnUnitTarget(player, creature, credit.QuestId, credit.CreditEntry, itemId);
+            if (!target)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+                    player->GetName(), creature->GetGUID().ToString());
+                continue;
+            }
+
+            bestCreatureDist = dist;
+            bestCreatureTarget = *target;
+            haveCreature = true;
+        }
+    }
+
+    if (haveCreature)
+        return bestCreatureTarget;
+
+    if (!haveMarker || !bestMarkerCredit)
+        return {};
+
+    UseItemOnUnitTarget target;
+    target.Pos = bestMarker;
+    target.StopDistance = 0.25f;
+    target.QuestId = bestMarkerCredit->QuestId;
+    target.CreditEntry = bestMarkerCredit->CreditEntry;
+    target.ItemId = bestMarkerItemId;
+    return target;
+}
+
+bool PlayerbotClient::UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUnitTarget const& target)
+{
+    if (!player || target.QuestId <= 0 || !target.CreditEntry || !target.ItemId)
+        return false;
+    if (player->GetQuestStatus(uint32(target.QuestId)) != QUEST_STATUS_INCOMPLETE)
+        return false;
+    if (!player->HasItemCount(target.ItemId))
+        return false;
+
+    Quest const* quest = sObjectMgr->GetQuestTemplate(uint32(target.QuestId));
+    if (!quest || quest->GetSrcItemId() != target.ItemId)
+        return false;
+
+    for (QuestObjective const& objective : quest->GetObjectives())
+    {
+        if (objective.Type != QUEST_OBJECTIVE_MONSTER)
+            continue;
+        if (uint32(objective.ObjectID) != target.CreditEntry)
+            continue;
+        if (!player->IsQuestObjectiveCompletable(uint32(target.QuestId), objective.ID))
+            continue;
+        if (player->IsQuestObjectiveComplete(uint32(target.QuestId), objective.ID))
+            continue;
+        return true;
+    }
+
+    return false;
+}
+
 bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target)
 {
     if (!player || !player->IsInWorld() || !player->GetSession() || target.NpcGuid.IsEmpty() || !target.QuestId)
@@ -1804,6 +2125,33 @@ bool PlayerbotClient::TryUseGameObject(Player* player, GameObjectTarget const& t
     QueueGameObjUse(player->GetSession(), target.GoGuid);
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_GAME_OBJ_USE on {} for quest {}.",
         player->GetName(), target.GoGuid.ToString(), target.QuestId);
+    return true;
+}
+
+bool PlayerbotClient::TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || target.CreatureGuid.IsEmpty() || !target.ItemId)
+        return false;
+
+    Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
+    if (!creature || !creature->IsAlive())
+        return false;
+    if (!CreatureIsInInteractRange(player, creature))
+        return false;
+
+    Item* item = player->GetItemByEntry(target.ItemId);
+    if (!item)
+        return false;
+    if (player->CanUseItem(item) != EQUIP_ERR_OK)
+        return false;
+
+    uint32 const spellId = GetItemOnUseSpellId(item);
+    if (!spellId)
+        return false;
+
+    QueueUseItem(player, item, target.CreatureGuid, spellId);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_USE_ITEM with {} on {} for quest {}.",
+        player->GetName(), item->GetGUID().ToString(), target.CreatureGuid.ToString(), target.QuestId);
     return true;
 }
 

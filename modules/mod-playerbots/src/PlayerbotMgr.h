@@ -69,6 +69,7 @@ struct PlayerbotRecord
     PlayerbotClient::QuestTarget QuestTarget;
     PlayerbotClient::CombatTarget CombatTarget;
     PlayerbotClient::GameObjectTarget GameObjectTarget;
+    PlayerbotClient::UseItemOnUnitTarget UseItemOnUnitTarget;
     PlayerbotClient::ItemLootTarget ItemLootTarget;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     PlayerbotWalker Walker;
@@ -108,6 +109,7 @@ private:
     bool UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);
     bool BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::GameObjectTarget const& target);
+    bool BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::UseItemOnUnitTarget const& target);
     bool BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target);
     bool BeginItemLootTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);
     bool BeginItemWork(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);

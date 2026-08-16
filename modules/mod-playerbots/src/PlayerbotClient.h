@@ -21,6 +21,7 @@
 #include "ObjectGuid.h"
 #include "Optional.h"
 #include "Position.h"
+#include "UnitDefines.h"
 #include <unordered_set>
 
 class Player;
@@ -76,6 +77,13 @@ namespace PlayerbotClient
         bool LootCorpse = false;
     };
 
+    struct SpiritHealerTarget
+    {
+        ObjectGuid NpcGuid;
+        Position Pos;
+        float StopDistance = 0.25f;
+    };
+
     void QueueEnumCharacters(WorldSession* session);
     void QueuePlayerLogin(WorldSession* session, ObjectGuid characterGuid);
     void QueueCompleteCinematic(WorldSession* session);
@@ -92,6 +100,10 @@ namespace PlayerbotClient
     void QueueLootUnit(WorldSession* session, ObjectGuid creatureGuid);
     void QueueLootItem(WorldSession* session, ObjectGuid lootObj, uint8 lootListId);
     void QueueLootRelease(WorldSession* session, ObjectGuid unitGuid);
+    void QueueRepopRequest(WorldSession* session);
+    void QueueReclaimCorpse(WorldSession* session, ObjectGuid corpseGuid);
+    void QueueSpiritHealerActivate(WorldSession* session, ObjectGuid healerGuid);
+    void QueueStandStateChange(WorldSession* session, UnitStandStateType standState);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind);
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, int32 skipQuestId = 0);
@@ -106,6 +118,13 @@ namespace PlayerbotClient
     bool TryOpenLoot(Player* player, ObjectGuid creatureGuid);
     bool TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid creatureGuid, uint32 itemId);
     bool HasOpenLootOn(Player* player, ObjectGuid creatureGuid);
+    bool PlayerHasResurrectionSickness(Player const* player);
+    bool CorpseReclaimDelayFinished(Player const* player);
+    bool IsWithinCorpseReclaimRange(Player const* player);
+    bool HostilesWouldAggroAt(Player* player, Position const& at);
+    Optional<Position> PickCorpseStandPosition(Player* player);
+    Optional<SpiritHealerTarget> FindSpiritHealer(Player* player, Position const& nearPos);
+    bool TrySpiritHealer(Player* player, ObjectGuid healerGuid);
     Optional<GameObjectTarget> FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);

@@ -22,10 +22,23 @@
 #include "PlayerbotMovement.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
+#include "Position.h"
 #include <unordered_set>
 #include <vector>
 
 class Player;
+
+enum class PlayerbotDeathWork
+{
+    None,
+    WaitToRelease,
+    WaitForGhost,
+    WalkToCorpse,
+    WaitToReclaim,
+    WalkToHealer,
+    WaitToHeal,
+    SitRecover
+};
 
 struct PlayerbotRecord
 {
@@ -36,12 +49,23 @@ struct PlayerbotRecord
     bool CinematicSkipped = false;
     bool InitMoverQueued = false;
     bool QuestInteractQueued = false;
-    bool QuestSearchFailed = false;
     uint32 QuestArriveWaitMs = 0;
     uint32 QuestInteractWaitMs = 0;
     uint32 QuestSearchEmptyMs = 0;
     bool CombatSwingSent = false;
     bool LootOpenSent = false;
+    PlayerbotDeathWork Death = PlayerbotDeathWork::None;
+    uint32 DeathWaitMs = 0;
+    uint32 GhostMs = 0;
+    uint32 CampedMs = 0;
+    bool HadSickness = false;
+    bool GhostSettled = false;
+    bool RepopSent = false;
+    bool ReclaimSent = false;
+    bool HealerSent = false;
+    bool SitSent = false;
+    Position SpiritReleasePos;
+    ObjectGuid SpiritHealerGuid;
     PlayerbotClient::QuestTarget QuestTarget;
     PlayerbotClient::CombatTarget CombatTarget;
     PlayerbotClient::GameObjectTarget GameObjectTarget;
@@ -68,6 +92,13 @@ private:
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
     void ReplyTimeSync(WorldSession* session);
+    bool UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff);
+    void BeginDeath(PlayerbotRecord& bot, Player* player);
+    void ClearDeath(PlayerbotRecord& bot);
+    void ClearLivingWork(PlayerbotRecord& bot, Player* player);
+    bool BeginCorpseWalk(PlayerbotRecord& bot, Player* player);
+    bool BeginHealerWalk(PlayerbotRecord& bot, Player* player);
+    bool UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32 diff);
     void RecoverFailedWalk(PlayerbotRecord& bot, Player* player);
     bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking);
     bool TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId = 0, uint32 skipEntry = 0);

@@ -17,6 +17,7 @@
 
 #include "PlayerbotMgr.h"
 #include "Config.h"
+#include "Corpse.h"
 #include "Creature.h"
 #include "GameObject.h"
 #include "GameTime.h"
@@ -36,6 +37,12 @@ namespace
     constexpr float LOOT_SEARCH_RANGE = 10.0f;
     constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
+    constexpr uint32 RELEASE_WAIT_MS = 3000;
+    constexpr uint32 GHOST_SETTLE_MS = 500;
+    constexpr uint32 PACKET_RETRY_MS = 2000;
+    constexpr uint32 CAMPED_WAIT_MS = 20000;
+    constexpr uint32 GHOST_WAIT_LONG_MS = 180000;
+    constexpr uint32 GHOST_GIVE_UP_MS = 300000;
 }
 
 PlayerbotMgr* PlayerbotMgr::instance()
@@ -205,18 +212,8 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE.", player->GetName());
     }
 
-    if (!player->IsAlive())
-    {
-        if (!bot.QuestSearchFailed)
-        {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} died. The bot is standing still.", player->GetName());
-            ClearCombat(bot, player);
-            bot.QuestSearchFailed = true;
-        }
+    if (UpdateDeath(bot, player, diff))
         return;
-    }
-
-    bot.QuestSearchFailed = false;
 
     if (bot.Walker.IsMoving())
         bot.Walker.Update(player, diff);
@@ -490,6 +487,453 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
         bot.QuestSearchEmptyMs = 0;
     }
+}
+
+void PlayerbotMgr::BeginDeath(PlayerbotRecord& bot, Player* player)
+{
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} died. Waiting to release spirit.", player->GetName());
+    ClearLivingWork(bot, player);
+    ClearDeath(bot);
+    bot.Death = PlayerbotDeathWork::WaitToRelease;
+    bot.HadSickness = PlayerbotClient::PlayerHasResurrectionSickness(player);
+}
+
+void PlayerbotMgr::ClearDeath(PlayerbotRecord& bot)
+{
+    bot.Death = PlayerbotDeathWork::None;
+    bot.DeathWaitMs = 0;
+    bot.GhostMs = 0;
+    bot.CampedMs = 0;
+    bot.HadSickness = false;
+    bot.GhostSettled = false;
+    bot.RepopSent = false;
+    bot.ReclaimSent = false;
+    bot.HealerSent = false;
+    bot.SitSent = false;
+    bot.SpiritReleasePos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    bot.SpiritHealerGuid.Clear();
+}
+
+void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
+{
+    if (bot.Walker.IsMoving())
+        bot.Walker.Stop(player);
+
+    ClearCombat(bot, player);
+    ClearItemLoot(bot);
+    bot.QuestInteractQueued = false;
+    bot.QuestArriveWaitMs = 0;
+    bot.QuestInteractWaitMs = 0;
+    bot.QuestSearchEmptyMs = 0;
+    bot.QuestTarget = {};
+    bot.GameObjectTarget = {};
+    bot.UnreachableGuids.clear();
+    bot.Walker.Reset();
+}
+
+bool PlayerbotMgr::UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    if (!player->GetSession())
+        return false;
+
+    if (player->IsInCombat() || PlayerbotClient::FindAttackerTarget(player))
+    {
+        if (player->IsSitState())
+        {
+            PlayerbotClient::QueueStandStateChange(player->GetSession(), UNIT_STAND_STATE_STAND);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stood up; combat started before health was full.", player->GetName());
+        }
+        ClearDeath(bot);
+        return false;
+    }
+
+    if (player->GetHealth() >= player->GetMaxHealth())
+    {
+        if (player->IsSitState())
+        {
+            PlayerbotClient::QueueStandStateChange(player->GetSession(), UNIT_STAND_STATE_STAND);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} health is full. Standing and returning to the living brain.", player->GetName());
+        }
+        ClearDeath(bot);
+        return false;
+    }
+
+    if (!player->IsSitState())
+    {
+        bot.DeathWaitMs += diff;
+        if (!bot.SitSent || bot.DeathWaitMs >= PACKET_RETRY_MS)
+        {
+            PlayerbotClient::QueueStandStateChange(player->GetSession(), UNIT_STAND_STATE_SIT);
+            bot.SitSent = true;
+            bot.DeathWaitMs = 0;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_STAND_STATE_CHANGE sit until health is full.", player->GetName());
+        }
+    }
+
+    return true;
+}
+
+bool PlayerbotMgr::BeginCorpseWalk(PlayerbotRecord& bot, Player* player)
+{
+    if (!player->HasCorpse() || player->GetCorpseLocation().GetMapId() != player->GetMapId())
+        return false;
+
+    Optional<Position> standPos = PlayerbotClient::PickCorpseStandPosition(player);
+    if (!standPos)
+        return false;
+
+    if (bot.Walker.IsMoving())
+        bot.Walker.Stop(player);
+
+    bot.Walker.Reset();
+    bot.Death = PlayerbotDeathWork::WalkToCorpse;
+    bot.DeathWaitMs = 0;
+    bot.CampedMs = 0;
+    bot.ReclaimSent = false;
+    bot.QuestArriveWaitMs = 0;
+
+    bool const hot = PlayerbotClient::HostilesWouldAggroAt(player, player->GetCorpseLocation());
+    if (hot)
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} the reclaim circle is hot. Ghost-walking to the side of the corpse.", player->GetName());
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} ghost-walking to the corpse.", player->GetName());
+
+    if (player->GetExactDist(*standPos) <= 0.25f)
+    {
+        bot.Death = PlayerbotDeathWork::WaitToReclaim;
+        return true;
+    }
+
+    if (!bot.Walker.Start(player, *standPos, 0.25f))
+        return false;
+
+    return true;
+}
+
+bool PlayerbotMgr::BeginHealerWalk(PlayerbotRecord& bot, Player* player)
+{
+    if (bot.Walker.IsMoving())
+        bot.Walker.Stop(player);
+
+    bot.Walker.Reset();
+    bot.Death = PlayerbotDeathWork::WalkToHealer;
+    bot.DeathWaitMs = 0;
+    bot.HealerSent = false;
+    bot.QuestArriveWaitMs = 0;
+    bot.SpiritHealerGuid.Clear();
+
+    Position nearPos = bot.SpiritReleasePos;
+    if (nearPos.GetPositionX() == 0.0f && nearPos.GetPositionY() == 0.0f)
+        nearPos = player->GetPosition();
+
+    Optional<PlayerbotClient::SpiritHealerTarget> healer = PlayerbotClient::FindSpiritHealer(player, nearPos);
+    if (healer)
+    {
+        bot.SpiritHealerGuid = healer->NpcGuid;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to spirit healer {}.",
+            player->GetName(), healer->NpcGuid.ToString());
+
+        if (player->GetExactDist(healer->Pos) <= healer->StopDistance)
+        {
+            bot.Death = PlayerbotDeathWork::WaitToHeal;
+            return true;
+        }
+
+        if (bot.Walker.Start(player, healer->Pos, healer->StopDistance))
+            return true;
+
+        bot.SpiritHealerGuid.Clear();
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking back to the graveyard for the spirit healer.", player->GetName());
+    if (player->GetExactDist(nearPos) <= 2.0f)
+        return true;
+
+    return bot.Walker.Start(player, nearPos, 2.0f);
+}
+
+bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    if (!player)
+        return false;
+
+    if (player->IsAlive())
+    {
+        if (bot.Death == PlayerbotDeathWork::None)
+            return false;
+
+        if (bot.Death == PlayerbotDeathWork::SitRecover)
+            return UpdateSitRecover(bot, player, diff);
+
+        if (bot.Walker.IsMoving())
+            bot.Walker.Stop(player);
+
+        bot.Death = PlayerbotDeathWork::SitRecover;
+        bot.SitSent = false;
+        bot.DeathWaitMs = 0;
+        bot.Walker.Reset();
+        uint64 const maxHealth = player->GetMaxHealth() ? player->GetMaxHealth() : 1;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is alive at {:.0f}% health. Sitting to recover.",
+            player->GetName(), 100.0f * float(player->GetHealth()) / float(maxHealth));
+        return UpdateSitRecover(bot, player, diff);
+    }
+
+    if (bot.Death == PlayerbotDeathWork::None || bot.Death == PlayerbotDeathWork::SitRecover)
+        BeginDeath(bot, player);
+
+    bool const isGhost = player->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+
+    if (!isGhost)
+    {
+        bot.DeathWaitMs += diff;
+        if (bot.RepopSent)
+        {
+            if (bot.DeathWaitMs >= PACKET_RETRY_MS)
+            {
+                bot.RepopSent = false;
+                bot.DeathWaitMs = 0;
+            }
+            return true;
+        }
+
+        if (bot.DeathWaitMs < RELEASE_WAIT_MS)
+            return true;
+
+        PlayerbotClient::QueueRepopRequest(player->GetSession());
+        bot.RepopSent = true;
+        bot.DeathWaitMs = 0;
+        bot.Death = PlayerbotDeathWork::WaitForGhost;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_REPOP_REQUEST.", player->GetName());
+        return true;
+    }
+
+    bot.GhostMs += diff;
+
+    if (player->IsBeingTeleported())
+        return true;
+
+    if (!bot.GhostSettled)
+    {
+        bot.DeathWaitMs += diff;
+        bot.Death = PlayerbotDeathWork::WaitForGhost;
+        if (bot.DeathWaitMs < GHOST_SETTLE_MS)
+            return true;
+
+        bot.SpiritReleasePos = player->GetPosition();
+        bot.GhostSettled = true;
+        bot.DeathWaitMs = 0;
+    }
+
+    if (bot.Death == PlayerbotDeathWork::WaitForGhost)
+    {
+        if (bot.HadSickness || PlayerbotClient::PlayerHasResurrectionSickness(player))
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} already has resurrection sickness. Using the spirit healer.", player->GetName());
+            if (!BeginHealerWalk(bot, player))
+            {
+                bot.Death = PlayerbotDeathWork::WalkToHealer;
+                bot.DeathWaitMs = 0;
+            }
+            return true;
+        }
+
+        if (!BeginCorpseWalk(bot, player))
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot corpse walk. Using the spirit healer.", player->GetName());
+            if (!BeginHealerWalk(bot, player))
+            {
+                bot.Death = PlayerbotDeathWork::WalkToHealer;
+                bot.DeathWaitMs = 0;
+            }
+        }
+        return true;
+    }
+
+    if (bot.Walker.IsMoving())
+        bot.Walker.Update(player, diff);
+
+    if (bot.Death == PlayerbotDeathWork::WalkToCorpse)
+    {
+        if (bot.Walker.HasFailed() || bot.GhostMs >= GHOST_GIVE_UP_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} corpse walk failed or stuck. Using the spirit healer.", player->GetName());
+            BeginHealerWalk(bot, player);
+            return true;
+        }
+
+        if (bot.Walker.HasArrived() || bot.Walker.IsIdle())
+        {
+            bot.Death = PlayerbotDeathWork::WaitToReclaim;
+            bot.DeathWaitMs = 0;
+            bot.CampedMs = 0;
+            bot.ReclaimSent = false;
+        }
+        return true;
+    }
+
+    if (bot.Death == PlayerbotDeathWork::WaitToReclaim)
+    {
+        if (bot.GhostMs >= GHOST_WAIT_LONG_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has been a ghost a long time. Using the spirit healer.", player->GetName());
+            BeginHealerWalk(bot, player);
+            return true;
+        }
+
+        if (PlayerbotClient::HostilesWouldAggroAt(player, *player))
+        {
+            bot.CampedMs += diff;
+            Optional<Position> side = PlayerbotClient::PickCorpseStandPosition(player);
+            if (side && player->GetExactDist(*side) > 1.0f && !bot.Walker.IsMoving())
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} the reclaim circle is still hot. Standing to the side.", player->GetName());
+                if (bot.Walker.Start(player, *side, 0.25f))
+                {
+                    bot.Death = PlayerbotDeathWork::WalkToCorpse;
+                    return true;
+                }
+            }
+
+            if (bot.CampedMs >= CAMPED_WAIT_MS)
+            {
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} body is camped. Using the spirit healer.", player->GetName());
+                BeginHealerWalk(bot, player);
+                return true;
+            }
+            return true;
+        }
+
+        bot.CampedMs = 0;
+
+        if (!PlayerbotClient::IsWithinCorpseReclaimRange(player))
+        {
+            if (!bot.Walker.IsMoving())
+            {
+                Optional<Position> standPos = PlayerbotClient::PickCorpseStandPosition(player);
+                if (standPos && bot.Walker.Start(player, *standPos, 0.25f))
+                    bot.Death = PlayerbotDeathWork::WalkToCorpse;
+            }
+            return true;
+        }
+
+        if (bot.ReclaimSent)
+        {
+            bot.DeathWaitMs += diff;
+            if (bot.DeathWaitMs >= PACKET_RETRY_MS)
+            {
+                bot.ReclaimSent = false;
+                bot.DeathWaitMs = 0;
+            }
+            return true;
+        }
+
+        if (!PlayerbotClient::CorpseReclaimDelayFinished(player) || !PlayerbotClient::IsWithinCorpseReclaimRange(player))
+            return true;
+
+        Corpse* corpse = player->GetCorpse();
+        if (!corpse)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no corpse to reclaim. Using the spirit healer.", player->GetName());
+            BeginHealerWalk(bot, player);
+            return true;
+        }
+
+        PlayerbotClient::QueueReclaimCorpse(player->GetSession(), corpse->GetGUID());
+        bot.ReclaimSent = true;
+        bot.DeathWaitMs = 0;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_RECLAIM_CORPSE.", player->GetName());
+        return true;
+    }
+
+    if (bot.Death == PlayerbotDeathWork::WalkToHealer)
+    {
+        if (bot.Walker.HasFailed())
+        {
+            bot.Walker.Reset();
+            bot.DeathWaitMs = 0;
+        }
+
+        if (bot.Walker.IsMoving())
+            return true;
+
+        if (!bot.SpiritHealerGuid.IsEmpty())
+        {
+            bot.Death = PlayerbotDeathWork::WaitToHeal;
+            bot.DeathWaitMs = 0;
+            bot.HealerSent = false;
+            return true;
+        }
+
+        if (Optional<PlayerbotClient::SpiritHealerTarget> healer = PlayerbotClient::FindSpiritHealer(player, player->GetPosition()))
+        {
+            bot.SpiritHealerGuid = healer->NpcGuid;
+            if (player->GetExactDist(healer->Pos) <= healer->StopDistance)
+            {
+                bot.Death = PlayerbotDeathWork::WaitToHeal;
+                bot.DeathWaitMs = 0;
+                bot.HealerSent = false;
+                return true;
+            }
+            if (bot.Walker.Start(player, healer->Pos, healer->StopDistance))
+                return true;
+            bot.SpiritHealerGuid.Clear();
+        }
+
+        bot.DeathWaitMs += diff;
+        if (bot.DeathWaitMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has not found a spirit healer yet. Still looking.", player->GetName());
+            bot.DeathWaitMs = 0;
+            BeginHealerWalk(bot, player);
+        }
+        return true;
+    }
+
+    if (bot.Death == PlayerbotDeathWork::WaitToHeal)
+    {
+        if (bot.HealerSent)
+        {
+            bot.DeathWaitMs += diff;
+            if (bot.DeathWaitMs >= PACKET_RETRY_MS)
+            {
+                bot.HealerSent = false;
+                bot.DeathWaitMs = 0;
+            }
+            return true;
+        }
+
+        if (PlayerbotClient::TrySpiritHealer(player, bot.SpiritHealerGuid))
+        {
+            bot.HealerSent = true;
+            bot.DeathWaitMs = 0;
+            return true;
+        }
+
+        bot.DeathWaitMs += diff;
+        Creature* healer = ObjectAccessor::GetCreature(*player, bot.SpiritHealerGuid);
+        if (healer && healer->IsAlive()
+            && !player->IsWithinDistInMap(healer, healer->GetCombatReach() + 4.0f))
+        {
+            Position standPos;
+            float const standDistance = healer->GetCombatReach() + 1.0f;
+            if (PlayerbotWalker::PickApproachPosition(player, healer, standDistance, standPos)
+                && bot.Walker.Start(player, standPos, 0.25f))
+            {
+                bot.Death = PlayerbotDeathWork::WalkToHealer;
+                bot.DeathWaitMs = 0;
+                return true;
+            }
+        }
+
+        if (bot.DeathWaitMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            bot.DeathWaitMs = 0;
+            BeginHealerWalk(bot, player);
+        }
+        return true;
+    }
+
+    return true;
 }
 
 void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)

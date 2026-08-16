@@ -16,9 +16,11 @@
  */
 
 #include "PlayerbotClient.h"
+#include "Corpse.h"
 #include "Creature.h"
 #include "CreatureData.h"
 #include "DBCEnums.h"
+#include "DB2Stores.h"
 #include "GameObject.h"
 #include "GameTime.h"
 #include "GossipDef.h"
@@ -222,6 +224,47 @@ void PlayerbotClient::QueueLootRelease(WorldSession* session, ObjectGuid unitGui
 
     WorldPacket packet(CMSG_LOOT_RELEASE);
     packet << unitGuid;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueRepopRequest(WorldSession* session)
+{
+    if (!session)
+        return;
+
+    WorldPacket packet(CMSG_REPOP_REQUEST);
+    packet.WriteBit(false); // CheckInstance stays false
+    packet.FlushBits();
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueReclaimCorpse(WorldSession* session, ObjectGuid corpseGuid)
+{
+    if (!session || corpseGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_RECLAIM_CORPSE);
+    packet << corpseGuid;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueSpiritHealerActivate(WorldSession* session, ObjectGuid healerGuid)
+{
+    if (!session || healerGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_SPIRIT_HEALER_ACTIVATE);
+    packet << healerGuid;
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueStandStateChange(WorldSession* session, UnitStandStateType standState)
+{
+    if (!session)
+        return;
+
+    WorldPacket packet(CMSG_STAND_STATE_CHANGE);
+    packet << uint8(standState);
     session->QueuePacket(std::move(packet));
 }
 
@@ -572,6 +615,52 @@ namespace
         }
 
         return false;
+    }
+
+    bool CreatureWouldPullIfAlive(Player* player, Creature const* creature)
+    {
+        if (!player || !creature || !creature->IsAlive())
+            return false;
+        if (creature->IsCivilian() || creature->IsNeutralToAll())
+            return false;
+        if (creature->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) || creature->HasUnitFlag(UNIT_FLAG_IMMUNE_TO_PC))
+            return false;
+        if (player->IsValidAttackTarget(creature))
+            return true;
+        return creature->IsHostileTo(player);
+    }
+
+    bool SpiritHealerIsUsable(Player const* player, Creature const* creature)
+    {
+        if (!player || !creature || !creature->IsAlive())
+            return false;
+        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_SPIRIT_HEALER))
+            return false;
+        CreatureDifficulty const* difficulty = creature->GetCreatureDifficulty();
+        if (!difficulty || !(difficulty->TypeFlags & CREATURE_TYPE_FLAG_VISIBLE_TO_GHOSTS))
+            return false;
+        if (!player->InSamePhase(creature))
+            return false;
+        if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+            return false;
+        return true;
+    }
+
+    Optional<PlayerbotClient::SpiritHealerTarget> MakeSpiritHealerTarget(Player* player, Creature* creature)
+    {
+        if (!player || !creature)
+            return {};
+
+        Position standPos;
+        float const standDistance = creature->GetCombatReach() + 1.0f;
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+            return {};
+
+        PlayerbotClient::SpiritHealerTarget target;
+        target.NpcGuid = creature->GetGUID();
+        target.Pos = standPos;
+        target.StopDistance = 0.25f;
+        return target;
     }
 
     Optional<PlayerbotClient::ItemLootTarget> MakeItemLootTarget(Player* player, Creature* creature, int32 questId, uint32 itemId, bool lootCorpse)
@@ -1630,4 +1719,180 @@ bool PlayerbotClient::HasOpenLootOn(Player* player, ObjectGuid creatureGuid)
     }
 
     return false;
+}
+
+bool PlayerbotClient::PlayerHasResurrectionSickness(Player const* player)
+{
+    if (!player)
+        return false;
+
+    ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(player->GetRace());
+    if (!raceEntry || !raceEntry->ResSicknessSpellID)
+        return false;
+
+    return player->HasAura(uint32(raceEntry->ResSicknessSpellID));
+}
+
+bool PlayerbotClient::CorpseReclaimDelayFinished(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Corpse const* corpse = player->GetCorpse();
+    if (!corpse)
+        return false;
+
+    time_t const readyAt = time_t(corpse->GetGhostTime() + player->GetCorpseReclaimDelay(corpse->GetType() == CORPSE_RESURRECTABLE_PVP));
+    return readyAt <= time_t(GameTime::GetGameTime());
+}
+
+bool PlayerbotClient::IsWithinCorpseReclaimRange(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Corpse const* corpse = player->GetCorpse();
+    if (corpse)
+        return corpse->IsWithinDistInMap(player, CORPSE_RECLAIM_RADIUS, true);
+
+    if (!player->HasCorpse())
+        return false;
+
+    WorldLocation const& loc = player->GetCorpseLocation();
+    if (loc.GetMapId() != player->GetMapId())
+        return false;
+
+    return player->GetExactDist(loc) <= float(CORPSE_RECLAIM_RADIUS);
+}
+
+bool PlayerbotClient::HostilesWouldAggroAt(Player* player, Position const& at)
+{
+    if (!player || !player->GetMap())
+        return false;
+
+    Map* map = player->GetMap();
+    if (!map->IsGridLoaded(at))
+        map->LoadGrid(at.GetPositionX(), at.GetPositionY());
+
+    for (auto const& pair : map->GetCreatureBySpawnIdStore())
+    {
+        Creature* creature = pair.second;
+        if (!CreatureWouldPullIfAlive(player, creature))
+            continue;
+
+        float const pullRange = creature->GetAttackDistance(player) + creature->GetCombatReach();
+        if (creature->GetExactDist(at) <= pullRange)
+            return true;
+    }
+
+    return false;
+}
+
+Optional<Position> PlayerbotClient::PickCorpseStandPosition(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap() || !player->HasCorpse())
+        return {};
+
+    WorldLocation const& loc = player->GetCorpseLocation();
+    if (loc.GetMapId() != player->GetMapId())
+        return {};
+
+    Map* map = player->GetMap();
+    if (!map->IsGridLoaded(loc))
+        map->LoadGrid(loc.GetPositionX(), loc.GetPositionY());
+
+    Corpse* corpse = player->GetCorpse();
+    bool const hot = HostilesWouldAggroAt(player, loc);
+    float const sideDistances[] = { 32.0f, 35.0f, 28.0f, 24.0f };
+
+    if (corpse)
+    {
+        if (hot)
+        {
+            for (float standDistance : sideDistances)
+            {
+                if (standDistance >= float(CORPSE_RECLAIM_RADIUS))
+                    continue;
+
+                Position standPos;
+                if (!PlayerbotWalker::PickApproachPosition(player, corpse, standDistance, standPos))
+                    continue;
+                if (corpse->GetExactDist(standPos) > float(CORPSE_RECLAIM_RADIUS))
+                    continue;
+                if (HostilesWouldAggroAt(player, standPos))
+                    continue;
+                return standPos;
+            }
+
+            Position standPos;
+            if (PlayerbotWalker::PickApproachPosition(player, corpse, sideDistances[0], standPos)
+                && corpse->GetExactDist(standPos) <= float(CORPSE_RECLAIM_RADIUS))
+                return standPos;
+        }
+        else
+        {
+            Position standPos;
+            if (PlayerbotWalker::PickApproachPosition(player, corpse, 2.0f, standPos))
+                return standPos;
+        }
+    }
+
+    Position fallback;
+    fallback.Relocate(loc);
+    return fallback;
+}
+
+Optional<PlayerbotClient::SpiritHealerTarget> PlayerbotClient::FindSpiritHealer(Player* player, Position const& nearPos)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    Map* map = player->GetMap();
+    if (!map->IsGridLoaded(nearPos))
+        map->LoadGrid(nearPos.GetPositionX(), nearPos.GetPositionY());
+
+    Creature* best = nullptr;
+    float bestDist = std::numeric_limits<float>::max();
+
+    for (auto const& pair : map->GetCreatureBySpawnIdStore())
+    {
+        Creature* creature = pair.second;
+        if (!SpiritHealerIsUsable(player, creature))
+            continue;
+
+        float const dist = nearPos.GetExactDist(*creature);
+        if (dist >= bestDist)
+            continue;
+
+        bestDist = dist;
+        best = creature;
+    }
+
+    if (!best)
+        return {};
+
+    Optional<SpiritHealerTarget> target = MakeSpiritHealerTarget(player, best);
+    if (!target)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside spirit healer {} without standing in a spell focus.",
+            player->GetName(), best->GetGUID().ToString());
+        return {};
+    }
+
+    return target;
+}
+
+bool PlayerbotClient::TrySpiritHealer(Player* player, ObjectGuid healerGuid)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || healerGuid.IsEmpty())
+        return false;
+
+    if (!player->GetNPCIfCanInteractWith(healerGuid, UNIT_NPC_FLAG_SPIRIT_HEALER, UNIT_NPC_FLAG_2_NONE))
+        return false;
+
+    QueueSetSelection(player->GetSession(), healerGuid);
+    QueueSpiritHealerActivate(player->GetSession(), healerGuid);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_SPIRIT_HEALER_ACTIVATE on {}.",
+        player->GetName(), healerGuid.ToString());
+    return true;
 }

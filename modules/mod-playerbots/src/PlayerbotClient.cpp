@@ -1205,6 +1205,20 @@ namespace
         return SPELL_CAST_OK;
     }
 
+    SpellCastResult CheckUseItemCast(Player* player, Item* item, Unit* target, SpellInfo const* spellInfo)
+    {
+        if (!player || !item || !target || !spellInfo)
+            return SPELL_FAILED_UNKNOWN;
+
+        Spell* look = new Spell(player, spellInfo, TRIGGERED_NONE);
+        look->m_fromClient = true;
+        look->m_CastItem = item;
+        look->m_targets.SetUnitTarget(target);
+        SpellCastResult const result = look->CheckCast(true);
+        delete look;
+        return result;
+    }
+
     bool CreatureIsInInteractRange(Player const* player, Creature const* creature)
     {
         if (!player || !creature)
@@ -3001,33 +3015,75 @@ bool PlayerbotClient::TryUseGameObject(Player* player, GameObjectTarget const& t
     return true;
 }
 
-bool PlayerbotClient::TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target)
+PlayerbotClient::UseItemLook PlayerbotClient::LookUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target)
 {
-    if (!player || !player->IsInWorld() || !player->GetSession() || target.CreatureGuid.IsEmpty() || !target.ItemId)
-        return false;
+    if (!player || !player->IsInWorld() || !player->GetSession() || !player->GetMap()
+        || target.CreatureGuid.IsEmpty() || !target.ItemId)
+        return UseItemLook::Cannot;
 
     Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
     if (!creature || !creature->IsAlive())
-        return false;
+        return UseItemLook::Cannot;
     if (!CreatureIsInInteractRange(player, creature))
-        return false;
+        return UseItemLook::Cannot;
     if (!ItemSpellCanTargetCreature(player, target.ItemId, creature))
-        return false;
+        return UseItemLook::Cannot;
+
+    Item* item = player->GetItemByEntry(target.ItemId);
+    if (!item || player->CanUseItem(item) != EQUIP_ERR_OK)
+        return UseItemLook::Cannot;
+
+    uint32 const spellId = GetItemOnUseSpellId(item);
+    SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID()) : nullptr;
+    if (!spellInfo)
+        return UseItemLook::Cannot;
+
+    if (player->IsNonMeleeSpellCast(false, false, true) || !CombatSpellIsReady(player, spellInfo)
+        || CombatSpellAlreadyQueued(player, spellInfo) || !player->CanRequestSpellCast(spellInfo, player))
+        return UseItemLook::Wait;
+
+    SpellCastResult const result = CheckUseItemCast(player, item, creature, spellInfo);
+    if (result == SPELL_CAST_OK)
+        return UseItemLook::Press;
+    if (result == SPELL_FAILED_UNIT_NOT_INFRONT)
+        return UseItemLook::Face;
+    if (result == SPELL_FAILED_SPELL_IN_PROGRESS || result == SPELL_FAILED_NOT_READY)
+        return UseItemLook::Wait;
+
+    return UseItemLook::Cannot;
+}
+
+uint32 PlayerbotClient::TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || !player->GetMap()
+        || target.CreatureGuid.IsEmpty() || !target.ItemId)
+        return 0;
+
+    Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
+    if (!creature || !creature->IsAlive())
+        return 0;
+    if (!CreatureIsInInteractRange(player, creature))
+        return 0;
+    if (!ItemSpellCanTargetCreature(player, target.ItemId, creature))
+        return 0;
 
     Item* item = player->GetItemByEntry(target.ItemId);
     if (!item)
-        return false;
+        return 0;
     if (player->CanUseItem(item) != EQUIP_ERR_OK)
-        return false;
+        return 0;
 
     uint32 const spellId = GetItemOnUseSpellId(item);
     if (!spellId)
-        return false;
+        return 0;
+
+    if (player->GetTarget() != target.CreatureGuid)
+        QueueSetSelection(player->GetSession(), target.CreatureGuid);
 
     QueueUseItem(player, item, target.CreatureGuid, spellId);
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_USE_ITEM with {} on {} for quest {}.",
         player->GetName(), item->GetGUID().ToString(), target.CreatureGuid.ToString(), target.QuestId);
-    return true;
+    return spellId;
 }
 
 bool PlayerbotClient::TryOpenLoot(Player* player, ObjectGuid creatureGuid)

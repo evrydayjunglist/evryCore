@@ -57,6 +57,11 @@ struct PlayerbotRecord
     bool CombatCastPending = false;
     uint32 CombatCastWaitMs = 0;
     bool CombatFacingWait = false;
+    bool UseItemCastPending = false;
+    bool UseItemCastSeenGcd = false;
+    bool UseItemFacingWait = false;
+    uint32 UseItemCastSpellId = 0;
+    uint32 UseItemCastWaitMs = 0;
     bool LootOpenSent = false;
     PlayerbotDeathWork Death = PlayerbotDeathWork::None;
     uint32 DeathWaitMs = 0;
@@ -124,6 +129,7 @@ private:
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);
     bool BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::GameObjectTarget const& target);
     bool BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::UseItemOnUnitTarget const& target);
+    bool UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target);
     bool BeginItemLootTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);
     bool BeginItemWork(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);

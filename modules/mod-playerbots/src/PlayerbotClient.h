@@ -119,6 +119,14 @@ namespace PlayerbotClient
         bool WalkCloser = false;
     };
 
+    enum class UseItemLook
+    {
+        Cannot,
+        Wait,
+        Face,
+        Press
+    };
+
     // KeepQuest: only this quest and entry. Otherwise QuestId/Entry skip that objective's map markers.
     struct MapYellowFilter
     {
@@ -195,6 +203,7 @@ namespace PlayerbotClient
     Optional<UseItemOnUnitTarget> FindNearbyUseItemOnUnitTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<UseItemOnUnitTarget> FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUnitTarget const& target);
+    UseItemLook LookUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target);
     bool TryInteractQuest(Player* player, QuestTarget const& target);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
     bool TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId);
@@ -203,7 +212,7 @@ namespace PlayerbotClient
     bool CombatSpellIsMelee(SpellInfo const* spellInfo);
     float CombatSpellMaxRange(Player const* player, Unit const* target, SpellInfo const* spellInfo);
     bool TryUseGameObject(Player* player, GameObjectTarget const& target);
-    bool TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target);
+    uint32 TryUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target);
 }
 
 #endif

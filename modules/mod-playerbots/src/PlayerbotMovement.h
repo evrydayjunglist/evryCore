@@ -83,6 +83,7 @@ private:
     bool _startedOnAFace = false;
     uint32 _lipSteps = 0;
     float _lipDestDist = 0.0f;
+    float _lipStartDestDist = 0.0f;
     float _contourDirX = 0.0f;
     float _contourDirY = 0.0f;
 };

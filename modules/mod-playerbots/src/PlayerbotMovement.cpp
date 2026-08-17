@@ -427,18 +427,14 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     }
 
     bool const sameDest = _destination.GetExactDist(destination) < 1.0f;
-    // Already walking legal ground beside this face. Do not rebuild mmap from the same feet.
-    if (_contouring && _state == State::Moving && sameDest)
+    // Already walking this dest. Do not rebuild mmap from the same feet.
+    if (_state == State::Moving && sameDest)
         return true;
 
     uint32 const savedLipSteps = sameDest ? _lipSteps : 0;
     float const savedLipDestDist = sameDest ? _lipDestDist : 0.0f;
     float const savedCx = sameDest ? _contourDirX : 0.0f;
     float const savedCy = sameDest ? _contourDirY : 0.0f;
-    bool const keepFeet = _state == State::Moving && sameDest;
-    Position from;
-    if (keepFeet)
-        from = _lastGrounded;
 
     Reset();
     _lipSteps = savedLipSteps;
@@ -446,14 +442,12 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     _contourDirX = savedCx;
     _contourDirY = savedCy;
 
-    if (!keepFeet)
-    {
-        float x = player->GetPositionX();
-        float y = player->GetPositionY();
-        float z = player->GetPositionZ();
-        player->UpdateAllowedPositionZ(x, y, z);
-        from.Relocate(x, y, z, player->GetOrientation());
-    }
+    float x = player->GetPositionX();
+    float y = player->GetPositionY();
+    float z = player->GetPositionZ();
+    player->UpdateAllowedPositionZ(x, y, z);
+    Position from;
+    from.Relocate(x, y, z, player->GetOrientation());
 
     _destination = destination;
     _stopDistance = stopDistance;
@@ -557,10 +551,14 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
         if (_contouring && pathDone)
         {
-            if (TryCommitMmap(player, _lastGrounded, true))
-                return;
-            if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, true))
-                return;
+            // Walk the ring until a step toward dest is legal. Do not rebuild the same mmap from the same toes.
+            if (StepTowardDestIsLegal(player))
+            {
+                if (TryCommitMmap(player, _lastGrounded, true))
+                    return;
+                if (WalkLegalDestStep(player, true))
+                    return;
+            }
             if (!ContinueContour(player, true))
                 FailNoLegalRing(player);
             return;
@@ -1096,6 +1094,8 @@ bool PlayerbotWalker::WalkLegalDestStep(Player* player, bool alreadyMoving)
 void PlayerbotWalker::RefuseSteepStep(Player* player, Position const& /*attempted*/)
 {
     // Keep FORWARD. A player turns onto the flat beside a face or a wall; they do not stop and start on the same toes.
+    if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, true))
+        return;
     if (ContinueContour(player, true))
         return;
 

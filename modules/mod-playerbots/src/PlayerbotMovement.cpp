@@ -186,6 +186,35 @@ namespace
         return true;
     }
 
+    // One heartbeat can sit on the toe of a ridge. Sample the local look toward a heading, cell by cell.
+    bool LookAheadIsWalkable(Player* player, Position const& feet, float dirX, float dirY, float lookDist)
+    {
+        if (!player || lookDist < 0.05f)
+            return false;
+
+        float const stepLen = HeartbeatStepLen(player);
+        if (stepLen < 0.05f)
+            return false;
+
+        Position prev = feet;
+        float sampled = 0.0f;
+        while (sampled + 0.05f < lookDist)
+        {
+            float const nextDist = std::min(lookDist, sampled + (sampled < 0.01f ? stepLen : LIP_LOOK_CELL));
+            float const x = feet.GetPositionX() + dirX * nextDist;
+            float const y = feet.GetPositionY() + dirY * nextDist;
+            Position cell;
+            if (!PlantFromFeet(player, prev, x, y, 0.0f, cell))
+                return false;
+            if (!GroundedStepIsWalkable(player, prev, cell))
+                return false;
+            prev = cell;
+            sampled = nextDist;
+        }
+
+        return true;
+    }
+
     struct AvoidCircle
     {
         float x = 0.0f;
@@ -551,7 +580,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
         if (_contouring && pathDone)
         {
-            // Walk the ring until a step toward dest is legal. Do not rebuild the same mmap from the same toes.
+            // Walk the ring until dest is open across the local look. A 0.7-yard poke is the toe of a ridge.
             if (StepTowardDestIsLegal(player))
             {
                 if (TryCommitMmap(player, _lastGrounded, true))
@@ -705,6 +734,43 @@ bool PlayerbotWalker::FirstGroundedStepIsLegal(Player* player)
     return GroundedStepIsWalkable(player, _lastGrounded, first);
 }
 
+bool PlayerbotWalker::MmapLookIsLegal(Player* player)
+{
+    if (!player)
+        return false;
+
+    float const stepLen = HeartbeatStepLen(player);
+    if (stepLen < 0.05f)
+        return false;
+
+    Position prev = _lastGrounded;
+    for (float d = stepLen; d <= LIP_LOOK_RADIUS + 0.01f; d += LIP_LOOK_CELL)
+    {
+        Position planted;
+        if (!PeekGroundedStep(player, d, planted))
+            return false;
+        if (planted.GetExactDist(prev) < 0.05f)
+            break;
+        if (!GroundedStepIsWalkable(player, prev, planted))
+            return false;
+        prev = planted;
+    }
+
+    return true;
+}
+
+void PlayerbotWalker::NoteLipDestProgress()
+{
+    float const destDist = _lastGrounded.GetExactDist(_destination);
+    if (_lipDestDist <= 0.0f)
+        _lipDestDist = destDist;
+    else if (destDist + LIP_DEST_PROGRESS_YARDS < _lipDestDist)
+    {
+        _lipSteps = 0;
+        _lipDestDist = destDist;
+    }
+}
+
 bool PlayerbotWalker::StepTowardDestIsLegal(Player* player) const
 {
     if (!player)
@@ -721,16 +787,8 @@ bool PlayerbotWalker::StepTowardDestIsLegal(Player* player) const
 
     dx /= len;
     dy /= len;
-    float const stepLen = HeartbeatStepLen(player);
-    if (stepLen < 0.05f)
-        return false;
-
-    float x = feet.GetPositionX() + dx * stepLen;
-    float y = feet.GetPositionY() + dy * stepLen;
-    Position next;
-    if (!PlantFromFeet(player, feet, x, y, 0.0f, next))
-        return false;
-    return GroundedStepIsWalkable(player, feet, next);
+    float const lookDist = std::min(LIP_LOOK_RADIUS, std::max(0.0f, len - _stopDistance));
+    return LookAheadIsWalkable(player, feet, dx, dy, lookDist);
 }
 
 bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Position const& destination, std::vector<G3D::Vector3>& outPath)
@@ -840,7 +898,7 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
     _pointIndex = 0;
     _segmentProgress = 0.0f;
 
-    if (!FirstGroundedStepIsLegal(player))
+    if (!MmapLookIsLegal(player))
     {
         _path = std::move(savedPath);
         _pointIndex = savedIndex;
@@ -1023,14 +1081,7 @@ bool PlayerbotWalker::ContinueContour(Player* player, bool alreadyMoving)
     if (!player || !player->GetSession())
         return false;
 
-    float const destDist = _lastGrounded.GetExactDist(_destination);
-    if (_lipDestDist <= 0.0f)
-        _lipDestDist = destDist;
-    else if (destDist + LIP_DEST_PROGRESS_YARDS < _lipDestDist)
-    {
-        _lipSteps = 0;
-        _lipDestDist = destDist;
-    }
+    NoteLipDestProgress();
 
     if (_lipSteps >= LIP_MAX_STEPS)
         return false;
@@ -1059,6 +1110,10 @@ bool PlayerbotWalker::ContinueContour(Player* player, bool alreadyMoving)
 bool PlayerbotWalker::WalkLegalDestStep(Player* player, bool alreadyMoving)
 {
     if (!player || !player->GetSession())
+        return false;
+
+    NoteLipDestProgress();
+    if (_lipSteps >= LIP_MAX_STEPS)
         return false;
 
     Position const& feet = _lastGrounded;

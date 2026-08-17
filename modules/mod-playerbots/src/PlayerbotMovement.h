@@ -55,7 +55,9 @@ private:
     Position Advance(float distance);
     bool PeekGroundedStep(Player* player, float distance, Position& out);
     bool FirstGroundedStepIsLegal(Player* player);
+    bool MmapLookIsLegal(Player* player);
     bool StepTowardDestIsLegal(Player* player) const;
+    void NoteLipDestProgress();
     bool BuildMmapPath(Player* player, Position const& from, Position const& destination, std::vector<G3D::Vector3>& outPath);
     bool TryCommitMmap(Player* player, Position const& from, bool alreadyMoving);
     bool FindLipSidestep(Player* player, Position& out) const;

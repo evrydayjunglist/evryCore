@@ -1752,14 +1752,20 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
 
         Position standPos;
         float const standDistance = creature->GetCombatReach() + 1.0f;
-        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+        if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
+            && player->GetExactDist(standPos) > bot.CombatTarget.StopDistance
+            && bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance))
+        {
+            bot.CombatTarget.Pos = standPos;
+            return true;
+        }
+
+        Position const dest = creature->GetPosition();
+        if (player->GetExactDist(dest) <= bot.CombatTarget.StopDistance)
             return failCloseInWalk();
 
-        bot.CombatTarget.Pos = standPos;
-        if (player->GetExactDist(standPos) <= bot.CombatTarget.StopDistance)
-            return failCloseInWalk();
-
-        if (!bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance))
+        bot.CombatTarget.Pos = dest;
+        if (!bot.Walker.Start(player, dest, bot.CombatTarget.StopDistance))
             return failCloseInWalk();
 
         return true;

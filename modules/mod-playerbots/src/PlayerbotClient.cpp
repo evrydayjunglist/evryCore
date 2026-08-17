@@ -928,22 +928,15 @@ namespace
         target.QuestId = questId;
         target.CreditEntry = creditEntry;
 
-        Position standPos;
-        float const standDistance = creature->GetCombatReach() + 1.0f;
-        if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
-        {
-            target.Pos = standPos;
-            return target;
-        }
-
-        // Already in melee: swing from her feet. Do not require a walkable stand point.
+        // Kill walks aim at the mob. A stand-beside pin is for talk and use, and it pathfinds from
+        // her feet. Doing that for every spawn every tick skips a cave full of quest mobs and never
+        // starts the walk. Melee range is still when she swings.
         if (player->IsWithinMeleeRange(creature))
-        {
             target.Pos = player->GetPosition();
-            return target;
-        }
+        else
+            target.Pos = creature->GetPosition();
 
-        return {};
+        return target;
     }
 
     uint32 HeldQuestStartItem(Player* player, uint32 questId)
@@ -1837,11 +1830,7 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
 
         Optional<CombatTarget> target = MakeCombatTarget(player, creature, matched->QuestId, matched->CreditEntry);
         if (!target)
-        {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
-                player->GetName(), creature->GetGUID().ToString());
             continue;
-        }
 
         bestDist = dist;
         best = *target;
@@ -2060,11 +2049,7 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
 
             Optional<CombatTarget> target = MakeCombatTarget(player, creature, credit.QuestId, credit.CreditEntry);
             if (!target)
-            {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
-                    player->GetName(), creature->GetGUID().ToString());
                 continue;
-            }
 
             bestCreatureDist = dist;
             bestCreatureTarget = *target;

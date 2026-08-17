@@ -2013,16 +2013,6 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
     }
 
     bool const inRange = InInteractRange(player, creature);
-    if (inRange && bot.Walker.IsMoving())
-    {
-        StopWalkToClick(bot, player, bot.UseItemOnUnitTarget.CreatureGuid);
-        bot.QuestArriveWaitMs = 0;
-        return true;
-    }
-
-    if (bot.Walker.IsMoving())
-        return false;
-
     PlayerbotClient::UseItemLook const look = PlayerbotClient::LookUseItemOnUnit(player, bot.UseItemOnUnitTarget);
     if (look == PlayerbotClient::UseItemLook::Wait)
     {
@@ -2042,7 +2032,13 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
 
     if (look == PlayerbotClient::UseItemLook::Press)
     {
-        StopWalkToClick(bot, player, bot.UseItemOnUnitTarget.CreatureGuid);
+        if (bot.Walker.IsMoving())
+        {
+            StopWalkToClick(bot, player, bot.UseItemOnUnitTarget.CreatureGuid);
+            bot.QuestArriveWaitMs = 0;
+            return true;
+        }
+
         uint32 const spellId = PlayerbotClient::TryUseItemOnUnit(player, bot.UseItemOnUnitTarget);
         if (!spellId)
             return false;
@@ -2055,11 +2051,15 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
         return true;
     }
 
-    if (!inRange)
+    if (bot.Walker.IsMoving())
+        return false;
+
+    if (look == PlayerbotClient::UseItemLook::Closer || !inRange)
     {
         Position standPos;
         float const standDistance = creature->GetCombatReach() + 1.0f;
         if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
+            && player->GetExactDist(standPos) > bot.UseItemOnUnitTarget.StopDistance
             && bot.Walker.Start(player, standPos, bot.UseItemOnUnitTarget.StopDistance))
         {
             bot.UseItemOnUnitTarget.Pos = standPos;

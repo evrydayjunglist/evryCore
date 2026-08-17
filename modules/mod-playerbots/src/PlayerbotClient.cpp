@@ -3052,6 +3052,8 @@ PlayerbotClient::UseItemLook PlayerbotClient::LookUseItemOnUnit(Player* player, 
         return UseItemLook::Press;
     if (result == SPELL_FAILED_UNIT_NOT_INFRONT)
         return UseItemLook::Face;
+    if (result == SPELL_FAILED_OUT_OF_RANGE)
+        return UseItemLook::Closer;
     if (result == SPELL_FAILED_SPELL_IN_PROGRESS || result == SPELL_FAILED_NOT_READY || result == SPELL_FAILED_MOVING)
         return UseItemLook::Wait;
 

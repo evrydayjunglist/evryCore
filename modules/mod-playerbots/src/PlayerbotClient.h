@@ -124,6 +124,7 @@ namespace PlayerbotClient
         Cannot,
         Wait,
         Face,
+        Closer,
         Press
     };
 

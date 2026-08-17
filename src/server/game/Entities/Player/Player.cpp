@@ -9208,7 +9208,9 @@ void Player::SendLoot(Loot& loot, bool aeLooting)
     loot.OnLootOpened(GetMap(), this);
     m_AELootView[loot.GetGUID()] = &loot;
 
-    if (loot.loot_type == LOOT_CORPSE && !loot.GetOwnerGUID().IsItem())
+    // Nearby clients play the loot kneel from this flag while the window is open.
+    if (!loot.GetOwnerGUID().IsItem()
+        && (loot.loot_type == LOOT_CORPSE || loot.loot_type == LOOT_CHEST || loot.loot_type == LOOT_CORPSE_PERSONAL))
         SetUnitFlag(UNIT_FLAG_LOOTING);
 }
 

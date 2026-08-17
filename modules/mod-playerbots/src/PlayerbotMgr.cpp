@@ -2013,7 +2013,14 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
     }
 
     bool const inRange = InInteractRange(player, creature);
-    if (bot.Walker.IsMoving() && !inRange)
+    if (inRange && bot.Walker.IsMoving())
+    {
+        StopWalkToClick(bot, player, bot.UseItemOnUnitTarget.CreatureGuid);
+        bot.QuestArriveWaitMs = 0;
+        return true;
+    }
+
+    if (bot.Walker.IsMoving())
         return false;
 
     PlayerbotClient::UseItemLook const look = PlayerbotClient::LookUseItemOnUnit(player, bot.UseItemOnUnitTarget);
@@ -2050,9 +2057,6 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
 
     if (!inRange)
     {
-        if (bot.Walker.IsMoving())
-            return false;
-
         Position standPos;
         float const standDistance = creature->GetCombatReach() + 1.0f;
         if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
@@ -2065,6 +2069,10 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
             return true;
         }
     }
+
+    if (inRange && bot.QuestArriveWaitMs == 0)
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is in range of {} but cannot use the quest item yet.",
+            player->GetName(), bot.UseItemOnUnitTarget.CreatureGuid.ToString());
 
     bot.QuestArriveWaitMs += diff;
     if (bot.QuestArriveWaitMs < 5000)

@@ -1235,7 +1235,12 @@ namespace
         Position standPos;
         float const standDistance = creature->GetCombatReach() + 1.0f;
         if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
-            return {};
+        {
+            if (!CreatureIsInInteractRange(player, creature))
+                return {};
+
+            standPos = player->GetPosition();
+        }
 
         PlayerbotClient::UseItemOnUnitTarget target;
         target.CreatureGuid = creature->GetGUID();
@@ -2648,7 +2653,7 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseIte
         Optional<UseItemOnUnitTarget> target = MakeUseItemOnUnitTarget(player, creature, matched->QuestId, matched->CreditEntry, itemId);
         if (!target)
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {}. Skipping that creature.",
                 player->GetName(), creature->GetGUID().ToString());
             continue;
         }
@@ -2731,7 +2736,7 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
             Optional<UseItemOnUnitTarget> target = MakeUseItemOnUnitTarget(player, creature, credit.QuestId, credit.CreditEntry, itemId);
             if (!target)
             {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {}. Skipping that creature.",
                     player->GetName(), creature->GetGUID().ToString());
                 continue;
             }
@@ -3047,7 +3052,7 @@ PlayerbotClient::UseItemLook PlayerbotClient::LookUseItemOnUnit(Player* player, 
         return UseItemLook::Press;
     if (result == SPELL_FAILED_UNIT_NOT_INFRONT)
         return UseItemLook::Face;
-    if (result == SPELL_FAILED_SPELL_IN_PROGRESS || result == SPELL_FAILED_NOT_READY)
+    if (result == SPELL_FAILED_SPELL_IN_PROGRESS || result == SPELL_FAILED_NOT_READY || result == SPELL_FAILED_MOVING)
         return UseItemLook::Wait;
 
     return UseItemLook::Cannot;

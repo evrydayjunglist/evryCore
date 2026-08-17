@@ -1457,7 +1457,10 @@ namespace
         return true;
     }
 
-    Optional<PlayerbotClient::QuestTarget> MakeTurnInTarget(Player* player, Creature* creature, int32 questId)
+    constexpr float TAKEABLE_SEARCH_NEAR = 80.0f;
+    constexpr float TAKEABLE_SEARCH_FAR = 150.0f;
+
+    Optional<PlayerbotClient::QuestTarget> MakeQuestTarget(Player* player, Creature* creature, int32 questId, bool turnIn)
     {
         if (!player || !creature || !questId)
             return {};
@@ -1472,8 +1475,126 @@ namespace
         target.Pos = standPos;
         target.StopDistance = 0.25f;
         target.QuestId = questId;
-        target.TurnIn = true;
+        target.TurnIn = turnIn;
         return target;
+    }
+
+    bool CreatureIsUsableQuestGiver(Player const* player, Creature const* creature)
+    {
+        if (!player || !creature || !creature->IsAlive())
+            return false;
+        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
+            return false;
+        if (!player->InSamePhase(creature))
+            return false;
+        if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+            return false;
+        return true;
+    }
+
+    int32 FirstTakeableQuestId(Player* player, Creature* creature, int32 skipQuestId)
+    {
+        if (!player || !creature)
+            return 0;
+
+        player->PrepareQuestMenu(creature->GetGUID());
+        QuestMenu& menu = player->PlayerTalkClass->GetQuestMenu();
+        for (uint8 i = 0; i < menu.GetMenuItemCount(); ++i)
+        {
+            QuestMenuItem const& item = menu.GetItem(i);
+            if (skipQuestId && int32(item.QuestId) == skipQuestId)
+                continue;
+            if (item.QuestIcon != 2)
+                continue;
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(item.QuestId);
+            if (!quest)
+                continue;
+            if (!player->CanTakeQuest(quest, false) || !player->CanAddQuest(quest, false))
+                continue;
+
+            return int32(item.QuestId);
+        }
+
+        return 0;
+    }
+
+    Optional<PlayerbotClient::QuestTarget> MakeTakeableTarget(Player* player, Creature* creature, int32 skipQuestId)
+    {
+        if (!CreatureIsUsableQuestGiver(player, creature))
+            return {};
+
+        int32 const questId = FirstTakeableQuestId(player, creature, skipQuestId);
+        if (!questId)
+            return {};
+
+        return MakeQuestTarget(player, creature, questId, false);
+    }
+
+    Optional<PlayerbotClient::QuestTarget> FindTakeableQuestInRange(Player* player, float range, uint32 zoneId, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId)
+    {
+        if (!player || !player->IsInWorld())
+            return {};
+
+        std::vector<Creature*> nearby;
+        FindCreatureOptions options;
+        options.IsAlive = FindCreatureAliveState::Alive;
+        player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+
+        Optional<PlayerbotClient::QuestTarget> best;
+        float bestDist = std::numeric_limits<float>::max();
+
+        for (Creature* creature : nearby)
+        {
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (creature->GetZoneId() != zoneId)
+                continue;
+
+            float const dist = player->GetExactDist(creature);
+            if (dist >= bestDist)
+                continue;
+
+            Optional<PlayerbotClient::QuestTarget> target = MakeTakeableTarget(player, creature, skipQuestId);
+            if (!target)
+                continue;
+
+            bestDist = dist;
+            best = target;
+        }
+
+        return best;
+    }
+
+    Optional<PlayerbotClient::QuestTarget> FindTakeableQuestRestOfZone(Player* player, uint32 zoneId, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, float minDist)
+    {
+        if (!player || !player->GetMap())
+            return {};
+
+        Optional<PlayerbotClient::QuestTarget> best;
+        float bestDist = std::numeric_limits<float>::max();
+
+        for (auto const& pair : player->GetMap()->GetCreatureBySpawnIdStore())
+        {
+            Creature* creature = pair.second;
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (creature->GetZoneId() != zoneId)
+                continue;
+
+            float const dist = player->GetExactDist(creature);
+            if (dist <= minDist || dist >= bestDist)
+                continue;
+
+            Optional<PlayerbotClient::QuestTarget> target = MakeTakeableTarget(player, creature, skipQuestId);
+            if (!target)
+                continue;
+
+            bestDist = dist;
+            best = target;
+        }
+
+        return best;
     }
 
     Creature* FindLivingEnderOnMap(Player* player, std::unordered_set<uint32> const& enderEntries, Optional<Position> const& marker, std::unordered_set<ObjectGuid> const& skip)
@@ -1615,7 +1736,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         if (!creature)
             continue;
 
-        Optional<QuestTarget> target = MakeTurnInTarget(player, creature, int32(questId));
+        Optional<QuestTarget> target = MakeQuestTarget(player, creature, int32(questId), true);
         if (!target)
             continue;
 
@@ -1631,6 +1752,21 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         return {};
 
     return best;
+}
+
+// Map work. No line of sight. This zone only, not the continent.
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindTakeableQuestInZone(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return {};
+
+    uint32 const zoneId = player->GetZoneId();
+    if (Optional<QuestTarget> found = FindTakeableQuestInRange(player, TAKEABLE_SEARCH_NEAR, zoneId, skip, skipQuestId))
+        return found;
+    if (Optional<QuestTarget> found = FindTakeableQuestInRange(player, TAKEABLE_SEARCH_FAR, zoneId, skip, skipQuestId))
+        return found;
+
+    return FindTakeableQuestRestOfZone(player, zoneId, skip, skipQuestId, TAKEABLE_SEARCH_FAR);
 }
 
 Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip)

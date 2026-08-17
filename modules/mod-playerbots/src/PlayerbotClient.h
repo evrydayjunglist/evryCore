@@ -161,6 +161,7 @@ namespace PlayerbotClient
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind, std::unordered_set<ObjectGuid> const& skip);
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
+    Optional<QuestTarget> FindTakeableQuestInZone(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<CombatTarget> FindAttackerTarget(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
     Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});

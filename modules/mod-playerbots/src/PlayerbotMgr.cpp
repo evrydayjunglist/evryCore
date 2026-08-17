@@ -1463,6 +1463,7 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
         Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids, filter);
         Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, filter);
         Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindLogCompleteTurnIn(player, bot.UnreachableGuids, skipQuestId);
+        Optional<PlayerbotClient::QuestTarget> takeable = PlayerbotClient::FindTakeableQuestInZone(player, bot.UnreachableGuids, skipQuestId);
 
         float bestDist = std::numeric_limits<float>::max();
         uint8 kind = 0;
@@ -1484,6 +1485,8 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
             consider(player->GetExactDist(item->Pos), 4);
         if (turnIn)
             consider(player->GetExactDist(turnIn->Pos), 5);
+        if (takeable)
+            consider(player->GetExactDist(takeable->Pos), 6);
 
         if (!kind)
             return false;
@@ -1510,10 +1513,15 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
             failedPos = item->Pos;
             started = BeginItemWork(bot, player, *item);
         }
-        else
+        else if (kind == 5)
         {
             failedPos = turnIn->Pos;
             started = BeginQuestTarget(bot, player, *turnIn);
+        }
+        else
+        {
+            failedPos = takeable->Pos;
+            started = BeginQuestTarget(bot, player, *takeable);
         }
 
         if (started)

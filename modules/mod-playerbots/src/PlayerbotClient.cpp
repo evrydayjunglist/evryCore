@@ -2146,6 +2146,8 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
             }
             if (!matched)
                 continue;
+            if (!PlayerHasLineOfSight(player, go))
+                continue;
 
             if (mustBeInUseRange && !player->GetGameObjectIfCanInteractWith(go->GetGUID()))
                 continue;

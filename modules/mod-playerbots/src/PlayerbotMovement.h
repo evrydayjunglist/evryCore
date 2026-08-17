@@ -53,7 +53,7 @@ private:
 
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
     Position Advance(float distance);
-    Position PeekGroundedStep(Player* player, float distance);
+    bool PeekGroundedStep(Player* player, float distance, Position& out);
     bool FirstGroundedStepIsLegal(Player* player);
     bool StepTowardDestIsLegal(Player* player) const;
     bool BuildMmapPath(Player* player, Position const& from, Position const& destination, std::vector<G3D::Vector3>& outPath);

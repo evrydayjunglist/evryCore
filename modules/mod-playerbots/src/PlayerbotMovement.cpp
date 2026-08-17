@@ -19,6 +19,7 @@
 #include "Common.h"
 #include "GameObject.h"
 #include "GameTime.h"
+#include "GridDefines.h"
 #include "Log.h"
 #include "Map.h"
 #include "MoveSpline.h"
@@ -147,6 +148,42 @@ namespace
             return false;
 
         return !StepHitsWorldCollision(player, from, to);
+    }
+
+    // Dirt is this plant, not the chest-height wall ray. Search from last feet plus the most she may climb this step.
+    // Do not search from a navmesh chord that already went through a hill. No floor is a face: refuse it.
+    bool PlantWalkZ(Player* player, float x, float y, float lastGroundedZ, float run, float& outZ)
+    {
+        if (!player || !player->IsInWorld())
+            return false;
+        if (!Trinity::IsValidMapCoord(x, y, lastGroundedZ))
+            return false;
+
+        float const maxRise = std::tan(MAX_WALKABLE_SLOPE_DEGREES * (float(M_PI) / 180.0f)) * std::max(run, 0.05f);
+        float const searchZ = lastGroundedZ + maxRise;
+        if (player->GetMapHeight(x, y, searchZ) <= INVALID_HEIGHT)
+            return false;
+
+        float z = searchZ;
+        player->UpdateAllowedPositionZ(x, y, z);
+        if (z <= INVALID_HEIGHT)
+            return false;
+
+        outZ = z;
+        return true;
+    }
+
+    bool PlantFromFeet(Player* player, Position const& feet, float x, float y, float orientation, Position& out)
+    {
+        float const dx = x - feet.GetPositionX();
+        float const dy = y - feet.GetPositionY();
+        float const run = std::sqrt(dx * dx + dy * dy);
+        float z = 0.0f;
+        if (!PlantWalkZ(player, x, y, feet.GetPositionZ(), run, z))
+            return false;
+
+        out.Relocate(x, y, z, orientation);
+        return true;
     }
 
     struct AvoidCircle
@@ -463,8 +500,9 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
     // Mmap's first step is a face or a wall. That is not unreachable. Walk legal ground beside it.
     // A wall is not a hill: look for another same-objective yellow only when this first step is steep.
-    Position const first = PeekGroundedStep(player, HeartbeatStepLen(player));
-    _startedOnAFace = !GroundedStepIsLegal(MeasureGroundedStep(_lastGrounded, first));
+    Position first;
+    bool const planted = PeekGroundedStep(player, HeartbeatStepLen(player), first);
+    _startedOnAFace = !planted || !GroundedStepIsLegal(MeasureGroundedStep(_lastGrounded, first));
     if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, false))
         return true;
     if (ContinueContour(player, false))
@@ -495,15 +533,9 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         _heartbeatMs -= HEARTBEAT_INTERVAL_MS;
         float const stepLen = speed * (float(HEARTBEAT_INTERVAL_MS) / 1000.0f);
         Position const next = Advance(stepLen);
-
-        float z = next.GetPositionZ();
-        player->UpdateAllowedPositionZ(next.GetPositionX(), next.GetPositionY(), z);
-
         Position grounded;
-        grounded.Relocate(next.GetPositionX(), next.GetPositionY(), z, next.GetOrientation());
-
-        // Last grounded feet to this tick's grounded feet. 35° up, short down, and no vmap or gameobject wall.
-        if (!GroundedStepIsWalkable(player, _lastGrounded, grounded))
+        if (!PlantFromFeet(player, _lastGrounded, next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), grounded)
+            || !GroundedStepIsWalkable(player, _lastGrounded, grounded))
         {
             RefuseSteepStep(player, grounded);
             return;
@@ -649,7 +681,7 @@ Position PlayerbotWalker::Advance(float distance)
     return pos;
 }
 
-Position PlayerbotWalker::PeekGroundedStep(Player* player, float distance)
+bool PlayerbotWalker::PeekGroundedStep(Player* player, float distance, Position& out)
 {
     size_t const savedIndex = _pointIndex;
     float const savedProgress = _segmentProgress;
@@ -657,12 +689,10 @@ Position PlayerbotWalker::PeekGroundedStep(Player* player, float distance)
     _pointIndex = savedIndex;
     _segmentProgress = savedProgress;
 
-    float z = next.GetPositionZ();
-    player->UpdateAllowedPositionZ(next.GetPositionX(), next.GetPositionY(), z);
+    if (!player)
+        return false;
 
-    Position grounded;
-    grounded.Relocate(next.GetPositionX(), next.GetPositionY(), z, next.GetOrientation());
-    return grounded;
+    return PlantFromFeet(player, _lastGrounded, next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), out);
 }
 
 bool PlayerbotWalker::FirstGroundedStepIsLegal(Player* player)
@@ -670,7 +700,10 @@ bool PlayerbotWalker::FirstGroundedStepIsLegal(Player* player)
     if (!player)
         return false;
 
-    Position const first = PeekGroundedStep(player, HeartbeatStepLen(player));
+    Position first;
+    if (!PeekGroundedStep(player, HeartbeatStepLen(player), first))
+        return false;
+
     return GroundedStepIsWalkable(player, _lastGrounded, first);
 }
 
@@ -696,10 +729,9 @@ bool PlayerbotWalker::StepTowardDestIsLegal(Player* player) const
 
     float x = feet.GetPositionX() + dx * stepLen;
     float y = feet.GetPositionY() + dy * stepLen;
-    float z = feet.GetPositionZ();
-    player->UpdateAllowedPositionZ(x, y, z);
     Position next;
-    next.Relocate(x, y, z);
+    if (!PlantFromFeet(player, feet, x, y, 0.0f, next))
+        return false;
     return GroundedStepIsWalkable(player, feet, next);
 }
 
@@ -730,15 +762,16 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
             float const px = -dy / len;
             float const py = dx / len;
             float const offset = hit->radius + VIA_EXTRA_CLEARANCE;
-            Position vias[2];
+            std::vector<Position> vias;
             for (int32 i = 0; i < 2; ++i)
             {
                 float const sign = i == 0 ? 1.0f : -1.0f;
                 float x = hit->x + px * offset * sign;
                 float y = hit->y + py * offset * sign;
-                float z = from.GetPositionZ();
-                player->UpdateAllowedPositionZ(x, y, z);
-                vias[i].Relocate(x, y, z);
+                Position viaPos;
+                if (!PlantFromFeet(player, from, x, y, 0.0f, viaPos))
+                    continue;
+                vias.push_back(viaPos);
             }
 
             for (Position const& via : vias)
@@ -882,19 +915,17 @@ bool PlayerbotWalker::FindLipSidestep(Player* player, Position& out) const
             float const firstDist = std::min(stepLen, dist);
             float fx = feet.GetPositionX() + c * firstDist;
             float fy = feet.GetPositionY() + s * firstDist;
-            float fz = feet.GetPositionZ();
-            player->UpdateAllowedPositionZ(fx, fy, fz);
             Position first;
-            first.Relocate(fx, fy, fz);
+            if (!PlantFromFeet(player, feet, fx, fy, 0.0f, first))
+                continue;
             if (!GroundedStepIsWalkable(player, feet, first))
                 continue;
 
             float x = feet.GetPositionX() + c * dist;
             float y = feet.GetPositionY() + s * dist;
-            float z = feet.GetPositionZ();
-            player->UpdateAllowedPositionZ(x, y, z);
             Position cell;
-            cell.Relocate(x, y, z, ang);
+            if (!PlantFromFeet(player, feet, x, y, ang, cell))
+                continue;
             if (dist > firstDist + 0.01f && !GroundedStepIsWalkable(player, feet, cell))
                 continue;
 
@@ -1044,10 +1075,9 @@ bool PlayerbotWalker::WalkLegalDestStep(Player* player, bool alreadyMoving)
     float const stepLen = std::max(HeartbeatStepLen(player), LIP_LOOK_CELL);
     float x = feet.GetPositionX() + dx * stepLen;
     float y = feet.GetPositionY() + dy * stepLen;
-    float z = feet.GetPositionZ();
-    player->UpdateAllowedPositionZ(x, y, z);
     Position toward;
-    toward.Relocate(x, y, z, Position::NormalizeOrientation(std::atan2(dy, dx)));
+    if (!PlantFromFeet(player, feet, x, y, Position::NormalizeOrientation(std::atan2(dy, dx)), toward))
+        return false;
     if (!GroundedStepIsWalkable(player, feet, toward))
         return false;
 

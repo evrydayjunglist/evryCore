@@ -374,6 +374,7 @@ void PlayerbotWalker::Reset()
     _startedOnAFace = false;
     _lipSteps = 0;
     _lipDestDist = 0.0f;
+    _lipStartDestDist = 0.0f;
     _contourDirX = 0.0f;
     _contourDirY = 0.0f;
 }
@@ -462,12 +463,14 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
     uint32 const savedLipSteps = sameDest ? _lipSteps : 0;
     float const savedLipDestDist = sameDest ? _lipDestDist : 0.0f;
+    float const savedLipStartDestDist = sameDest ? _lipStartDestDist : 0.0f;
     float const savedCx = sameDest ? _contourDirX : 0.0f;
     float const savedCy = sameDest ? _contourDirY : 0.0f;
 
     Reset();
     _lipSteps = savedLipSteps;
     _lipDestDist = savedLipDestDist;
+    _lipStartDestDist = savedLipStartDestDist;
     _contourDirX = savedCx;
     _contourDirY = savedCy;
 
@@ -512,6 +515,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     {
         _lipSteps = 0;
         _lipDestDist = 0.0f;
+        _lipStartDestDist = 0.0f;
         _contourDirX = 0.0f;
         _contourDirY = 0.0f;
         _state = State::Moving;
@@ -580,14 +584,16 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
         if (_contouring && pathDone)
         {
-            // Walk the ring until dest is open across the local look. A 0.7-yard poke is the toe of a ridge.
-            if (StepTowardDestIsLegal(player))
+            // Do not mmap from the pocket. Dest look can pass on the toe of a ridge; mmap then resets the lip cap.
+            // Walk dest or the ring until dest is a look-radius closer than when the lip started.
+            float const destDist = _lastGrounded.GetExactDist(_destination);
+            if (_lipStartDestDist > 0.0f && destDist + LIP_LOOK_RADIUS < _lipStartDestDist)
             {
                 if (TryCommitMmap(player, _lastGrounded, true))
                     return;
-                if (WalkLegalDestStep(player, true))
-                    return;
             }
+            if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, true))
+                return;
             if (!ContinueContour(player, true))
                 FailNoLegalRing(player);
             return;
@@ -910,6 +916,7 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
     _startedOnAFace = false;
     _lipSteps = 0;
     _lipDestDist = 0.0f;
+    _lipStartDestDist = 0.0f;
     _contourDirX = 0.0f;
     _contourDirY = 0.0f;
     _heartbeatMs = 0;
@@ -1050,6 +1057,9 @@ bool PlayerbotWalker::FindLipSidestep(Player* player, Position& out) const
 
 void PlayerbotWalker::ApplyContourPath(Player* player, Position const& side, bool alreadyMoving)
 {
+    if (_lipStartDestDist <= 0.0f)
+        _lipStartDestDist = _lastGrounded.GetExactDist(_destination);
+
     _path.clear();
     _path.push_back(G3D::Vector3(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ()));
     _path.push_back(G3D::Vector3(side.GetPositionX(), side.GetPositionY(), side.GetPositionZ()));

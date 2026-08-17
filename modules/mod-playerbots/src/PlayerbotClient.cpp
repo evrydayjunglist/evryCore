@@ -631,8 +631,7 @@ namespace
                     continue;
                 if (objective.Flags & QUEST_OBJECTIVE_FLAG_HIDDEN)
                     continue;
-                if (objective.Flags2 & QUEST_OBJECTIVE_FLAG_2_QUEST_BOUND_ITEM)
-                    continue;
+                // This Flags2 bit means the item is not stored in bags, not that it is not a world drop.
                 if (!player->IsQuestObjectiveCompletable(questId, objective.ID))
                     continue;
                 if (player->IsQuestObjectiveComplete(questId, objective.ID))

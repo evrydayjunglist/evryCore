@@ -63,6 +63,7 @@ struct PlayerbotRecord
     uint32 UseItemCastSpellId = 0;
     uint32 UseItemCastWaitMs = 0;
     bool LootOpenSent = false;
+    uint32 LootOpenWaitMs = 0;
     PlayerbotDeathWork Death = PlayerbotDeathWork::None;
     uint32 DeathWaitMs = 0;
     uint32 GhostMs = 0;

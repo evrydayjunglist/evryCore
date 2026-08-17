@@ -43,6 +43,7 @@ namespace
     constexpr uint32 USE_ITEM_CAST_START_MS = 400;
     constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
+    constexpr uint32 LOOT_WINDOW_MS = 1000;
     constexpr uint32 VENDOR_RETRY_MS = 60000;
     constexpr uint32 RELEASE_WAIT_MS = 3000;
     constexpr uint32 GHOST_SETTLE_MS = 500;
@@ -406,6 +407,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         ClearUseItemCast(bot);
         bot.ItemLootTarget = {};
         bot.LootOpenSent = false;
+        bot.LootOpenWaitMs = 0;
         ClearVendor(bot);
         bot.LookedForOtherYellowOnFace = false;
         bot.UnreachableGuids.clear();
@@ -1685,6 +1687,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
 
             bot.ItemLootTarget = *loot;
             bot.LootOpenSent = false;
+            bot.LootOpenWaitMs = 0;
             bot.Walker.Reset();
             return true;
         }
@@ -2202,6 +2205,7 @@ void PlayerbotMgr::ClearItemLoot(PlayerbotRecord& bot)
 {
     bot.ItemLootTarget = {};
     bot.LootOpenSent = false;
+    bot.LootOpenWaitMs = 0;
 }
 
 bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff)
@@ -2281,6 +2285,7 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
             }
 
             bot.LootOpenSent = true;
+            bot.LootOpenWaitMs = 0;
             bot.QuestArriveWaitMs = 0;
             return true;
         }
@@ -2351,9 +2356,39 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
             }
 
             bot.LootOpenSent = true;
+            bot.LootOpenWaitMs = 0;
             bot.QuestArriveWaitMs = 0;
             return true;
         }
+    }
+
+    if (!PlayerbotClient::HasOpenLootOn(player, lootOwner))
+    {
+        bot.QuestArriveWaitMs += diff;
+        if (bot.QuestArriveWaitMs >= QUEST_SEARCH_RETRY_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} opened loot on {} but no loot window appeared. Skipping that {}.",
+                player->GetName(), lootOwner.ToString(), skipKind);
+            bot.UnreachableGuids.insert(lootOwner);
+            ClearItemLoot(bot);
+            bot.Walker.Reset();
+            return false;
+        }
+        return true;
+    }
+
+    if (Optional<PlayerbotClient::CombatTarget> attacker = PlayerbotClient::FindAttackerTarget(player))
+    {
+        PlayerbotClient::QueueLootRelease(player->GetSession(), lootOwner);
+        ClearItemLoot(bot);
+        bot.Walker.Reset();
+        return BeginCombatTarget(bot, player, *attacker);
+    }
+
+    if (bot.LootOpenWaitMs < LOOT_WINDOW_MS)
+    {
+        bot.LootOpenWaitMs += diff;
+        return true;
     }
 
     bot.QuestArriveWaitMs += diff;
@@ -2413,6 +2448,7 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
     bot.CombatTarget = {};
     bot.ItemLootTarget = target;
     bot.LootOpenSent = false;
+    bot.LootOpenWaitMs = 0;
     bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 

@@ -58,10 +58,11 @@ namespace
     constexpr float LIP_LOOK_RADIUS = 4.0f;
     constexpr float LIP_LOOK_CELL = 1.0f;
     constexpr float LIP_MIN_DEST_DOT = -0.15f;
-    constexpr float LIP_FACE_DEST_DOT = 0.35f;
     constexpr float LIP_DEST_PROGRESS_YARDS = 1.0f;
     constexpr uint32 LIP_MAX_STEPS = 8;
     constexpr int32 LIP_LOOK_DIRECTIONS = 16;
+    // Walk off a face onto open ground, then mmap. This is not a path around a mountain.
+    constexpr float LEAVE_FACE_MAX_YARDS = 24.0f;
 
     float HeartbeatStepLen(Player const* player)
     {
@@ -374,7 +375,9 @@ void PlayerbotWalker::Reset()
     _startedOnAFace = false;
     _lipSteps = 0;
     _lipDestDist = 0.0f;
-    _lipStartDestDist = 0.0f;
+    _lipOrigin.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    _haveLipOrigin = false;
+    _destPokeActive = false;
     _contourDirX = 0.0f;
     _contourDirY = 0.0f;
 }
@@ -463,14 +466,18 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
     uint32 const savedLipSteps = sameDest ? _lipSteps : 0;
     float const savedLipDestDist = sameDest ? _lipDestDist : 0.0f;
-    float const savedLipStartDestDist = sameDest ? _lipStartDestDist : 0.0f;
+    Position const savedLipOrigin = sameDest ? _lipOrigin : Position();
+    bool const savedHaveLipOrigin = sameDest && _haveLipOrigin;
+    bool const savedDestPokeActive = sameDest && _destPokeActive;
     float const savedCx = sameDest ? _contourDirX : 0.0f;
     float const savedCy = sameDest ? _contourDirY : 0.0f;
 
     Reset();
     _lipSteps = savedLipSteps;
     _lipDestDist = savedLipDestDist;
-    _lipStartDestDist = savedLipStartDestDist;
+    _lipOrigin = savedLipOrigin;
+    _haveLipOrigin = savedHaveLipOrigin;
+    _destPokeActive = savedDestPokeActive;
     _contourDirX = savedCx;
     _contourDirY = savedCy;
 
@@ -495,6 +502,14 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     std::vector<G3D::Vector3> path;
     if (!BuildMmapPath(player, from, destination, path))
     {
+        _lastProgressPos = from;
+        if (TryLeaveFace(player, false))
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path from these feet. Walking off this face, then mmap.",
+                player->GetName());
+            return true;
+        }
+
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the destination. The bot is standing still.",
             player->GetName());
         _state = State::Failed;
@@ -515,7 +530,8 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     {
         _lipSteps = 0;
         _lipDestDist = 0.0f;
-        _lipStartDestDist = 0.0f;
+        _haveLipOrigin = false;
+        _destPokeActive = false;
         _contourDirX = 0.0f;
         _contourDirY = 0.0f;
         _state = State::Moving;
@@ -530,9 +546,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     Position first;
     bool const planted = PeekGroundedStep(player, HeartbeatStepLen(player), first);
     _startedOnAFace = !planted || !GroundedStepIsLegal(MeasureGroundedStep(_lastGrounded, first));
-    if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, false))
-        return true;
-    if (ContinueContour(player, false))
+    if (TryLeaveFace(player, false))
         return true;
 
     FailNoLegalRing(player);
@@ -584,17 +598,11 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
         if (_contouring && pathDone)
         {
-            // Do not mmap from the pocket. Dest look can pass on the toe of a ridge; mmap then resets the lip cap.
-            // Walk dest or the ring until dest is a look-radius closer than when the lip started.
-            float const destDist = _lastGrounded.GetExactDist(_destination);
-            if (_lipStartDestDist > 0.0f && destDist + LIP_LOOK_RADIUS < _lipStartDestDist)
-            {
-                if (TryCommitMmap(player, _lastGrounded, true))
-                    return;
-            }
-            if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, true))
+            // Do not mmap from the pocket: MmapLookIsLegal refuses a prefix that is still a face.
+            // Dest may get farther while she walks off the face onto open ground. That is the leave, not a fail.
+            if (TryCommitMmap(player, _lastGrounded, true))
                 return;
-            if (!ContinueContour(player, true))
+            if (!TryLeaveFace(player, true))
                 FailNoLegalRing(player);
             return;
         }
@@ -777,6 +785,50 @@ void PlayerbotWalker::NoteLipDestProgress()
     }
 }
 
+void PlayerbotWalker::NoteLipOrigin()
+{
+    if (_haveLipOrigin)
+        return;
+
+    _lipOrigin = _lastGrounded;
+    _haveLipOrigin = true;
+}
+
+bool PlayerbotWalker::LeaveFaceExceeded() const
+{
+    if (!_haveLipOrigin)
+        return false;
+
+    return _lastGrounded.GetExactDist2d(_lipOrigin) > LEAVE_FACE_MAX_YARDS;
+}
+
+bool PlayerbotWalker::ContourShouldStop(Player* player) const
+{
+    // Dest is open in front: old poke cap. Leaving a face may take more than eight steps.
+    if (StepTowardDestIsLegal(player))
+        return _lipSteps >= LIP_MAX_STEPS;
+
+    return LeaveFaceExceeded();
+}
+
+bool PlayerbotWalker::TryLeaveFace(Player* player, bool alreadyMoving)
+{
+    if (StepTowardDestIsLegal(player))
+    {
+        if (!_destPokeActive)
+        {
+            _lipSteps = 0;
+            _destPokeActive = true;
+        }
+        if (WalkLegalDestStep(player, alreadyMoving))
+            return true;
+    }
+    else
+        _destPokeActive = false;
+
+    return ContinueContour(player, alreadyMoving);
+}
+
 bool PlayerbotWalker::StepTowardDestIsLegal(Player* player) const
 {
     if (!player)
@@ -916,7 +968,8 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
     _startedOnAFace = false;
     _lipSteps = 0;
     _lipDestDist = 0.0f;
-    _lipStartDestDist = 0.0f;
+    _haveLipOrigin = false;
+    _destPokeActive = false;
     _contourDirX = 0.0f;
     _contourDirY = 0.0f;
     _heartbeatMs = 0;
@@ -993,10 +1046,9 @@ bool PlayerbotWalker::FindLipSidestep(Player* player, Position& out) const
                 continue;
 
             float const destDot = c * destDx + s * destDy;
-            if (destDot < LIP_MIN_DEST_DOT)
-                continue;
-            // Straight at dest is the face or the wall. Walk beside it.
-            if (!destStepLegal && destDot > LIP_FACE_DEST_DOT)
+            // Dest look is a face: still take legal cells toward dest (that is often the way out of a nook).
+            // Dest may get farther while she walks around. Do not require destDot toward dest.
+            if (destStepLegal && destDot < LIP_MIN_DEST_DOT)
                 continue;
             if (haveHeading && (c * _contourDirX + s * _contourDirY) < 0.0f)
                 continue;
@@ -1017,7 +1069,8 @@ bool PlayerbotWalker::FindLipSidestep(Player* player, Position& out) const
             LipCell found;
             found.pos = cell;
             found.cross = destDx * s - destDy * c;
-            found.score = side * 2.0f + offsetPref * 1.5f + destDot * 0.2f + headingBonus * 1.0f;
+            found.score = side * 2.0f + offsetPref * 1.5f + headingBonus * 1.0f;
+            found.score += destDot * 0.2f;
             cells.push_back(found);
         }
     }
@@ -1057,8 +1110,7 @@ bool PlayerbotWalker::FindLipSidestep(Player* player, Position& out) const
 
 void PlayerbotWalker::ApplyContourPath(Player* player, Position const& side, bool alreadyMoving)
 {
-    if (_lipStartDestDist <= 0.0f)
-        _lipStartDestDist = _lastGrounded.GetExactDist(_destination);
+    NoteLipOrigin();
 
     _path.clear();
     _path.push_back(G3D::Vector3(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ()));
@@ -1093,7 +1145,7 @@ bool PlayerbotWalker::ContinueContour(Player* player, bool alreadyMoving)
 
     NoteLipDestProgress();
 
-    if (_lipSteps >= LIP_MAX_STEPS)
+    if (ContourShouldStop(player))
         return false;
 
     Position side;
@@ -1123,7 +1175,7 @@ bool PlayerbotWalker::WalkLegalDestStep(Player* player, bool alreadyMoving)
         return false;
 
     NoteLipDestProgress();
-    if (_lipSteps >= LIP_MAX_STEPS)
+    if (ContourShouldStop(player))
         return false;
 
     Position const& feet = _lastGrounded;
@@ -1159,9 +1211,7 @@ bool PlayerbotWalker::WalkLegalDestStep(Player* player, bool alreadyMoving)
 void PlayerbotWalker::RefuseSteepStep(Player* player, Position const& /*attempted*/)
 {
     // Keep FORWARD. A player turns onto the flat beside a face or a wall; they do not stop and start on the same toes.
-    if (StepTowardDestIsLegal(player) && WalkLegalDestStep(player, true))
-        return;
-    if (ContinueContour(player, true))
+    if (TryLeaveFace(player, true))
         return;
 
     FailNoLegalRing(player);

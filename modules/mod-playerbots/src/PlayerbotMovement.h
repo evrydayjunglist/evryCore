@@ -58,6 +58,10 @@ private:
     bool MmapLookIsLegal(Player* player);
     bool StepTowardDestIsLegal(Player* player) const;
     void NoteLipDestProgress();
+    void NoteLipOrigin();
+    bool LeaveFaceExceeded() const;
+    bool ContourShouldStop(Player* player) const;
+    bool TryLeaveFace(Player* player, bool alreadyMoving);
     bool BuildMmapPath(Player* player, Position const& from, Position const& destination, std::vector<G3D::Vector3>& outPath);
     bool TryCommitMmap(Player* player, Position const& from, bool alreadyMoving);
     bool FindLipSidestep(Player* player, Position& out) const;
@@ -83,7 +87,9 @@ private:
     bool _startedOnAFace = false;
     uint32 _lipSteps = 0;
     float _lipDestDist = 0.0f;
-    float _lipStartDestDist = 0.0f;
+    Position _lipOrigin;
+    bool _haveLipOrigin = false;
+    bool _destPokeActive = false;
     float _contourDirX = 0.0f;
     float _contourDirY = 0.0f;
 };

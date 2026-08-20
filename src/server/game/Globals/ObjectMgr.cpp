@@ -5426,22 +5426,53 @@ TreasurePickerTemplate const* ObjectMgr::GetTreasurePicker(uint32 treasurePicker
     return Trinity::Containers::MapGetValuePtr(_treasurePickerStore, treasurePickerId);
 }
 
-TreasurePickerItem const* ObjectMgr::SelectTreasurePickerItem(TreasurePickerTemplate const* treasurePicker, uint32 choiceItemId /*= 0*/) const
+bool ObjectMgr::IsTreasurePickerItemEligibleForPlayer(Player const* player, uint32 itemId) const
 {
-    if (!treasurePicker || treasurePicker->Items.empty())
+    if (!player)
+        return false;
+
+    ItemTemplate const* proto = GetItemTemplate(itemId);
+    if (!proto)
+        return false;
+
+    // ItemSparse.AllowableClass -1 means any class.
+    if ((proto->GetAllowableClass() & player->GetClassMask()) == 0)
+        return false;
+
+    // A weapon with AllowableClass -1 still needs the class weapon skill.
+    // Illidari Warglaive 160513 is AllowableClass -1 (ItemSparse 12.0.7.67808);
+    // Priest, Hunter, and Warrior sniff 12.0.7.68453 omit it; only Demon Hunter has SKILL_WARGLAIVES.
+    // Bags with AllowableClass -1 are not weapons and stay usable by any class.
+    if (proto->GetAllowableClass() == -1 && proto->GetClass() == ITEM_CLASS_WEAPON)
+    {
+        if (uint32 skill = proto->GetSkill())
+            if (player->GetSkillValue(skill) == 0)
+                return false;
+    }
+
+    return true;
+}
+
+TreasurePickerItem const* ObjectMgr::SelectTreasurePickerItem(TreasurePickerTemplate const* treasurePicker, Player const* player, uint32 choiceItemId /*= 0*/) const
+{
+    if (!treasurePicker || !player || treasurePicker->Items.empty())
         return nullptr;
 
     if (treasurePicker->IsChoice)
     {
         for (TreasurePickerItem const& item : treasurePicker->Items)
-            if (item.ItemID == choiceItemId)
+            if (item.ItemID == choiceItemId && IsTreasurePickerItemEligibleForPlayer(player, item.ItemID))
                 return &item;
 
         return nullptr;
     }
 
-    // SMSG_QUEST_GIVER_QUEST_COMPLETE ItemReward matches the first offer row.
-    return &treasurePicker->Items.front();
+    // SMSG_QUEST_GIVER_QUEST_COMPLETE ItemReward matches the first row this player can use.
+    for (TreasurePickerItem const& item : treasurePicker->Items)
+        if (IsTreasurePickerItemEligibleForPlayer(player, item.ItemID))
+            return &item;
+
+    return nullptr;
 }
 
 void ObjectMgr::LoadQuestStartersAndEnders()

@@ -372,8 +372,12 @@ void WorldSession::HandleQueryTreasurePicker(WorldPackets::Query::QueryTreasureP
     treasurePickerResponse.Treasure.IsChoice = treasurePicker->IsChoice;
     treasurePickerResponse.Treasure.Gold = treasurePicker->Gold;
 
+    Player* player = GetPlayer();
     for (TreasurePickerItem const& pickerItem : treasurePicker->Items)
     {
+        if (!sObjectMgr->IsTreasurePickerItemEligibleForPlayer(player, pickerItem.ItemID))
+            continue;
+
         WorldPackets::Query::TreasurePickItem& itemPick = treasurePickerResponse.Treasure.ItemPicks.emplace_back();
         itemPick.Item.ItemID = pickerItem.ItemID;
         itemPick.Quantity = pickerItem.Quantity;

@@ -14897,7 +14897,7 @@ bool Player::CanRewardQuest(Quest const* quest, LootItemType rewardType, uint32 
     for (int32 treasurePickerId : quest->GetTreasurePickerId())
     {
         TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(uint32(treasurePickerId));
-        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, rewardId);
+        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, this, rewardId);
         if (!pickerItem)
             continue;
 
@@ -15295,7 +15295,7 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
     for (int32 treasurePickerId : quest->GetTreasurePickerId())
     {
         TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(uint32(treasurePickerId));
-        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, rewardId);
+        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, this, rewardId);
         if (!pickerItem)
             continue;
 
@@ -17465,8 +17465,8 @@ void Player::SendQuestReward(Quest const* quest, Creature const* questGiver, uin
     for (int32 treasurePickerId : quest->GetTreasurePickerId())
     {
         TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(uint32(treasurePickerId));
-        // Complete packet ItemReward uses the same first offer row as the grant path.
-        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker);
+        // Complete packet ItemReward uses the same first eligible row as the grant path.
+        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, this);
         if (!pickerItem)
             continue;
 

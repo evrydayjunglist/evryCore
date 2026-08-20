@@ -459,11 +459,12 @@ namespace WorldPackets
             std::string_view LogDescription;
             std::string_view DescriptionText;
             std::vector<ConditionalQuestText> ConditionalDescriptionText;
-            bool DisplayPopup = false;
-            bool StartCheat = false;
             bool AutoLaunched = false;
             bool FromContentPush = false;
+            bool ReplayQuest = false;
             bool ResetByScheduler = false;
+            bool StartCheat = false;
+            bool DisplayPopup = false;
         };
 
         struct QuestObjectiveCollect

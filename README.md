@@ -28,6 +28,7 @@ When a job lands on `game`, add a short entry here. The percent is feature compl
 
 - **combat-stats** (~75%) — Player base stamina, health, and STR/AGI/INT from ExpectedStat.db2, including the Midnight health and primary-stat squish at current-expansion levels. `GiveLevel` uses the same overrides as login. Creature MaxHealth uses floor so create health matches retail. `DealDamageMods` scales player damage into create-level creature HP and creature damage onto the level-matched DPS curve. `ScalingPlayerLevelDelta` is refreshed after NextLevelXP is known.
 - **chromie-time** (~80%) — Chromie Time select, persist, gossip, and leave. Burning Crusade breadcrumb after select; remaining expansions mapped in `chromie_time_expansion_quest`. Outdoor scaling uses ConditionalContentTuning. Start and re-enter from the present lock at level 68; already in a campaign may change timelines until the ContentTuning end level. Dorn refuse vs FAQ. Orgrimmar hourglass. Dark Portal Eastern Kingdoms ↔ Outland.
+- **treasure-picker** (~75%) — `CMSG_QUERY_TREASURE_PICKER` replies from world `treasure_picker` rows, class-filtered by ItemSparse.AllowableClass (weapons with AllowableClass -1 still need the class weapon skill). Turn-in grants the first eligible row, or the chosen item on a choice picker. Arathi RPE quests 90882–90887 have picker contents. A quest that lists a picker id with no row still gets an empty reply so the quest frame opens.
 
 ## Requirements
 

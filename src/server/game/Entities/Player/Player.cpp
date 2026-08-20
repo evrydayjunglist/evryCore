@@ -14896,6 +14896,23 @@ bool Player::CanRewardQuest(Quest const* quest, LootItemType rewardType, uint32 
         }
     }
 
+    for (int32 treasurePickerId : quest->GetTreasurePickerId())
+    {
+        TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(uint32(treasurePickerId));
+        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, this, rewardId);
+        if (!pickerItem)
+            continue;
+
+        InventoryResult res = CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, pickerItem->ItemID, pickerItem->Quantity);
+        if (res != EQUIP_ERR_OK)
+        {
+            if (msg)
+                SendQuestFailed(quest->GetQuestId(), res);
+
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -15274,6 +15291,28 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
         }
         default:
             break;
+    }
+
+    // TreasurePicker items come from world tables, not quest_template RewardItemId.
+    for (int32 treasurePickerId : quest->GetTreasurePickerId())
+    {
+        TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(uint32(treasurePickerId));
+        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, this, rewardId);
+        if (!pickerItem)
+            continue;
+
+        ItemPosCountVec dest;
+        if (CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, pickerItem->ItemID, pickerItem->Quantity) != EQUIP_ERR_OK)
+            continue;
+
+        std::vector<int32> bonusListIDs;
+        if (pickerItem->BonusListID)
+            bonusListIDs.push_back(pickerItem->BonusListID);
+
+        ItemContext context = ItemContext(pickerItem->Context);
+        Item* item = StoreNewItem(dest, pickerItem->ItemID, true, 0, {}, context, bonusListIDs.empty() ? nullptr : &bonusListIDs);
+        if (item)
+            SendNewItem(item, pickerItem->Quantity, true, false);
     }
 
     for (uint8 i = 0; i < QUEST_REWARD_CURRENCY_COUNT; ++i)
@@ -17424,6 +17463,24 @@ void Player::SendQuestReward(Quest const* quest, Creature const* questGiver, uin
     }
 
     packet.HideChatMessage = hideChatMessage;
+
+    for (int32 treasurePickerId : quest->GetTreasurePickerId())
+    {
+        TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(uint32(treasurePickerId));
+        // Complete packet ItemReward uses the same first eligible row as the grant path.
+        TreasurePickerItem const* pickerItem = sObjectMgr->SelectTreasurePickerItem(treasurePicker, this);
+        if (!pickerItem)
+            continue;
+
+        packet.ItemReward.ItemID = pickerItem->ItemID;
+        if (pickerItem->BonusListID)
+        {
+            packet.ItemReward.ItemBonus.emplace();
+            packet.ItemReward.ItemBonus->Context = ItemContext(pickerItem->Context);
+            packet.ItemReward.ItemBonus->BonusListIDs.push_back(pickerItem->BonusListID);
+        }
+        break;
+    }
 
     SendDirectMessage(packet.Write());
 }

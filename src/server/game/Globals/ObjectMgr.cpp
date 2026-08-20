@@ -5362,6 +5362,119 @@ void ObjectMgr::LoadQuests()
     TC_LOG_INFO("server.loading", ">> Loaded {} quests definitions in {} ms", _questTemplates.size(), GetMSTimeDiffToNow(oldMSTime));
 }
 
+void ObjectMgr::LoadTreasurePickerTemplates()
+{
+    uint32 oldMSTime = getMSTime();
+
+    _treasurePickerStore.clear();
+
+    //                                                  0                  1      2         3
+    QueryResult result = WorldDatabase.Query("SELECT TreasurePickerID, Flags, IsChoice, Gold FROM treasure_picker");
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 treasure pickers. DB table `treasure_picker` is empty.");
+        return;
+    }
+
+    do
+    {
+        Field* fields = result->Fetch();
+
+        TreasurePickerTemplate& treasurePicker = _treasurePickerStore[fields[0].GetUInt32()];
+        treasurePicker.ID = fields[0].GetUInt32();
+        treasurePicker.Flags = fields[1].GetInt32();
+        treasurePicker.IsChoice = fields[2].GetBool();
+        treasurePicker.Gold = fields[3].GetUInt64();
+    } while (result->NextRow());
+
+    //                                               0                  1    2       3              4            5
+    result = WorldDatabase.Query("SELECT TreasurePickerID, Idx, ItemID, ItemQuantity, BonusListID, Context FROM treasure_picker_items ORDER BY TreasurePickerID ASC, Idx ASC");
+    if (result)
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 treasurePickerId = fields[0].GetUInt32();
+
+            auto itr = _treasurePickerStore.find(treasurePickerId);
+            if (itr == _treasurePickerStore.end())
+            {
+                TC_LOG_ERROR("sql.sql", "Table `treasure_picker_items` has data for TreasurePickerID {} but such treasure picker does not exist", treasurePickerId);
+                continue;
+            }
+
+            uint32 itemId = fields[2].GetUInt32();
+            if (!GetItemTemplate(itemId))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `treasure_picker_items` has non-existing ItemID {} for TreasurePickerID {}", itemId, treasurePickerId);
+                continue;
+            }
+
+            TreasurePickerItem& item = itr->second.Items.emplace_back();
+            item.ItemID = itemId;
+            item.Quantity = fields[3].GetUInt32();
+            item.BonusListID = fields[4].GetInt32();
+            item.Context = fields[5].GetUInt8();
+        } while (result->NextRow());
+    }
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} treasure pickers in {} ms", _treasurePickerStore.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+TreasurePickerTemplate const* ObjectMgr::GetTreasurePicker(uint32 treasurePickerId) const
+{
+    return Trinity::Containers::MapGetValuePtr(_treasurePickerStore, treasurePickerId);
+}
+
+bool ObjectMgr::IsTreasurePickerItemEligibleForPlayer(Player const* player, uint32 itemId) const
+{
+    if (!player)
+        return false;
+
+    ItemTemplate const* proto = GetItemTemplate(itemId);
+    if (!proto)
+        return false;
+
+    // ItemSparse.AllowableClass -1 means any class.
+    if ((proto->GetAllowableClass() & player->GetClassMask()) == 0)
+        return false;
+
+    // A weapon with AllowableClass -1 still needs the class weapon skill.
+    // Illidari Warglaive 160513 is AllowableClass -1 (ItemSparse 12.0.7.67808);
+    // Priest, Hunter, and Warrior sniff 12.0.7.68453 omit it; only Demon Hunter has SKILL_WARGLAIVES.
+    // Bags with AllowableClass -1 are not weapons and stay usable by any class.
+    if (proto->GetAllowableClass() == -1 && proto->GetClass() == ITEM_CLASS_WEAPON)
+    {
+        if (uint32 skill = proto->GetSkill())
+            if (player->GetSkillValue(skill) == 0)
+                return false;
+    }
+
+    return true;
+}
+
+TreasurePickerItem const* ObjectMgr::SelectTreasurePickerItem(TreasurePickerTemplate const* treasurePicker, Player const* player, uint32 choiceItemId /*= 0*/) const
+{
+    if (!treasurePicker || !player || treasurePicker->Items.empty())
+        return nullptr;
+
+    if (treasurePicker->IsChoice)
+    {
+        for (TreasurePickerItem const& item : treasurePicker->Items)
+            if (item.ItemID == choiceItemId && IsTreasurePickerItemEligibleForPlayer(player, item.ItemID))
+                return &item;
+
+        return nullptr;
+    }
+
+    // SMSG_QUEST_GIVER_QUEST_COMPLETE ItemReward matches the first row this player can use.
+    for (TreasurePickerItem const& item : treasurePicker->Items)
+        if (IsTreasurePickerItemEligibleForPlayer(player, item.ItemID))
+            return &item;
+
+    return nullptr;
+}
+
 void ObjectMgr::LoadQuestStartersAndEnders()
 {
     TC_LOG_INFO("server.loading", "Loading GO Start Quest Data...");

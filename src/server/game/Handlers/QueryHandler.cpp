@@ -19,6 +19,7 @@
 #include "Common.h"
 #include "Corpse.h"
 #include "DatabaseEnv.h"
+#include "DBCEnums.h"
 #include "DB2Stores.h"
 #include "GameTime.h"
 #include "Item.h"
@@ -347,11 +348,42 @@ void WorldSession::HandleQueryTreasurePicker(WorldPackets::Query::QueryTreasureP
     if (!questInfo)
         return;
 
+    bool questUsesPicker = false;
+    for (int32 treasurePickerId : questInfo->GetTreasurePickerId())
+    {
+        if (uint32(treasurePickerId) == queryTreasurePicker.TreasurePickerID)
+        {
+            questUsesPicker = true;
+            break;
+        }
+    }
+
+    if (!questUsesPicker)
+        return;
+
+    TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(queryTreasurePicker.TreasurePickerID);
+    if (!treasurePicker)
+        return;
+
     WorldPackets::Query::TreasurePickerResponse treasurePickerResponse;
     treasurePickerResponse.QuestID = queryTreasurePicker.QuestID;
     treasurePickerResponse.TreasurePickerID = queryTreasurePicker.TreasurePickerID;
+    treasurePickerResponse.Treasure.Flags = treasurePicker->Flags;
+    treasurePickerResponse.Treasure.IsChoice = treasurePicker->IsChoice;
+    treasurePickerResponse.Treasure.Gold = treasurePicker->Gold;
 
-    // TODO: Missing treasure picker implementation
+    for (TreasurePickerItem const& pickerItem : treasurePicker->Items)
+    {
+        WorldPackets::Query::TreasurePickItem& itemPick = treasurePickerResponse.Treasure.ItemPicks.emplace_back();
+        itemPick.Item.ItemID = pickerItem.ItemID;
+        itemPick.Quantity = pickerItem.Quantity;
+        if (pickerItem.BonusListID)
+        {
+            itemPick.Item.ItemBonus.emplace();
+            itemPick.Item.ItemBonus->Context = ItemContext(pickerItem.Context);
+            itemPick.Item.ItemBonus->BonusListIDs.push_back(pickerItem.BonusListID);
+        }
+    }
 
     SendPacket(treasurePickerResponse.Write());
 }

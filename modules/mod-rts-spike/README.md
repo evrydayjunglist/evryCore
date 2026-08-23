@@ -19,7 +19,7 @@ This is the one to run first. If it works, the hardest problem on the plan disap
 3. `.gps` to read your current coordinates, then `/rtsspike camset <x> <y> <z>` with a point a little above and behind you.
 4. Record: does `C_Commentator.SetCameraPosition` exist, does it error, and does the camera actually detach and move?
 
-Outcome to write down: **works** → camera ladder lands on rung 1, and the real work is implementing the unhandled commentator opcodes in the `game` branch. **absent or inert** → rung 1 is dead; run `/rtsspike tactical` to judge whether the stock max-zoom camera (rung 4) is tall enough while the vehicle-seat spike (rung 3) is scheduled.
+Outcome: **works**. The two flags satisfy the client gate and `SetCameraPosition` moves the camera exactly, so no commentator opcode implementation is needed. The remaining camera question is whether a server viewpoint for world streaming composes with the commentator camera; the camera mechanism itself is settled.
 
 ## Spike 2 — addon command channel round-trip
 
@@ -113,9 +113,26 @@ Not scripted here — it needs the mod-playerbots order API that does not exist 
   from a click next to the character, and reading one without the other is how this
   result got doubted after the fact.
 
-  This run overlaid Blizzard's own `SpellMisc` (ID 164352) rather than using the clone,
-  because a cloned spell could not be cast: the client had its data (`GetSpellName`
-  answered) but neither the spellbook nor a `/cast` by name would reach it, and
-  `SkillLineAbility` is not the reason, since Blizzard has no row there either. That
-  overlay changes Blizzard for every character and should be deleted when the spike is.
+  The clone failure had a separate, measured cause. The first clones copied
+  `SpellName` and the SpellInfo component records but omitted the client-only
+  `Spell.db2` root. Their name resolved, but the client reported them unknown and
+  unusable and sent no cast. Adding that root through `hotfix_blob` made the
+  diagnostic clone cast. The repaired evryOps clone now copies the effective root,
+  name, and components in one push. Fresh spell 2000001 produced the normal learned
+  message, returned known and usable, showed the reticle with `/cast RTS Order`, and
+  cast at the clicked point with `/cast [@cursor] RTS Order`. The temporary
+  `SkillLineAbility` rows for 1312659 and 2000000 did not change their behavior; the
+  working clone has no such relation.
+
+  Cleanup snapshot `2026-08-23_00-29-30` and hotfix push 110669 removed both
+  diagnostic clones and those `SkillLineAbility` rows. The realm-wide Blizzard
+  `SpellMisc` override (ID 164352) was deleted, and the same push marks the native
+  record valid so a reconnect refreshes its original data. Spell 2000001 and all of
+  its cloned records remain.
+
+  Follow-up snapshot `2026-08-23_00-53-35` removed only the obsolete Valid Spell
+  record from diagnostic push 110667. Once its payload was deleted, leaving that
+  record made `LoadHotfixData` report an unknown store at every boot. The newer
+  removal record and spell 2000001's Valid record remain, and the next boot was
+  clean.
 - Spike 4 walker at scale: blocked on Phase 1

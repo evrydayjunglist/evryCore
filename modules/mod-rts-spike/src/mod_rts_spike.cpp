@@ -177,11 +177,19 @@ public:
         // orientation and never touches the map, so the WorldLocation keeps its
         // default of MAPID_INVALID. Anything that acts on these coordinates has
         // to read the map off the player.
+        // Log where she was standing as well as where she clicked. The clicked point
+        // on its own cannot tell you whether the client aimed from the camera or from
+        // the character, because a click near the body and a click under a distant
+        // camera look the same once the caster's position is forgotten. The distance
+        // is the number that separates them.
         WorldLocation const* dest = spell->m_targets.GetDstPos();
-        ChatHandler(player->GetSession()).PSendSysMessage("rts-spike: spell %u dest map %u at %.3f %.3f %.3f",
-            spellInfo->Id, player->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ());
-        TC_LOG_INFO("server.worldserver", "mod-rts-spike: {} cast spell {} dest map {} at {:.3f} {:.3f} {:.3f}",
-            player->GetName(), spellInfo->Id, player->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ());
+        float const distance = player->GetExactDist(dest);
+        ChatHandler(player->GetSession()).PSendSysMessage("rts-spike: spell %u dest map %u at %.3f %.3f %.3f, caster at %.3f %.3f %.3f, %.1f yards away",
+            spellInfo->Id, player->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ(),
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), distance);
+        TC_LOG_INFO("server.worldserver", "mod-rts-spike: {} cast spell {} dest map {} at {:.3f} {:.3f} {:.3f}, caster at {:.3f} {:.3f} {:.3f}, {:.1f} yards away",
+            player->GetName(), spellInfo->Id, player->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ(),
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), distance);
     }
 };
 

@@ -92,15 +92,26 @@ Not scripted here — it needs the mod-playerbots order API that does not exist 
   Blizzard's periodic component re-casts at the stored destination every tick, so one
   click logged many lines.
 
-  **Rerun with those two changed, and it works.** With the camera 300 yards from the
-  body, clicks under the commander camera reached the server at -521.698 -3956.561
-  41.273 and -522.517 -3963.887 45.798, both within about twelve yards of the camera
-  and over three hundred from the character. So the client's terrain raycast follows
-  the commentator camera, and ground ordering at commander range needs no client
-  patching at all — only a spell whose range and line of sight allow it. The Blizzard
-  cast itself was invisible from up there, which is the same streaming limit Spike 1
-  found: the effect spawned by the body's seer range, so the client was never told
-  about it.
+  **Rerun with those two changed, and it works.** Blizzard's own `SpellMisc` (ID
+  164352) was overlaid to `RangeIndex` 13 and `Attributes3` 4, and with the camera 300
+  yards from the body, clicks under the commander camera reached the server at
+  -521.698 -3956.561 41.273 and -522.517 -3963.887 45.798 — both within about twelve
+  yards of the camera and over three hundred from the character, which was still at
+  -525.066 -4268.14. So the client's terrain raycast follows the commentator camera,
+  and ground ordering at commander range needs no client patching at all, only a spell
+  whose range and line of sight allow the click. That the server accepted a three
+  hundred yard ground cast is itself the proof the overlay was live: row 5 is 0-40
+  yards for both the hostile and the friendly pair, and `Spell::prepare` refuses in
+  `CheckCast` before `_cast` ever reaches the logging hook.
+
+  The Blizzard cast itself was invisible from up there, which is the same streaming
+  limit Spike 1 found: the effect spawned within the body's seer range, so the client
+  was never told about it.
+
+  The log now records the caster's position and the distance to the click as well as
+  the click itself. The clicked point alone cannot tell a click at a distant camera
+  from a click next to the character, and reading one without the other is how this
+  result got doubted after the fact.
 
   This run overlaid Blizzard's own `SpellMisc` (ID 164352) rather than using the clone,
   because a cloned spell could not be cast: the client had its data (`GetSpellName`

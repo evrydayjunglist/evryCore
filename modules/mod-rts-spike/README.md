@@ -1,6 +1,6 @@
 # mod-rts-spike
 
-Throwaway harness for the RTS commander-mode plan's Phase 0. It answers the questions that cannot be answered from source, because they are about how the live retail client behaves. Delete this whole folder once the answers are recorded below.
+Throwaway harness for Commander Mode experiments that cannot be settled from source because they depend on live retail-client behavior. The current branch contains the completed Phase 0A camera, channel, ground-order, cloned-spell, and vehicle-seat evidence. Phase 0B direct-switch feasibility belongs on its own fresh job branch after Phase 0A lands. Delete this whole folder once the remaining experimental answers are recorded.
 
 It is a normal drop-in module (`modules/mod-rts-spike/`), so a static build compiles it in. The client half is the `RTSSpike` addon under `addon/`.
 
@@ -39,7 +39,7 @@ Outcome to write down: destination matches the clicked point yes/no; works while
 
 ## Spike 4 — walker at RTS scale
 
-Not scripted here — it needs the mod-playerbots order API that does not exist yet (Phase 1). Note it as blocked on Phase 1 rather than run it now. When Phase 1 lands, order five grouped bots to one point with formation offsets and redirect them mid-walk.
+Not scripted here — it needs the shared commandable-player movement API that does not exist yet. This is Phase 1A's final acceptance test, not work to run before the API. When Phase 1A lands, order five grouped bots to one point with explicit test offsets and redirect them mid-walk.
 
 ## Answers (fill in, then delete the module)
 
@@ -149,6 +149,6 @@ Not scripted here — it needs the mod-playerbots order API that does not exist 
   record made `LoadHotfixData` report an unknown store at every boot. The newer
   removal record and spell 2000001's Valid record remain, and the next boot was
   clean.
-- Spike 4 walker at scale: blocked on Phase 1
+- Spike 4 walker at scale: blocked on Phase 1A and retained as that phase's final acceptance test
 
 The living implementation plan and tracker is [COMMANDER_MODE.md](../../COMMANDER_MODE.md).

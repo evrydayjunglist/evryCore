@@ -85,7 +85,7 @@ public:
 
         player->SetPlayerFlag(PLAYER_FLAGS_COMMENTATOR2);
         player->SetPlayerFlag(PLAYER_FLAGS_COMMENTATOR_CAMERA);
-        handler->PSendSysMessage("rts-spike: commentator flags set on {}. Now probe C_Commentator from the RTSSpike addon.", player->GetName());
+        handler->PSendSysMessage("rts-spike: commentator flags set on %s. Now probe C_Commentator from the RTSSpike addon.", player->GetName());
         TC_LOG_INFO("server.worldserver", "mod-rts-spike: commentator flags set on {}", player->GetName());
         return true;
     }
@@ -98,7 +98,7 @@ public:
 
         player->RemovePlayerFlag(PLAYER_FLAGS_COMMENTATOR2);
         player->RemovePlayerFlag(PLAYER_FLAGS_COMMENTATOR_CAMERA);
-        handler->PSendSysMessage("rts-spike: commentator flags removed from {}.", player->GetName());
+        handler->PSendSysMessage("rts-spike: commentator flags removed from %s.", player->GetName());
         TC_LOG_INFO("server.worldserver", "mod-rts-spike: commentator flags removed from {}", player->GetName());
         return true;
     }
@@ -107,7 +107,7 @@ public:
     {
         ReticleSpellId = spellId;
         ReticleAnyDest = false;
-        handler->PSendSysMessage("rts-spike: logging ground destinations for spell {}.", spellId);
+        handler->PSendSysMessage("rts-spike: logging ground destinations for spell %u.", spellId);
         return true;
     }
 
@@ -136,7 +136,7 @@ public:
         bool const flags = player->HasPlayerFlag(PLAYER_FLAGS_COMMENTATOR2) && player->HasPlayerFlag(PLAYER_FLAGS_COMMENTATOR_CAMERA);
         uint32 const spellId = ReticleSpellId.load();
         bool const anyDest = ReticleAnyDest.load();
-        handler->PSendSysMessage("rts-spike: commentator flags {}. Reticle logging: {}.",
+        handler->PSendSysMessage("rts-spike: commentator flags %s. Reticle logging: %s.",
             flags ? "ON" : "off",
             anyDest ? "every ground cast" : (spellId ? Trinity::StringFormat("spell {}", spellId) : "off"));
         return true;
@@ -168,15 +168,20 @@ public:
         if (!spell->m_targets.HasDst())
         {
             if (armedSpellId)
-                ChatHandler(player->GetSession()).PSendSysMessage("rts-spike: spell {} cast, but it carries no ground destination.", spellInfo->Id);
+                ChatHandler(player->GetSession()).PSendSysMessage("rts-spike: spell %u cast, but it carries no ground destination.", spellInfo->Id);
             return;
         }
 
+        // The map comes from the caster, not the destination. A destination the
+        // client sent is filled by Position::Relocate, which copies x, y, z and
+        // orientation and never touches the map, so the WorldLocation keeps its
+        // default of MAPID_INVALID. Anything that acts on these coordinates has
+        // to read the map off the player.
         WorldLocation const* dest = spell->m_targets.GetDstPos();
-        ChatHandler(player->GetSession()).PSendSysMessage("rts-spike: spell {} dest map {} at {:.3f} {:.3f} {:.3f}",
-            spellInfo->Id, dest->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ());
+        ChatHandler(player->GetSession()).PSendSysMessage("rts-spike: spell %u dest map %u at %.3f %.3f %.3f",
+            spellInfo->Id, player->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ());
         TC_LOG_INFO("server.worldserver", "mod-rts-spike: {} cast spell {} dest map {} at {:.3f} {:.3f} {:.3f}",
-            player->GetName(), spellInfo->Id, dest->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ());
+            player->GetName(), spellInfo->Id, player->GetMapId(), dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ());
     }
 };
 

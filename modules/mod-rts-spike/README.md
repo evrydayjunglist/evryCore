@@ -124,6 +124,20 @@ Not scripted here — it needs the mod-playerbots order API that does not exist 
   `SkillLineAbility` rows for 1312659 and 2000000 did not change their behavior; the
   working clone has no such relation.
 
+  Spell 2000001 is the keeper feasibility spell, not finished product data. Live
+  overlay inspection still shows `CastingTimeIndex` 5, a 12-second recovery, a
+  1.5-second start recovery, a 2.5% mana cost, and an area-trigger effect. Before the
+  order translator consumes it, make it instant and inert with no cost, global
+  cooldown, or cooldown, then repeat the cast checks.
+
+  The vehicle follow-up also passed on 23 August 2026, with the commentator flags
+  off to isolate the seat test. Wintergrasp Demolisher entry 28094 kept the player
+  seated in seats 2 and 3, and `/cast RTS Order` delivered a separate spell 2000001
+  destination from each seat. The logged map value was the expected `MAPID_INVALID`;
+  the order implementation takes the map from the caster. A combined
+  commentator-plus-vehicle run is unnecessary because the commentator camera won
+  the ladder and Commander Mode does not use a vehicle for its view.
+
   Cleanup snapshot `2026-08-23_00-29-30` and hotfix push 110669 removed both
   diagnostic clones and those `SkillLineAbility` rows. The realm-wide Blizzard
   `SpellMisc` override (ID 164352) was deleted, and the same push marks the native
@@ -136,3 +150,5 @@ Not scripted here — it needs the mod-playerbots order API that does not exist 
   removal record and spell 2000001's Valid record remain, and the next boot was
   clean.
 - Spike 4 walker at scale: blocked on Phase 1
+
+The living implementation plan and tracker is [COMMANDER_MODE.md](../../COMMANDER_MODE.md).

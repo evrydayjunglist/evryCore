@@ -1739,7 +1739,7 @@ bool PlayerbotWalker::JumpMovementIsAllowed(Player const* player, char const*& r
         return false;
     }
 
-    uint32 const refusedFlags = MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR | MOVEMENTFLAG_SWIMMING
+    static constexpr MovementFlags refusedFlags = MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR | MOVEMENTFLAG_SWIMMING
         | MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY | MOVEMENTFLAG_ROOT | MOVEMENTFLAG_HOVER;
     if (player->m_movementInfo.HasMovementFlag(refusedFlags))
     {

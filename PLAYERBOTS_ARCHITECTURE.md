@@ -12,8 +12,8 @@ Last updated: 23 August 2026
 Playerbots have two useful operating levels.
 
 With `mod-playerbots` and `mod-rts`, but without `playerbots.exe`, they are
-commandable RTS-ready characters. They do not choose a life for themselves, but they
-can safely execute local orders and tactical policies such as hold, passive,
+commandable RTS-ready characters. Their life goal stays unset while they safely execute
+local orders and tactical policies such as hold, passive,
 defensive, follow, assist, guard, patrol, move, attack, loot, and interact as those
 capabilities are implemented.
 
@@ -65,19 +65,21 @@ Still open:
 - `playerbots.exe` remains a C# .NET 10 Worker application.
 - Worldserver and the executable communicate over loopback TCP with bounded,
   length-prefixed messages.
-- Keep UTF-8 JSON while the strategic contract is changing. Consider another encoding
-  only after measurements justify the dependency and build cost. Do not add gRPC now.
+- UTF-8 JSON is the current strategic-contract encoding because it stays inspectable
+  while the contract changes. gRPC or another encoding remains available when measured
+  traffic and tooling benefits justify the dependency and build cost.
 - When durable planner memory is needed, use a private SQLite store owned by
-  `playerbots.exe`. It is not a TrinityCore world or character database and never
-  authorizes game mutations.
+  `playerbots.exe`. TrinityCore world and character databases retain game authority,
+  while SQLite stores planner-owned memory only.
 - Distribution builds remain self-contained single-file executables. One executable
-  hosts all bot planners; do not start one process or operating-system thread per bot.
+  hosts isolated bot planners with bounded shared resources rather than requiring a
+  process or operating-system thread for every bot.
 
 C# is selected because strategic work is stateful, asynchronous, and slow relative to
 the world tick. Domain modeling, persistence, diagnostics, testing, and iteration speed
 matter more there than native-cycle performance. Movement, combat timing, interaction,
-and all authoritative state remain in C++, so an executable pause or garbage collection
-cannot stall the world thread.
+and all authoritative state remain in C++, keeping executable pauses and garbage
+collection independent from the world thread.
 
 ## Responsibilities
 
@@ -114,8 +116,8 @@ The executable owns strategic autonomy:
 - reconciliation after its own restart or a worldserver restart;
 - status, structured logs, traces, and operator-facing diagnostics.
 
-It may send typed strategic intents. It never becomes a remote `WorldSession`, a
-world-tick puppeteer, or an alternate authority for the `Player`.
+It sends typed strategic intents. `WorldSession`, world-tick execution, and authoritative
+`Player` state remain inside worldserver.
 
 Examples of the boundary:
 
@@ -202,7 +204,8 @@ old generation are rejected before they can queue another action.
 RTS or direct control always preempts external autonomy for the selected subject.
 `playerbots.exe` is told that the intention was suspended or invalidated. When human
 control releases the bot, external autonomy receives fresh authoritative state and
-replans; it never blindly resumes a stale target, interaction, purchase, or combat step.
+replans from current truth rather than resuming a stale target, interaction, purchase,
+or combat step.
 
 RTS and direct switch also need session-level state because acquiring or releasing
 control may be an atomic transition across the commander, the original body, and one or
@@ -213,7 +216,7 @@ more selected bots. A per-`Player` boolean is not enough.
 Reserve means no self-chosen life goal, not a completely inert session.
 
 - Hold keeps the current owner and position and does no unrelated work.
-- Passive never initiates or retaliates.
+- Passive remains inert even when attacked.
 - Defensive responds only to legitimate attackers, obeys a bounded leash, and returns
   to the previous order or anchor.
 - Guard protects an assigned unit or place according to its stance and returns after
@@ -225,8 +228,8 @@ Reserve means no self-chosen life goal, not a completely inert session.
   commandable-`Player` capabilities as they become available.
 
 The default reserve stance and the exact first set of tactical policies remain product
-choices in `COMMANDER_MODE.md`. Do not let the existing autonomous combat behavior
-become an accidental commanded default.
+choices in `COMMANDER_MODE.md`. Commanded combat behavior begins from that explicit
+choice rather than inheriting the current autonomous default.
 
 ## Strategic bridge
 
@@ -254,12 +257,12 @@ Before the first writable strategic intent, the bridge needs:
 - cross-language golden-message, malformed-message, retry, duplicate, stale-generation,
   backpressure, reconnect, and restart tests.
 
-Loopback is transport scope, not authentication. A second local process must not gain
-writable authority merely by connecting.
+Loopback defines transport scope; authenticated capability negotiation defines writable
+authority, so a second local process gains nothing merely by connecting.
 
-Do not add gRPC now. Keep JSON inspectable while the contract is changing. If measured
-traffic later justifies a binary encoding, treat that as a separate dependency and
-build decision.
+JSON remains inspectable while the contract is changing. Measured traffic or tooling
+needs may select gRPC or a binary encoding through a separate dependency and build
+decision.
 
 ## Information and non-cheat boundary
 
@@ -268,35 +271,37 @@ and action rules.
 
 - A bot may expose its quest log, inventory, spells, legitimate map knowledge, visible
   and phase-valid nearby world, party or guild state, and action results.
-- Do not expose hidden spawns, unrestricted world objects, database tables, another
-  player's private state, or server-wide omniscience.
-- One executable may host many isolated bot agents. It must not merge every private
-  observation into automatic shared knowledge.
+- Exposed observations are limited to player-legible state; hidden spawns, unrestricted
+  world objects, database tables, another player's private state, and server-wide
+  omniscience fall outside that boundary.
+- One executable may host many isolated bot agents. Private observations remain scoped
+  to the observing bot unless the explicit sharing policy permits communication.
 - Group, guild, and social coordination may share information through an explicit
   policy comparable to what players could communicate. The policy must say what is
   shared and with whom.
 - Planner-owned memory does not override current world truth. Worldserver revalidates
   phase, visibility, range, line of sight, geometry, resources, cooldowns, costs,
   prerequisites, permissions, and controller ownership at execution time.
-- The executable cannot send raw packet bytes, arbitrary scripts, SQL, teleports,
-  inventory edits, quest completion, direct group or guild mutation, or another
-  privileged server operation.
+- The executable sends typed strategic intents. Worldserver alone translates accepted
+  intents into packet actions and retains privileged operations such as SQL, teleports,
+  inventory edits, quest completion, and direct group or guild mutation.
 - Every game mutation follows a deliberately implemented player capability and queues
   the packet a real client would send.
 
 ## Persistence
 
 World and character databases remain authoritative for game state. `playerbots.exe`
-must not connect to them as a shortcut around the bridge or the bot's permitted view.
+receives its permitted view through the bridge, keeping database authority and planner
+knowledge separated.
 
 When durable strategic memory is implemented, a private SQLite store is the selected
 starting point. Key bot state by realm and stable character identity, not roster index.
 It may contain personalities, preferences, long-term goals, relationships, schedules,
 resumable semantic plans, an outbox, and a bounded decision journal.
 
-Do not persist volatile target GUIDs, movement steps, current tactical actions, or a
-worldserver controller generation as if they survived a restart. A new world boot
-epoch requires a fresh snapshot and revalidation of every durable goal.
+Durable memory contains semantic goals rather than volatile target GUIDs, movement
+steps, current tactical actions, or a worldserver controller generation. A new world
+boot epoch requires a fresh snapshot and revalidation of every durable goal.
 
 ## Failure and restart behavior
 
@@ -317,22 +322,24 @@ After worldserver restarts, it issues a new boot epoch and no volatile action su
 The executable reconnects, reads authoritative roster and bot state, reasserts durable
 desired goals, and replans.
 
-After `playerbots.exe` restarts, it does the same reconciliation. It must not replay an
-old click, reward selection, invitation, purchase, placement, or combat target without
-fresh validation.
+After `playerbots.exe` restarts, it does the same reconciliation. Old clicks, reward
+selections, invitations, purchases, placements, and combat targets require fresh
+validation before any new action.
 
 The behavior when a Coordinator presence lease expires during active RTS or direct
 human control remains an explicit product decision. The two safe choices are to pin
 presence until that human-control session releases, or to release and restore the human
-session safely before logout. Never kick a directly controlled subject before restoring
-the controller's playable original character.
+session safely before logout. Restoration of the controller's playable original
+character always precedes a directly controlled subject's logout.
 
 ## Implementation order
 
-Do not move the current quest loop into C# as the first strategic feature.
+The first strategic feature proves the bridge with a bounded semantic activity while
+the current quest loop stays intact until embodied skills and controller migration are
+ready.
 
 1. Keep the working executable login foundation and existing built-in autonomy intact.
-2. Complete the stock-client direct-switch feasibility spike required by
+2. Retain the completed stock-client direct-switch no-go and cleaned-up evidence from
    `COMMANDER_MODE.md`.
 3. Build the subject-neutral controller, generation, quiescing, hold, release, and
    stale-request contract.

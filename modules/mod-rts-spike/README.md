@@ -1,6 +1,6 @@
 # mod-rts-spike
 
-Throwaway harness for Commander Mode experiments that cannot be settled from source because they depend on live retail-client behavior. The current branch contains the completed Phase 0A camera, channel, ground-order, cloned-spell, and vehicle-seat evidence. Phase 0B direct-switch feasibility belongs on its own fresh job branch after Phase 0A lands. Delete this whole folder once the remaining experimental answers are recorded.
+Throwaway harness for Commander Mode experiments. The current source retains the completed Phase 0A camera, channel, ground-order, cloned-spell, and vehicle-seat probes. The Phase 0B direct-switch extension was removed after source inspection and a live retail-client run rejected the current stock-server path as playable possession: camera and active-mover state can follow the bot, while selection, ordinary spell casts, and the visible player UI remain on the session owner. No production control seam was retained from that probe. Delete this whole folder after its remaining Phase 1A scale and Phase 4 viewpoint uses are measured and their evidence is retained elsewhere.
 
 It is a normal drop-in module (`modules/mod-rts-spike/`), so a static build compiles it in. The client half is the `RTSSpike` addon under `addon/`.
 
@@ -37,7 +37,71 @@ Outcome to write down: ack received yes/no; whether `CONFIG_ADDON_CHANNEL` had t
 
 Outcome to write down: destination matches the clicked point yes/no; works while vehicle-seated yes/no.
 
-## Spike 4 — walker at RTS scale
+## Phase 0B — direct switch to one managed bot
+
+Status: complete and cleaned up. The disposable invite, switch, release, lifecycle,
+actor-UI probe, playerbot-quiescing, and state-test code was removed after the live
+no-go was recorded. The current module does not provide direct-switch commands.
+
+The measured branch required one alive, stationary, visible, same-group and
+same-instance managed bot. It queued the bot's real party-invite acceptance packet,
+quiesced Builtin movement, snapshotted the owner's action bars, then exercised the
+native viewpoint → active mover → `SetClientControl` order. It sent the bot's known
+spells, action buttons, cooldown history, and charge state as a visual probe. Those
+stock packets carry no actor identity, so none of that code was selected for production.
+
+First live setup attempt, 23 August 2026: party creation through the packet-driven
+acceptance helper worked far enough to attempt `.rtsspike switch Opai`, but acquisition
+was refused before mutation with `controller does not own its normal mover/viewpoint`.
+The harness had incorrectly required `GetViewpoint()` to return the controller;
+TrinityCore returns `nullptr` for the normal self-view and uses `FarsightObject` only
+for a non-default viewpoint. The predicate now accepts that normal null value and emits
+separate mover and viewpoint refusals. This attempt completed no control-transfer check.
+
+Second live run, 23 August 2026: **the current stock path is a playable-possession
+no-go.** Magey's camera moved to Opai and the client acknowledged Opai as active mover;
+`CMSG_SET_ACTIVE_MOVER`, movement heartbeat, and fall-land packets all carried Opai's
+GUID and matched the server's expected mover. The run did not establish ordinary
+walk/turn control. Target selection still arrived on Magey's session owner, including
+selecting Opai as though Magey were still the actor. Spell `2000001` and ordinary
+Blizzard casts resolved with Magey as the actual caster. The server sent Opai's 115
+known spells, 5 action buttons, spell history, and charge state to Magey's client, but
+the visible controls remained Magey's. This proves that sending the actorless stock UI
+packets does not retarget the player UI to Opai.
+
+Explicit `.rtsspike release` succeeded without relogging: Magey's normal camera and
+play returned, the owner UI snapshot reported no changed bar slots, and
+`Playerbots.log` recorded Opai leaving the direct-control spike and resuming her
+Builtin movement. Melee input, an actual action-bar edit and persistence check, both
+death cases, and the other forced exits were not tested. The failed possession gate is
+already sufficient for the Phase 0B stock-path no-go; do not describe those remaining
+cases as passed.
+
+### Source and build result — 23 August 2026
+
+**No-go for playable direct switch on the current stock-server input path.** Existing
+`Player::SetClientControl` and `Unit::SetMovedUnit` send stock control/viewpoint/active-
+mover state, and movement validation resolves the packet GUID against
+`GetUnitBeingMoved()`. In contrast, the stock handlers call `_player->SetSelection`,
+`_player->Attack`, `_player->CanRequestSpellCast` / `RequestSpellCast`, and
+`GetPlayer()->AddActionButton` / `RemoveActionButton`. Those verbs therefore remain on
+the original character. Mover-only success would not satisfy possession.
+
+The UI probe can send actor data through stock packets, but those packets have no actor
+identity and incoming bar edits remain owner-bound. After this result, the owner selected
+a capability-negotiated custom client/protocol boundary comparable in responsibility to
+SuperUI. Its exact client form and production protocol remain separate work. Client
+patching, injection, reverse engineering, custom opcodes, a purpose-built client, and
+companion tooling are all available options subject to the safety proof.
+
+The measured branch's RelWithDebInfo `worldserver` and `tests` targets built
+successfully, and its focused `[rts-spike]` tests passed 20 assertions in two cases.
+Those spike-only tests were removed with the harness. After cleanup, `worldserver`,
+`bnetserver`, and `tests` rebuild successfully; the remaining C++ suite passes 362
+assertions in 46 cases and the .NET protocol tests pass. These are source/build results,
+not live retail-client evidence.
+
+## Spike 5 — walker at RTS scale
 
 Not scripted here — it needs the shared commandable-player movement API that does not exist yet. This is Phase 1A's final acceptance test, not work to run before the API. When Phase 1A lands, order five grouped bots to one point with explicit test offsets and redirect them mid-walk.
 
@@ -149,6 +213,11 @@ Not scripted here — it needs the shared commandable-player movement API that d
   record made `LoadHotfixData` report an unknown store at every boot. The newer
   removal record and spell 2000001's Valid record remain, and the next boot was
   clean.
-- Spike 4 walker at scale: blocked on Phase 1A and retained as that phase's final acceptance test
+- **Phase 0B direct switch: live no-go confirmed.** The stock client accepted Opai's
+  viewpoint and active-mover identity, while selection and spell casts remained Magey's
+  and the stock UI packets did not replace Magey's visible controls. Explicit release
+  restored Magey and resumed Opai's Builtin controller. Untested melee, bar-persistence,
+  death, and lifecycle cases remain recorded as untested rather than passed.
+- Spike 5 walker at scale: blocked on Phase 1A and retained as that phase's final acceptance test
 
 The living implementation plan and tracker is [COMMANDER_MODE.md](../../COMMANDER_MODE.md).

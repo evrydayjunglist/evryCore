@@ -20,12 +20,12 @@ Keep the root `README.md` to a short job summary, and keep experimental evidence
 | --- | --- | --- |
 | 0A. Commander client feasibility | **Complete** | Camera, command channel, ground order, cloned spell, and vehicle-seat tests pass |
 | 0B. Direct-switch feasibility | **Complete — live no-go confirmed, custom boundary selected, throwaway switch code removed** | Stock viewpoint and active mover work, but selection, casts, and visible player UI remain on the session owner; production possession will use a capability-negotiated custom client/protocol boundary |
-| 1A. Shared commandable-player movement | **Implemented — live acceptance pending** | The player body and managed bots use one move/hold/release contract; one- and five-bot tests pass |
-| 1B. Explicit attack and loot adapters | Waiting on Phase 1A | Manual attack and loot reach player-like packet paths for the player body and managed bots |
+| 1A. Shared commandable-player movement | **Backend implemented — stock-client input custody blocks acceptance** | The player body and managed bots use one move/hold/release contract; the original cannot also move from ordinary client input; remaining one- and five-bot lifecycle tests pass |
+| 1B. Explicit attack and loot adapters | Waiting on client input custody and Phase 1A | Manual attack and loot reach player-like packet paths for the player body and managed bots |
 | 2. `mod-rts` translator | Waiting on Phases 1A and 1B | Guarded group orders reach shared adapters with no action or movement engine in `mod-rts` |
 | 3. Commander addon | Waiting on Phase 2; camera completion also waits on Phase 4 | Selection, camera mode, reticle orders, state display, and clean exit work together |
 | 4. Streaming viewpoint | Spike pending; does not block Phase 1A | A real active viewpoint streams the camera area without fighting the commentator camera |
-| S1. Direct switch product | Blocked on an approved actor/UI boundary and Phase 1A | The client can play an authorized party bot while the original character is safely AI-driven, then restore both |
+| S1. Direct switch product | Commander client foundation is next; possession behavior follows Phase 1A | The client can play an authorized party bot while the original character is safely AI-driven, then restore both |
 | 5. evryOps support | Later | Configuration, read-only pins, and addon distribution are available without web orders |
 
 Checkboxes mean:
@@ -62,9 +62,10 @@ strategic controller, while real-time orders remain in the worldserver control p
 
 Safety and selected design boundaries:
 
-- The RTS path currently uses the proven stock `TrinityCore` addon-command channel.
-  Direct possession has its own selected capability-negotiated custom client/protocol
-  boundary and may use custom opcodes or another transport justified by that design.
+- The current RTS harness uses the proven stock `TrinityCore` addon-command channel.
+  The next job is a narrow, version-pinned Commander client boundary for RTS input
+  custody as well as later direct possession. It must negotiate capability, park direct
+  body input while RTS owns the original, and restore ordinary input on every exit.
 - Client patching, injection, reverse engineering, a purpose-built client, and companion
   tooling are available options for the dedicated client job. Choose from measured
   evidence and keep the resulting path safe, supportable, and explicit.
@@ -80,6 +81,10 @@ Safety and selected design boundaries:
   runtime directly.
 - A commander may address only their own original character and eligible bots in their
   own group and on the same map.
+- The original character remains the same real `Player`, account character, group
+  member, and lifecycle subject while RTS owns it. It is not converted into a managed
+  bot. The shared commandable runtime drives it as an RTS subject, and WASD must not
+  concurrently drive the body.
 - Use the caster's map for a ground order. Client-sent destinations contain XYZ but
   retain `MAPID_INVALID`.
 
@@ -117,6 +122,12 @@ RTS free view
   subject generation, and rejects its late work. Releasing a bot restores its
   applicable baseline controller. External autonomy receives fresh state and replans;
   it does not resume a stale target or action.
+- An RTS claim on the original is not exclusive until the connected client has yielded
+  gameplay input. The 24 August live test showed that `SetClientControl(player, false)`
+  greys the action bar but leaves the original as Trinity's active moved unit, so stock
+  WASD packets are still accepted. The custom client must park those packets, and the
+  server must independently reject network-origin gameplay packets that conflict with
+  the active claim while still accepting generation-authorized internal RTS packets.
 
 ### RTS order path
 
@@ -189,9 +200,10 @@ subject context + destination
     typed switch/release and actor-input requests, actor-identified UI state, explicit
     acknowledgements, and forced-release reasons while worldserver authorizes and
     revalidates every action.
-  - Capability negotiation keeps unsupported clients on their ordinary path. The exact
-    client form is still open and may include patching, injection, reverse engineering,
-    a purpose-built client, companion tooling, or a combination selected by evidence.
+  - Capability negotiation keeps unsupported clients on their ordinary path. The next
+    job is the narrow version-pinned Commander component and input-custody contract.
+    Its lowest-level implementation technique remains evidence-driven: patching,
+    injection, reverse engineering, companion tooling, or another supportable approach.
 - [ ] Decide the unattended original-character policy during direct switch.
   - Choices include hold, follow/assist/defend, the Builtin controller, the External
     controller, or the shared RTS command service. Begin with the least autonomous safe
@@ -220,6 +232,13 @@ subject context + destination
     works without the executable. Normal Coordinator absence and grace behavior resumes
     after RTS exits and the claims are safely released. This connection is not the
     future External strategic heartbeat.
+- [x] Decide original-character identity and movement ownership in RTS free view.
+  - Selected 24 August 2026: the original remains the real original character, but its
+    active controller is RTS and the same commandable runtime drives it like any other
+    RTS subject. Ordinary WASD body movement is disabled until RTS exit restores normal
+    human control. The action bar, attacks, spells, items, and interactions require an
+    explicit client-input policy in the client job; no stock packet should be assumed
+    harmless merely because movement was parked.
 - [x] Decide commander arbitration when more than one human is in the group.
   - Selected 24 August 2026: one commander may own RTS claims for a group, and that
     commander must be the current group leader. A leadership change that removes that
@@ -278,18 +297,20 @@ original character and party bots are all commandable. A narrow direct-switch
 feasibility spike therefore precedes the shared Phase 1A backend, while production
 switch remains a sibling track after that shared foundation.
 
-Branch sequence:
+Current branch sequence:
 
-1. Merge the completed Phase 0A `job/rts-spike` work into `evry`.
-2. Create a fresh disposable Phase 0B switch-spike branch from updated `evry`.
-3. When Phase 0B is measured, remove any throwaway-only switch code and merge its
-   evidence plus only deliberately accepted reusable seams into `evry`.
-4. Create the Phase 1A movement branch from that refreshed `evry`; after it lands,
-   create a separate Phase 1B attack/loot branch.
-5. Branch S1 only after its prerequisites have landed on `evry`.
+1. Phase 0A and the cleaned Phase 0B evidence are already on `evry`.
+2. Merge `job/rts-commandable-movement` into `evry` as the implemented backend with its
+   remaining live-acceptance limits documented; do not call Phase 1A complete.
+3. Create a fresh client job from updated `evry` for the versioned Commander capability,
+   RTS input custody, exit restoration, and the reviewed packet-origin enforcement seam.
+4. After that client boundary lands, use a fresh bounded Phase 1A follow-up for the
+   remaining original, five-bot, lifecycle, death, teleport, map, and Coordinator-loss
+   acceptance and any fixes those tests expose.
+5. Begin Phase 1B only after the full Phase 1A gate passes. Branch the later possession
+   product from `evry` after its shared client and controller prerequisites have landed.
 
-`job/rts-spike` and the Phase 0B branch remain disposable single-purpose branches rather
-than a stacked umbrella branch.
+Keep each job disposable and single-purpose rather than stacking an umbrella branch.
 
 ## Phase 0A — Commander client feasibility
 
@@ -439,6 +460,19 @@ AI rather than replacing that AI with a persistent RTS ownership state:
 - SuperUI possession is separate from ordinary group orders. A relevant teleport or
   the possessed bot's death force-releases possession and restores the original client
   actor. Death of the unattended original character does not force-release possession.
+- SuperUI does not turn the original account character into a fabricated bot. While the
+  human drives a bot or uses free view, `AttachToRealCharacter` attaches the same
+  `AiBotAI` to that existing `Player`; its dummy bot entry is only AI-internal state.
+  Leaving free view detaches that AI and restores manual control.
+- SuperUI's wire contract makes the custom client responsible for input custody. Free-
+  view release mode keeps the own character autonomous and tells the client to flush a
+  stop and park its movement stream. The server-side order path then assumes the
+  detached camera sends no character movement. Its one-second movement rejection is
+  only a forced-release drain for in-flight possessed-bot packets, not a continuous
+  free-view input gate.
+- The reference shelf contains SuperUI's protocol and server implementation, but not
+  the `MSUIClient` source. The parked-stream contract and server assumption are verified;
+  the exact client key-routing implementation is not available for inspection here.
 
 The selected evryCore behavior intentionally diverges toward a stricter RTS model. The
 owner wants Commander Mode to behave as much like an RTS as practical and confirmed the
@@ -456,6 +490,10 @@ current Phase 1A posture:
 - Death and a compatible same-map teleport suspend movement, advance the generation,
   and return the subject to commanded hold after packet-driven recovery or authoritative
   revalidation. An incompatible map or instance still invalidates the claim.
+- The original keeps its original identity and lifecycle while using this same RTS
+  controller and walker. Unlike SuperUI, evryCore will not rely only on the client to
+  park input: the selected production boundary also needs server-side packet-origin
+  enforcement so network input and internal RTS work cannot drive it simultaneously.
 
 This is an intentional product distinction, not missing SuperUI parity. Reference
 evidence lives in `SuperUiContent/SuiWorld/CRPG/SuiPossess.cpp` (`HandleOrder`,
@@ -491,6 +529,10 @@ evidence lives in `SuperUiContent/SuiWorld/CRPG/SuiPossess.cpp` (`HandleOrder`,
   Because Trinity normally excludes the apparent sender from a client movement update,
   the adapter also mirrors each accepted movement state to the owning client and waits
   for authoritative feet synchronization before reporting arrival.
+- [ ] Add production client-input custody for an RTS-claimed original. The custom client
+  must park direct body movement and restore it on exit; a narrow server seam must
+  distinguish network-origin gameplay packets from authorized internal RTS packets and
+  enforce the current controller generation.
 - [x] Add owner-aware move, stop/hold, and explicit release operations using a narrow
   request type carrying controller and subject identity.
 - [x] Store controller identity and generation, requested directive, moving/holding/
@@ -530,7 +572,10 @@ arrival without visible owning-client movement, the module-only movement mirror 
 arrival barrier were added; all four RelWithDebInfo targets rebuilt and both C++ suites
 still pass. A subsequent live test visibly moved the owning client to the requested
 feet and passed the synchronization barrier; redirect, stop, exit restoration, and
-lifecycle coverage remain open.
+lifecycle coverage remain open. The owner could still move Magey with WASD while the
+RTS claim was active. The greyed action bar showed the control update reached the stock
+client, but `SetClientControl(player, false)` did not remove Magey as its own active
+mover. That fails exclusive input ownership and makes client input custody the next job.
 
 ### Acceptance gate
 
@@ -545,7 +590,9 @@ lifecycle coverage remain open.
   - Basic move passed live on 24 August 2026 after the owning-client mirror fix. Magey
     visibly followed `.rtsspike command moveoriginal -43.190189 -4308.263672
     69.915924`; the log recorded synchronization at those commanded feet before arrival
-    and commanded hold. Redirect and explicit stop/hold still require live testing.
+    and commanded hold. The same test then failed exclusivity because ordinary WASD
+    still moved Magey during the RTS claim. Redirect and explicit stop/hold still
+    require live testing after input custody exists.
 - [ ] Use the throwaway spike harness to order five grouped bots to five formation
   offsets, then redirect all five mid-walk.
 - [ ] Add the original character to the scale test and confirm every subject arrives
@@ -572,7 +619,14 @@ lifecycle coverage remain open.
   RTS movement. Exit RTS and confirm the normal Coordinator-absence logout behavior
   resumes. Treat this only as presence-loss evidence, not an External heartbeat test.
 
-Phase 1B begins after this gate passes.
+The next bounded job is the Commander client/input-custody boundary, not Phase 1B. Start
+with a capability/version handshake, RTS enter/exit acknowledgements, parked body
+movement, clean restoration on normal and forced exit, and fail-closed behavior for an
+unsupported client build. Pair it with the smallest reviewed worldserver ingress seam
+that tags packet origin and rejects conflicting network gameplay under an RTS claim.
+Do not mix the client job into this movement branch. Finish the remaining Phase 1A
+scale and lifecycle gate after that boundary makes the original claim genuinely
+exclusive. Phase 1B begins only after the full gate passes.
 
 ## Phase 1B — explicit attack and loot adapters
 
@@ -864,3 +918,5 @@ Location: `D:\WOWEmulation\Emulators\Tools\evryOps`
 | 24 Aug 2026 | SuperUI source comparison confirmed that its ordinary group orders temporarily override companion follow/assist AI, while evryCore deliberately keeps exclusive RTS claims and persistent commanded hold. The owner selected the stricter RTS posture; automatic follow, combat, and loot must not resume after stop or arrival. |
 | 24 Aug 2026 | First Phase 1A live run passed one-bot enter, move, stop/hold, and release, but the original character remained visually stationary while the internal walker falsely reported arrival. Source traced this to Trinity excluding the apparent movement sender from `SMSG_MOVE_UPDATE`. The module now mirrors only commanded-original movement to its owning client and requires authoritative feet synchronization before arrival; builds and automated tests pass, live retest pending. |
 | 24 Aug 2026 | Phase 1A original-character live retest passed its basic move: Magey visibly followed `moveoriginal` for a 27.3-yard commanded walk, navigated a local obstruction, synchronized the owning client at exactly `(-43.19, -4308.26, 69.92)`, and only then reported arrival and commanded hold. Redirect, explicit stop, exit restoration, and lifecycle cases remain untested. |
+| 24 Aug 2026 | The same original-character run failed exclusive input ownership: Magey still accepted ordinary WASD movement during the RTS claim, although the action bar appeared greyed. `SetClientControl(player, false)` does not remove the original as its own active mover. The original remains the original `Player`, but production RTS must park direct client gameplay input and enforce that ownership server-side. |
+| 24 Aug 2026 | The owner selected custom-client work as the next job. Begin with a versioned capability handshake, RTS enter/exit, parked original-body input, reliable restoration, unsupported-build refusal, and a narrow server packet-origin gate; direct possession and product UI can build on that boundary later. |

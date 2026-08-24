@@ -5,7 +5,7 @@ This is the authoritative architecture and long-term product direction for
 [Commander Mode](COMMANDER_MODE.md) remains the implementation plan for direct switch
 and RTS control.
 
-Last updated: 23 August 2026
+Last updated: 24 August 2026
 
 ## Vision
 
@@ -44,6 +44,12 @@ Selected:
 - Presence and strategic autonomy are independent configuration and authority axes.
 - RTS and direct human control preempt strategic autonomy through the shared controller
   contract.
+- An original character claimed by RTS remains the same real account character and
+  lifecycle subject. RTS temporarily owns its gameplay intentions through the shared
+  commandable runtime; it is not converted into a managed bot.
+- A capability-negotiated, version-pinned Commander client is the next control-layer
+  job. It parks direct original-body input during RTS and restores it on exit, while a
+  narrow worldserver packet-origin gate independently enforces controller ownership.
 - The C++ world runtime, C# executable, Lua addon, and loopback framed-message stack are
   retained.
 - All game actions remain worldserver-validated and use player-like packet paths.
@@ -53,8 +59,8 @@ Selected:
 Still open:
 
 - the default Reserve stance and the first tactical policies enabled for RTS units;
-- whether active RTS or direct human control temporarily pins presence when a
-  Coordinator lease expires, or is safely released before logout;
+- the direct-possession behavior when a Coordinator presence lease expires; active RTS
+  currently pins a valid claimed bot until RTS releases it;
 - the exact future strategic-autonomy configuration key and migration defaults;
 - the first external strategic activity chosen for the end-to-end proof.
 
@@ -138,6 +144,15 @@ and translates those orders into the shared commandable-`Player` service.
 `mod-rts` does not own controller state, pathfinding, movement, combat, or interaction.
 It calls the same embodied skills used by built-in and external autonomy.
 
+The product client boundary extends beyond an addon. The addon remains the RTS
+selection and presentation layer, but a version-pinned Commander client component must
+own input custody: negotiate capability, enter and leave RTS explicitly, park direct
+body gameplay input while the original is commanded, and restore it on every normal or
+forced exit. Unsupported builds stay on ordinary play. Worldserver remains
+authoritative and does not trust the client alone; ingress must preserve packet origin
+so a network packet that conflicts with the active controller can be rejected without
+rejecting an authorized internal packet queued by the commandable runtime.
+
 ## Presence and strategic autonomy
 
 Presence and intelligence are separate choices.
@@ -188,6 +203,13 @@ The exclusive controller identifies who may produce gameplay intentions. Control
 include the retail client, reserve, built-in autonomy, external autonomy, RTS, direct
 control, and the chosen unattended-original-character policy. Exactly one controller
 may drive a `Player` at a time.
+
+For the connected original character, identity and controller are deliberately
+separate. It remains the session's original `Player`, with the same account, group,
+position, death state, inventory, and other authoritative state. In RTS free view its
+controller changes from the retail client to RTS, and the shared automated skill
+runtime drives it. Normal body movement cannot remain live merely because the session
+still belongs to that character.
 
 A directive and stance live under that controller. Examples include hold, move, follow,
 patrol, guard, attack, loot, passive, defensive, and assist. Hold is not a controller:
@@ -326,11 +348,11 @@ After `playerbots.exe` restarts, it does the same reconciliation. Old clicks, re
 selections, invitations, purchases, placements, and combat targets require fresh
 validation before any new action.
 
-The behavior when a Coordinator presence lease expires during active RTS or direct
-human control remains an explicit product decision. The two safe choices are to pin
-presence until that human-control session releases, or to release and restore the human
-session safely before logout. Restoration of the controller's playable original
-character always precedes a directly controlled subject's logout.
+When a Coordinator presence lease expires during active RTS, valid RTS-claimed managed
+bots stay online until the claim releases; normal Coordinator absence handling resumes
+afterward. Direct-possession behavior remains an explicit product decision. Restoration
+of the controller's playable original character always precedes a directly controlled
+subject's logout.
 
 ## Implementation order
 
@@ -342,19 +364,24 @@ ready.
 2. Retain the completed stock-client direct-switch no-go and cleaned-up evidence from
    `COMMANDER_MODE.md`.
 3. Build the subject-neutral controller, generation, quiescing, hold, release, and
-   stale-request contract.
-4. Add reserve stances and reusable follow, patrol, guard, assist, move, attack, loot,
+   stale-request contract. The backend is implemented; finish its live scale and
+   lifecycle acceptance after client input custody exists.
+4. **Next:** build the narrow Commander client boundary and server ingress enforcement:
+   capability/version negotiation, RTS enter/exit acknowledgement, parked direct body
+   input, reliable restoration, unsupported-build refusal, and packet-origin-aware
+   controller/generation checks.
+5. Add reserve stances and reusable follow, patrol, guard, assist, move, attack, loot,
    and interaction capabilities in bounded jobs.
-5. Separate the current in-process activity selector from its movement, combat,
+6. Separate the current in-process activity selector from its movement, combat,
    interaction, death, and session skill runtime. Keep it as the Builtin controller
    during migration.
-6. Mature the bridge for authenticated duplex strategic intents, observations,
+7. Mature the bridge for authenticated duplex strategic intents, observations,
    reconciliation, and failure handling.
-7. Prove one coarse external activity end to end, including executable loss,
+8. Prove one coarse external activity end to end, including executable loss,
    worldserver restart, RTS preemption, retry, duplicate delivery, stale-generation
    rejection, and non-cheat tests.
-8. Move long-horizon quest and activity choice outward incrementally.
-9. Add grouping, guilds, professions, economy, and housing one legitimate packet-driven
+9. Move long-horizon quest and activity choice outward incrementally.
+10. Add grouping, guilds, professions, economy, and housing one legitimate packet-driven
    capability family at a time.
 
 “Everything a player does” is the destination. Each new verb still needs a safe,
@@ -381,3 +408,16 @@ gameplay intent.
 That distinction must remain visible in documentation and logs: the selected
 architecture is the target, while the current executable is still its login and
 transport foundation.
+
+The `job/rts-commandable-movement` backend now provides controller-tracked commander claims for
+the original character and eligible grouped managed bots, controller generations,
+stale-request rejection, shared packet-walker movement, persistent commanded hold,
+release to baseline, death and teleport suspension, and Coordinator presence pinning.
+Focused commandable tests pass 98 assertions in 18 cases and the complete C++ suite
+passes 411 assertions in 53 cases. Live testing passed one-bot enter/move/stop/release
+and a synchronized original-character move. It also found the remaining blocking
+boundary: the stock client still sends accepted WASD movement for the RTS-claimed
+original. The action bar greys, but `SetClientControl(player, false)` leaves the
+original as its active mover. Therefore the controller contract is implemented inside
+the backend but is not yet exclusive at network ingress; the custom client and server
+packet-origin gate are next.

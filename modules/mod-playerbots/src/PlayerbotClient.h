@@ -146,6 +146,7 @@ namespace PlayerbotClient
     void QueueMoveTeleportAck(Player* player);
     void QueueWorldPortResponse(WorldSession* session);
     void QueueMovement(WorldSession* session, OpcodeClient opcode, MovementInfo const& movementInfo);
+    void SendMovementUpdate(WorldSession* session, MovementInfo const& movementInfo);
     void QueueQuestGiverAcceptQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);
     void QueueQuestGiverCompleteQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);
     void QueueQuestGiverChooseReward(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);

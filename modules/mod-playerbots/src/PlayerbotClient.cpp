@@ -171,6 +171,17 @@ void PlayerbotClient::QueueMovement(WorldSession* session, OpcodeClient opcode, 
     session->QueuePacket(std::move(packet));
 }
 
+void PlayerbotClient::SendMovementUpdate(WorldSession* session, MovementInfo const& movementInfo)
+{
+    if (!session)
+        return;
+
+    MovementInfo status = movementInfo;
+    WorldPackets::Movement::MoveUpdate update;
+    update.Status = &status;
+    session->SendPacket(update.Write());
+}
+
 void PlayerbotClient::QueueQuestGiverAcceptQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId)
 {
     if (!session || questGiverGuid.IsEmpty() || !questId)

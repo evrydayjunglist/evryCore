@@ -126,12 +126,12 @@ They do not implement the product order translator or formation behavior.
    the same public move request with five fixed four-yard test offsets. Repeat mid-walk.
 5. Test the human character only after the bot tests pass with
    `.rtsspike command moveoriginal <x> <y> <z>`, redirect it, and stop it with
-   `.rtsspike command stop <human-name>`. Do not press ordinary movement keys while the
-   free-view claim is active. This backend spike does not change the camera or
-   viewpoint. The original action bar may appear disabled while client movement control
-   is off, but the character must visibly follow the commanded walk. Before reporting
+   `.rtsspike command stop <human-name>`. This backend spike does not change the camera
+   or viewpoint. The character must visibly follow the commanded walk. Before reporting
    arrival, `Playerbots.log` must say `owning client synchronized at commanded feet`; a
-   synchronization timeout is a failed move, not an arrival.
+   synchronization timeout is a failed move, not an arrival. Deliberately test ordinary
+   WASD as a separate exclusivity check: the current stock client still moves the body,
+   which is a known failure rather than expected Commander behavior.
 6. `.rtsspike command release <bot-name>` restores that bot's baseline. Releasing the
    original character is refused while free view remains active.
 7. `.rtsspike command exit` releases every remaining claim and restores ordinary human
@@ -140,6 +140,30 @@ They do not implement the product order translator or formation behavior.
 The live run must also cover death/recovery, same-map teleport suspension, incompatible
 map or instance, group removal, leadership loss, logout, and Coordinator disconnect as
 listed in the root Commander Mode checklist. These commands existing is not live proof.
+
+Current live result, 24 August 2026: Opai passed one-bot enter, move, stop/hold, and
+release. Magey then visibly completed a 27.3-yard `moveoriginal`, navigated a local
+obstruction, synchronized the owning client at the exact destination, and entered hold.
+However, Magey still accepted ordinary WASD movement during the RTS claim. The action
+bar appeared greyed, so the client received the control update, but the stock path left
+Magey as its own active mover. This means the commanded movement adapter works while
+exclusive original-character input ownership does not.
+
+SuperUI documents the missing client half explicitly. Its free-view release mode keeps
+the original character autonomous and requires `MSUIClient` to flush a stop and park
+its movement stream; the server then assumes the detached camera sends no character
+movement. SuperUI attaches `AiBotAI` to the existing real original `Player` and detaches
+it on exit rather than changing the character's identity. Its server only rejects
+movement for one second when draining in-flight packets after a forced possession
+release. The reference shelf contains that wire contract and server source, but not the
+`MSUIClient` implementation, so its exact key-routing hooks cannot be inspected here.
+
+The next job is a narrow, version-pinned Commander client/input-custody boundary:
+capability handshake, RTS enter/exit acknowledgement, parked direct body gameplay
+input, reliable restoration on normal and forced exit, unsupported-build refusal, and
+a matching server packet-origin gate. The server must reject conflicting network input
+under an RTS claim while still accepting authorized internal RTS packets. Keep that
+client job separate from this movement branch.
 
 ## Answers (fill in, then delete the module)
 

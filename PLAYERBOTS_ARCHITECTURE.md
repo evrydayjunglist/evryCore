@@ -339,7 +339,7 @@ the current quest loop stays intact until embodied skills and controller migrati
 ready.
 
 1. Keep the working executable login foundation and existing built-in autonomy intact.
-2. Complete the stock-client direct-switch feasibility spike required by
+2. Retain the completed stock-client direct-switch no-go and cleaned-up evidence from
    `COMMANDER_MODE.md`.
 3. Build the subject-neutral controller, generation, quiescing, hold, release, and
    stale-request contract.

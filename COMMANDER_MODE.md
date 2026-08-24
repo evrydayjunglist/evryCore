@@ -19,8 +19,8 @@ Keep the root `README.md` to a short job summary, and keep experimental evidence
 | Phase | State | Exit condition |
 | --- | --- | --- |
 | 0A. Commander client feasibility | **Complete** | Camera, command channel, ground order, cloned spell, and vehicle-seat tests pass |
-| 0B. Direct-switch feasibility | **Live no-go confirmed; custom boundary selected; cleanup pending** | Stock viewpoint and active mover work, but selection, casts, and visible player UI remain on the session owner; production possession will use a capability-negotiated custom client/protocol boundary |
-| 1A. Shared commandable-player movement | Waiting on Phase 0B cleanup and remaining owner decisions | The player body and managed bots use one move/hold/release contract; one- and five-bot tests pass |
+| 0B. Direct-switch feasibility | **Complete — live no-go confirmed, custom boundary selected, throwaway switch code removed** | Stock viewpoint and active mover work, but selection, casts, and visible player UI remain on the session owner; production possession will use a capability-negotiated custom client/protocol boundary |
+| 1A. Shared commandable-player movement | Waiting on Phase 0B landing and remaining owner decisions | The player body and managed bots use one move/hold/release contract; one- and five-bot tests pass |
 | 1B. Explicit attack and loot adapters | Waiting on Phase 1A | Manual attack and loot reach player-like packet paths for the player body and managed bots |
 | 2. `mod-rts` translator | Waiting on Phases 1A and 1B | Guarded group orders reach shared adapters with no action or movement engine in `mod-rts` |
 | 3. Commander addon | Waiting on Phase 2; camera completion also waits on Phase 4 | Selection, camera mode, reticle orders, state display, and clean exit work together |
@@ -332,12 +332,17 @@ belong to the owner. A production path would need an explicitly approved server
 actor/UI-routing seam, a selected client/protocol boundary, or no direct-possession
 feature. This is a Phase 0B limit and result, not a permanent ban on any option.
 
-The bounded harness is implemented: one GM/controller pair, a spike-only helper that
-queues the managed bot's stock party-invite acceptance packet, managed-bot arbitration,
+The bounded branch harness implemented one GM/controller pair, a spike-only helper that
+queued the managed bot's stock party-invite acceptance packet, managed-bot arbitration,
 owner-bar snapshot and rollback, native control ordering, packet/state logs, and forced
-release hooks. RelWithDebInfo `worldserver` and `tests` build, and `[rts-spike]` passes
-20 assertions in two test cases. The live playable-possession gate and explicit-release
-case have been measured; unchecked live items below remain untested rather than passed.
+release hooks. It built and its focused state tests passed before the live run. Cleanup
+then removed the invite and switch commands, playerbot quiescing flag, state helper, and
+focused tests because no production control seam was selected. The live
+playable-possession gate and explicit-release case were measured; unchecked live items
+below remain untested rather than passed.
+
+The checklist below records the measured branch rather than commands available in the
+current tree.
 
 Live result, 23 August 2026: Magey's camera and active mover switched to Opai. The
 client acknowledged Opai's GUID in active-mover, heartbeat, and fall-land packets, but
@@ -776,3 +781,4 @@ Location: `D:\WOWEmulation\Emulators\Tools\evryOps`
 | 23 Aug 2026 | First Phase 0B switch attempt stopped safely before mutation because the harness treated normal `GetViewpoint() == nullptr` as invalid. Source confirmed null is the ordinary self-view; the predicate was corrected and no live acceptance item was marked complete. |
 | 23 Aug 2026 | Phase 0B live run switched Magey's camera and active mover to Opai, but selection and spell casts remained Magey's and Opai's stock spell/action packets did not replace Magey's visible UI. Explicit release restored Magey and resumed Opai's Builtin movement. Current stock-server playable possession is a live-confirmed no-go. |
 | 23 Aug 2026 | Owner selected a capability-negotiated custom client/protocol boundary comparable in responsibility to SuperUI for future direct possession. Client patching, injection, reverse engineering, custom opcodes, a purpose-built client, and companion tooling are available options; exact client form, protocol design, safety proof, and unattended-original policy remain separate decisions. |
+| 24 Aug 2026 | Removed the Phase 0B-only invite, switch, release, lifecycle, actor-UI probe, playerbot-quiescing, and state-test code after retaining the live no-go evidence. No production control seam was carried forward. The cleaned `worldserver`, `bnetserver`, and `tests` targets rebuilt; all remaining 362 C++ assertions in 46 cases and the .NET protocol tests passed. |

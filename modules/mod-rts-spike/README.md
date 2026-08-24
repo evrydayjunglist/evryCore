@@ -1,6 +1,6 @@
 # mod-rts-spike
 
-Throwaway harness for Commander Mode experiments. The current branch contains the completed Phase 0A camera, channel, ground-order, cloned-spell, and vehicle-seat evidence plus the Phase 0B direct-switch measurement harness. Source inspection and a live retail-client run reject the current stock-server path as playable possession: camera and active-mover state can follow the bot, while selection, ordinary spell casts, and the visible player UI remain on the session owner. Melee, bar persistence, death, other forced exits, and cleanup were not run because the playable-possession gate had already failed. Delete this whole folder once the retained evidence and any deliberately selected reusable seams have been separated from the throwaway harness.
+Throwaway harness for Commander Mode experiments. The current source retains the completed Phase 0A camera, channel, ground-order, cloned-spell, and vehicle-seat probes. The Phase 0B direct-switch extension was removed after source inspection and a live retail-client run rejected the current stock-server path as playable possession: camera and active-mover state can follow the bot, while selection, ordinary spell casts, and the visible player UI remain on the session owner. No production control seam was retained from that probe. Delete this whole folder after its remaining Phase 1A scale and Phase 4 viewpoint uses are measured and their evidence is retained elsewhere.
 
 It is a normal drop-in module (`modules/mod-rts-spike/`), so a static build compiles it in. The client half is the `RTSSpike` addon under `addon/`.
 
@@ -39,56 +39,16 @@ Outcome to write down: destination matches the clicked point yes/no; works while
 
 ## Phase 0B — direct switch to one managed bot
 
-This is a single-pair GM probe, not the production direct-switch feature. It adds no
-custom opcode, client patch, input proxy, unattended-body AI, or production actor
-router. The controller and bot must be alive, stationary, visible, in the same group
-and map instance, off transports and vehicles, out of teleport and existing control
-states, and backed by live sessions. The playerbot controller is quiesced before the
-native viewpoint → active mover → `SetClientControl` sequence begins.
+Status: complete and cleaned up. The disposable invite, switch, release, lifecycle,
+actor-UI probe, playerbot-quiescing, and state-test code was removed after the live
+no-go was recorded. The current module does not provide direct-switch commands.
 
-The harness sends the bot's known spells, action buttons, cooldown history, and charge
-state to the controller using their stock server packets. These packets do not carry a
-player identity. The controller's action bars are therefore snapshotted before the
-probe, all bar differences are logged, and the snapshot is restored on release. This
-is measurement and crash-safe persistence is not claimed.
-
-The bot has no general party-invite behavior yet. For this spike, invite it normally
-and then make its managed session send the stock acceptance packet:
-
-```text
-/invite Botname
-.rtsspike acceptinvite Botname
-```
-
-The helper accepts only the GM controller's pending invite to an online, same-instance
-managed bot. It queues `CMSG_PARTY_INVITE_RESPONSE`; it does not create a group or call
-`Group::AddMember` from the module.
-
-### Live checklist — not yet run
-
-Run this only in a controlled test area. Source inspection shows that target, melee,
-spell, and bar input will act on the original session owner on the current core even
-while movement names the bot as active mover.
-
-1. Invite the managed bot normally, run `.rtsspike acceptinvite Botname`, and confirm
-   both players are in the same group and map. Stand the controller still and make sure
-   neither player is charmed, falling, teleporting, flying, transported, or in a
-   vehicle. The bot may be wandering; acquisition quiesces it and waits for it to stop.
-2. Select the bot and run `.rtsspike switch`, or run `.rtsspike switch Botname`.
-   `.rtsspike switchstatus` prints the reserved pair and phase.
-3. Record camera and ordinary movement behavior. Then, with a harmless target and the
-   original body positioned safely, record selection, one melee request, and one spell
-   known by the bot. Compare every `mod-rts-spike: input` line in `Server.log`: movement
-   is labelled `route=active-mover`; selection, melee, casts, and bars are labelled
-   `route=session-owner`.
-4. Record whether the bot's spells, bars, cooldowns, cast results, health, and power
-   appear coherently. Move one action-bar button and record which character changes.
-5. Run `.rtsspike release`. Verify the original mover, viewpoint, input, spell state,
-   and snapshotted bars return without relogging.
-6. Repeat separately for possessed-bot death, original-character death followed by
-   explicit release, either logout, teleport/map change, group removal, failed acquire,
-   and normal server shutdown. Do not mark any Commander Mode live checkbox until the
-   matching case has actually passed.
+The measured branch required one alive, stationary, visible, same-group and
+same-instance managed bot. It queued the bot's real party-invite acceptance packet,
+quiesced Builtin movement, snapshotted the owner's action bars, then exercised the
+native viewpoint → active mover → `SetClientControl` order. It sent the bot's known
+spells, action buttons, cooldown history, and charge state as a visual probe. Those
+stock packets carry no actor identity, so none of that code was selected for production.
 
 First live setup attempt, 23 August 2026: party creation through the packet-driven
 acceptance helper worked far enough to attempt `.rtsspike switch Opai`, but acquisition
@@ -134,9 +94,12 @@ SuperUI. Its exact client form and production protocol remain separate work. Cli
 patching, injection, reverse engineering, custom opcodes, a purpose-built client, and
 companion tooling are all available options subject to the safety proof.
 
-The RelWithDebInfo `worldserver` and `tests` targets build successfully. The focused
-`[rts-spike]` tests pass 20 assertions in two cases. These are source/build results, not
-live retail-client evidence.
+The measured branch's RelWithDebInfo `worldserver` and `tests` targets built
+successfully, and its focused `[rts-spike]` tests passed 20 assertions in two cases.
+Those spike-only tests were removed with the harness. After cleanup, `worldserver`,
+`bnetserver`, and `tests` rebuild successfully; the remaining C++ suite passes 362
+assertions in 46 cases and the .NET protocol tests pass. These are source/build results,
+not live retail-client evidence.
 
 ## Spike 5 — walker at RTS scale
 

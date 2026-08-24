@@ -714,52 +714,6 @@ bool PlayerbotMgr::IsBotAccount(uint32 accountId) const
     return _accountIds.contains(accountId);
 }
 
-bool PlayerbotMgr::IsManagedBot(Player const* player) const
-{
-    if (!player || !player->GetSession() || !IsBotAccount(player->GetSession()->GetAccountId()))
-        return false;
-
-    return std::ranges::any_of(_bots, [player](PlayerbotRecord const& bot)
-    {
-        return bot.Account.CharacterGuid == player->GetGUID();
-    });
-}
-
-bool PlayerbotMgr::SetDirectControlSpike(Player* player, bool controlled)
-{
-    if (!player)
-        return false;
-
-    auto itr = std::ranges::find_if(_bots, [player](PlayerbotRecord const& bot)
-    {
-        return bot.Account.CharacterGuid == player->GetGUID();
-    });
-    if (itr == _bots.end())
-        return false;
-
-    PlayerbotRecord& bot = *itr;
-    if (bot.DirectControlSpike == controlled)
-        return true;
-
-    if (controlled)
-    {
-        if (bot.Walker.IsJumping())
-            return false;
-
-        ClearLivingWork(bot, player);
-        bot.DirectControlSpike = true;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is quiesced for the direct-control spike.", player->GetName());
-    }
-    else
-    {
-        bot.DirectControlSpike = false;
-        bot.QuestSearchEmptyMs = 0;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} left the direct-control spike and may resume its built-in controller.", player->GetName());
-    }
-
-    return true;
-}
-
 void PlayerbotMgr::OnBotLogin(Player* player)
 {
     if (!player)
@@ -875,13 +829,6 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     Player* player = session->GetPlayer();
     if (!player)
         return;
-
-    if (bot.DirectControlSpike)
-    {
-        if (player->IsInWorld())
-            ReplyTimeSync(session);
-        return;
-    }
 
     if (bot.Walker.IsJumping() && player->IsBeingTeleported())
         bot.Walker.Stop(player);

@@ -8,9 +8,11 @@ Last updated: 23 August 2026
 
 Source plan: `Commander Mode.pdf`, revised 22 August 2026
 
-This file is both the plan and the tracker. Keep the root `README.md` to a short job
-summary, and keep experimental evidence in `modules/mod-rts-spike/README.md` until
-the spike module is deleted.
+This file is both the plan and the tracker.
+[Playerbots architecture](PLAYERBOTS_ARCHITECTURE.md) is the authoritative wider design
+for the reserve, Builtin, and External playerbot brains and the C# executable stack.
+Keep the root `README.md` to a short job summary, and keep experimental evidence in
+`modules/mod-rts-spike/README.md` until the spike module is deleted.
 
 ## Status
 
@@ -52,6 +54,12 @@ The player's original character is also a commandable RTS subject; its unattende
 driver must be proven safe before Phase 1A chooses an adapter, because human client
 input and automated packets must never compete for the same `Player`.
 
+Commander is one controller family over the embodied runtime defined in
+`PLAYERBOTS_ARCHITECTURE.md`. Without `playerbots.exe`, bots may remain RTS-ready in
+reserve and execute bounded local orders or stances. With the executable, External
+autonomy may choose their long-horizon lives. RTS and direct control preempt that
+strategic controller; they do not route real-time orders through the executable.
+
 Hard boundaries:
 
 - The RTS path uses the stock `TrinityCore` addon-command channel and no custom
@@ -64,6 +72,9 @@ Hard boundaries:
 - Keep commanded action player-like. Managed bots use the existing walker and real
   client packets. Do not add `MotionMaster`, module teleports, direct attack calls, or
   direct spell preparation as Commander shortcuts.
+- Keep strategic planning off the real-time Commander path. `playerbots.exe` may receive
+  controller changes and later replan, but `mod-rts` calls the shared worldserver skill
+  runtime directly.
 - A commander may address only their own original character and eligible bots in their
   own group and on the same map.
 - Use the caster's map for a ground order. Client-sent destinations contain XYZ but
@@ -76,12 +87,12 @@ Hard boundaries:
 ```text
 Normal play
   client -> original character
-  autonomy -> party bots
+  applicable Reserve, Builtin, or External controller -> party bots
 
 Direct switch
   client -> selected party bot
   selected unattended policy -> original character
-  autonomy -> remaining party bots
+  applicable baseline controller -> remaining party bots
 
 RTS free view
   client -> commentator camera and RTS UI
@@ -97,8 +108,12 @@ RTS free view
   an explicitly selected unattended policy. In RTS mode, the original character is a
   selectable commandable unit alongside party bots.
 - Only one controller may drive a `Player` at a time. Normal input, direct possession,
-  autonomous playerbot work, unattended-body work, and RTS orders must have explicit,
-  non-overlapping transitions.
+  Builtin or External playerbot work, unattended-body work, and RTS orders must have
+  explicit, non-overlapping transitions.
+- Acquiring RTS or direct control quiesces the previous controller, increments the
+  subject generation, and rejects its late work. Releasing a bot restores its
+  applicable baseline controller. External autonomy receives fresh state and replans;
+  it does not resume a stale target or action.
 
 ### RTS order path
 
@@ -173,16 +188,17 @@ subject context + destination
     explicitly whether a modified client is acceptable. Do not drift into client
     patching as an implementation detail.
 - [ ] Decide the unattended original-character policy during direct switch.
-  - Choices include hold, follow/assist/defend, the full existing playerbot brain, or
-    the shared RTS command service. Begin with the least autonomous safe behavior that
-    matches how the owner wants to play.
+  - Choices include hold, follow/assist/defend, the Builtin controller, the External
+    controller, or the shared RTS command service. Begin with the least autonomous safe
+    behavior that matches how the owner wants to play.
 - [ ] Decide what entering RTS mode does to eligible units.
   - Either the original character and all party bots immediately enter commanded hold,
     or each remains in its current controller until its first accepted order.
 - [ ] Decide whether the original character may be individually released while RTS
   free view remains active.
-  - Releasing a bot can restore bot autonomy. It cannot restore ordinary human input to
-    the original character while the same client remains the RTS camera/controller.
+  - Releasing a bot restores its applicable Reserve, Builtin, or External baseline. It
+    cannot restore ordinary human input to the original character while the same client
+    remains the RTS camera/controller.
     Recommended behavior: disallow individual release of the original body; exiting
     RTS restores human control, while a separate unattended-policy command may change
     how the body acts during free view.
@@ -190,6 +206,15 @@ subject context + destination
   - Current direction: commanded units do not autonomously acquire targets, retaliate,
     chase, or loot. Attack and loot are explicit commander orders. Passive, defensive,
     assist, aggressive, and auto-loot-in-reach policies may be added later.
+- [ ] Choose the default Reserve and initial RTS stance.
+  - Reserve means no self-chosen long-term activity, not necessarily inert combat.
+    Passive never retaliates. Defensive responds only to legitimate attackers with a
+    bounded leash and return. Do not inherit the current Builtin combat behavior by
+    accident.
+- [ ] Decide Coordinator presence loss during active RTS or direct control.
+  - Either the live human-control session temporarily pins presence until safe release,
+    or worldserver releases control, restores the playable original character, and only
+    then logs the managed bot out. Never kick a directly controlled subject first.
 - [ ] Decide commander arbitration when more than one human is in the group.
   - Entering free view must not silently create hidden per-bot locks. Choose one active
     commander per group, group-leader control, or another visible rule.
@@ -219,8 +244,9 @@ evryCore keeps its existing queued release-spirit, ghost-walk, and reclaim packe
 The earlier suggested 15-minute stale-command timeout is withdrawn. No arbitrary
 elapsed-time release is selected. A legitimate hold must be able to last indefinitely;
 cleanup should follow explicit exit or a concrete invalidation such as logout, group
-removal, map incompatibility, or destruction. Add a lease only if testing demonstrates
-a real abandoned-controller case that those events cannot clean up.
+removal, map incompatibility, or destruction. The renewable External strategic lease
+and optional Coordinator presence lease prove process health; they are not Commander
+order timeouts and must not release a legitimate RTS hold.
 
 ## Plan corrections from the PDF
 
@@ -304,7 +330,7 @@ production switch feature here
   cooldowns, cast results, and basic character state, then restore the owner's UI.
 - [ ] Determine whether action-bar edits can be saved to the bot rather than the owner.
 - [ ] Keep the original character safe and stationary for this spike. Do not attach the
-  full playerbot brain until the unattended-body policy is chosen.
+  Builtin or External activity controller until the unattended-body policy is chosen.
 - [ ] Kill the possessed bot and verify direct possession is force-released to the
   original character with the correct mover, viewpoint, input, and death-state UI.
 - [ ] Kill the unattended original character and verify possession continues, its death
@@ -353,8 +379,8 @@ proven path for the player's original character; no product UI or order translat
     indefinitely until explicit release or a real lifecycle invalidation.
 - [x] Keep stop/hold distinct from release.
   - `stop` cancels movement at the current location and enters hold. `hold` retains the
-    controller and suppresses ordinary autonomy. `release` removes command control and
-    restores the applicable normal controller.
+    controller and suppresses the baseline controller. `release` removes command
+    control and restores the applicable Reserve, Builtin, or External baseline.
 - [ ] Confirm death recovery and the post-resurrection state.
   - Death suspends RTS movement while the existing packet-driven release-spirit,
     ghost-walk, reclaim, and recovery flow runs. Clear the active move, attack, or loot
@@ -371,17 +397,21 @@ proven path for the player's original character; no product UI or order translat
   queue automated movement while the retail client still owns that character's input.
 - [ ] Add owner-aware move, stop/hold, and explicit release operations using a narrow
   request type carrying controller and subject identity.
-- [ ] Store controller, requested destination, moving/holding/recovering state, and the
-  concrete lifecycle data needed for safe cleanup. Do not add an arbitrary timeout.
-- [ ] Clear incompatible autonomous work when command control begins.
+- [ ] Store controller identity and generation, requested directive, moving/holding/
+  recovering state, and the concrete lifecycle data needed for safe cleanup. Do not add
+  an arbitrary timeout.
+- [ ] Quiesce the previous controller at a safe boundary, clear incompatible Builtin or
+  External work, and reject late work from the old generation before command control
+  begins.
 - [ ] While commanded, continue required session housekeeping, death handling, and the
   selected packet walker, but suppress quest, vendor, idle-combat, target acquisition,
   chasing, and loot unless a later explicit order or selected stance permits them.
 - [ ] Clear the active command and suspend command movement across death while normal
   release-spirit and corpse recovery runs, then apply the chosen post-resurrection
   state without releasing RTS control accidentally.
-- [ ] Stop movement without restoring autonomy for stop/hold. Release safely on
-  explicit release and the chosen logout, group, map, controller, and subject events.
+- [ ] Stop movement without restoring the baseline for stop/hold. Release safely to the
+  applicable Reserve, Builtin, or External controller on explicit release and the
+  chosen logout, group, map, controller, and subject events.
 - [ ] Log command start, redirect, arrival, hold, release, refusal, recovery, and
   invalidation without a per-tick flood.
 - [ ] Add focused automated coverage for subject lookup, controller authorization,
@@ -408,8 +438,9 @@ proven path for the player's original character; no product UI or order translat
   explicit order.
 - [ ] Kill a commanded bot and confirm automatic spirit/corpse recovery does not require
   ghost commands or silently restore quest autonomy.
-- [ ] Confirm explicit release restores bot autonomy. Confirm that exiting RTS, rather
-  than individually releasing the original body, restores normal player control.
+- [ ] Confirm explicit release restores each bot's applicable Reserve, Builtin, or
+  External baseline. Confirm that exiting RTS, rather than individually releasing the
+  original body, restores normal player control.
 - [ ] Kill the unattended original character and confirm release-spirit, ghost walk,
   corpse recovery, and return-to-hold preserve the RTS association without requiring
   commander control of the ghost.
@@ -514,6 +545,8 @@ engine and no new core call site without a separately discussed seam
 - [ ] Add deterministic formation offsets so multiple bots do not stack.
 - [ ] Return batched commandable-unit position and command state at about 2 Hz.
 - [ ] Add `rts hold` and `rts follow <name>` after move/stop/state pass.
+- [ ] Add patrol, guard, passive, defensive, and assist policies only after the shared
+  reserve skills define their leash, return, target, and controller semantics.
 - [ ] Add a `.conf.dist` only for genuine runtime policy; keep player-model numbers as
   code constants unless a knob is justified.
 - [ ] Add automated command parsing, scope, rate-limit, and formation tests.
@@ -610,8 +643,9 @@ from mover-only success.
 - [ ] Add an authorized same-map switch request for an eligible grouped managed bot.
 - [ ] Store one controller-to-subject pairing and reject double control, implicit
   takeover, transport/teleport conflicts, and bot-to-bot switch without a clean release.
-- [ ] Suspend the possessed bot's autonomous controller, stop incompatible movement,
-  and close incompatible interaction state before granting client input.
+- [ ] Suspend the possessed bot's applicable Reserve, Builtin, or External controller,
+  stop incompatible movement, and close incompatible interaction state before granting
+  client input.
 - [ ] Transfer viewpoint, active mover, and client control in the order proven by the
   spike, then confirm the controlled bot through normal active-mover handling.
 - [ ] Route movement, selection, melee, spell, item, loot, aura-cancel, and channel
@@ -620,7 +654,7 @@ from mover-only success.
   bags, money, and other agreed player-state UI. Decide whether bar edits are read-only
   or persist to the bot; never save them onto the owner's character accidentally.
 - [ ] Attach the selected unattended controller to the original character. Do not
-  silently grant it full quest, combat, or loot autonomy beyond the chosen policy.
+  silently grant it quest, combat, or loot behavior beyond the chosen policy.
 - [ ] When the unattended original character dies, clear its active task, report the
   death to the controller, keep direct possession active, and run only the selected
   player-like corpse-recovery policy.
@@ -649,7 +683,7 @@ Acceptance:
 - [ ] Kill the possessed bot and verify forced release restores the original character
   as the client actor without losing either character's real death state.
 - [ ] Switch back without relogging; both characters restore their correct controller,
-  bars, spell state, position, and autonomy.
+  bars, spell state, position, and applicable baseline.
 - [ ] Transition between direct switch and RTS free view only through explicit release
   states; no actor remains abandoned or controlled twice.
 - [ ] Every forced-exit case restores a playable original character.
@@ -667,8 +701,10 @@ Location: `D:\WOWEmulation\Emulators\Tools\evryOps`
 ## Deferred vocabulary and polish
 
 - `rts follow <name>` and `rts hold` follow the move/stop MVP.
-- Passive, self-defense, assist, and aggressive are future Commander combat policies.
-  Do not let the existing playerbot combat brain become an accidental default stance.
+- Passive, defensive, guard, patrol, follow, assist, and aggressive are planned local
+  policies under Reserve or RTS control. Implement them in bounded jobs after the
+  shared command contract; do not let the existing Builtin combat brain become an
+  accidental default stance.
 - Optional auto-loot-in-reach follows reliable explicit `rts loot`; it is not the
   commanded default.
 - World-map orders follow in-world reticle orders.
@@ -676,8 +712,9 @@ Location: `D:\WOWEmulation\Emulators\Tools\evryOps`
 - Heals, buffs, class stance logic, interrupts, pets, and class rotations remain
   separate playerbot jobs, not Commander prerequisites. Commander combat posture is a
   control policy, not class stance logic.
-- Shared bot knowledge, continent convenience travel, and guide-scripted brains remain
-  out of scope.
+- Per-bot strategic memory and explicit party, guild, or social information sharing
+  follow `PLAYERBOTS_ARCHITECTURE.md`. Omniscient shared live spawns, continent
+  convenience travel, and guide-scripted brains remain out of scope.
 
 ## Evidence log
 

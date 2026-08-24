@@ -26,7 +26,9 @@ Playerbots.Enable = 0
 #
 #                     Automatic   - log in the roster during world startup
 #                     Coordinator - create the roster but leave it offline until
-#                                   playerbots.exe connects and requests it online
+#                                   playerbots.exe connects and requests it online.
+#                                   If that owning connection remains gone for five
+#                                   seconds, save and log out the bots in place.
 #
 
 Playerbots.LoginMode = Automatic

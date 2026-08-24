@@ -20,6 +20,7 @@
 
 #include "PlayerbotClient.h"
 #include "PlayerbotBridge.h"
+#include "PlayerbotCoordinatorLease.h"
 #include "PlayerbotMovement.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
@@ -45,6 +46,9 @@ struct PlayerbotRecord
 {
     PlayerbotAccount Account;
     bool SessionQueued = false;
+    bool SessionSeen = false;
+    bool CoordinatorLogoutRequested = false;
+    bool CoordinatorLogoutKickSent = false;
     bool EnumQueued = false;
     bool LoginQueued = false;
     bool ContinueLoginCalled = false;
@@ -108,8 +112,11 @@ public:
     void OnBotLogin(Player* player);
 
 private:
-    void UpdateBridge();
+    void UpdateBridge(uint32 diff);
     std::string HandleBridgeRequest(uint64 connectionId, std::string const& payload);
+    void BeginCoordinatorLogout();
+    bool UpdateCoordinatorLogout(PlayerbotRecord& bot);
+    void ResetBotSession(PlayerbotRecord& bot);
     bool TryLogin(PlayerbotRecord& bot);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
@@ -148,6 +155,7 @@ private:
     std::unordered_set<uint32> _accountIds;
     std::unordered_set<uint64> _bridgeHandshakes;
     PlayerbotBridge _bridge;
+    PlayerbotCoordinatorLease _coordinatorLease;
     PlayerbotLoginMode _loginMode = PlayerbotLoginMode::Automatic;
     bool _bridgeStarted = false;
 };

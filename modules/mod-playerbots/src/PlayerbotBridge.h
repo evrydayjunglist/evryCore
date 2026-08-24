@@ -37,6 +37,7 @@ public:
     bool Start(uint16 port);
     void Stop();
     std::vector<PlayerbotBridgeRequest> TakeRequests();
+    std::vector<uint64> TakeDisconnectedConnections();
 
 private:
     class Impl;

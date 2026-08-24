@@ -215,6 +215,7 @@ public:
 
         std::lock_guard lock(_requestsMutex);
         _requests.clear();
+        _disconnectedConnections.clear();
     }
 
     std::vector<PlayerbotBridgeRequest> TakeRequests()
@@ -228,6 +229,19 @@ public:
             _requests.pop_front();
         }
         return requests;
+    }
+
+    std::vector<uint64> TakeDisconnectedConnections()
+    {
+        std::vector<uint64> connections;
+        std::lock_guard lock(_requestsMutex);
+        connections.reserve(_disconnectedConnections.size());
+        while (!_disconnectedConnections.empty())
+        {
+            connections.push_back(_disconnectedConnections.front());
+            _disconnectedConnections.pop_front();
+        }
+        return connections;
     }
 
 private:
@@ -254,6 +268,7 @@ private:
                     _session.reset();
                     _activeConnectionId = 0;
                 }
+                QueueDisconnect(id);
                 TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: coordinator connection {} disconnected.", id);
             });
         _session->Start();
@@ -266,7 +281,10 @@ private:
         if (_requests.size() >= MAX_PLAYERBOT_BRIDGE_REQUESTS)
         {
             if (std::shared_ptr<PlayerbotBridgeSession> active = session.lock())
-                active->Send(R"({"version":1,"type":"error","requestId":"","payload":{"code":"serverBusy","message":"The world thread request queue is full."}})");
+            {
+                active->Send("{\"version\":" + std::to_string(PLAYERBOTS_BRIDGE_PROTOCOL_VERSION) +
+                    R"(,"type":"error","requestId":"","payload":{"code":"serverBusy","message":"The world thread request queue is full."}})");
+            }
             return;
         }
 
@@ -281,12 +299,19 @@ private:
         _requests.push_back(std::move(request));
     }
 
+    void QueueDisconnect(uint64 connectionId)
+    {
+        std::lock_guard lock(_requestsMutex);
+        _disconnectedConnections.push_back(connectionId);
+    }
+
     Trinity::Asio::IoContext _ioContext{ 1 };
     std::unique_ptr<Trinity::Net::AsyncAcceptor> _acceptor;
     std::shared_ptr<PlayerbotBridgeSession> _session;
     std::thread _networkThread;
     std::mutex _requestsMutex;
     std::deque<PlayerbotBridgeRequest> _requests;
+    std::deque<uint64> _disconnectedConnections;
     std::atomic<bool> _running = false;
     uint64 _nextConnectionId = 0;
     uint64 _activeConnectionId = 0;
@@ -314,4 +339,9 @@ void PlayerbotBridge::Stop()
 std::vector<PlayerbotBridgeRequest> PlayerbotBridge::TakeRequests()
 {
     return _impl->TakeRequests();
+}
+
+std::vector<uint64> PlayerbotBridge::TakeDisconnectedConnections()
+{
+    return _impl->TakeDisconnectedConnections();
 }

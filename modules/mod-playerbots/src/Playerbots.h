@@ -31,6 +31,7 @@ inline constexpr char const* PLAYERBOTS_CLASSES = "Playerbots.Classes";
 inline constexpr char const* PLAYERBOTS_BRIDGE_ENABLE = "Playerbots.Bridge.Enable";
 inline constexpr char const* PLAYERBOTS_BRIDGE_PORT = "Playerbots.Bridge.Port";
 inline constexpr char const* PLAYERBOTS_LOG = "module.playerbots";
+inline constexpr int PLAYERBOTS_BRIDGE_PROTOCOL_VERSION = 2;
 
 enum class PlayerbotLoginMode
 {

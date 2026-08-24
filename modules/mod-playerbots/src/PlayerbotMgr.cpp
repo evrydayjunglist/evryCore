@@ -41,6 +41,7 @@
 #include <limits>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 
 namespace
 {
@@ -59,8 +60,6 @@ namespace
     constexpr uint32 CAMPED_WAIT_MS = 20000;
     constexpr uint32 GHOST_WAIT_LONG_MS = 180000;
     constexpr uint32 GHOST_GIVE_UP_MS = 300000;
-    constexpr int BRIDGE_PROTOCOL_VERSION = 2;
-
     std::string NormalizeLoginMode(std::string_view value)
     {
         while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
@@ -116,7 +115,7 @@ namespace
     {
         rapidjson::Document response(rapidjson::kObjectType);
         rapidjson::Document::AllocatorType& allocator = response.GetAllocator();
-        response.AddMember("version", BRIDGE_PROTOCOL_VERSION, allocator);
+        response.AddMember("version", PLAYERBOTS_BRIDGE_PROTOCOL_VERSION, allocator);
         AddJsonString(response, "type", type, allocator);
         AddJsonString(response, "requestId", requestId, allocator);
 
@@ -459,22 +458,40 @@ void PlayerbotMgr::Stop()
 
 void PlayerbotMgr::Update(uint32 diff)
 {
-    UpdateBridge();
+    UpdateBridge(diff);
 
     for (PlayerbotRecord& bot : _bots)
     {
+        if (UpdateCoordinatorLogout(bot))
+            continue;
+
         UpdateLogin(bot);
         UpdateWorld(bot, diff);
     }
 }
 
-void PlayerbotMgr::UpdateBridge()
+void PlayerbotMgr::UpdateBridge(uint32 diff)
 {
     if (!_bridgeStarted)
         return;
 
     for (PlayerbotBridgeRequest& request : _bridge.TakeRequests())
         request.Reply(HandleBridgeRequest(request.ConnectionId, request.Payload));
+
+    // Let an ensured replacement take ownership before applying stale disconnects from the connection it replaced.
+    for (uint64 connectionId : _bridge.TakeDisconnectedConnections())
+    {
+        _bridgeHandshakes.erase(connectionId);
+        if (_loginMode == PlayerbotLoginMode::Coordinator && _coordinatorLease.Disconnect(connectionId))
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG,
+                "mod-playerbots: owning coordinator connection {} was lost; waiting {} second(s) before logging out bots.",
+                connectionId, PLAYERBOT_COORDINATOR_DISCONNECT_GRACE_MS / IN_MILLISECONDS);
+        }
+    }
+
+    if (_loginMode == PlayerbotLoginMode::Coordinator && _coordinatorLease.Update(diff))
+        BeginCoordinatorLogout();
 }
 
 std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string const& payload)
@@ -493,7 +510,7 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
 
     auto const versionMember = request.FindMember("version");
     if (versionMember == request.MemberEnd() || !versionMember->value.IsInt() ||
-        versionMember->value.GetInt() != BRIDGE_PROTOCOL_VERSION)
+        versionMember->value.GetInt() != PLAYERBOTS_BRIDGE_PROTOCOL_VERSION)
     {
         return MakeBridgeError(requestId, "unsupportedVersion", "This worldserver supports playerbot bridge protocol version 2.");
     }
@@ -510,7 +527,7 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
         return MakeBridgeResponse("welcome", requestId,
             [this](rapidjson::Value& responsePayload, rapidjson::Document::AllocatorType& allocator)
         {
-            responsePayload.AddMember("protocolVersion", BRIDGE_PROTOCOL_VERSION, allocator);
+            responsePayload.AddMember("protocolVersion", PLAYERBOTS_BRIDGE_PROTOCOL_VERSION, allocator);
             responsePayload.AddMember("readOnly", _loginMode != PlayerbotLoginMode::Coordinator, allocator);
             AddJsonString(responsePayload, "loginMode", LoginModeName(_loginMode), allocator);
             AddJsonString(responsePayload, "server", "worldserver", allocator);
@@ -595,6 +612,15 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
         if (payloadMember == request.MemberEnd() || !payloadMember->value.IsObject() || !payloadMember->value.ObjectEmpty())
             return MakeBridgeError(requestId, "invalidPayload", "ensureBotsOnline takes no arguments.");
 
+        bool const canceledDisconnectGrace = _coordinatorLease.DisconnectGraceMs() != 0;
+        _coordinatorLease.Ensure(connectionId);
+        if (canceledDisconnectGrace)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG,
+                "mod-playerbots: coordinator connection {} ensured the roster before the disconnect grace expired; bots will stay online.",
+                connectionId);
+        }
+
         uint32 onlineBots = 0;
         uint32 loginRequestsStarted = 0;
         for (PlayerbotRecord& bot : _bots)
@@ -622,6 +648,67 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
     return MakeBridgeError(requestId, "unknownType", "The requested message type is not supported.");
 }
 
+void PlayerbotMgr::BeginCoordinatorLogout()
+{
+    uint32 logoutRequests = 0;
+    for (PlayerbotRecord& bot : _bots)
+    {
+        if (!bot.SessionQueued && !sWorld->FindSession(bot.Account.AccountId))
+            continue;
+        if (bot.CoordinatorLogoutRequested)
+            continue;
+
+        bot.CoordinatorLogoutRequested = true;
+        ++logoutRequests;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: coordinator remained disconnected; logging out {} managed bot session(s) in place.",
+        logoutRequests);
+}
+
+bool PlayerbotMgr::UpdateCoordinatorLogout(PlayerbotRecord& bot)
+{
+    if (!bot.CoordinatorLogoutRequested)
+        return false;
+
+    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+    if (session)
+    {
+        bot.SessionSeen = true;
+        if (!bot.CoordinatorLogoutKickSent)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: logging out account {} because its coordinator is offline.",
+                bot.Account.AccountId);
+            session->KickPlayer("mod-playerbots coordinator disconnected");
+            bot.CoordinatorLogoutKickSent = true;
+        }
+        return true;
+    }
+
+    if (!bot.CoordinatorLogoutKickSent && !bot.SessionSeen)
+        return true;
+
+    uint32 const accountId = bot.Account.AccountId;
+    ResetBotSession(bot);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} finished coordinator-loss logout.", accountId);
+
+    if (_coordinatorLease.ConnectionId())
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: a coordinator is connected again; requesting a fresh login for account {}.",
+            accountId);
+        TryLogin(bot);
+    }
+    return true;
+}
+
+void PlayerbotMgr::ResetBotSession(PlayerbotRecord& bot)
+{
+    PlayerbotAccount account = std::move(bot.Account);
+    bot = PlayerbotRecord();
+    bot.Account = std::move(account);
+}
+
 bool PlayerbotMgr::IsBotAccount(uint32 accountId) const
 {
     return _accountIds.contains(accountId);
@@ -644,6 +731,7 @@ bool PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
     if (sWorld->FindSession(bot.Account.AccountId))
     {
         bot.SessionQueued = true;
+        bot.SessionSeen = true;
         return false;
     }
 
@@ -661,6 +749,8 @@ void PlayerbotMgr::UpdateLogin(PlayerbotRecord& bot)
     WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
     if (!session)
         return;
+
+    bot.SessionSeen = true;
 
     if (session->IsInQueue())
         return;

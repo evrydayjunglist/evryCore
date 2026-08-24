@@ -18,17 +18,20 @@
 #ifndef EVRY_MOD_PLAYERBOT_MOVEMENT_H
 #define EVRY_MOD_PLAYERBOT_MOVEMENT_H
 
+#include "PlayerbotJump.h"
+#include "PlayerbotMovementRecovery.h"
 #include "Position.h"
 #include <G3D/Vector3.h>
 #include <vector>
 
 class Player;
 class WorldObject;
+enum OpcodeClient : uint32;
 
 class PlayerbotWalker
 {
 public:
-    bool Start(Player* player, Position const& destination, float stopDistance);
+    bool Start(Player* player, Position const& destination, float stopDistance, PlayerbotRecoveryGoal const& goal = {});
     void Update(Player* player, uint32 diff);
     void Stop(Player* player);
     void Reset();
@@ -37,23 +40,60 @@ public:
     static bool PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out);
 
     bool IsIdle() const { return _state == State::Idle; }
-    bool IsMoving() const { return _state == State::Moving; }
+    bool IsMoving() const { return _state == State::Moving || _state == State::Jumping; }
+    bool IsJumping() const { return _state == State::Jumping; }
     bool HasArrived() const { return _state == State::Arrived; }
     bool HasFailed() const { return _state == State::Failed; }
     bool StartedOnAFace() const { return _startedOnAFace; }
 
 private:
+    enum class GroundedStepFailure
+    {
+        None,
+        NoPath,
+        NoFloor,
+        SteepUp,
+        TooFarDown,
+        StaticCollision,
+        DynamicCollision,
+        InvalidPosition
+    };
+
     enum class State
     {
         Idle,
         Moving,
+        Jumping,
         Arrived,
         Failed
     };
 
+    struct JumpPlan
+    {
+        Position Launch;
+        Position Landing;
+        PlayerbotJumpTrajectory Trajectory;
+        float DirectionX = 0.0f;
+        float DirectionY = 0.0f;
+        uint32 DurationMs = 0;
+    };
+
+    struct MmapPathEvidence
+    {
+        bool Calculated = false;
+        uint32 Type = 0;
+        float Length = 0.0f;
+        G3D::Vector3 ActualEnd = G3D::Vector3(0.0f, 0.0f, 0.0f);
+        std::vector<G3D::Vector3> Prefix;
+    };
+
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
+    void QueueJumpMove(Player* player, OpcodeClient opcode, Position const& pos, uint32 fallTime);
     Position Advance(float distance);
     bool PeekGroundedStep(Player* player, float distance, Position& out);
+    GroundedStepFailure PeekGroundedStepFailure(Player* player, float distance, Position& out);
+    GroundedStepFailure ClassifyGroundedStep(Player* player, Position const& from, float x, float y, float orientation,
+        Position& out) const;
     bool FirstGroundedStepIsLegal(Player* player);
     bool MmapLookIsLegal(Player* player);
     bool StepTowardDestIsLegal(Player* player) const;
@@ -62,13 +102,27 @@ private:
     bool LeaveFaceExceeded() const;
     bool ContourShouldStop(Player* player) const;
     bool TryLeaveFace(Player* player, bool alreadyMoving);
-    bool BuildMmapPath(Player* player, Position const& from, Position const& destination, std::vector<G3D::Vector3>& outPath);
+    bool BuildMmapPath(Player* player, Position const& from, Position const& destination,
+        std::vector<G3D::Vector3>& outPath, MmapPathEvidence* evidence = nullptr);
     bool TryCommitMmap(Player* player, Position const& from, bool alreadyMoving);
+    bool RejoinPathReachesNewGround(Position const& from, std::vector<G3D::Vector3> const& path) const;
+    void LogRecoveryMmap(Player* player, char const* decision, MmapPathEvidence const& evidence) const;
+    void LogStartConnectivity(Player* player, Position const& from);
     bool FindLipSidestep(Player* player, Position& out) const;
     bool ContinueContour(Player* player, bool alreadyMoving);
     bool WalkLegalDestStep(Player* player, bool alreadyMoving);
     void ApplyContourPath(Player* player, Position const& side, bool alreadyMoving);
-    void RefuseSteepStep(Player* player, Position const& attempted);
+    bool BeginFaceRecovery(Player* player, GroundedStepFailure failure, Position const& attempted);
+    void ClearFaceRecovery();
+    void NoteMmapRejoinProgress(Player* player, Position const& previousFeet);
+    void RefuseStep(Player* player, GroundedStepFailure failure, Position const& attempted);
+    bool TryStartJump(Player* player);
+    bool BuildJumpPlan(Player* player, JumpPlan& out, char const*& reason);
+    bool JumpMovementIsAllowed(Player const* player, char const*& reason) const;
+    void UpdateJump(Player* player, uint32 diff);
+    void FinishJump(Player* player);
+    void ResetNow();
+    static char const* GroundedStepFailureName(GroundedStepFailure failure);
     void Fail(Player* player, char const* reason);
     void FailNoLegalRing(Player* player);
 
@@ -92,6 +146,16 @@ private:
     bool _destPokeActive = false;
     float _contourDirX = 0.0f;
     float _contourDirY = 0.0f;
+    PlayerbotFaceRecovery _faceRecovery;
+    GroundedStepFailure _lastGroundedStepFailure = GroundedStepFailure::None;
+    Position _lastRefusedStep;
+    Position _lastRequestedStep;
+    PlayerbotRecoveryGoal _recoveryGoal;
+    JumpPlan _jump;
+    uint32 _jumpElapsedMs = 0;
+    uint32 _jumpHeartbeatMs = 0;
+    uint32 _jumpMapId = 0;
+    bool _stopAfterJump = false;
 };
 
 #endif

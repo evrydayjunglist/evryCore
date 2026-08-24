@@ -31,6 +31,8 @@
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <limits>
 #include <unordered_set>
 
@@ -51,6 +53,94 @@ namespace
     constexpr uint32 CAMPED_WAIT_MS = 20000;
     constexpr uint32 GHOST_WAIT_LONG_MS = 180000;
     constexpr uint32 GHOST_GIVE_UP_MS = 300000;
+
+    PlayerbotRecoveryGoal GuidRecoveryGoal(Player* player, PlayerbotRecoveryGoalKind kind, ObjectGuid const& guid)
+    {
+        if (!player || guid.IsEmpty())
+            return {};
+
+        return PlayerbotRecoveryGoal::ForObject(kind, player->GetMapId(), guid.GetRawValue(0), guid.GetRawValue(1));
+    }
+
+    std::uint64_t ObjectiveKey(uint32 entry, uint32 extra = 0)
+    {
+        return std::uint64_t(entry) | (std::uint64_t(extra) << 32);
+    }
+
+    PlayerbotRecoveryGoal RecoveryGoalFor(Player* player, PlayerbotClient::QuestTarget const& target)
+    {
+        if (!target.NpcGuid.IsEmpty())
+            return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, target.NpcGuid);
+
+        return PlayerbotRecoveryGoal::ForObjective(PlayerbotRecoveryGoalKind::MapQuest, player->GetMapId(),
+            uint32(target.QuestId), target.TurnIn ? 1 : 0);
+    }
+
+    PlayerbotRecoveryGoal RecoveryGoalFor(Player* player, PlayerbotClient::CombatTarget const& target)
+    {
+        if (!target.CreatureGuid.IsEmpty())
+            return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, target.CreatureGuid);
+
+        return PlayerbotRecoveryGoal::ForObjective(PlayerbotRecoveryGoalKind::MapCreatureObjective, player->GetMapId(),
+            uint32(target.QuestId), ObjectiveKey(target.CreditEntry, target.ItemId));
+    }
+
+    PlayerbotRecoveryGoal RecoveryGoalFor(Player* player, PlayerbotClient::GameObjectTarget const& target)
+    {
+        if (!target.GoGuid.IsEmpty())
+            return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::GameObject, target.GoGuid);
+
+        return PlayerbotRecoveryGoal::ForObjective(PlayerbotRecoveryGoalKind::MapGameObjectObjective, player->GetMapId(),
+            uint32(target.QuestId), target.GoEntry);
+    }
+
+    PlayerbotRecoveryGoal RecoveryGoalFor(Player* player, PlayerbotClient::UseItemOnUnitTarget const& target)
+    {
+        if (!target.CreatureGuid.IsEmpty())
+            return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, target.CreatureGuid);
+
+        return PlayerbotRecoveryGoal::ForObjective(PlayerbotRecoveryGoalKind::MapUseItemObjective, player->GetMapId(),
+            uint32(target.QuestId), ObjectiveKey(target.CreditEntry, target.ItemId));
+    }
+
+    PlayerbotRecoveryGoal RecoveryGoalFor(Player* player, PlayerbotClient::ItemLootTarget const& target)
+    {
+        if (!target.GoGuid.IsEmpty())
+            return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::GameObject, target.GoGuid);
+        if (!target.CreatureGuid.IsEmpty())
+            return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, target.CreatureGuid);
+
+        uint32 const sourceEntry = target.CreatureEntry ? target.CreatureEntry : target.GoEntry;
+        return PlayerbotRecoveryGoal::ForObjective(PlayerbotRecoveryGoalKind::MapItemObjective, player->GetMapId(),
+            uint32(target.QuestId), ObjectiveKey(target.ItemId, sourceEntry));
+    }
+
+    PlayerbotRecoveryGoal RecoveryGoalFor(Player* player, PlayerbotClient::VendorTarget const& target)
+    {
+        return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, target.NpcGuid);
+    }
+
+    PlayerbotRecoveryGoal CorpseRecoveryGoal(Player* player)
+    {
+        if (!player)
+            return {};
+        if (Corpse* corpse = player->GetCorpse())
+            return GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Corpse, corpse->GetGUID());
+
+        return PlayerbotRecoveryGoal::ForObject(PlayerbotRecoveryGoalKind::Corpse, player->GetMapId(),
+            player->GetGUID().GetRawValue(0), player->GetGUID().GetRawValue(1));
+    }
+
+    PlayerbotRecoveryGoal GraveyardRecoveryGoal(Player* player, Position const& position)
+    {
+        if (!player)
+            return {};
+
+        int32 const cellX = int32(std::floor(position.GetPositionX() / 5.0f));
+        int32 const cellY = int32(std::floor(position.GetPositionY() / 5.0f));
+        std::uint64_t const cell = (std::uint64_t(std::uint32_t(cellX)) << 32) | std::uint32_t(cellY);
+        return PlayerbotRecoveryGoal::ForObjective(PlayerbotRecoveryGoalKind::Graveyard, player->GetMapId(), 0, cell);
+    }
 
     bool InInteractRange(Player const* player, Creature const* creature)
     {
@@ -359,6 +449,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (!player)
         return;
 
+    if (bot.Walker.IsJumping() && player->IsBeingTeleported())
+        bot.Walker.Stop(player);
+
     ReplyTeleportAcks(player);
 
     if (!player->IsInWorld())
@@ -424,12 +517,17 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             return;
         }
 
-        if (TryClickFromHere(bot, player))
+        if (!bot.Walker.IsJumping() && TryClickFromHere(bot, player))
             return;
     }
 
     if (bot.Walker.IsMoving())
         bot.Walker.Update(player, diff);
+
+    // The launch, airborne heartbeats, and landing are one client movement action.
+    // Keep the current target and do not start another verb in the middle of it.
+    if (bot.Walker.IsJumping())
+        return;
 
     int32 skipFailedQuestId = 0;
     uint32 skipFailedEntry = 0;
@@ -539,7 +637,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             Position standPos;
             float const standDistance = creature->GetCombatReach() + 1.0f;
             if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
-                && bot.Walker.Start(player, standPos, bot.QuestTarget.StopDistance))
+                && bot.Walker.Start(player, standPos, bot.QuestTarget.StopDistance, RecoveryGoalFor(player, bot.QuestTarget)))
             {
                 bot.QuestTarget.Pos = standPos;
                 bot.QuestArriveWaitMs = 0;
@@ -584,7 +682,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                     size = go->GetGOInfo()->size < 1.0f ? 1.0f : go->GetGOInfo()->size;
                 Position standPos;
                 if (PlayerbotWalker::PickApproachPosition(player, go, size + 1.0f, standPos)
-                    && bot.Walker.Start(player, standPos, bot.GameObjectTarget.StopDistance))
+                    && bot.Walker.Start(player, standPos, bot.GameObjectTarget.StopDistance, RecoveryGoalFor(player, bot.GameObjectTarget)))
                 {
                     bot.GameObjectTarget.Pos = standPos;
                     bot.QuestArriveWaitMs = 0;
@@ -761,6 +859,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (bot.Walker.IsMoving())
     {
+        if (bot.Walker.IsJumping())
+            return;
+
         TryImmediateWorld(bot, player, true);
         if (bot.Walker.IsMoving()
             && bot.VendorTarget.NpcGuid.IsEmpty()
@@ -912,7 +1013,7 @@ bool PlayerbotMgr::BeginCorpseWalk(PlayerbotRecord& bot, Player* player)
         return true;
     }
 
-    if (!bot.Walker.Start(player, *standPos, 0.25f))
+    if (!bot.Walker.Start(player, *standPos, 0.25f, CorpseRecoveryGoal(player)))
         return false;
 
     return true;
@@ -947,7 +1048,8 @@ bool PlayerbotMgr::BeginHealerWalk(PlayerbotRecord& bot, Player* player)
             return true;
         }
 
-        if (bot.Walker.Start(player, healer->Pos, healer->StopDistance))
+        if (bot.Walker.Start(player, healer->Pos, healer->StopDistance,
+            GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, healer->NpcGuid)))
             return true;
 
         bot.SpiritHealerGuid.Clear();
@@ -957,7 +1059,7 @@ bool PlayerbotMgr::BeginHealerWalk(PlayerbotRecord& bot, Player* player)
     if (player->GetExactDist(nearPos) <= 2.0f)
         return true;
 
-    return bot.Walker.Start(player, nearPos, 2.0f);
+    return bot.Walker.Start(player, nearPos, 2.0f, GraveyardRecoveryGoal(player, nearPos));
 }
 
 bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff)
@@ -1095,7 +1197,7 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
             if (side && player->GetExactDist(*side) > 1.0f && !bot.Walker.IsMoving())
             {
                 TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} the reclaim circle is still hot. Standing to the side.", player->GetName());
-                if (bot.Walker.Start(player, *side, 0.25f))
+                if (bot.Walker.Start(player, *side, 0.25f, CorpseRecoveryGoal(player)))
                 {
                     bot.Death = PlayerbotDeathWork::WalkToCorpse;
                     return true;
@@ -1118,7 +1220,7 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
             if (!bot.Walker.IsMoving())
             {
                 Optional<Position> standPos = PlayerbotClient::PickCorpseStandPosition(player);
-                if (standPos && bot.Walker.Start(player, *standPos, 0.25f))
+                if (standPos && bot.Walker.Start(player, *standPos, 0.25f, CorpseRecoveryGoal(player)))
                     bot.Death = PlayerbotDeathWork::WalkToCorpse;
             }
             return true;
@@ -1182,7 +1284,8 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
                 bot.HealerSent = false;
                 return true;
             }
-            if (bot.Walker.Start(player, healer->Pos, healer->StopDistance))
+            if (bot.Walker.Start(player, healer->Pos, healer->StopDistance,
+                GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, healer->NpcGuid)))
                 return true;
             bot.SpiritHealerGuid.Clear();
         }
@@ -1225,7 +1328,8 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
             Position standPos;
             float const standDistance = healer->GetCombatReach() + 1.0f;
             if (PlayerbotWalker::PickApproachPosition(player, healer, standDistance, standPos)
-                && bot.Walker.Start(player, standPos, 0.25f))
+                && bot.Walker.Start(player, standPos, 0.25f,
+                    GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, bot.SpiritHealerGuid)))
             {
                 bot.Death = PlayerbotDeathWork::WalkToHealer;
                 bot.DeathWaitMs = 0;
@@ -1754,7 +1858,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         float const standDistance = creature->GetCombatReach() + 1.0f;
         if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
             && player->GetExactDist(standPos) > bot.CombatTarget.StopDistance
-            && bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance))
+            && bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance, RecoveryGoalFor(player, bot.CombatTarget)))
         {
             bot.CombatTarget.Pos = standPos;
             return true;
@@ -1765,7 +1869,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
             return failCloseInWalk();
 
         bot.CombatTarget.Pos = dest;
-        if (!bot.Walker.Start(player, dest, bot.CombatTarget.StopDistance))
+        if (!bot.Walker.Start(player, dest, bot.CombatTarget.StopDistance, RecoveryGoalFor(player, bot.CombatTarget)))
             return failCloseInWalk();
 
         return true;
@@ -1851,7 +1955,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
             return true;
         }
 
-        if (!bot.Walker.Start(player, dest, stop))
+        if (!bot.Walker.Start(player, dest, stop, RecoveryGoalFor(player, bot.CombatTarget)))
             return failCloseInWalk();
 
         return true;
@@ -1905,7 +2009,7 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
         player->GetName(), bot.QuestTarget.NpcGuid.ToString(), bot.QuestTarget.QuestId,
         bot.QuestTarget.TurnIn ? "turn-in" : "accept");
     bot.QuestArriveWaitMs = 0;
-    if (!bot.Walker.Start(player, bot.QuestTarget.Pos, bot.QuestTarget.StopDistance))
+    if (!bot.Walker.Start(player, bot.QuestTarget.Pos, bot.QuestTarget.StopDistance, RecoveryGoalFor(player, bot.QuestTarget)))
     {
         if (!bot.QuestTarget.NpcGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.QuestTarget.NpcGuid);
@@ -1945,7 +2049,8 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
             player->GetName(), bot.GameObjectTarget.QuestId);
 
     bot.QuestArriveWaitMs = 0;
-    if (!bot.Walker.Start(player, bot.GameObjectTarget.Pos, bot.GameObjectTarget.StopDistance))
+    if (!bot.Walker.Start(player, bot.GameObjectTarget.Pos, bot.GameObjectTarget.StopDistance,
+        RecoveryGoalFor(player, bot.GameObjectTarget)))
     {
         if (!bot.GameObjectTarget.GoGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.GameObjectTarget.GoGuid);
@@ -2069,7 +2174,8 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
         float const standDistance = creature->GetCombatReach() + 1.0f;
         if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
             && player->GetExactDist(standPos) > bot.UseItemOnUnitTarget.StopDistance
-            && bot.Walker.Start(player, standPos, bot.UseItemOnUnitTarget.StopDistance))
+            && bot.Walker.Start(player, standPos, bot.UseItemOnUnitTarget.StopDistance,
+                RecoveryGoalFor(player, bot.UseItemOnUnitTarget)))
         {
             bot.UseItemOnUnitTarget.Pos = standPos;
             bot.QuestArriveWaitMs = 0;
@@ -2122,7 +2228,8 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
             player->GetName(), bot.UseItemOnUnitTarget.QuestId);
 
     bot.QuestArriveWaitMs = 0;
-    if (!bot.Walker.Start(player, bot.UseItemOnUnitTarget.Pos, bot.UseItemOnUnitTarget.StopDistance))
+    if (!bot.Walker.Start(player, bot.UseItemOnUnitTarget.Pos, bot.UseItemOnUnitTarget.StopDistance,
+        RecoveryGoalFor(player, bot.UseItemOnUnitTarget)))
     {
         if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
@@ -2182,7 +2289,8 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
             player->GetName(), bot.CombatTarget.QuestId);
 
     bot.QuestArriveWaitMs = 0;
-    if (!bot.Walker.Start(player, bot.CombatTarget.Pos, bot.CombatTarget.StopDistance))
+    if (!bot.Walker.Start(player, bot.CombatTarget.Pos, bot.CombatTarget.StopDistance,
+        RecoveryGoalFor(player, bot.CombatTarget)))
     {
         if (KeepCombatAfterFailedWalk(player, bot.CombatTarget.CreatureGuid))
         {
@@ -2257,7 +2365,8 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
             }
 
             bot.ItemLootTarget.Pos = standPos;
-            if (!bot.Walker.Start(player, standPos, bot.ItemLootTarget.StopDistance))
+            if (!bot.Walker.Start(player, standPos, bot.ItemLootTarget.StopDistance,
+                RecoveryGoalFor(player, bot.ItemLootTarget)))
             {
                 bot.UnreachableGuids.insert(lootOwner);
                 ClearItemLoot(bot);
@@ -2331,7 +2440,8 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
             }
 
             bot.ItemLootTarget.Pos = standPos;
-            if (!bot.Walker.Start(player, standPos, bot.ItemLootTarget.StopDistance))
+            if (!bot.Walker.Start(player, standPos, bot.ItemLootTarget.StopDistance,
+                RecoveryGoalFor(player, bot.ItemLootTarget)))
             {
                 bot.UnreachableGuids.insert(lootOwner);
                 ClearItemLoot(bot);
@@ -2487,7 +2597,8 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
             player->GetName(), bot.ItemLootTarget.QuestId);
 
     bot.QuestArriveWaitMs = 0;
-    if (!bot.Walker.Start(player, bot.ItemLootTarget.Pos, bot.ItemLootTarget.StopDistance))
+    if (!bot.Walker.Start(player, bot.ItemLootTarget.Pos, bot.ItemLootTarget.StopDistance,
+        RecoveryGoalFor(player, bot.ItemLootTarget)))
     {
         if (!bot.ItemLootTarget.GoGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.ItemLootTarget.GoGuid);
@@ -2559,7 +2670,8 @@ bool PlayerbotMgr::BeginVendorTarget(PlayerbotRecord& bot, Player* player, Playe
         player->GetName(), bot.VendorTarget.NpcGuid.ToString(),
         bot.VendorTarget.CanRepair ? " (can repair)" : "");
     bot.QuestArriveWaitMs = 0;
-    if (!bot.Walker.Start(player, bot.VendorTarget.Pos, bot.VendorTarget.StopDistance))
+    if (!bot.Walker.Start(player, bot.VendorTarget.Pos, bot.VendorTarget.StopDistance,
+        RecoveryGoalFor(player, bot.VendorTarget)))
     {
         bot.UnreachableGuids.insert(bot.VendorTarget.NpcGuid);
         ClearVendor(bot);
@@ -2596,7 +2708,8 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
             Position standPos;
             float const standDistance = creature->GetCombatReach() + 1.0f;
             if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
-                && bot.Walker.Start(player, standPos, bot.VendorTarget.StopDistance))
+                && bot.Walker.Start(player, standPos, bot.VendorTarget.StopDistance,
+                    RecoveryGoalFor(player, bot.VendorTarget)))
             {
                 bot.VendorTarget.Pos = standPos;
                 bot.QuestArriveWaitMs = 0;

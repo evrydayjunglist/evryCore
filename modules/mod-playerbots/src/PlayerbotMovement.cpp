@@ -22,8 +22,10 @@
 #include "GridDefines.h"
 #include "Log.h"
 #include "Map.h"
+#include "MapDefines.h"
 #include "MoveSpline.h"
 #include "MovementInfo.h"
+#include "MovementTypedefs.h"
 #include "Object.h"
 #include "Opcodes.h"
 #include "PathGenerator.h"
@@ -61,8 +63,17 @@ namespace
     constexpr float LIP_DEST_PROGRESS_YARDS = 1.0f;
     constexpr uint32 LIP_MAX_STEPS = 8;
     constexpr int32 LIP_LOOK_DIRECTIONS = 16;
-    // Walk off a face onto open ground, then mmap. This is not a path around a mountain.
-    constexpr float LEAVE_FACE_MAX_YARDS = 24.0f;
+    constexpr float NORMAL_JUMP_VERTICAL_SPEED = 7.955547f;
+    constexpr float JUMP_ARC_SAMPLE_SECONDS = 0.025f;
+    constexpr float JUMP_FLOOR_SEARCH_ABOVE_FEET = 0.5f;
+    constexpr float JUMP_FOOT_CLEARANCE = 0.05f;
+    constexpr float JUMP_ASCENT_GROUND_TOLERANCE = 0.05f;
+    constexpr float JUMP_MAX_LANDING_RISE = 1.25f;
+    constexpr float JUMP_MAX_LANDING_DROP = 2.0f;
+    constexpr float JUMP_MIN_CLEARANCE_PAST_FACE = 0.5f;
+    constexpr float RECOVERY_CONNECTIVITY_PROBE_YARDS[] = { 60.0f, 120.0f };
+    constexpr int32 RECOVERY_CONNECTIVITY_DIRECTIONS = 8;
+    constexpr float RECOVERY_PROBE_ENDPOINT_YARDS = 8.0f;
 
     float HeartbeatStepLen(Player const* player)
     {
@@ -98,16 +109,22 @@ namespace
         return -step.rise <= MAX_DOWN_STEP_YARDS;
     }
 
-    // Same rays as WorldObject::MovePositionToFirstCollision: static vmap, then dynamic gameobject.
-    // Chest height, not feet, so floors, ramps, doorways, and stairs are not walls. Do not relocate.
-    bool StepHitsWorldCollision(Player const* player, Position const& from, Position const& to)
+    enum class StepWorldCollision
+    {
+        None,
+        Static,
+        Dynamic,
+        InvalidPosition
+    };
+
+    StepWorldCollision GetSegmentWorldCollision(Player const* player, Position const& from, Position const& to, float heightOffset)
     {
         if (!player || !player->IsInWorld())
-            return false;
+            return StepWorldCollision::None;
 
         Map* map = player->FindMap();
         if (!map)
-            return false;
+            return StepWorldCollision::None;
 
         float const fromX = from.GetPositionX();
         float const fromY = from.GetPositionY();
@@ -116,31 +133,79 @@ namespace
         float destY = to.GetPositionY();
         float destZ = to.GetPositionZ();
         if (!Trinity::IsValidMapCoord(fromX, fromY, fromZ) || !Trinity::IsValidMapCoord(destX, destY, destZ))
-            return true;
+            return StepWorldCollision::InvalidPosition;
 
         float const dx = destX - fromX;
         float const dy = destY - fromY;
         if ((dx * dx + dy * dy) < 0.0001f)
-            return false;
+            return StepWorldCollision::None;
 
-        float const halfHeight = player->GetCollisionHeight() * 0.5f;
         float hitX = destX;
         float hitY = destY;
         float hitZ = destZ;
         if (VMAP::VMapFactory::createOrGetVMapManager()->getObjectHitPos(
             PhasingHandler::GetTerrainMapId(player->GetPhaseShift(), player->GetMapId(), map->GetTerrain(), fromX, fromY),
-            fromX, fromY, fromZ + halfHeight,
-            destX, destY, destZ + halfHeight,
+            fromX, fromY, fromZ + heightOffset,
+            destX, destY, destZ + heightOffset,
             hitX, hitY, hitZ, -0.5f))
-            return true;
+            return StepWorldCollision::Static;
 
         if (map->getObjectHitPos(player->GetPhaseShift(),
-            fromX, fromY, fromZ + halfHeight,
-            destX, destY, destZ + halfHeight,
+            fromX, fromY, fromZ + heightOffset,
+            destX, destY, destZ + heightOffset,
             hitX, hitY, hitZ, -0.5f))
-            return true;
+            return StepWorldCollision::Dynamic;
 
-        return false;
+        return StepWorldCollision::None;
+    }
+
+    // Same rays as WorldObject::MovePositionToFirstCollision: static vmap, then dynamic gameobject.
+    // Chest height, not feet, so floors, ramps, doorways, and stairs are not walls. Do not relocate.
+    StepWorldCollision GetStepWorldCollision(Player const* player, Position const& from, Position const& to)
+    {
+        float const halfHeight = player ? player->GetCollisionHeight() * 0.5f : 0.0f;
+        return GetSegmentWorldCollision(player, from, to, halfHeight);
+    }
+
+    bool JumpSegmentIsClear(Player const* player, Position const& from, Position const& to)
+    {
+        if (!player)
+            return false;
+
+        float const dx = to.GetPositionX() - from.GetPositionX();
+        float const dy = to.GetPositionY() - from.GetPositionY();
+        float const horizontal = std::sqrt(dx * dx + dy * dy);
+        if (horizontal < 0.0001f)
+            return false;
+
+        float const collisionHeight = player->GetCollisionHeight();
+        float const heights[] =
+        {
+            std::min(0.1f, collisionHeight),
+            std::min(collisionHeight * 0.25f, collisionHeight),
+            collisionHeight * 0.5f,
+            std::max(collisionHeight * 0.5f, collisionHeight - 0.1f)
+        };
+        float const radius = std::max(0.0f, player->GetBoundingRadius());
+        float const sideX = -dy / horizontal;
+        float const sideY = dx / horizontal;
+        float const lateralOffsets[] = { -radius, 0.0f, radius };
+
+        for (float lateral : lateralOffsets)
+        {
+            Position shiftedFrom = from;
+            shiftedFrom.Relocate(from.GetPositionX() + sideX * lateral, from.GetPositionY() + sideY * lateral,
+                from.GetPositionZ(), from.GetOrientation());
+            Position shiftedTo = to;
+            shiftedTo.Relocate(to.GetPositionX() + sideX * lateral, to.GetPositionY() + sideY * lateral,
+                to.GetPositionZ(), to.GetOrientation());
+
+            for (float height : heights)
+                if (GetSegmentWorldCollision(player, shiftedFrom, shiftedTo, height) != StepWorldCollision::None)
+                    return false;
+        }
+
+        return true;
     }
 
     bool GroundedStepIsWalkable(Player const* player, Position const& from, Position const& to)
@@ -148,7 +213,7 @@ namespace
         if (!GroundedStepIsLegal(MeasureGroundedStep(from, to)))
             return false;
 
-        return !StepHitsWorldCollision(player, from, to);
+        return GetStepWorldCollision(player, from, to) == StepWorldCollision::None;
     }
 
     // Dirt is this plant, not the chest-height wall ray. Search from last feet plus the most she may climb this step.
@@ -352,13 +417,37 @@ namespace
 
 void PlayerbotWalker::Stop(Player* player)
 {
+    if (_state == State::Jumping)
+    {
+        if (player && player->IsAlive() && player->IsInWorld() && !player->IsBeingTeleported())
+        {
+            // A player cannot stop in mid-air. Finish the validated arc, then stop on the landing.
+            _stopAfterJump = true;
+            return;
+        }
+
+        ResetNow();
+        return;
+    }
+
     if (_state == State::Moving && player && player->GetSession())
         QueueMove(player, player->GetPosition(), false, false);
 
-    Reset();
+    ResetNow();
 }
 
 void PlayerbotWalker::Reset()
+{
+    if (_state == State::Jumping)
+    {
+        _stopAfterJump = true;
+        return;
+    }
+
+    ResetNow();
+}
+
+void PlayerbotWalker::ResetNow()
 {
     _state = State::Idle;
     _path.clear();
@@ -380,6 +469,16 @@ void PlayerbotWalker::Reset()
     _destPokeActive = false;
     _contourDirX = 0.0f;
     _contourDirY = 0.0f;
+    _faceRecovery.Reset();
+    _lastGroundedStepFailure = GroundedStepFailure::None;
+    _lastRefusedStep.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    _lastRequestedStep.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    _recoveryGoal = {};
+    _jump = {};
+    _jumpElapsedMs = 0;
+    _jumpHeartbeatMs = 0;
+    _jumpMapId = 0;
+    _stopAfterJump = false;
 }
 
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out)
@@ -451,7 +550,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
     return true;
 }
 
-bool PlayerbotWalker::Start(Player* player, Position const& destination, float stopDistance)
+bool PlayerbotWalker::Start(Player* player, Position const& destination, float stopDistance, PlayerbotRecoveryGoal const& goal)
 {
     if (!player || !player->IsInWorld() || !player->GetSession())
     {
@@ -459,18 +558,29 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
         return false;
     }
 
-    bool const sameDest = _destination.GetExactDist(destination) < 1.0f;
-    // Already walking this dest. Do not rebuild mmap from the same feet.
-    if (_state == State::Moving && sameDest)
+    // Finish the current client jump before accepting another ground path.
+    if (_state == State::Jumping)
         return true;
 
-    uint32 const savedLipSteps = sameDest ? _lipSteps : 0;
-    float const savedLipDestDist = sameDest ? _lipDestDist : 0.0f;
-    Position const savedLipOrigin = sameDest ? _lipOrigin : Position();
-    bool const savedHaveLipOrigin = sameDest && _haveLipOrigin;
-    bool const savedDestPokeActive = sameDest && _destPokeActive;
-    float const savedCx = sameDest ? _contourDirX : 0.0f;
-    float const savedCy = sameDest ? _contourDirY : 0.0f;
+    bool const sameDest = _destination.GetExactDist(destination) < 1.0f;
+    bool const sameGoal = !goal.Empty() && !_recoveryGoal.Empty() && goal == _recoveryGoal;
+    bool const sameWalk = sameDest && (goal.Empty() ? _recoveryGoal.Empty() : sameGoal);
+    // Already walking this dest. Do not rebuild mmap from the same feet.
+    if (_state == State::Moving && sameWalk)
+        return true;
+
+    bool const preserveEpisode = _faceRecovery.Active() && (sameGoal || (goal.Empty() && sameDest));
+    bool const preserveCourse = preserveEpisode && sameDest;
+    uint32 const savedLipSteps = preserveCourse ? _lipSteps : 0;
+    float const savedLipDestDist = preserveCourse ? _lipDestDist : 0.0f;
+    Position const savedLipOrigin = preserveEpisode ? _lipOrigin : Position();
+    bool const savedHaveLipOrigin = preserveEpisode && _haveLipOrigin;
+    bool const savedDestPokeActive = preserveCourse && _destPokeActive;
+    float const savedCx = preserveCourse ? _contourDirX : 0.0f;
+    float const savedCy = preserveCourse ? _contourDirY : 0.0f;
+    PlayerbotFaceRecovery const savedFaceRecovery = preserveEpisode ? _faceRecovery : PlayerbotFaceRecovery();
+    GroundedStepFailure const savedStepFailure = preserveEpisode ? _lastGroundedStepFailure : GroundedStepFailure::None;
+    Position const savedRefusedStep = preserveEpisode ? _lastRefusedStep : Position();
 
     Reset();
     _lipSteps = savedLipSteps;
@@ -480,6 +590,10 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     _destPokeActive = savedDestPokeActive;
     _contourDirX = savedCx;
     _contourDirY = savedCy;
+    _faceRecovery = savedFaceRecovery;
+    _lastGroundedStepFailure = savedStepFailure;
+    _lastRefusedStep = savedRefusedStep;
+    _recoveryGoal = goal;
 
     float x = player->GetPositionX();
     float y = player->GetPositionY();
@@ -495,14 +609,20 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     if (from.GetExactDist(destination) <= stopDistance)
     {
         _state = State::Arrived;
+        ClearFaceRecovery();
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is already in range of the walk destination.", player->GetName());
         return true;
     }
 
     std::vector<G3D::Vector3> path;
-    if (!BuildMmapPath(player, from, destination, path))
+    MmapPathEvidence mmapEvidence;
+    if (!BuildMmapPath(player, from, destination, path, &mmapEvidence))
     {
         _lastProgressPos = from;
+        _lastRequestedStep = destination;
+        BeginFaceRecovery(player, GroundedStepFailure::NoPath, from);
+        LogRecoveryMmap(player, "path rejected", mmapEvidence);
+        LogStartConnectivity(player, from);
         if (TryLeaveFace(player, false))
         {
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path from these feet. Walking off this face, then mmap.",
@@ -526,14 +646,28 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     _contouring = false;
     _startedOnAFace = false;
 
-    if (FirstGroundedStepIsLegal(player))
+    Position first;
+    GroundedStepFailure const firstFailure = PeekGroundedStepFailure(player, HeartbeatStepLen(player), first);
+    if (firstFailure == GroundedStepFailure::None)
     {
-        _lipSteps = 0;
-        _lipDestDist = 0.0f;
-        _haveLipOrigin = false;
-        _destPokeActive = false;
-        _contourDirX = 0.0f;
-        _contourDirY = 0.0f;
+        if (_faceRecovery.Active())
+        {
+            if (!RejoinPathReachesNewGround(from, _path))
+            {
+                LogRecoveryMmap(player, "rejoin rejected because its first yards only revisit recovery ground", mmapEvidence);
+                if (TryLeaveFace(player, false))
+                    return true;
+                if (TryStartJump(player))
+                    return true;
+                FailNoLegalRing(player);
+                return false;
+            }
+
+            _faceRecovery.BeginMmapRejoin(from.GetExactDist(_destination), from.GetPositionX(), from.GetPositionY());
+            LogRecoveryMmap(player, "testing provisional rejoin", mmapEvidence);
+        }
+        else
+            ClearFaceRecovery();
         _state = State::Moving;
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk. {} points, length to destination {:.1f} yards.",
             player->GetName(), uint32(_path.size()), from.GetExactDist(destination));
@@ -543,10 +677,14 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
     // Mmap's first step is a face or a wall. That is not unreachable. Walk legal ground beside it.
     // A wall is not a hill: look for another same-objective yellow only when this first step is steep.
-    Position first;
-    bool const planted = PeekGroundedStep(player, HeartbeatStepLen(player), first);
-    _startedOnAFace = !planted || !GroundedStepIsLegal(MeasureGroundedStep(_lastGrounded, first));
+    _startedOnAFace = firstFailure == GroundedStepFailure::NoFloor
+        || firstFailure == GroundedStepFailure::SteepUp
+        || firstFailure == GroundedStepFailure::TooFarDown;
+    BeginFaceRecovery(player, firstFailure, first);
+    LogRecoveryMmap(player, "mmap prefix refused", mmapEvidence);
     if (TryLeaveFace(player, false))
+        return true;
+    if (TryStartJump(player))
         return true;
 
     FailNoLegalRing(player);
@@ -555,8 +693,14 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
 void PlayerbotWalker::Update(Player* player, uint32 diff)
 {
-    if (_state != State::Moving || !player || !player->IsInWorld() || !player->GetSession())
+    if ((_state != State::Moving && _state != State::Jumping) || !player || !player->IsInWorld() || !player->GetSession())
         return;
+
+    if (_state == State::Jumping)
+    {
+        UpdateJump(player, diff);
+        return;
+    }
 
     if (!player->movespline->Finalized())
     {
@@ -574,15 +718,23 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         _heartbeatMs -= HEARTBEAT_INTERVAL_MS;
         float const stepLen = speed * (float(HEARTBEAT_INTERVAL_MS) / 1000.0f);
         Position const next = Advance(stepLen);
+        _lastRequestedStep = next;
+        Position const previousGrounded = _lastGrounded;
         Position grounded;
-        if (!PlantFromFeet(player, _lastGrounded, next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), grounded)
-            || !GroundedStepIsWalkable(player, _lastGrounded, grounded))
+        GroundedStepFailure const failure = ClassifyGroundedStep(player, previousGrounded,
+            next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), grounded);
+        if (failure != GroundedStepFailure::None)
         {
-            RefuseSteepStep(player, grounded);
+            RefuseStep(player, failure, grounded);
             return;
         }
 
         _lastGrounded = grounded;
+        if (_faceRecovery.Rejoining())
+            NoteMmapRejoinProgress(player, previousGrounded);
+        else if (_faceRecovery.Active())
+            _faceRecovery.Advance(previousGrounded.GetExactDist2d(_lastGrounded),
+                _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY());
 
         bool const atDest = grounded.GetExactDist(_destination) <= _stopDistance;
         bool const pathDone = _pointIndex + 1 >= _path.size();
@@ -591,6 +743,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             QueueMove(player, grounded, false, false);
             _state = State::Arrived;
             _contouring = false;
+            ClearFaceRecovery();
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
                 player->GetName(), grounded.GetPositionX(), grounded.GetPositionY(), grounded.GetPositionZ());
             return;
@@ -611,6 +764,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         {
             QueueMove(player, grounded, false, false);
             _state = State::Arrived;
+            ClearFaceRecovery();
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
                 player->GetName(), grounded.GetPositionX(), grounded.GetPositionY(), grounded.GetPositionZ());
             return;
@@ -642,6 +796,8 @@ void PlayerbotWalker::QueueMove(Player* player, Position const& pos, bool moving
     info.guid = player->GetGUID();
     info.time = GameTime::GetGameTimeMS();
     info.pos = pos;
+    info.RemoveMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+    info.jump.Reset();
 
     if (moving)
         info.AddMovementFlag(MOVEMENTFLAG_FORWARD);
@@ -654,6 +810,29 @@ void PlayerbotWalker::QueueMove(Player* player, Position const& pos, bool moving
     else if (!moving)
         opcode = CMSG_MOVE_STOP;
 
+    PlayerbotClient::QueueMovement(player->GetSession(), opcode, info);
+}
+
+void PlayerbotWalker::QueueJumpMove(Player* player, OpcodeClient opcode, Position const& pos, uint32 fallTime)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    MovementInfo info = player->m_movementInfo;
+    info.guid = player->GetGUID();
+    info.time = GameTime::GetGameTimeMS();
+    info.pos = pos;
+    info.AddMovementFlag(MOVEMENTFLAG_FORWARD);
+    if (opcode == CMSG_MOVE_FALL_LAND)
+        info.RemoveMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+    else
+        info.AddMovementFlag(MOVEMENTFLAG_FALLING);
+
+    info.jump.fallTime = fallTime;
+    info.jump.zspeed = -_jump.Trajectory.VerticalSpeed;
+    info.jump.sinAngle = _jump.DirectionY;
+    info.jump.cosAngle = _jump.DirectionX;
+    info.jump.xyspeed = _jump.Trajectory.HorizontalSpeed;
     PlayerbotClient::QueueMovement(player->GetSession(), opcode, info);
 }
 
@@ -736,16 +915,58 @@ bool PlayerbotWalker::PeekGroundedStep(Player* player, float distance, Position&
     return PlantFromFeet(player, _lastGrounded, next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), out);
 }
 
+PlayerbotWalker::GroundedStepFailure PlayerbotWalker::PeekGroundedStepFailure(Player* player, float distance, Position& out)
+{
+    size_t const savedIndex = _pointIndex;
+    float const savedProgress = _segmentProgress;
+    Position const next = Advance(distance);
+    _lastRequestedStep = next;
+    _pointIndex = savedIndex;
+    _segmentProgress = savedProgress;
+
+    if (!player)
+        return GroundedStepFailure::InvalidPosition;
+
+    return ClassifyGroundedStep(player, _lastGrounded, next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), out);
+}
+
+PlayerbotWalker::GroundedStepFailure PlayerbotWalker::ClassifyGroundedStep(Player* player, Position const& from,
+    float x, float y, float orientation, Position& out) const
+{
+    out.Relocate(x, y, from.GetPositionZ(), orientation);
+    if (!Trinity::IsValidMapCoord(x, y, from.GetPositionZ()))
+        return GroundedStepFailure::InvalidPosition;
+    if (!PlantFromFeet(player, from, x, y, orientation, out))
+        return GroundedStepFailure::NoFloor;
+
+    GroundedStep const step = MeasureGroundedStep(from, out);
+    if (step.rise > 0.0f && step.degrees > MAX_WALKABLE_SLOPE_DEGREES)
+        return GroundedStepFailure::SteepUp;
+    if (step.rise <= 0.0f && -step.rise > MAX_DOWN_STEP_YARDS)
+        return GroundedStepFailure::TooFarDown;
+
+    switch (GetStepWorldCollision(player, from, out))
+    {
+        case StepWorldCollision::Static:
+            return GroundedStepFailure::StaticCollision;
+        case StepWorldCollision::Dynamic:
+            return GroundedStepFailure::DynamicCollision;
+        case StepWorldCollision::InvalidPosition:
+            return GroundedStepFailure::InvalidPosition;
+        case StepWorldCollision::None:
+            return GroundedStepFailure::None;
+    }
+
+    return GroundedStepFailure::InvalidPosition;
+}
+
 bool PlayerbotWalker::FirstGroundedStepIsLegal(Player* player)
 {
     if (!player)
         return false;
 
     Position first;
-    if (!PeekGroundedStep(player, HeartbeatStepLen(player), first))
-        return false;
-
-    return GroundedStepIsWalkable(player, _lastGrounded, first);
+    return PeekGroundedStepFailure(player, HeartbeatStepLen(player), first) == GroundedStepFailure::None;
 }
 
 bool PlayerbotWalker::MmapLookIsLegal(Player* player)
@@ -796,10 +1017,7 @@ void PlayerbotWalker::NoteLipOrigin()
 
 bool PlayerbotWalker::LeaveFaceExceeded() const
 {
-    if (!_haveLipOrigin)
-        return false;
-
-    return _lastGrounded.GetExactDist2d(_lipOrigin) > LEAVE_FACE_MAX_YARDS;
+    return _faceRecovery.Exhausted();
 }
 
 bool PlayerbotWalker::ContourShouldStop(Player* player) const
@@ -849,9 +1067,12 @@ bool PlayerbotWalker::StepTowardDestIsLegal(Player* player) const
     return LookAheadIsWalkable(player, feet, dx, dy, lookDist);
 }
 
-bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Position const& destination, std::vector<G3D::Vector3>& outPath)
+bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Position const& destination,
+    std::vector<G3D::Vector3>& outPath, MmapPathEvidence* evidence)
 {
     outPath.clear();
+    if (evidence)
+        *evidence = {};
     if (!player)
         return false;
 
@@ -861,6 +1082,16 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
     PathGenerator generator(player);
     bool const calculated = generator.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
         destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+    if (evidence)
+    {
+        evidence->Calculated = calculated;
+        evidence->Type = uint32(generator.GetPathType());
+        evidence->Length = generator.GetPathLength();
+        evidence->ActualEnd = generator.GetActualEndPosition();
+        Movement::PointsArray const& generated = generator.GetPath();
+        size_t const prefixSize = std::min<size_t>(generated.size(), 5);
+        evidence->Prefix.assign(generated.begin(), generated.begin() + prefixSize);
+    }
     if (!calculated || !PathIsWalkable(generator))
         return false;
 
@@ -940,14 +1171,149 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
     return outPath.size() >= 2;
 }
 
+bool PlayerbotWalker::RejoinPathReachesNewGround(Position const& from, std::vector<G3D::Vector3> const& path) const
+{
+    if (!_faceRecovery.Active())
+        return true;
+    if (path.size() < 2)
+        return false;
+
+    float checked = 0.0f;
+    float const limit = PlayerbotFaceRecovery::ConfirmedRejoinYards;
+    float const sampleYards = PlayerbotFaceRecovery::NewGroundCellYards * 0.5f;
+    G3D::Vector3 previous(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ());
+
+    for (size_t i = 1; i < path.size() && checked < limit; ++i)
+    {
+        G3D::Vector3 const delta = path[i] - previous;
+        float const segmentYards = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+        if (segmentYards < 0.01f)
+        {
+            previous = path[i];
+            continue;
+        }
+
+        float const available = std::min(segmentYards, limit - checked);
+        for (float along = std::min(sampleYards, available); along <= available + 0.01f; along += sampleYards)
+        {
+            float const t = along / segmentYards;
+            float const x = previous.x + delta.x * t;
+            float const y = previous.y + delta.y * t;
+            if (!_faceRecovery.HasVisitedGround(x, y))
+                return true;
+        }
+
+        checked += available;
+        previous = path[i];
+    }
+
+    return false;
+}
+
+void PlayerbotWalker::LogRecoveryMmap(Player* player, char const* decision, MmapPathEvidence const& evidence) const
+{
+    if (!player || !_faceRecovery.Active())
+        return;
+
+    std::string prefix;
+    for (G3D::Vector3 const& point : evidence.Prefix)
+    {
+        if (!prefix.empty())
+            prefix += " -> ";
+        prefix += Trinity::StringFormat("({:.2f},{:.2f},{:.2f})", point.x, point.y, point.z);
+    }
+    if (prefix.empty())
+        prefix = "none";
+
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} recovery mmap {}: goal={} map={} key={:016X}:{:016X}, calculated={}, type=0x{:02X}, actualEnd=({:.2f}, {:.2f}, {:.2f}), pathLength={:.1f}, firstPoints=[{}], episodeYards={:.1f}, visitedCells={}.",
+        player->GetName(), decision, PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _recoveryGoal.MapId,
+        _recoveryGoal.Secondary, _recoveryGoal.Primary, evidence.Calculated, evidence.Type,
+        evidence.ActualEnd.x, evidence.ActualEnd.y, evidence.ActualEnd.z, evidence.Length, prefix,
+        _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells());
+}
+
+void PlayerbotWalker::LogStartConnectivity(Player* player, Position const& from)
+{
+    if (!player || !_faceRecovery.Active() || _faceRecovery.ConnectivityChecked())
+        return;
+
+    _faceRecovery.MarkConnectivityChecked();
+    bool connected = false;
+    float connectedRadius = 0.0f;
+    int32 connectedDirection = -1;
+    float connectedEndpointGap = 0.0f;
+
+    for (float radius : RECOVERY_CONNECTIVITY_PROBE_YARDS)
+    {
+        for (int32 direction = 0; direction < RECOVERY_CONNECTIVITY_DIRECTIONS; ++direction)
+        {
+            float const angle = float(direction) * (2.0f * float(M_PI)) / float(RECOVERY_CONNECTIVITY_DIRECTIONS);
+            float const x = from.GetPositionX() + std::cos(angle) * radius;
+            float const y = from.GetPositionY() + std::sin(angle) * radius;
+            float z = from.GetPositionZ();
+            if (!Trinity::IsValidMapCoord(x, y, z))
+                continue;
+            player->UpdateAllowedPositionZ(x, y, z);
+            if (!Trinity::IsValidMapCoord(x, y, z) || z <= INVALID_HEIGHT)
+                continue;
+
+            PathGenerator probe(player);
+            if (!probe.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(), x, y, z, false))
+                continue;
+
+            uint32 const type = uint32(probe.GetPathType());
+            if ((type & REFUSED_PATH_TYPES) || (type & PATHFIND_FARFROMPOLY_START) || probe.GetPath().size() < 2)
+                continue;
+
+            G3D::Vector3 const& endpoint = probe.GetActualEndPosition();
+            connectedEndpointGap = std::sqrt((endpoint.x - x) * (endpoint.x - x) + (endpoint.y - y) * (endpoint.y - y));
+            if ((type & PATHFIND_INCOMPLETE) && connectedEndpointGap > RECOVERY_PROBE_ENDPOINT_YARDS)
+                continue;
+
+            connected = true;
+            connectedRadius = radius;
+            connectedDirection = direction;
+            break;
+        }
+
+        if (connected)
+            break;
+    }
+
+    if (connected)
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} recovery diagnosis: the start has an honest mmap route to the {:.0f}-yard probe at direction {} (endpoint gap {:.1f}); this is a bad destination or route leg, not an isolated start.",
+            player->GetName(), connectedRadius, connectedDirection, connectedEndpointGap);
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} recovery diagnosis: no honest mmap route reached any of 16 probes at 60/120 yards. The bot may be standing in a disconnected or local navmesh pocket; this is diagnostic only and does not permit a teleport.",
+            player->GetName());
+}
+
 bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool alreadyMoving)
 {
     if (!player || !player->GetSession())
         return false;
 
     std::vector<G3D::Vector3> path;
-    if (!BuildMmapPath(player, from, _destination, path))
+    MmapPathEvidence mmapEvidence;
+    if (!BuildMmapPath(player, from, _destination, path, &mmapEvidence))
+    {
+        if (_faceRecovery.Active())
+        {
+            LogRecoveryMmap(player, "rejoin path rejected", mmapEvidence);
+            LogStartConnectivity(player, from);
+        }
         return false;
+    }
+
+    bool const testingFaceRejoin = _faceRecovery.Active();
+    if (testingFaceRejoin && !RejoinPathReachesNewGround(from, path))
+    {
+        LogRecoveryMmap(player, "rejoin rejected because its first yards only revisit recovery ground", mmapEvidence);
+        return false;
+    }
 
     std::vector<G3D::Vector3> savedPath = _path;
     size_t const savedIndex = _pointIndex;
@@ -958,6 +1324,8 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
 
     if (!MmapLookIsLegal(player))
     {
+        if (testingFaceRejoin)
+            LogRecoveryMmap(player, "rejoin rejected because its first four yards still meet the obstruction", mmapEvidence);
         _path = std::move(savedPath);
         _pointIndex = savedIndex;
         _segmentProgress = savedProgress;
@@ -966,20 +1334,29 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
 
     _contouring = false;
     _startedOnAFace = false;
-    _lipSteps = 0;
-    _lipDestDist = 0.0f;
-    _haveLipOrigin = false;
-    _destPokeActive = false;
-    _contourDirX = 0.0f;
-    _contourDirY = 0.0f;
+    if (testingFaceRejoin)
+    {
+        _faceRecovery.BeginMmapRejoin(from.GetExactDist(_destination), from.GetPositionX(), from.GetPositionY());
+        _destPokeActive = false;
+    }
+    else
+        ClearFaceRecovery();
     _heartbeatMs = 0;
     _stuckMs = 0;
-    _logMs = 0;
+    if (!testingFaceRejoin)
+        _logMs = 0;
     _lastProgressPos = from;
     _state = State::Moving;
 
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk. {} points, length to destination {:.1f} yards.",
-        player->GetName(), uint32(_path.size()), from.GetExactDist(_destination));
+    if (testingFaceRejoin)
+    {
+        LogRecoveryMmap(player, "testing provisional rejoin", mmapEvidence);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is testing an mmap rejoin. {} points, length to destination {:.1f} yards; obstacle recovery remains active.",
+            player->GetName(), uint32(_path.size()), from.GetExactDist(_destination));
+    }
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk. {} points, length to destination {:.1f} yards.",
+            player->GetName(), uint32(_path.size()), from.GetExactDist(_destination));
 
     Position pose = from;
     if (_path.size() >= 2)
@@ -1118,7 +1495,6 @@ void PlayerbotWalker::ApplyContourPath(Player* player, Position const& side, boo
     _pointIndex = 0;
     _segmentProgress = 0.0f;
     _heartbeatMs = 0;
-    _logMs = 0;
     _contouring = true;
     _state = State::Moving;
 
@@ -1208,12 +1584,477 @@ bool PlayerbotWalker::WalkLegalDestStep(Player* player, bool alreadyMoving)
     return true;
 }
 
-void PlayerbotWalker::RefuseSteepStep(Player* player, Position const& /*attempted*/)
+char const* PlayerbotWalker::GroundedStepFailureName(GroundedStepFailure failure)
 {
+    switch (failure)
+    {
+        case GroundedStepFailure::None:
+            return "legal";
+        case GroundedStepFailure::NoPath:
+            return "no mmap path";
+        case GroundedStepFailure::NoFloor:
+            return "no floor";
+        case GroundedStepFailure::SteepUp:
+            return "steep uphill";
+        case GroundedStepFailure::TooFarDown:
+            return "drop too far";
+        case GroundedStepFailure::StaticCollision:
+            return "vmap collision";
+        case GroundedStepFailure::DynamicCollision:
+            return "gameobject collision";
+        case GroundedStepFailure::InvalidPosition:
+            return "invalid position";
+    }
+
+    return "unknown obstruction";
+}
+
+bool PlayerbotWalker::BeginFaceRecovery(Player* player, GroundedStepFailure failure, Position const& attempted)
+{
+    bool const newEpisode = !_faceRecovery.Active();
+    float const rejoinYards = _faceRecovery.RejoinYards();
+    bool const repeatedDuringRejoin = _faceRecovery.Refuse();
+    bool const reasonChanged = !newEpisode && failure != _lastGroundedStepFailure;
+
+    if (newEpisode)
+    {
+        _faceRecovery.Begin(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY());
+        NoteLipOrigin();
+    }
+
+    _lastGroundedStepFailure = failure;
+    _lastRefusedStep = attempted;
+
+    if (!player || (!newEpisode && !repeatedDuringRejoin && !reasonChanged))
+        return repeatedDuringRejoin;
+
+    GroundedStep const step = MeasureGroundedStep(_lastGrounded, attempted);
+    char const* floorKind = failure == GroundedStepFailure::NoFloor ? "none" : "planted";
+    if (repeatedDuringRejoin)
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} met the same local obstruction after {:.1f} yards of a provisional mmap rejoin ({}; rise {:.2f}, slope {:.1f} degrees). Floor/layer evidence: feetZ={:.2f}, mmapZ={:.2f}, {}Z={:.2f}. Continuing goal {} with {:.1f} episode yards across {} visited cells.",
+            player->GetName(), rejoinYards, GroundedStepFailureName(failure), step.rise, step.degrees,
+            _lastGrounded.GetPositionZ(), _lastRequestedStep.GetPositionZ(), floorKind, attempted.GetPositionZ(),
+            PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells());
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} began local obstacle recovery for goal {} ({} at ({:.2f}, {:.2f}, {:.2f}); rise {:.2f}, slope {:.1f} degrees). Floor/layer evidence: feetZ={:.2f}, mmapZ={:.2f}, {}Z={:.2f}.",
+            player->GetName(), PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), GroundedStepFailureName(failure),
+            attempted.GetPositionX(), attempted.GetPositionY(), attempted.GetPositionZ(), step.rise, step.degrees,
+            _lastGrounded.GetPositionZ(), _lastRequestedStep.GetPositionZ(), floorKind, attempted.GetPositionZ());
+
+    return repeatedDuringRejoin;
+}
+
+void PlayerbotWalker::ClearFaceRecovery()
+{
+    _faceRecovery.Reset();
+    _lastGroundedStepFailure = GroundedStepFailure::None;
+    _lastRefusedStep.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    _startedOnAFace = false;
+    _lipSteps = 0;
+    _lipDestDist = 0.0f;
+    _haveLipOrigin = false;
+    _destPokeActive = false;
+    _contourDirX = 0.0f;
+    _contourDirY = 0.0f;
+}
+
+void PlayerbotWalker::NoteMmapRejoinProgress(Player* player, Position const& previousFeet)
+{
+    if (!_faceRecovery.Rejoining())
+        return;
+
+    float const stepYards = previousFeet.GetExactDist2d(_lastGrounded);
+    float const destinationDistance = _lastGrounded.GetExactDist(_destination);
+    if (!_faceRecovery.AdvanceMmap(stepYards, destinationDistance,
+        _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY()))
+        return;
+
+    float const rejoinYards = _faceRecovery.RejoinYards();
+    if (player)
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} left the local obstruction after {:.1f} yards of legal mmap travel. Obstacle recovery is clear.",
+            player->GetName(), rejoinYards);
+    ClearFaceRecovery();
+}
+
+void PlayerbotWalker::RefuseStep(Player* player, GroundedStepFailure failure, Position const& attempted)
+{
+    bool const repeatedDuringRejoin = BeginFaceRecovery(player, failure, attempted);
+    bool triedJump = false;
+
+    if (repeatedDuringRejoin)
+    {
+        triedJump = true;
+        if (TryStartJump(player))
+            return;
+    }
+
+    if (_faceRecovery.Exhausted())
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} still meets the local obstruction after {:.1f} yards without reaching new ground ({:.1f} total recovery yards across {} local cells). The bot is standing still.",
+            player->GetName(), _faceRecovery.StalledYards(), _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells());
+        FailNoLegalRing(player);
+        return;
+    }
+
     // Keep FORWARD. A player turns onto the flat beside a face or a wall; they do not stop and start on the same toes.
     if (TryLeaveFace(player, true))
         return;
 
+    // With no legal contour, one validated normal jump may still clear a short uphill lip or low static obstacle.
+    if (!triedJump && TryStartJump(player))
+        return;
+
+    FailNoLegalRing(player);
+}
+
+bool PlayerbotWalker::JumpMovementIsAllowed(Player const* player, char const*& reason) const
+{
+    if (!player || !player->GetSession() || !player->IsInWorld() || !player->IsAlive())
+    {
+        reason = "the player is not alive in the world";
+        return false;
+    }
+    if (player->IsBeingTeleported() || !player->movespline->Finalized())
+    {
+        reason = "another movement owner is active";
+        return false;
+    }
+    if (player->HasUnitState(UNIT_STATE_NOT_MOVE))
+    {
+        reason = "the player cannot move";
+        return false;
+    }
+    if (player->IsInFlight() || player->IsFlying() || player->IsInWater() || player->GetTransport() || player->GetVehicle())
+    {
+        reason = "the player is not using ordinary grounded movement";
+        return false;
+    }
+    if (player->IsMounted())
+    {
+        reason = "mounted jump recovery is not validated";
+        return false;
+    }
+
+    uint32 const refusedFlags = MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR | MOVEMENTFLAG_SWIMMING
+        | MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY | MOVEMENTFLAG_ROOT | MOVEMENTFLAG_HOVER;
+    if (player->m_movementInfo.HasMovementFlag(refusedFlags))
+    {
+        reason = "the client movement flags are not grounded";
+        return false;
+    }
+    if (std::fabs(player->m_movementInfo.gravityModifier - 1.0f) > 0.001f)
+    {
+        reason = "modified gravity is not validated";
+        return false;
+    }
+
+    return true;
+}
+
+bool PlayerbotWalker::BuildJumpPlan(Player* player, JumpPlan& out, char const*& reason)
+{
+    if (!player)
+    {
+        reason = "there is no player";
+        return false;
+    }
+
+    Position const launch = _lastGrounded;
+    float baseDirX = _lastRefusedStep.GetPositionX() - launch.GetPositionX();
+    float baseDirY = _lastRefusedStep.GetPositionY() - launch.GetPositionY();
+    float const dirLen = std::sqrt(baseDirX * baseDirX + baseDirY * baseDirY);
+    if (dirLen < 0.05f)
+    {
+        reason = "the rejected step has no forward direction";
+        return false;
+    }
+    baseDirX /= dirLen;
+    baseDirY /= dirLen;
+
+    PlayerbotJumpTrajectory trajectory;
+    trajectory.HorizontalSpeed = player->GetSpeed(MOVE_RUN);
+    trajectory.VerticalSpeed = NORMAL_JUMP_VERTICAL_SPEED;
+    trajectory.Gravity = Movement::gravity;
+    if (trajectory.HorizontalSpeed < 0.05f)
+    {
+        reason = "the player has no run speed";
+        return false;
+    }
+
+    float const maxTime = trajectory.DescendingTimeToHeight(-JUMP_MAX_LANDING_DROP);
+    float const apexTime = trajectory.ApexTime();
+    float const refusedDistance = launch.GetExactDist2d(_lastRefusedStep);
+    float const headingOffsetsDegrees[] = { 0.0f, 15.0f, -15.0f, 30.0f, -30.0f };
+    char const* firstReason = "the normal jump has no safe landing";
+    bool haveFirstReason = false;
+
+    // A player can angle a normal jump around the high side of a lip. Every candidate still needs a clear body arc,
+    // a verified floor, ordinary ground after landing, and an mmap continuation to the original destination.
+    for (float headingOffsetDegrees : headingOffsetsDegrees)
+    {
+        float const headingOffset = headingOffsetDegrees * (float(M_PI) / 180.0f);
+        float const rotateCos = std::cos(headingOffset);
+        float const rotateSin = std::sin(headingOffset);
+        float const dirX = baseDirX * rotateCos - baseDirY * rotateSin;
+        float const dirY = baseDirX * rotateSin + baseDirY * rotateCos;
+        float const orientation = Position::NormalizeOrientation(std::atan2(dirY, dirX));
+        char const* candidateReason = "the normal jump has no safe landing";
+        bool rejected = false;
+        Position previous = launch;
+        Position landing;
+        float landingTime = 0.0f;
+
+        for (float time = JUMP_ARC_SAMPLE_SECONDS; time <= maxTime + 0.001f; time += JUMP_ARC_SAMPLE_SECONDS)
+        {
+            float const horizontal = trajectory.HorizontalDistance(time);
+            float const x = launch.GetPositionX() + dirX * horizontal;
+            float const y = launch.GetPositionY() + dirY * horizontal;
+            float const arcZ = launch.GetPositionZ() + trajectory.HeightOffset(time);
+            if (!Trinity::IsValidMapCoord(x, y, arcZ))
+            {
+                candidateReason = "the jump arc leaves valid map coordinates";
+                rejected = true;
+                break;
+            }
+
+            float const floorZ = player->GetMapHeight(x, y, arcZ + JUMP_FLOOR_SEARCH_ABOVE_FEET);
+            if (floorZ <= INVALID_HEIGHT)
+            {
+                candidateReason = "the jump arc has no verified floor";
+                rejected = true;
+                break;
+            }
+            if (floorZ - launch.GetPositionZ() > JUMP_MAX_LANDING_RISE
+                || launch.GetPositionZ() - floorZ > JUMP_MAX_LANDING_DROP)
+            {
+                candidateReason = "the jump arc crosses an unsafe rise or drop";
+                rejected = true;
+                break;
+            }
+
+            Position arc;
+            arc.Relocate(x, y, arcZ, orientation);
+            if (!JumpSegmentIsClear(player, previous, arc))
+            {
+                candidateReason = "the full-body jump sweep hits world collision";
+                rejected = true;
+                break;
+            }
+
+            float const footClearance = arcZ - floorZ;
+            if (time <= apexTime)
+            {
+                if (footClearance < -JUMP_ASCENT_GROUND_TOLERANCE)
+                {
+                    if (headingOffsetDegrees == 0.0f)
+                        TC_LOG_INFO(PLAYERBOTS_LOG,
+                            "mod-playerbots: {} direct jump sweep met uphill ground at {:.3f} seconds and {:.2f} yards (arc Z {:.2f}, floor Z {:.2f}, clearance {:.2f}). Trying nearby headings.",
+                            player->GetName(), time, horizontal, arcZ, floorZ, footClearance);
+                    candidateReason = "the uphill face intersects the ascending jump arc";
+                    rejected = true;
+                    break;
+                }
+            }
+            else if (footClearance <= JUMP_FOOT_CLEARANCE)
+            {
+                if (footClearance < -0.25f)
+                {
+                    candidateReason = "the descending jump passed below the landing floor";
+                    rejected = true;
+                    break;
+                }
+                landing.Relocate(x, y, floorZ, arc.GetOrientation());
+                landingTime = time;
+                break;
+            }
+
+            previous = arc;
+        }
+
+        if (!rejected && landingTime <= 0.0f)
+        {
+            candidateReason = "the normal jump has no safe landing";
+            rejected = true;
+        }
+        if (!rejected && launch.GetExactDist2d(landing) < refusedDistance + JUMP_MIN_CLEARANCE_PAST_FACE)
+        {
+            candidateReason = "the landing does not clear the rejected step";
+            rejected = true;
+        }
+
+        if (!rejected)
+        {
+            LiquidData liquid;
+            ZLiquidStatus const liquidStatus = player->GetMap()->GetLiquidStatus(player->GetPhaseShift(),
+                landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ(), {}, &liquid, player->GetCollisionHeight());
+            if (liquidStatus & MAP_LIQUID_STATUS_IN_CONTACT)
+            {
+                candidateReason = "the landing is in liquid";
+                rejected = true;
+            }
+        }
+
+        if (!rejected && !LookAheadIsWalkable(player, landing, dirX, dirY, LIP_LOOK_RADIUS))
+        {
+            candidateReason = "there is no ordinary ground beyond the landing";
+            rejected = true;
+        }
+
+        std::vector<G3D::Vector3> continuation;
+        if (!rejected && !BuildMmapPath(player, landing, _destination, continuation))
+        {
+            candidateReason = "mmap has no continuation from the landing";
+            rejected = true;
+        }
+
+        if (rejected)
+        {
+            if (!haveFirstReason)
+            {
+                firstReason = candidateReason;
+                haveFirstReason = true;
+            }
+            continue;
+        }
+
+        out.Launch = launch;
+        out.Launch.SetOrientation(orientation);
+        out.Landing = landing;
+        out.Trajectory = trajectory;
+        out.DirectionX = dirX;
+        out.DirectionY = dirY;
+        out.DurationMs = uint32(std::ceil(landingTime * 1000.0f));
+        if (headingOffsetDegrees != 0.0f)
+            TC_LOG_INFO(PLAYERBOTS_LOG,
+                "mod-playerbots: {} found a clear normal-jump heading {:.0f} degrees beside the rejected step.",
+                player->GetName(), headingOffsetDegrees);
+        return true;
+    }
+
+    reason = firstReason;
+    return false;
+}
+
+bool PlayerbotWalker::TryStartJump(Player* player)
+{
+    bool const jumpableFailure = _lastGroundedStepFailure == GroundedStepFailure::SteepUp
+        || _lastGroundedStepFailure == GroundedStepFailure::StaticCollision;
+    if (!jumpableFailure || !_faceRecovery.Active() || _faceRecovery.JumpAttempted())
+        return false;
+
+    char const* reason = "the jump was not valid";
+    if (!JumpMovementIsAllowed(player, reason))
+        return false;
+
+    JumpPlan plan;
+    if (!BuildJumpPlan(player, plan, reason))
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} did not jump this uphill lip: {}.", player->GetName(), reason);
+        return false;
+    }
+
+    _faceRecovery.MarkJumpAttempted();
+    _jump = plan;
+    _jumpElapsedMs = 0;
+    _jumpHeartbeatMs = 0;
+    _jumpMapId = player->GetMapId();
+    _stopAfterJump = false;
+    _contouring = false;
+    bool const alreadyMoving = _state == State::Moving;
+    _state = State::Jumping;
+    if (!alreadyMoving)
+        QueueMove(player, _jump.Launch, true, true);
+    QueueJumpMove(player, CMSG_MOVE_JUMP, _jump.Launch, 0);
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} queued a normal jump over the uphill lip ({:.1f} yards, {} ms) with a verified landing and continuation.",
+        player->GetName(), _jump.Launch.GetExactDist2d(_jump.Landing), _jump.DurationMs);
+    return true;
+}
+
+void PlayerbotWalker::UpdateJump(Player* player, uint32 diff)
+{
+    if (!player || !player->GetSession() || !player->IsAlive() || !player->IsInWorld()
+        || player->IsBeingTeleported() || player->GetMapId() != _jumpMapId
+        || !player->movespline->Finalized() || player->GetExactDist2d(_lastGrounded) > 10.0f)
+    {
+        ResetNow();
+        return;
+    }
+
+    uint32 const remainingMs = _jump.DurationMs - _jumpElapsedMs;
+    uint32 const advanceMs = std::min(diff, remainingMs);
+    _jumpElapsedMs += advanceMs;
+    _jumpHeartbeatMs += advanceMs;
+
+    while (_jumpHeartbeatMs >= HEARTBEAT_INTERVAL_MS)
+    {
+        _jumpHeartbeatMs -= HEARTBEAT_INTERVAL_MS;
+        uint32 const heartbeatTimeMs = _jumpElapsedMs - _jumpHeartbeatMs;
+        if (heartbeatTimeMs >= _jump.DurationMs)
+            break;
+
+        float const time = float(heartbeatTimeMs) / 1000.0f;
+        float const horizontal = _jump.Trajectory.HorizontalDistance(time);
+        Position airborne;
+        airborne.Relocate(
+            _jump.Launch.GetPositionX() + _jump.DirectionX * horizontal,
+            _jump.Launch.GetPositionY() + _jump.DirectionY * horizontal,
+            _jump.Launch.GetPositionZ() + _jump.Trajectory.HeightOffset(time),
+            _jump.Launch.GetOrientation());
+        QueueJumpMove(player, CMSG_MOVE_HEARTBEAT, airborne, heartbeatTimeMs);
+        _lastGrounded = airborne;
+    }
+
+    if (_jumpElapsedMs >= _jump.DurationMs)
+        FinishJump(player);
+}
+
+void PlayerbotWalker::FinishJump(Player* player)
+{
+    Position const landing = _jump.Landing;
+    uint32 const durationMs = _jump.DurationMs;
+    bool const stopAfterLanding = _stopAfterJump;
+    QueueJumpMove(player, CMSG_MOVE_FALL_LAND, landing, durationMs);
+    _lastGrounded = landing;
+    _jumpElapsedMs = 0;
+    _jumpHeartbeatMs = 0;
+    _jumpMapId = 0;
+    _stopAfterJump = false;
+    _state = State::Moving;
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} landed the obstacle-recovery jump at ({:.2f}, {:.2f}, {:.2f}).",
+        player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ());
+
+    if (stopAfterLanding)
+    {
+        QueueMove(player, landing, false, false);
+        ResetNow();
+        return;
+    }
+    if (landing.GetExactDist(_destination) <= _stopDistance)
+    {
+        QueueMove(player, landing, false, false);
+        _state = State::Arrived;
+        ClearFaceRecovery();
+        _jump = {};
+        return;
+    }
+    if (TryCommitMmap(player, landing, true))
+    {
+        _jump = {};
+        return;
+    }
+    if (TryLeaveFace(player, true))
+    {
+        _jump = {};
+        return;
+    }
+
+    _jump = {};
     FailNoLegalRing(player);
 }
 

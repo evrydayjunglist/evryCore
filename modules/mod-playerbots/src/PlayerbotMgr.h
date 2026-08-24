@@ -19,6 +19,7 @@
 #define EVRY_MOD_PLAYERBOT_MGR_H
 
 #include "PlayerbotClient.h"
+#include "PlayerbotBridge.h"
 #include "PlayerbotMovement.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
@@ -100,11 +101,14 @@ public:
     ~PlayerbotMgr();
 
     void Start();
+    void Stop();
     void Update(uint32 diff);
     bool IsBotAccount(uint32 accountId) const;
     void OnBotLogin(Player* player);
 
 private:
+    void UpdateBridge();
+    std::string HandleBridgeRequest(uint64 connectionId, std::string const& payload);
     void TryLogin(PlayerbotRecord& bot);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
@@ -141,6 +145,9 @@ private:
 
     std::vector<PlayerbotRecord> _bots;
     std::unordered_set<uint32> _accountIds;
+    std::unordered_set<uint64> _bridgeHandshakes;
+    PlayerbotBridge _bridge;
+    bool _bridgeStarted = false;
 };
 
 #define sPlayerbotMgr PlayerbotMgr::instance()

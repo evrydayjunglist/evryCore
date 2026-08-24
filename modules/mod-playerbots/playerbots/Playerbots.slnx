@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Playerbots.Protocol/Playerbots.Protocol.csproj" />
+  <Project Path="src/Playerbots.Host/Playerbots.Host.csproj" />
+  <Project Path="tests/Playerbots.Protocol.Tests/Playerbots.Protocol.Tests.csproj" />
+</Solution>

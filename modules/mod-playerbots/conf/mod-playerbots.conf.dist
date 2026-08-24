@@ -78,6 +78,27 @@ Playerbots.Classes =
 Playerbots.RegenerateCharacters = 0
 
 #
+#    Playerbots.Bridge.Enable
+#        Description: Listen on 127.0.0.1 for the separate playerbots.exe
+#                     coordinator. The first protocol is read-only and does not
+#                     change which bots log in or how they act.
+#        Default:     0 (disabled)
+#
+#                     1 - enabled
+#                     0 - disabled
+#
+
+Playerbots.Bridge.Enable = 0
+
+#
+#    Playerbots.Bridge.Port
+#        Description: Loopback TCP port used by playerbots.exe.
+#        Default:     3444
+#
+
+Playerbots.Bridge.Port = 3444
+
+#
 #    Appender.Playerbots
 #        Description: File for module.playerbots log lines. Lives under LogsDir
 #                     next to Server.log. Type 2 = file, level 3 = Info, flags 3 =

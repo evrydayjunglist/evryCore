@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotMgr.h"
+#include "CharacterCache.h"
 #include "Config.h"
 #include "Corpse.h"
 #include "Creature.h"
@@ -25,15 +26,20 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotFactory.h"
+#include "RealmList.h"
 #include "SpellInfo.h"
 #include "Unit.h"
 #include "UnitDefines.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 #include <unordered_set>
 
 namespace
@@ -53,6 +59,47 @@ namespace
     constexpr uint32 CAMPED_WAIT_MS = 20000;
     constexpr uint32 GHOST_WAIT_LONG_MS = 180000;
     constexpr uint32 GHOST_GIVE_UP_MS = 300000;
+    constexpr int BRIDGE_PROTOCOL_VERSION = 1;
+
+    void AddJsonString(rapidjson::Value& object, char const* name, std::string_view value,
+        rapidjson::Document::AllocatorType& allocator)
+    {
+        object.AddMember(rapidjson::StringRef(name),
+            rapidjson::Value(value.data(), rapidjson::SizeType(value.size()), allocator), allocator);
+    }
+
+    std::string SerializeJson(rapidjson::Document const& document)
+    {
+        rapidjson::StringBuffer buffer;
+        rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+        document.Accept(writer);
+        return std::string(buffer.GetString(), buffer.GetSize());
+    }
+
+    template <typename PayloadWriter>
+    std::string MakeBridgeResponse(std::string_view type, std::string_view requestId, PayloadWriter&& writePayload)
+    {
+        rapidjson::Document response(rapidjson::kObjectType);
+        rapidjson::Document::AllocatorType& allocator = response.GetAllocator();
+        response.AddMember("version", BRIDGE_PROTOCOL_VERSION, allocator);
+        AddJsonString(response, "type", type, allocator);
+        AddJsonString(response, "requestId", requestId, allocator);
+
+        rapidjson::Value payload(rapidjson::kObjectType);
+        writePayload(payload, allocator);
+        response.AddMember("payload", std::move(payload), allocator);
+        return SerializeJson(response);
+    }
+
+    std::string MakeBridgeError(std::string_view requestId, std::string_view code, std::string_view message)
+    {
+        return MakeBridgeResponse("error", requestId,
+            [code, message](rapidjson::Value& payload, rapidjson::Document::AllocatorType& allocator)
+        {
+            AddJsonString(payload, "code", code, allocator);
+            AddJsonString(payload, "message", message, allocator);
+        });
+    }
 
     PlayerbotRecoveryGoal GuidRecoveryGoal(Player* player, PlayerbotRecoveryGoalKind kind, ObjectGuid const& guid)
     {
@@ -285,7 +332,10 @@ PlayerbotMgr* PlayerbotMgr::instance()
     return &instance;
 }
 
-PlayerbotMgr::~PlayerbotMgr() = default;
+PlayerbotMgr::~PlayerbotMgr()
+{
+    Stop();
+}
 
 void PlayerbotMgr::Start()
 {
@@ -298,6 +348,23 @@ void PlayerbotMgr::Start()
             deleted);
         World::StopNow(SHUTDOWN_EXIT_CODE);
         return;
+    }
+
+    if (sConfigMgr->GetBoolDefault(PLAYERBOTS_BRIDGE_ENABLE, false))
+    {
+        int32 const port = sConfigMgr->GetIntDefault(PLAYERBOTS_BRIDGE_PORT, 3444);
+        if (port < 1 || port > 65535)
+        {
+            TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} must be between 1 and 65535; the coordinator bridge is disabled.",
+                PLAYERBOTS_BRIDGE_PORT);
+        }
+        else if (_bridge.Start(uint16(port)))
+        {
+            _bridgeStarted = true;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: read-only coordinator bridge listening on 127.0.0.1:{}.", port);
+        }
+        else
+            TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: could not start the coordinator bridge on 127.0.0.1:{}.", port);
     }
 
     if (!sConfigMgr->GetBoolDefault(PLAYERBOTS_ENABLE, false))
@@ -333,13 +400,145 @@ void PlayerbotMgr::Start()
     }
 }
 
+void PlayerbotMgr::Stop()
+{
+    if (!_bridgeStarted)
+        return;
+
+    _bridge.Stop();
+    _bridgeHandshakes.clear();
+    _bridgeStarted = false;
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: coordinator bridge stopped.");
+}
+
 void PlayerbotMgr::Update(uint32 diff)
 {
+    UpdateBridge();
+
     for (PlayerbotRecord& bot : _bots)
     {
         UpdateLogin(bot);
         UpdateWorld(bot, diff);
     }
+}
+
+void PlayerbotMgr::UpdateBridge()
+{
+    if (!_bridgeStarted)
+        return;
+
+    for (PlayerbotBridgeRequest& request : _bridge.TakeRequests())
+        request.Reply(HandleBridgeRequest(request.ConnectionId, request.Payload));
+}
+
+std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string const& payload)
+{
+    rapidjson::Document request;
+    request.Parse(payload.data(), payload.size());
+    if (request.HasParseError() || !request.IsObject())
+        return MakeBridgeError({}, "invalidJson", "The request must be one JSON object.");
+
+    std::string requestId;
+    auto const requestIdMember = request.FindMember("requestId");
+    if (requestIdMember != request.MemberEnd() && requestIdMember->value.IsString())
+        requestId.assign(requestIdMember->value.GetString(), requestIdMember->value.GetStringLength());
+    if (requestId.empty() || requestId.size() > 128)
+        return MakeBridgeError({}, "invalidRequestId", "requestId must be a non-empty string no longer than 128 bytes.");
+
+    auto const versionMember = request.FindMember("version");
+    if (versionMember == request.MemberEnd() || !versionMember->value.IsInt() ||
+        versionMember->value.GetInt() != BRIDGE_PROTOCOL_VERSION)
+    {
+        return MakeBridgeError(requestId, "unsupportedVersion", "This worldserver supports playerbot bridge protocol version 1.");
+    }
+
+    auto const typeMember = request.FindMember("type");
+    if (typeMember == request.MemberEnd() || !typeMember->value.IsString())
+        return MakeBridgeError(requestId, "invalidType", "type must be a string.");
+
+    std::string_view const type(typeMember->value.GetString(), typeMember->value.GetStringLength());
+    if (type == "hello")
+    {
+        _bridgeHandshakes.clear();
+        _bridgeHandshakes.insert(connectionId);
+        return MakeBridgeResponse("welcome", requestId,
+            [](rapidjson::Value& responsePayload, rapidjson::Document::AllocatorType& allocator)
+        {
+            responsePayload.AddMember("protocolVersion", BRIDGE_PROTOCOL_VERSION, allocator);
+            responsePayload.AddMember("readOnly", true, allocator);
+            AddJsonString(responsePayload, "server", "worldserver", allocator);
+        });
+    }
+
+    if (!_bridgeHandshakes.contains(connectionId))
+        return MakeBridgeError(requestId, "helloRequired", "Send hello before any other request on this connection.");
+
+    if (type == "ping")
+    {
+        return MakeBridgeResponse("pong", requestId,
+            [](rapidjson::Value& /*responsePayload*/, rapidjson::Document::AllocatorType& /*allocator*/) { });
+    }
+
+    if (type == "getServerStatus")
+    {
+        return MakeBridgeResponse("serverStatus", requestId,
+            [this](rapidjson::Value& responsePayload, rapidjson::Document::AllocatorType& allocator)
+        {
+            bool const enabled = sConfigMgr->GetBoolDefault(PLAYERBOTS_ENABLE, false);
+            int32 const configuredCount = sConfigMgr->GetIntDefault(PLAYERBOTS_COUNT, 1);
+            uint32 onlineBots = 0;
+            for (PlayerbotRecord const& bot : _bots)
+            {
+                WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+                if (session && session->GetPlayer() && session->GetPlayer()->IsInWorld())
+                    ++onlineBots;
+            }
+
+            responsePayload.AddMember("playerbotsEnabled", enabled, allocator);
+            responsePayload.AddMember("configuredCount", configuredCount, allocator);
+            responsePayload.AddMember("managedBots", uint32(_bots.size()), allocator);
+            responsePayload.AddMember("onlineBots", onlineBots, allocator);
+            responsePayload.AddMember("activeSessions", sWorld->GetActiveAndQueuedSessionCount(), allocator);
+            responsePayload.AddMember("onlinePlayers", sWorld->GetPlayerCount(), allocator);
+
+            Battlenet::RealmHandle const realmId = sRealmList->GetCurrentRealmId();
+            responsePayload.AddMember("realmId", realmId.Realm, allocator);
+            if (std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm())
+                AddJsonString(responsePayload, "realmName", realm->Name, allocator);
+            else
+                AddJsonString(responsePayload, "realmName", {}, allocator);
+        });
+    }
+
+    if (type == "getBotRoster")
+    {
+        return MakeBridgeResponse("botRoster", requestId,
+            [this](rapidjson::Value& responsePayload, rapidjson::Document::AllocatorType& allocator)
+        {
+            rapidjson::Value bots(rapidjson::kArrayType);
+            for (PlayerbotRecord const& bot : _bots)
+            {
+                WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+                Player* player = session ? session->GetPlayer() : nullptr;
+                CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(bot.Account.CharacterGuid);
+
+                rapidjson::Value entry(rapidjson::kObjectType);
+                entry.AddMember("botId", bot.Account.Index, allocator);
+                entry.AddMember("accountId", bot.Account.AccountId, allocator);
+                AddJsonString(entry, "characterGuid", bot.Account.CharacterGuid.ToString(), allocator);
+                AddJsonString(entry, "name", player ? player->GetName() : (cache ? cache->Name : std::string()), allocator);
+                entry.AddMember("race", player ? player->GetRace() : (cache ? cache->Race : 0), allocator);
+                entry.AddMember("class", player ? player->GetClass() : (cache ? cache->Class : 0), allocator);
+                entry.AddMember("level", player ? player->GetLevel() : (cache ? cache->Level : 0), allocator);
+                entry.AddMember("sessionOnline", session != nullptr, allocator);
+                entry.AddMember("inWorld", player && player->IsInWorld(), allocator);
+                bots.PushBack(std::move(entry), allocator);
+            }
+            responsePayload.AddMember("bots", std::move(bots), allocator);
+        });
+    }
+
+    return MakeBridgeError(requestId, "unknownType", "The requested message type is not supported.");
 }
 
 bool PlayerbotMgr::IsBotAccount(uint32 accountId) const

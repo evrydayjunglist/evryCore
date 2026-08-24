@@ -35,6 +35,11 @@ public:
     {
         sPlayerbotMgr->Update(diff);
     }
+
+    void OnShutdown() override
+    {
+        sPlayerbotMgr->Stop();
+    }
 };
 
 class PlayerbotsPlayerScript : public PlayerScript

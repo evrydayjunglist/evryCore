@@ -40,12 +40,17 @@ internal sealed class CoordinatorWorker(ILogger<CoordinatorWorker> logger, IConf
         await using BridgeClient client = await BridgeClient.ConnectAsync(_host, _port, stoppingToken).ConfigureAwait(false);
         logger.LogInformation("Connected to worldserver playerbot bridge at {Host}:{Port}.", _host, _port);
 
+        bool coordinatorLogin;
         using (JsonDocument welcome = await ExchangeWithTimeoutAsync(client, "hello", new { client = "playerbots.exe" }, stoppingToken).ConfigureAwait(false))
         {
             RequireType(welcome, "welcome");
             JsonElement payload = welcome.RootElement.GetProperty("payload");
-            logger.LogInformation("Handshake complete. Protocol {ProtocolVersion}; read-only: {ReadOnly}.",
-                payload.GetProperty("protocolVersion").GetInt32(), payload.GetProperty("readOnly").GetBoolean());
+            coordinatorLogin = ReadCoordinatorLoginMode(payload);
+            bool readOnly = payload.GetProperty("readOnly").GetBoolean();
+            if (readOnly == coordinatorLogin)
+                throw new InvalidDataException("worldserver reported an inconsistent login mode and bridge access level.");
+            logger.LogInformation("Handshake complete. Protocol {ProtocolVersion}; login mode: {LoginMode}; read-only: {ReadOnly}.",
+                payload.GetProperty("protocolVersion").GetInt32(), payload.GetProperty("loginMode").GetString(), readOnly);
         }
 
         using (JsonDocument status = await ExchangeWithTimeoutAsync(client, "getServerStatus", null, stoppingToken).ConfigureAwait(false))
@@ -53,9 +58,10 @@ internal sealed class CoordinatorWorker(ILogger<CoordinatorWorker> logger, IConf
             RequireType(status, "serverStatus");
             JsonElement payload = status.RootElement.GetProperty("payload");
             logger.LogInformation(
-                "Realm {RealmName} ({RealmId}): playerbots enabled={Enabled}, configured={Configured}, managed={Managed}, online={Online}.",
+                "Realm {RealmName} ({RealmId}): playerbots enabled={Enabled}, login mode={LoginMode}, configured={Configured}, managed={Managed}, online={Online}.",
                 payload.GetProperty("realmName").GetString(), payload.GetProperty("realmId").GetUInt32(),
-                payload.GetProperty("playerbotsEnabled").GetBoolean(), payload.GetProperty("configuredCount").GetInt32(),
+                payload.GetProperty("playerbotsEnabled").GetBoolean(), payload.GetProperty("loginMode").GetString(),
+                payload.GetProperty("configuredCount").GetInt32(),
                 payload.GetProperty("managedBots").GetUInt32(), payload.GetProperty("onlineBots").GetUInt32());
         }
 
@@ -71,6 +77,16 @@ internal sealed class CoordinatorWorker(ILogger<CoordinatorWorker> logger, IConf
                     bot.GetProperty("race").GetUInt32(), bot.GetProperty("class").GetUInt32(),
                     bot.GetProperty("sessionOnline").GetBoolean(), bot.GetProperty("inWorld").GetBoolean());
             }
+        }
+
+        if (coordinatorLogin)
+        {
+            using JsonDocument ensured = await ExchangeWithTimeoutAsync(client, "ensureBotsOnline", null, stoppingToken).ConfigureAwait(false);
+            RequireType(ensured, "botsOnlineEnsured");
+            JsonElement payload = ensured.RootElement.GetProperty("payload");
+            logger.LogInformation("Ensured {Managed} managed bot(s) online; {Online} already online and {Started} login request(s) started.",
+                payload.GetProperty("managedBots").GetUInt32(), payload.GetProperty("onlineBots").GetUInt32(),
+                payload.GetProperty("loginRequestsStarted").GetUInt32());
         }
 
         while (!stoppingToken.IsCancellationRequested)
@@ -94,6 +110,17 @@ internal sealed class CoordinatorWorker(ILogger<CoordinatorWorker> logger, IConf
         string? actual = message.RootElement.GetProperty("type").GetString();
         if (!string.Equals(actual, expected, StringComparison.Ordinal))
             throw new InvalidDataException($"Expected {expected}, but worldserver sent {actual}.");
+    }
+
+    private static bool ReadCoordinatorLoginMode(JsonElement payload)
+    {
+        string? loginMode = payload.GetProperty("loginMode").GetString();
+        return loginMode switch
+        {
+            "Automatic" => false,
+            "Coordinator" => true,
+            _ => throw new InvalidDataException($"worldserver reported unknown playerbot login mode {loginMode}.")
+        };
     }
 
     private static int ReadPort(string? configured)

@@ -5,7 +5,8 @@
 
 #
 #    Playerbots.Enable
-#        Description: Create and log in in-process playerbots on world startup.
+#        Description: Discover or create the configured in-process playerbot roster.
+#                     Playerbots.LoginMode decides when they log in.
 #                     Bots are real characters in the characters database.
 #                     They send the same client packets a person sends.
 #        Default:     0 (disabled)
@@ -17,9 +18,23 @@
 Playerbots.Enable = 0
 
 #
+#    Playerbots.LoginMode
+#        Description: Who asks worldserver to start the configured bot sessions.
+#                     Worldserver always constructs the sessions and performs
+#                     the normal bot login sequence on its world thread.
+#        Default:     Automatic
+#
+#                     Automatic   - log in the roster during world startup
+#                     Coordinator - create the roster but leave it offline until
+#                                   playerbots.exe connects and requests it online
+#
+
+Playerbots.LoginMode = Automatic
+
+#
 #    Playerbots.Count
-#        Description: How many bots to keep online. Start at 1.
-#                     Each online bot has its own Battlenet account and one game account.
+#        Description: How many bots belong to the configured roster. Start at 1.
+#                     Each bot has its own Battlenet account and one game account.
 #                     Existing bot characters are loaded on restart; they are not wiped.
 #        Default:     1
 #
@@ -80,8 +95,9 @@ Playerbots.RegenerateCharacters = 0
 #
 #    Playerbots.Bridge.Enable
 #        Description: Listen on 127.0.0.1 for the separate playerbots.exe
-#                     coordinator. The first protocol is read-only and does not
-#                     change which bots log in or how they act.
+#                     coordinator while using Automatic login mode. That bridge
+#                     remains read-only. Coordinator login mode always starts the
+#                     bridge because playerbots.exe owns the request to log in.
 #        Default:     0 (disabled)
 #
 #                     1 - enabled

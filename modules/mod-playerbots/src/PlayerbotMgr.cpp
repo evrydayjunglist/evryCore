@@ -59,7 +59,42 @@ namespace
     constexpr uint32 CAMPED_WAIT_MS = 20000;
     constexpr uint32 GHOST_WAIT_LONG_MS = 180000;
     constexpr uint32 GHOST_GIVE_UP_MS = 300000;
-    constexpr int BRIDGE_PROTOCOL_VERSION = 1;
+    constexpr int BRIDGE_PROTOCOL_VERSION = 2;
+
+    std::string NormalizeLoginMode(std::string_view value)
+    {
+        while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
+            value.remove_prefix(1);
+        while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r'))
+            value.remove_suffix(1);
+
+        std::string normalized(value);
+        for (char& c : normalized)
+        {
+            if (c >= 'A' && c <= 'Z')
+                c = char(c - 'A' + 'a');
+        }
+        return normalized;
+    }
+
+    PlayerbotLoginMode ReadLoginMode()
+    {
+        std::string const configured = sConfigMgr->GetStringDefault(PLAYERBOTS_LOGIN_MODE, "Automatic");
+        std::string const normalized = NormalizeLoginMode(configured);
+        if (normalized == "coordinator")
+            return PlayerbotLoginMode::Coordinator;
+        if (normalized != "automatic")
+        {
+            TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} is '{}'; expected Automatic or Coordinator. Using Automatic.",
+                PLAYERBOTS_LOGIN_MODE, configured);
+        }
+        return PlayerbotLoginMode::Automatic;
+    }
+
+    char const* LoginModeName(PlayerbotLoginMode mode)
+    {
+        return mode == PlayerbotLoginMode::Coordinator ? "Coordinator" : "Automatic";
+    }
 
     void AddJsonString(rapidjson::Value& object, char const* name, std::string_view value,
         rapidjson::Document::AllocatorType& allocator)
@@ -350,7 +385,10 @@ void PlayerbotMgr::Start()
         return;
     }
 
-    if (sConfigMgr->GetBoolDefault(PLAYERBOTS_BRIDGE_ENABLE, false))
+    _loginMode = ReadLoginMode();
+    bool const bridgeRequested = sConfigMgr->GetBoolDefault(PLAYERBOTS_BRIDGE_ENABLE, false)
+        || _loginMode == PlayerbotLoginMode::Coordinator;
+    if (bridgeRequested)
     {
         int32 const port = sConfigMgr->GetIntDefault(PLAYERBOTS_BRIDGE_PORT, 3444);
         if (port < 1 || port > 65535)
@@ -361,7 +399,8 @@ void PlayerbotMgr::Start()
         else if (_bridge.Start(uint16(port)))
         {
             _bridgeStarted = true;
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: read-only coordinator bridge listening on 127.0.0.1:{}.", port);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} coordinator bridge listening on 127.0.0.1:{}.",
+                _loginMode == PlayerbotLoginMode::Coordinator ? "login-enabled" : "read-only", port);
         }
         else
             TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: could not start the coordinator bridge on 127.0.0.1:{}.", port);
@@ -381,8 +420,8 @@ void PlayerbotMgr::Start()
     }
 
     uint32 sessionsAtStartup = sWorld->GetActiveAndQueuedSessionCount();
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: starting {} bot(s). Active sessions at OnStartup: {}.",
-        count, sessionsAtStartup);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: preparing {} bot(s) in {} login mode. Active sessions at OnStartup: {}.",
+        count, LoginModeName(_loginMode), sessionsAtStartup);
 
     for (int32 i = 1; i <= count; ++i)
     {
@@ -395,8 +434,15 @@ void PlayerbotMgr::Start()
         }
 
         _accountIds.insert(bot.Account.AccountId);
-        TryLogin(bot);
+        if (_loginMode == PlayerbotLoginMode::Automatic)
+            TryLogin(bot);
         _bots.push_back(std::move(bot));
+    }
+
+    if (_loginMode == PlayerbotLoginMode::Coordinator)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: prepared {} bot(s); they will remain offline until playerbots.exe requests ensureBotsOnline.",
+            _bots.size());
     }
 }
 
@@ -449,7 +495,7 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
     if (versionMember == request.MemberEnd() || !versionMember->value.IsInt() ||
         versionMember->value.GetInt() != BRIDGE_PROTOCOL_VERSION)
     {
-        return MakeBridgeError(requestId, "unsupportedVersion", "This worldserver supports playerbot bridge protocol version 1.");
+        return MakeBridgeError(requestId, "unsupportedVersion", "This worldserver supports playerbot bridge protocol version 2.");
     }
 
     auto const typeMember = request.FindMember("type");
@@ -462,10 +508,11 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
         _bridgeHandshakes.clear();
         _bridgeHandshakes.insert(connectionId);
         return MakeBridgeResponse("welcome", requestId,
-            [](rapidjson::Value& responsePayload, rapidjson::Document::AllocatorType& allocator)
+            [this](rapidjson::Value& responsePayload, rapidjson::Document::AllocatorType& allocator)
         {
             responsePayload.AddMember("protocolVersion", BRIDGE_PROTOCOL_VERSION, allocator);
-            responsePayload.AddMember("readOnly", true, allocator);
+            responsePayload.AddMember("readOnly", _loginMode != PlayerbotLoginMode::Coordinator, allocator);
+            AddJsonString(responsePayload, "loginMode", LoginModeName(_loginMode), allocator);
             AddJsonString(responsePayload, "server", "worldserver", allocator);
         });
     }
@@ -495,6 +542,7 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
             }
 
             responsePayload.AddMember("playerbotsEnabled", enabled, allocator);
+            AddJsonString(responsePayload, "loginMode", LoginModeName(_loginMode), allocator);
             responsePayload.AddMember("configuredCount", configuredCount, allocator);
             responsePayload.AddMember("managedBots", uint32(_bots.size()), allocator);
             responsePayload.AddMember("onlineBots", onlineBots, allocator);
@@ -538,6 +586,39 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
         });
     }
 
+    if (type == "ensureBotsOnline")
+    {
+        if (_loginMode != PlayerbotLoginMode::Coordinator)
+            return MakeBridgeError(requestId, "coordinatorModeRequired", "ensureBotsOnline is only available in Coordinator login mode.");
+
+        auto const payloadMember = request.FindMember("payload");
+        if (payloadMember == request.MemberEnd() || !payloadMember->value.IsObject() || !payloadMember->value.ObjectEmpty())
+            return MakeBridgeError(requestId, "invalidPayload", "ensureBotsOnline takes no arguments.");
+
+        uint32 onlineBots = 0;
+        uint32 loginRequestsStarted = 0;
+        for (PlayerbotRecord& bot : _bots)
+        {
+            WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+            if (session && session->GetPlayer() && session->GetPlayer()->IsInWorld())
+                ++onlineBots;
+            if (TryLogin(bot))
+                ++loginRequestsStarted;
+        }
+
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: coordinator requested ensureBotsOnline; managed {}, already online {}, new login request(s) {}.",
+            _bots.size(), onlineBots, loginRequestsStarted);
+        return MakeBridgeResponse("botsOnlineEnsured", requestId,
+            [this, onlineBots, loginRequestsStarted](rapidjson::Value& responsePayload,
+                rapidjson::Document::AllocatorType& allocator)
+        {
+            responsePayload.AddMember("managedBots", uint32(_bots.size()), allocator);
+            responsePayload.AddMember("onlineBots", onlineBots, allocator);
+            responsePayload.AddMember("loginRequestsStarted", loginRequestsStarted, allocator);
+        });
+    }
+
     return MakeBridgeError(requestId, "unknownType", "The requested message type is not supported.");
 }
 
@@ -555,13 +636,24 @@ void PlayerbotMgr::OnBotLogin(Player* player)
         player->GetName());
 }
 
-void PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
+bool PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
 {
+    if (bot.SessionQueued)
+        return false;
+
+    if (sWorld->FindSession(bot.Account.AccountId))
+    {
+        bot.SessionQueued = true;
+        return false;
+    }
+
     std::unique_ptr<WorldSession> session = PlayerbotFactory::MakeSession(bot.Account);
+    bot.SessionQueued = true;
     TC_LOG_INFO(PLAYERBOTS_LOG,
         "mod-playerbots: constructed WorldSession for account {} with an empty socket. Calling World::AddSession.",
         bot.Account.AccountId);
     sWorld->AddSession(session.release());
+    return true;
 }
 
 void PlayerbotMgr::UpdateLogin(PlayerbotRecord& bot)

@@ -6,7 +6,7 @@ namespace Evry.Playerbots.Protocol;
 
 public static class BridgeProtocol
 {
-    public const int Version = 1;
+    public const int Version = 2;
     public const int MaxPayloadBytes = 64 * 1024;
 
     public static async ValueTask WriteFrameAsync(Stream stream, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)

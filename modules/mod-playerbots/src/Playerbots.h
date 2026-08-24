@@ -23,6 +23,7 @@
 #include <string>
 
 inline constexpr char const* PLAYERBOTS_ENABLE = "Playerbots.Enable";
+inline constexpr char const* PLAYERBOTS_LOGIN_MODE = "Playerbots.LoginMode";
 inline constexpr char const* PLAYERBOTS_COUNT = "Playerbots.Count";
 inline constexpr char const* PLAYERBOTS_REGENERATE_CHARACTERS = "Playerbots.RegenerateCharacters";
 inline constexpr char const* PLAYERBOTS_RACES = "Playerbots.Races";
@@ -30,6 +31,12 @@ inline constexpr char const* PLAYERBOTS_CLASSES = "Playerbots.Classes";
 inline constexpr char const* PLAYERBOTS_BRIDGE_ENABLE = "Playerbots.Bridge.Enable";
 inline constexpr char const* PLAYERBOTS_BRIDGE_PORT = "Playerbots.Bridge.Port";
 inline constexpr char const* PLAYERBOTS_LOG = "module.playerbots";
+
+enum class PlayerbotLoginMode
+{
+    Automatic,
+    Coordinator
+};
 
 struct PlayerbotAccount
 {

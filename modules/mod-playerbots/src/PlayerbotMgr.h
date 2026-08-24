@@ -44,6 +44,7 @@ enum class PlayerbotDeathWork
 struct PlayerbotRecord
 {
     PlayerbotAccount Account;
+    bool SessionQueued = false;
     bool EnumQueued = false;
     bool LoginQueued = false;
     bool ContinueLoginCalled = false;
@@ -109,7 +110,7 @@ public:
 private:
     void UpdateBridge();
     std::string HandleBridgeRequest(uint64 connectionId, std::string const& payload);
-    void TryLogin(PlayerbotRecord& bot);
+    bool TryLogin(PlayerbotRecord& bot);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
     void ReplyTimeSync(WorldSession* session);
@@ -147,6 +148,7 @@ private:
     std::unordered_set<uint32> _accountIds;
     std::unordered_set<uint64> _bridgeHandshakes;
     PlayerbotBridge _bridge;
+    PlayerbotLoginMode _loginMode = PlayerbotLoginMode::Automatic;
     bool _bridgeStarted = false;
 };
 

@@ -120,7 +120,8 @@ static async Task HandleHostConnectionAsync(TcpListener listener, CancellationTo
         await WriteResponseAsync(stream, hello, "welcome", new
         {
             protocolVersion = BridgeProtocol.Version,
-            readOnly = true,
+            readOnly = false,
+            loginMode = "Coordinator",
             server = "worldserver"
         }, cancellationToken);
     }
@@ -130,9 +131,10 @@ static async Task HandleHostConnectionAsync(TcpListener listener, CancellationTo
         AssertMessageType(status, "getServerStatus");
         await WriteResponseAsync(stream, status, "serverStatus", new
         {
-            playerbotsEnabled = false,
+            playerbotsEnabled = true,
+            loginMode = "Coordinator",
             configuredCount = 1,
-            managedBots = 0,
+            managedBots = 1,
             onlineBots = 0,
             activeSessions = 0,
             onlinePlayers = 0,
@@ -144,7 +146,38 @@ static async Task HandleHostConnectionAsync(TcpListener listener, CancellationTo
     using (JsonDocument roster = await ReadMessageAsync(stream, cancellationToken))
     {
         AssertMessageType(roster, "getBotRoster");
-        await WriteResponseAsync(stream, roster, "botRoster", new { bots = Array.Empty<object>() }, cancellationToken);
+        await WriteResponseAsync(stream, roster, "botRoster", new
+        {
+            bots = new[]
+            {
+                new
+                {
+                    botId = 1,
+                    accountId = 100,
+                    characterGuid = "Player-1-00000001",
+                    name = "Opai",
+                    race = 2,
+                    @class = 1,
+                    level = 10,
+                    sessionOnline = false,
+                    inWorld = false
+                }
+            }
+        }, cancellationToken);
+    }
+
+    using (JsonDocument ensure = await ReadMessageAsync(stream, cancellationToken))
+    {
+        AssertMessageType(ensure, "ensureBotsOnline");
+        JsonElement payload = ensure.RootElement.GetProperty("payload");
+        Assert(payload.ValueKind == JsonValueKind.Object && !payload.EnumerateObject().Any(),
+            "ensureBotsOnline must not send writable roster parameters.");
+        await WriteResponseAsync(stream, ensure, "botsOnlineEnsured", new
+        {
+            managedBots = 1,
+            onlineBots = 0,
+            loginRequestsStarted = 1
+        }, cancellationToken);
     }
 }
 

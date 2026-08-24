@@ -94,6 +94,7 @@ struct PlayerbotRecord
     std::unordered_set<ObjectGuid> UnreachableGuids;
     std::vector<Position> UnreachablePositions;
     bool LookedForOtherYellowOnFace = false;
+    bool DirectControlSpike = false;
     PlayerbotWalker Walker;
 };
 
@@ -109,6 +110,8 @@ public:
     void Stop();
     void Update(uint32 diff);
     bool IsBotAccount(uint32 accountId) const;
+    bool IsManagedBot(Player const* player) const;
+    bool SetDirectControlSpike(Player* player, bool controlled);
     void OnBotLogin(Player* player);
 
 private:

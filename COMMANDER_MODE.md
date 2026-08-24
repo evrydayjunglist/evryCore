@@ -19,13 +19,13 @@ Keep the root `README.md` to a short job summary, and keep experimental evidence
 | Phase | State | Exit condition |
 | --- | --- | --- |
 | 0A. Commander client feasibility | **Complete** | Camera, command channel, ground order, cloned spell, and vehicle-seat tests pass |
-| 0B. Direct-switch feasibility | **Ready; decisions pending** | Stock-client control transfer, actor routing, UI restoration, and safe release are measured |
-| 1A. Shared commandable-player movement | Waiting on Phase 0B and owner decisions | The player body and managed bots use one move/hold/release contract; one- and five-bot tests pass |
+| 0B. Direct-switch feasibility | **Live no-go confirmed; custom boundary selected; cleanup pending** | Stock viewpoint and active mover work, but selection, casts, and visible player UI remain on the session owner; production possession will use a capability-negotiated custom client/protocol boundary |
+| 1A. Shared commandable-player movement | Waiting on Phase 0B cleanup and remaining owner decisions | The player body and managed bots use one move/hold/release contract; one- and five-bot tests pass |
 | 1B. Explicit attack and loot adapters | Waiting on Phase 1A | Manual attack and loot reach player-like packet paths for the player body and managed bots |
 | 2. `mod-rts` translator | Waiting on Phases 1A and 1B | Guarded group orders reach shared adapters with no action or movement engine in `mod-rts` |
 | 3. Commander addon | Waiting on Phase 2; camera completion also waits on Phase 4 | Selection, camera mode, reticle orders, state display, and clean exit work together |
 | 4. Streaming viewpoint | Spike pending; does not block Phase 1A | A real active viewpoint streams the camera area without fighting the commentator camera |
-| S1. Direct switch product | Waiting on Phase 0B and Phase 1A | The client can play an authorized party bot while the original character is safely AI-driven, then restore both |
+| S1. Direct switch product | Blocked on an approved actor/UI boundary and Phase 1A | The client can play an authorized party bot while the original character is safely AI-driven, then restore both |
 | 5. evryOps support | Later | Configuration, read-only pins, and addon distribution are available without web orders |
 
 Checkboxes mean:
@@ -42,8 +42,8 @@ Keep the work units separate: Phase 0B is a control-transfer spike, Phase 1A is 
 shared movement-state and playerbots-adapter job, Phase 1B adds explicit attack and
 loot adapters, Phase 2 is a `mod-rts` job, Phase 3 is the RTS addon job, Phase 4 starts
 as its own viewpoint spike, S1 is the production direct-switch job, and Phase 5 belongs
-in the evryOps repository. The order-spell data cleanup is also a separate content job;
-do not bury it in a C++ commit.
+in the evryOps repository. The order-spell data cleanup is also a separate content job
+with its own content commit.
 
 ## Goal and boundaries
 
@@ -51,27 +51,30 @@ Commander Mode is a control layer over the existing retail client and player-lik
 movement. Selection remains client-side. Managed bots continue to use the same
 `PlayerbotWalker` used by autonomy, so there is one movement engine rather than two.
 The player's original character is also a commandable RTS subject; its unattended
-driver must be proven safe before Phase 1A chooses an adapter, because human client
-input and automated packets must never compete for the same `Player`.
+driver must be proven safe before Phase 1A chooses an adapter. Controller arbitration
+keeps human client input and automated packets mutually exclusive for each `Player`.
 
 Commander is one controller family over the embodied runtime defined in
 `PLAYERBOTS_ARCHITECTURE.md`. Without `playerbots.exe`, bots may remain RTS-ready in
 reserve and execute bounded local orders or stances. With the executable, External
 autonomy may choose their long-horizon lives. RTS and direct control preempt that
-strategic controller; they do not route real-time orders through the executable.
+strategic controller, while real-time orders remain in the worldserver control path.
 
-Hard boundaries:
+Safety and selected design boundaries:
 
-- The RTS path uses the stock `TrinityCore` addon-command channel and no custom
-  opcodes.
-- Do not patch, inject into, or reverse-engineer `Wow.exe` for Commander Mode. Direct
-  switch has a separate unresolved client-boundary decision; do not add a modified
-  client or custom protocol unless the owner explicitly selects it after Phase 0B.
-- Do not use a vehicle seat for the selected camera design.
-- Do not issue orders from evryOps; its bot pins remain read-only.
-- Keep commanded action player-like. Managed bots use the existing walker and real
-  client packets. Do not add `MotionMaster`, module teleports, direct attack calls, or
-  direct spell preparation as Commander shortcuts.
+- The RTS path currently uses the proven stock `TrinityCore` addon-command channel.
+  Direct possession has its own selected capability-negotiated custom client/protocol
+  boundary and may use custom opcodes or another transport justified by that design.
+- Client patching, injection, reverse engineering, a purpose-built client, and companion
+  tooling are available options for the dedicated client job. Choose from measured
+  evidence and keep the resulting path safe, supportable, and explicit.
+- The selected camera design uses commentator mode; the vehicle-seat experiment remains
+  evidence rather than the current camera implementation.
+- Runtime orders originate in the game-side Commander client; evryOps bot pins remain a
+  read-only operator view under the current architecture.
+- Commanded action remains player-valid: preserve costs, geometry, lifecycle, and server
+  authority, using the existing walker and packet-equivalent action paths. Shortcuts that
+  bypass those invariants fail the project's non-cheaty, non-hacky safety line.
 - Keep strategic planning off the real-time Commander path. `playerbots.exe` may receive
   controller changes and later replan, but `mod-rts` calls the shared worldserver skill
   runtime directly.
@@ -180,13 +183,15 @@ subject context + destination
 
 ## Open product decisions
 
-- [ ] Decide the direct-switch client boundary.
-  - Start by testing the stock retail client and existing packets. SuperUI's full
-    switch uses custom client packets to proxy a bot's UI and inputs; evryCore cannot
-    assume that design is available.
-  - If the stock client cannot provide the required experience, stop and decide
-    explicitly whether a modified client is acceptable. Do not drift into client
-    patching as an implementation detail.
+- [x] Decide the direct-switch client boundary.
+  - Selected 23 August 2026 after the stock-path no-go: a capability-negotiated custom
+    client/protocol boundary comparable in responsibility to SuperUI. It must carry
+    typed switch/release and actor-input requests, actor-identified UI state, explicit
+    acknowledgements, and forced-release reasons while worldserver authorizes and
+    revalidates every action.
+  - Capability negotiation keeps unsupported clients on their ordinary path. The exact
+    client form is still open and may include patching, injection, reverse engineering,
+    a purpose-built client, companion tooling, or a combination selected by evidence.
 - [ ] Decide the unattended original-character policy during direct switch.
   - Choices include hold, follow/assist/defend, the Builtin controller, the External
     controller, or the shared RTS command service. Begin with the least autonomous safe
@@ -196,28 +201,27 @@ subject context + destination
     or each remains in its current controller until its first accepted order.
 - [ ] Decide whether the original character may be individually released while RTS
   free view remains active.
-  - Releasing a bot restores its applicable Reserve, Builtin, or External baseline. It
-    cannot restore ordinary human input to the original character while the same client
-    remains the RTS camera/controller.
+  - Releasing a bot restores its applicable Reserve, Builtin, or External baseline.
+    Ordinary human input returns to the original character when that client exits its
+    RTS camera/controller claim.
     Recommended behavior: disallow individual release of the original body; exiting
     RTS restores human control, while a separate unattended-policy command may change
     how the body acts during free view.
 - [ ] Confirm the initial RTS combat and loot policy.
-  - Current direction: commanded units do not autonomously acquire targets, retaliate,
-    chase, or loot. Attack and loot are explicit commander orders. Passive, defensive,
+  - Current direction: commanded units wait for explicit attack and loot orders. Passive, defensive,
     assist, aggressive, and auto-loot-in-reach policies may be added later.
 - [ ] Choose the default Reserve and initial RTS stance.
   - Reserve means no self-chosen long-term activity, not necessarily inert combat.
-    Passive never retaliates. Defensive responds only to legitimate attackers with a
-    bounded leash and return. Do not inherit the current Builtin combat behavior by
-    accident.
+    Passive stays inert. Defensive responds only to legitimate attackers with a bounded
+    leash and return. Each selected stance explicitly defines whether any Builtin combat
+    behavior applies.
 - [ ] Decide Coordinator presence loss during active RTS or direct control.
   - Either the live human-control session temporarily pins presence until safe release,
-    or worldserver releases control, restores the playable original character, and only
-    then logs the managed bot out. Never kick a directly controlled subject first.
+    or worldserver releases control, restores the playable original character, and then
+    logs the managed bot out. Playable-control restoration precedes subject logout.
 - [ ] Decide commander arbitration when more than one human is in the group.
-  - Entering free view must not silently create hidden per-bot locks. Choose one active
-    commander per group, group-leader control, or another visible rule.
+  - Entering free view exposes its ownership rule: one active commander per group,
+    group-leader control, or another visible arbitration model.
 - [ ] Decide the post-resurrection RTS state.
   - Current direction: death suspends the order, normal player-like corpse recovery
     runs automatically, and the unit returns alive in hold awaiting a new command.
@@ -238,15 +242,16 @@ or end the RTS association.
 SuperUI is useful evidence for those control-state transitions: it force-releases when
 the possessed bot dies, but not when the unattended original character dies, and it
 clears the dead AI unit's current task. Its recovery mechanics are not selected here.
-Do not copy direct `BuildPlayerRepop`, ghost teleport, or `ResurrectPlayer()` shortcuts;
-evryCore keeps its existing queued release-spirit, ghost-walk, and reclaim packets.
+evryCore keeps its existing queued release-spirit, ghost-walk, and reclaim packets;
+direct `BuildPlayerRepop`, ghost teleport, or `ResurrectPlayer()` would violate the
+player-valid and non-cheaty safety outcome.
 
 The earlier suggested 15-minute stale-command timeout is withdrawn. No arbitrary
 elapsed-time release is selected. A legitimate hold must be able to last indefinitely;
 cleanup should follow explicit exit or a concrete invalidation such as logout, group
 removal, map incompatibility, or destruction. The renewable External strategic lease
-and optional Coordinator presence lease prove process health; they are not Commander
-order timeouts and must not release a legitimate RTS hold.
+and optional Coordinator presence lease prove process health. Commander holds remain
+active across those lease renewals until explicit release or lifecycle invalidation.
 
 ## Plan corrections from the PDF
 
@@ -277,7 +282,8 @@ Branch sequence:
    create a separate Phase 1B attack/loot branch.
 5. Branch S1 only after its prerequisites have landed on `evry`.
 
-Do not turn `job/rts-spike` or the Phase 0B branch into a stacked umbrella branch.
+`job/rts-spike` and the Phase 0B branch remain disposable single-purpose branches rather
+than a stacked umbrella branch.
 
 ## Phase 0A — Commander client feasibility
 
@@ -313,15 +319,43 @@ begin.
 
 Location: a throwaway extension to `modules/mod-rts-spike/` on its own job branch
 
-Scope: prove or reject the stock-client control-transfer path; do not build the
-production switch feature here
+Scope: prove or reject the stock-client control-transfer path. Production switch work
+belongs to S1 after the boundary design is selected.
 
-- [ ] Add a GM-only switch command for one alive, same-map, visible, grouped managed
+Current source result, 23 August 2026: **no-go for playable possession on the current
+stock-server input path.** `SetClientControl`/`SetMovedUnit` can establish a stock
+viewpoint and active mover, and movement handlers validate against that mover. The
+selection, melee, cast, and action-button handlers instead mutate the session owner's
+`Player`. Stock known-spell, action-button, cooldown-history, and charge packets carry
+no actor identity; they can be sent as a visual probe, but incoming bar edits still
+belong to the owner. A production path would need an explicitly approved server
+actor/UI-routing seam, a selected client/protocol boundary, or no direct-possession
+feature. This is a Phase 0B limit and result, not a permanent ban on any option.
+
+The bounded harness is implemented: one GM/controller pair, a spike-only helper that
+queues the managed bot's stock party-invite acceptance packet, managed-bot arbitration,
+owner-bar snapshot and rollback, native control ordering, packet/state logs, and forced
+release hooks. RelWithDebInfo `worldserver` and `tests` build, and `[rts-spike]` passes
+20 assertions in two test cases. The live playable-possession gate and explicit-release
+case have been measured; unchecked live items below remain untested rather than passed.
+
+Live result, 23 August 2026: Magey's camera and active mover switched to Opai. The
+client acknowledged Opai's GUID in active-mover, heartbeat, and fall-land packets, but
+ordinary walking was not established. Selection packets still mutated Magey, spell
+`2000001` and Blizzard resolved with Magey as caster, and sending Opai's 115 known
+spells plus 5 action buttons did not replace Magey's visible controls. Explicit release
+returned Magey to normal without relogging and Opai resumed Builtin movement. This
+confirms the stock-path no-go. Melee, action-bar editing/persistence, both death cases,
+and the remaining forced exits were not tested.
+
+- [x] Add a GM-only switch command for one alive, same-map, visible, grouped managed
   bot and a separate release command.
+  - Live: `.rtsspike switch Opai` reached active and `.rtsspike release` restored Magey.
 - [ ] Validate controller, subject, group, map, transport, teleport, death, and existing
   control state before changing anything.
-- [ ] Exercise the native ordering required by client control: viewpoint, active mover,
+- [x] Exercise the native ordering required by client control: viewpoint, active mover,
   then `SetClientControl`.
+  - Live: camera moved to Opai and the client acknowledged Opai as active mover.
 - [ ] Prove that normal client movement controls the bot and that releasing restores
   the original character's mover, camera, and input without relogging.
 - [ ] Route and verify selection, melee, and one ordinary known spell against the bot
@@ -329,8 +363,8 @@ production switch feature here
 - [ ] Test whether the stock client can display the bot's known spells, action bars,
   cooldowns, cast results, and basic character state, then restore the owner's UI.
 - [ ] Determine whether action-bar edits can be saved to the bot rather than the owner.
-- [ ] Keep the original character safe and stationary for this spike. Do not attach the
-  Builtin or External activity controller until the unattended-body policy is chosen.
+- [ ] Keep the original character safe and stationary for this spike. Its unattended
+  controller remains unassigned until the unattended-body policy is chosen.
 - [ ] Kill the possessed bot and verify direct possession is force-released to the
   original character with the correct mover, viewpoint, input, and death-state UI.
 - [ ] Kill the unattended original character and verify possession continues, its death
@@ -339,23 +373,31 @@ production switch feature here
 - [ ] Force a clean return to the original character on explicit release, bot death,
   either logout, teleport or map change, group removal, failed switch, and module or
   server shutdown where applicable.
-- [ ] Record exactly which parts work with the stock retail client and which, if any,
+- [x] Record exactly which parts work with the stock retail client and which, if any,
   require an addon, core seam, or modified protocol.
-- [ ] Rebuild RelWithDebInfo `worldserver`.
+  - Live no-go: viewpoint/active mover worked; selection, casts, and visible player UI
+    remained Magey's. The owner subsequently selected a capability-negotiated custom
+    client/protocol boundary comparable in responsibility to SuperUI.
+- [x] Rebuild RelWithDebInfo `worldserver`.
+  - 23 August 2026: `worldserver.exe` linked successfully with static
+    `mod-playerbots` and `mod-rts-spike`; the focused state tests also passed.
 
 Acceptance:
 
 - [ ] Switch into one party bot, move it with ordinary controls, select a target, swing,
   and cast one of the bot's known spells.
 - [ ] Display the bot's usable controls without permanently overwriting the owner's UI.
-- [ ] Switch back and verify the original character's mover, viewpoint, bars, spells,
+- [x] Switch back and verify the original character's mover, viewpoint, bars, spells,
   and input are restored.
+  - Live: explicit release returned Magey to normal without relogging, found no owner
+    bar differences, and resumed Opai's Builtin controller.
 - [ ] Every forced exit returns control safely; no actor remains double-controlled or
   abandoned.
 - [ ] Original-character death alone does not eject the controller from a living
   possessed bot; switching back while the original is dead remains safe and playable.
-- [ ] Write a stock-client go/no-go result before Phase 1A chooses the unattended-player
+- [x] Write a stock-client go/no-go result before Phase 1A chooses the unattended-player
   adapter or S1 production work begins.
+  - **No-go** for playable possession on the current stock-server path.
 
 ## Phase 1A — shared commandable-player movement and RTS latch
 
@@ -375,8 +417,8 @@ proven path for the player's original character; no product UI or order translat
     chase, or loot while commanded. Phase 1B adds explicit attack and loot after the
     movement API is stable.
 - [ ] Choose the visible multi-human commander rule and concrete invalidation events.
-  - Do not add an arbitrary elapsed-time timeout. Arrival and hold remain commanded
-    indefinitely until explicit release or a real lifecycle invalidation.
+  - Arrival and hold remain commanded indefinitely until explicit release or a real
+    lifecycle invalidation; elapsed time alone leaves ownership unchanged.
 - [x] Keep stop/hold distinct from release.
   - `stop` cancels movement at the current location and enters hold. `hold` retains the
     controller and suppresses the baseline controller. `release` removes command
@@ -393,13 +435,13 @@ proven path for the player's original character; no product UI or order translat
   `PlayerbotRecord` or making `mod-rts` depend on playerbot internals.
 - [ ] Add a managed-playerbot lookup and adapter that reuses `PlayerbotWalker` rather
   than creating another movement system.
-- [ ] Add the separately approved unattended-original-character adapter. It must not
-  queue automated movement while the retail client still owns that character's input.
+- [ ] Add the separately approved unattended-original-character adapter. It queues
+  automated movement only while automation owns that character's controller claim.
 - [ ] Add owner-aware move, stop/hold, and explicit release operations using a narrow
   request type carrying controller and subject identity.
 - [ ] Store controller identity and generation, requested directive, moving/holding/
-  recovering state, and the concrete lifecycle data needed for safe cleanup. Do not add
-  an arbitrary timeout.
+  recovering state, and the concrete lifecycle data needed for safe cleanup. Ownership
+  expires through explicit release or a concrete lifecycle invalidation.
 - [ ] Quiesce the previous controller at a safe boundary, clear incompatible Builtin or
   External work, and reject late work from the old generation before command control
   begins.
@@ -420,7 +462,8 @@ proven path for the player's original character; no product UI or order translat
   five grouped bots and assigns five simple, explicit offsets. This is only the scale
   harness; product formation remains Phase 2 work.
 - [ ] Extend the harness to include the unattended original character as a commandable
-  subject once Phase 0B has proved the required control handoff.
+  subject only after the Phase 0B boundary decision defines a safe ownership contract;
+  the stock switch did not prove a playable control handoff.
 - [ ] Rebuild RelWithDebInfo `worldserver`.
 
 ### Acceptance gate
@@ -445,7 +488,7 @@ proven path for the player's original character; no product UI or order translat
   corpse recovery, and return-to-hold preserve the RTS association without requiring
   commander control of the ghost.
 
-Do not start Phase 1B until this gate passes.
+Phase 1B begins after this gate passes.
 
 ## Phase 1B — explicit attack and loot adapters
 
@@ -457,8 +500,8 @@ parser, addon UI, autonomous combat stance, or automatic nearby loot
 ### Decisions before implementation
 
 - [ ] Decide what an explicit attack does after its target dies or becomes invalid.
-  - Recommended behavior: stop combat and return the subject to commanded hold. Do not
-    acquire another target automatically.
+  - Recommended behavior: stop combat and return the subject to commanded hold with the
+    next target supplied by another explicit order.
 - [ ] Decide whether explicit loot means take every normally clickable item and coin or
   open the loot window for later item-level orders.
   - Recommended starting behavior: use the existing playerbot take-all packet flow for
@@ -473,9 +516,9 @@ parser, addon UI, autonomous combat stance, or automatic nearby loot
 - [ ] Add a managed-playerbot loot adapter that reuses normal eligibility, interact
   range, walk, `CMSG_LOOT_UNIT` or gameobject use, take, and release packet paths.
 - [ ] Add equivalent unattended-original-character adapters through the safe controller
-  seam selected in Phase 1A; never send simultaneous human and automated input.
-- [ ] Keep the ordered target explicit. Do not select nearby enemies, assist the group,
-  chase another target, or loot an unrelated corpse.
+  seam selected in Phase 1A, with mutually exclusive human and automated input claims.
+- [ ] Keep the ordered target explicit. Nearby acquisition, group assist, target chaining,
+  and unrelated corpse loot require their own selected policy or explicit order.
 - [ ] On completion, refusal, or target loss, return to commanded hold without restoring
   quest, vendor, combat, or loot autonomy.
 - [ ] Log accepted action, refusal, target loss, completion, and return-to-hold without
@@ -495,8 +538,8 @@ parser, addon UI, autonomous combat stance, or automatic nearby loot
 - [ ] Confirm every action uses existing player-like packet paths without AntiDOS flood,
   direct server attack calls, direct spell preparation, or loot shortcuts.
 
-Do not mark Phase 2 complete until this gate passes. The movement-only translator may
-begin after Phase 1A if Phase 1B remains a separate in-progress job.
+Phase 2 reaches complete after this gate passes. The movement-only translator may begin
+after Phase 1A while Phase 1B remains a separate in-progress job.
 
 ## Phase 2 — `mod-rts`, the order translator
 
@@ -516,7 +559,7 @@ engine and no new core call site without a separately discussed seam
 - [ ] Decide and test how the addon arms subjects for a ground cast. Recommended
   starting design: keep one short-lived, one-shot subject context per commander,
   reject stale or missing context, and consume it when spell `2000001` supplies a
-  destination. The server must not treat this as permanent UI selection.
+  destination. The context is one-order input rather than permanent UI selection.
 - [ ] Add an `AllSpellScript::OnSpellCast` handler for spell `2000001` that reads the
   client destination before `CheckCast`, pairs it with the validated subject context,
   takes the map from the caster, and calls a shared move service.
@@ -541,8 +584,8 @@ engine and no new core call site without a separately discussed seam
   human control to the original character.
 - [ ] Route the spell hook and direct chat/SOAP move command through the same validated
   move service.
-- [ ] Take the ground-order map from the commander, never the destination object.
-- [ ] Add deterministic formation offsets so multiple bots do not stack.
+- [ ] Take the ground-order map from the commander; the destination object supplies XYZ.
+- [ ] Add deterministic formation offsets that keep multiple bots separated.
 - [ ] Return batched commandable-unit position and command state at about 2 Hz.
 - [ ] Add `rts hold` and `rts follow <name>` after move/stop/state pass.
 - [ ] Add patrol, guard, passive, defensive, and assist policies only after the shared
@@ -555,13 +598,13 @@ engine and no new core call site without a separately discussed seam
 Acceptance:
 
 - [ ] Chat, addon channel, and SOAP reach the same command tree.
-- [ ] A commander cannot address another human character, a non-group bot, or a subject
-  on another map.
+- [ ] Authorization accepts only the commander's own character and eligible same-map
+  group bots; every other subject receives an explicit refusal.
 - [ ] A valid group move reaches only the shared service; managed bots still move only
   through the existing `PlayerbotWalker` adapter.
 - [ ] The original character and selected bots accept explicit attack and loot orders
   without restoring unrelated autonomous combat or loot.
-- [ ] A stale or missing subject context cannot turn a ground cast into an order.
+- [ ] A stale or missing subject context yields an explicit refusal and no order.
 - [ ] Repeated state replies and redirects remain below channel and AntiDOS limits.
 
 ## Phase 3 — Commander addon
@@ -589,10 +632,10 @@ Acceptance:
   stop each; release the bot without leaving free view.
 - [ ] Select five bots and preserve formation through a redirect.
 - [ ] Issue explicit attack and loot orders to selected units; unselected and passive
-  units do not join or loot automatically.
+  units remain uninvolved.
 - [ ] Enter and leave camera mode without losing command-channel replies.
-- [ ] Exit RTS mode and restore normal client control to the original character; do not
-  offer an individual release action that would compete with the active free camera.
+- [ ] Exit RTS mode and restore normal client control to the original character. While
+  free camera remains active, its UI exposes only transitions compatible with that claim.
 - [ ] Reloading the UI clears or reconstructs selection without leaving stale commands.
 
 ## Phase 4 — streaming viewpoint
@@ -612,17 +655,18 @@ before Phase 3 camera integration is implemented or Phase 3 is marked complete.
   make active, move at a bounded rate, and clean up on exit, logout, teleport, map
   change, or module shutdown. On death, suspend/remove the viewpoint as required and
   recreate it after recovery without implicitly ending the RTS association.
-- [ ] Keep the commander's original body vulnerable under ordinary game rules and
-  drive it only through the chosen commandable-player adapter. Do not park it by
-  assumption, teleport it, make it invulnerable, or leave the retail client competing
-  for its movement.
-- [ ] Reject invalid maps and coordinates; never use the viewpoint as a teleport.
+- [ ] Keep the commander's original body vulnerable under ordinary game rules and drive
+  it through the chosen commandable-player adapter under one exclusive controller claim.
+  Position and protection remain ordinary player-valid state.
+- [ ] Reject invalid maps and coordinates. The viewpoint changes visibility while player
+  position changes only through an authorized player-valid movement or travel path.
 - [ ] Verify creatures and terrain stream around the camera position while the
   commentator camera remains controllable.
 - [ ] Kill the unattended original character, complete automatic spirit/corpse recovery,
   and verify the viewpoint and RTS association return in the chosen hold state.
-- [ ] If they conflict, stop and choose a new camera/streaming design before product
-  implementation. Do not silently fall back to a vehicle or injected client.
+- [ ] If they conflict, choose and record a new camera/streaming design before product
+  implementation. Vehicle and injected-client approaches remain available when evidence
+  makes one of them the better safe design.
 - [ ] Rebuild RelWithDebInfo `worldserver` for any C++ version of the spike or product
   viewpoint.
 
@@ -636,9 +680,11 @@ Location: the smallest module and explicitly discussed core seams selected by Ph
 Scope: a sibling control mode outside RTS free view; it shares controller identity and
 commandable-player lifecycle with Phase 1A but has its own input and UI routing
 
-Gate: Phase 0B has a go result, the client boundary is explicitly selected, and the
-unattended original-character policy is decided. Do not infer production feasibility
-from mover-only success.
+Gate: design the selected capability-negotiated custom client/protocol boundary, decide
+its exact client form and the unattended original-character policy, and complete the
+required safety/threat-model review. Production feasibility requires actor and UI proof
+beyond mover-only success, and the 12.1 protocol receives its own audited message IDs
+rather than inheriting SuperUI's Vanilla numbers.
 
 - [ ] Add an authorized same-map switch request for an eligible grouped managed bot.
 - [ ] Store one controller-to-subject pairing and reject double control, implicit
@@ -652,15 +698,14 @@ from mover-only success.
   inputs to the controlled bot using the approved client boundary.
 - [ ] Present the bot's known spells, action bars, cooldowns, cast results, equipment,
   bags, money, and other agreed player-state UI. Decide whether bar edits are read-only
-  or persist to the bot; never save them onto the owner's character accidentally.
-- [ ] Attach the selected unattended controller to the original character. Do not
-  silently grant it quest, combat, or loot behavior beyond the chosen policy.
+  or persist to the bot, with the owner's bars isolated and preserved.
+- [ ] Attach the selected unattended controller to the original character with exactly
+  the quest, combat, and loot capabilities chosen by its policy.
 - [ ] When the unattended original character dies, clear its active task, report the
   death to the controller, keep direct possession active, and run only the selected
   player-like corpse-recovery policy.
 - [ ] Allow explicit release back to a dead or ghost original character and restore its
-  real death state and normal death controls; do not fabricate life to make release
-  convenient.
+  real death state and normal death controls exactly as they exist.
 - [ ] Distinguish release back to the original character from transition into RTS free
   view. Both paths must restore the correct mover, viewpoint, controls, and AI owners.
 - [ ] Force a safe release on possessed-bot death, controller logout, bot logout,
@@ -674,8 +719,8 @@ Acceptance:
 
 - [ ] Switch from the original character to one party bot and play that bot with normal
   movement, targeting, melee, spells, items, and the agreed UI state.
-- [ ] The original character follows the chosen unattended policy and never receives
-  simultaneous human and automated input.
+- [ ] The original character follows the chosen unattended policy under an exclusive
+  controller claim, with human and automated input separated.
 - [ ] Kill the unattended original character while the possessed bot remains alive;
   possession continues, the death is visible, and its active task does not resume.
 - [ ] Switch back while the original character is dead or a ghost and verify its normal
@@ -696,15 +741,16 @@ Location: `D:\WOWEmulation\Emulators\Tools\evryOps`
 - [ ] Add read-only live bot pins to the existing Map page.
 - [ ] Host the packaged addon zip when client-asset distribution is built.
 - **Skipped:** VehicleSeat overlay editor; the vehicle camera rung did not win.
-- **Never:** movement buttons, task assignment, or any other web control plane.
+- **Scope boundary:** evryOps remains an operator view; movement, task assignment, and
+  gameplay control stay in the selected game-side Commander clients and worldserver.
 
 ## Deferred vocabulary and polish
 
 - `rts follow <name>` and `rts hold` follow the move/stop MVP.
 - Passive, defensive, guard, patrol, follow, assist, and aggressive are planned local
   policies under Reserve or RTS control. Implement them in bounded jobs after the
-  shared command contract; do not let the existing Builtin combat brain become an
-  accidental default stance.
+  shared command contract, with the default stance chosen explicitly rather than
+  inherited accidentally from Builtin combat.
 - Optional auto-loot-in-reach follows reliable explicit `rts loot`; it is not the
   commanded default.
 - World-map orders follow in-world reticle orders.
@@ -726,3 +772,7 @@ Location: `D:\WOWEmulation\Emulators\Tools\evryOps`
 | 23 Aug 2026 | Fresh clone `2000001` passed learn, known, usable, reticle, and cursor-cast checks. |
 | 23 Aug 2026 | Vehicle seats 2 and 3 each delivered an RTS Order destination with commentator flags off. |
 | 23 Aug 2026 | Live overlay inspection confirmed spell `2000001` still needs product cleanup: cast time, mana cost, global cooldown, cooldown, and area-trigger effect remain. |
+| 23 Aug 2026 | Phase 0B source inspection found active-mover-aware movement but session-owner-bound selection, melee, spell, and action-bar handlers; current stock-server playable possession was a source-level no-go. RelWithDebInfo worldserver/tests built and the focused tests passed 20 assertions; the later live result is recorded below. |
+| 23 Aug 2026 | First Phase 0B switch attempt stopped safely before mutation because the harness treated normal `GetViewpoint() == nullptr` as invalid. Source confirmed null is the ordinary self-view; the predicate was corrected and no live acceptance item was marked complete. |
+| 23 Aug 2026 | Phase 0B live run switched Magey's camera and active mover to Opai, but selection and spell casts remained Magey's and Opai's stock spell/action packets did not replace Magey's visible UI. Explicit release restored Magey and resumed Opai's Builtin movement. Current stock-server playable possession is a live-confirmed no-go. |
+| 23 Aug 2026 | Owner selected a capability-negotiated custom client/protocol boundary comparable in responsibility to SuperUI for future direct possession. Client patching, injection, reverse engineering, custom opcodes, a purpose-built client, and companion tooling are available options; exact client form, protocol design, safety proof, and unattended-original policy remain separate decisions. |

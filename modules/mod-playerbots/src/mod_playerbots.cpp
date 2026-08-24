@@ -57,6 +57,16 @@ public:
 
         sPlayerbotMgr->OnBotLogin(player);
     }
+
+    void OnLogout(Player* player) override
+    {
+        sPlayerbotMgr->OnPlayerLogout(player);
+    }
+
+    void OnMapChanged(Player* player) override
+    {
+        sPlayerbotMgr->OnPlayerMapChanged(player);
+    }
 };
 
 void Addmod_playerbotsScripts()

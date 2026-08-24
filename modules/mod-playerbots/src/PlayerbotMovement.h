@@ -35,12 +35,18 @@ public:
     void Update(Player* player, uint32 diff);
     void Stop(Player* player);
     void Reset();
+    void SetOwningClientMovementMirror(bool enabled) { _mirrorOwningClientMovement = enabled; }
+
+    static void StopAtFeet(Player* player);
 
     // Stand next to the target. Max interact range can land in a campfire on the way.
     static bool PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out);
 
     bool IsIdle() const { return _state == State::Idle; }
-    bool IsMoving() const { return _state == State::Moving || _state == State::Jumping; }
+    bool IsMoving() const
+    {
+        return _state == State::Moving || _state == State::Jumping || _state == State::AwaitingClientSync;
+    }
     bool IsJumping() const { return _state == State::Jumping; }
     bool HasArrived() const { return _state == State::Arrived; }
     bool HasFailed() const { return _state == State::Failed; }
@@ -64,6 +70,7 @@ private:
         Idle,
         Moving,
         Jumping,
+        AwaitingClientSync,
         Arrived,
         Failed
     };
@@ -89,6 +96,8 @@ private:
 
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
     void QueueJumpMove(Player* player, OpcodeClient opcode, Position const& pos, uint32 fallTime);
+    void FinishGroundedArrival(Player* player, Position const& pos);
+    void UpdateOwningClientSync(Player* player, uint32 diff);
     Position Advance(float distance);
     bool PeekGroundedStep(Player* player, float distance, Position& out);
     GroundedStepFailure PeekGroundedStepFailure(Player* player, float distance, Position& out);
@@ -135,6 +144,7 @@ private:
     uint32 _heartbeatMs = 0;
     uint32 _stuckMs = 0;
     uint32 _logMs = 0;
+    uint32 _owningClientSyncMs = 0;
     Position _lastProgressPos;
     Position _lastGrounded;
     bool _contouring = false;
@@ -156,6 +166,7 @@ private:
     uint32 _jumpHeartbeatMs = 0;
     uint32 _jumpMapId = 0;
     bool _stopAfterJump = false;
+    bool _mirrorOwningClientMovement = false;
 };
 
 #endif

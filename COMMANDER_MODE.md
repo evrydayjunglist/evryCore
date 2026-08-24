@@ -4,7 +4,7 @@ Living implementation plan and work tracker for three related control modes on t
 retail client: ordinary manual play, direct switch/possession of a party bot, and an
 RTS free view that commands the player's original character alongside party bots.
 
-Last updated: 23 August 2026
+Last updated: 24 August 2026
 
 Source plan: `Commander Mode.pdf`, revised 22 August 2026
 
@@ -20,7 +20,7 @@ Keep the root `README.md` to a short job summary, and keep experimental evidence
 | --- | --- | --- |
 | 0A. Commander client feasibility | **Complete** | Camera, command channel, ground order, cloned spell, and vehicle-seat tests pass |
 | 0B. Direct-switch feasibility | **Complete — live no-go confirmed, custom boundary selected, throwaway switch code removed** | Stock viewpoint and active mover work, but selection, casts, and visible player UI remain on the session owner; production possession will use a capability-negotiated custom client/protocol boundary |
-| 1A. Shared commandable-player movement | Waiting on Phase 0B landing and remaining owner decisions | The player body and managed bots use one move/hold/release contract; one- and five-bot tests pass |
+| 1A. Shared commandable-player movement | **Implemented — live acceptance pending** | The player body and managed bots use one move/hold/release contract; one- and five-bot tests pass |
 | 1B. Explicit attack and loot adapters | Waiting on Phase 1A | Manual attack and loot reach player-like packet paths for the player body and managed bots |
 | 2. `mod-rts` translator | Waiting on Phases 1A and 1B | Guarded group orders reach shared adapters with no action or movement engine in `mod-rts` |
 | 3. Commander addon | Waiting on Phase 2; camera completion also waits on Phase 4 | Selection, camera mode, reticle orders, state display, and clean exit work together |
@@ -196,35 +196,38 @@ subject context + destination
   - Choices include hold, follow/assist/defend, the Builtin controller, the External
     controller, or the shared RTS command service. Begin with the least autonomous safe
     behavior that matches how the owner wants to play.
-- [ ] Decide what entering RTS mode does to eligible units.
-  - Either the original character and all party bots immediately enter commanded hold,
-    or each remains in its current controller until its first accepted order.
-- [ ] Decide whether the original character may be individually released while RTS
+- [x] Decide what entering RTS mode does to eligible units.
+  - Selected 24 August 2026: entering RTS immediately claims the commander's original
+    character and every eligible online grouped managed bot in the same compatible map
+    instance. Every claimed unit begins in commanded hold.
+- [x] Decide whether the original character may be individually released while RTS
   free view remains active.
-  - Releasing a bot restores its applicable Reserve, Builtin, or External baseline.
-    Ordinary human input returns to the original character when that client exits its
-    RTS camera/controller claim.
-    Recommended behavior: disallow individual release of the original body; exiting
-    RTS restores human control, while a separate unattended-policy command may change
-    how the body acts during free view.
-- [ ] Confirm the initial RTS combat and loot policy.
-  - Current direction: commanded units wait for explicit attack and loot orders. Passive, defensive,
-    assist, aggressive, and auto-loot-in-reach policies may be added later.
+  - Selected 24 August 2026: the original character cannot be individually released
+    while RTS free view remains active. Exiting RTS restores ordinary human control.
+    Releasing a bot restores its applicable Reserve, Builtin, or External baseline.
+- [x] Confirm the initial RTS combat and loot policy.
+  - Selected 24 August 2026: commanded units perform movement only. They do not
+    autonomously acquire targets, retaliate, chase, attack, or loot. Explicit attack
+    and loot belong to the next backend job.
 - [ ] Choose the default Reserve and initial RTS stance.
   - Reserve means no self-chosen long-term activity, not necessarily inert combat.
     Passive stays inert. Defensive responds only to legitimate attackers with a bounded
     leash and return. Each selected stance explicitly defines whether any Builtin combat
     behavior applies.
-- [ ] Decide Coordinator presence loss during active RTS or direct control.
-  - Either the live human-control session temporarily pins presence until safe release,
-    or worldserver releases control, restores the playable original character, and then
-    logs the managed bot out. Playable-control restoration precedes subject logout.
-- [ ] Decide commander arbitration when more than one human is in the group.
-  - Entering free view exposes its ownership rule: one active commander per group,
-    group-leader control, or another visible arbitration model.
-- [ ] Decide the post-resurrection RTS state.
-  - Current direction: death suspends the order, normal player-like corpse recovery
-    runs automatically, and the unit returns alive in hold awaiting a new command.
+- [x] Decide Coordinator presence loss during active RTS or direct control.
+  - Selected 24 August 2026: loss of the owning `playerbots.exe` connection in
+    Coordinator login mode does not log out a managed bot under a valid RTS claim. RTS
+    works without the executable. Normal Coordinator absence and grace behavior resumes
+    after RTS exits and the claims are safely released. This connection is not the
+    future External strategic heartbeat.
+- [x] Decide commander arbitration when more than one human is in the group.
+  - Selected 24 August 2026: one commander may own RTS claims for a group, and that
+    commander must be the current group leader. A leadership change that removes that
+    authority invalidates the claim.
+- [x] Decide the post-resurrection RTS state.
+  - Selected 24 August 2026: death clears active movement but retains RTS ownership.
+    Existing packet-driven release-spirit, ghost walk, corpse reclaim, and recovery run
+    normally. The unit returns alive in commanded hold and never resumes a stale move.
 - [ ] Confirm direct-switch behavior when either character dies.
   - Recommended behavior: a possessed bot's death force-releases direct possession and
     restores the original character as the client's actor, even if that character is
@@ -247,11 +250,14 @@ direct `BuildPlayerRepop`, ghost teleport, or `ResurrectPlayer()` would violate 
 player-valid and non-cheaty safety outcome.
 
 The earlier suggested 15-minute stale-command timeout is withdrawn. No arbitrary
-elapsed-time release is selected. A legitimate hold must be able to last indefinitely;
-cleanup should follow explicit exit or a concrete invalidation such as logout, group
-removal, map incompatibility, or destruction. The renewable External strategic lease
-and optional Coordinator presence lease prove process health. Commander holds remain
-active across those lease renewals until explicit release or lifecycle invalidation.
+elapsed-time release is selected. A legitimate hold must be able to last indefinitely.
+Explicit RTS exit, commander or subject logout, group removal, incompatible map or
+instance, subject destruction, or shutdown invalidates the applicable claim. A
+same-map teleport suspends movement and requires authoritative revalidation afterward;
+an incompatible map or instance releases the claim. The renewable External strategic
+lease and optional Coordinator presence lease prove process health. Commander holds
+remain active across those lease renewals until explicit release or lifecycle
+invalidation.
 
 ## Plan corrections from the PDF
 
@@ -337,7 +343,9 @@ queued the managed bot's stock party-invite acceptance packet, managed-bot arbit
 owner-bar snapshot and rollback, native control ordering, packet/state logs, and forced
 release hooks. It built and its focused state tests passed before the live run. Cleanup
 then removed the invite and switch commands, playerbot quiescing flag, state helper, and
-focused tests because no production control seam was selected. The live
+focused tests because no production control seam was selected. The packet-driven
+`acceptinvite` helper was later restored by itself to bootstrap groups for Phase 1A
+testing; no direct-switch code was restored. The live
 playable-possession gate and explicit-release case were measured; unchecked live items
 below remain untested rather than passed.
 
@@ -412,72 +420,132 @@ unattended original character
 Scope: a subject-neutral command-state contract, a managed-playerbot adapter, and a
 proven path for the player's original character; no product UI or order translator
 
+### SuperUI comparison and selected RTS posture
+
+Source inspection on 24 August 2026 found that SuperUI layers control over companion
+AI rather than replacing that AI with a persistent RTS ownership state:
+
+- `SuiPossess::HandleOrder` authorizes the sender and each supplied subject when an
+  order arrives, then routes move and attack through the existing `AiBotAI` task paths.
+  Ordinary ordered group bots do not receive a group-wide exclusive controller claim
+  or controller generation comparable to evryCore's command contract.
+- A normal grouped `AiBotAI` follows its assigned party human or boss and assists the
+  party in combat. An active `TASK_MOVE_TO` temporarily takes priority over formation
+  follow, but arrival clears that task. `ORDER_STOP` clears movement, attack, and the
+  current task; a later AI tick may therefore resume normal follow or combat-assist
+  behavior. The free-view-commanded possessed bot is a special case: formation follow
+  and autonomous goal selection are suppressed, but combat assist deliberately remains
+  live.
+- SuperUI possession is separate from ordinary group orders. A relevant teleport or
+  the possessed bot's death force-releases possession and restores the original client
+  actor. Death of the unattended original character does not force-release possession.
+
+The selected evryCore behavior intentionally diverges toward a stricter RTS model. The
+owner wants Commander Mode to behave as much like an RTS as practical and confirmed the
+current Phase 1A posture:
+
+- RTS entry exclusively claims the original character and every eligible grouped
+  managed bot for one group-leader commander, with controller identity and generation
+  barriers for stale work.
+- Move completion, movement refusal, and stop all enter persistent commanded hold.
+  Builtin quest, vendor, follow, combat, and loot behavior remains suppressed until an
+  explicit RTS directive or release changes that state.
+- Future follow, assist, attack, loot, guard, patrol, or stance behavior must be an
+  explicit command or deliberately selected RTS policy. It must not appear implicitly
+  because an old Builtin companion loop resumed after an order.
+- Death and a compatible same-map teleport suspend movement, advance the generation,
+  and return the subject to commanded hold after packet-driven recovery or authoritative
+  revalidation. An incompatible map or instance still invalidates the claim.
+
+This is an intentional product distinction, not missing SuperUI parity. Reference
+evidence lives in `SuperUiContent/SuiWorld/CRPG/SuiPossess.cpp` (`HandleOrder`,
+`OnPlayerTeleport`, and `OnPlayerDeath`) and `SuperUiContent/SuiBots/AiBotAIMain.cpp`
+(`DoPartyFollow`, the possessed update gate, and `TASK_MOVE_TO`).
+
 ### Decisions before implementation
 
-- [ ] Resolve the applicable open product decisions above using the Phase 0B result.
-- [ ] Confirm whether RTS entry immediately holds every eligible unit or command state
-  begins on the first accepted order.
-- [ ] Confirm manual combat and loot for the first commanded version.
-  - Recommended starting behavior: no autonomous target acquisition, retaliation,
-    chase, or loot while commanded. Phase 1B adds explicit attack and loot after the
-    movement API is stable.
-- [ ] Choose the visible multi-human commander rule and concrete invalidation events.
-  - Arrival and hold remain commanded indefinitely until explicit release or a real
-    lifecycle invalidation; elapsed time alone leaves ownership unchanged.
+- [x] Resolve the applicable open product decisions above using the Phase 0B result.
+- [x] Confirm that RTS entry immediately claims every eligible unit in commanded hold.
+- [x] Confirm movement-only behavior with no autonomous combat or loot for the first
+  commanded version. Phase 1B adds explicit attack and loot after this API is stable.
+- [x] Restrict ownership to one commander per group, initially the current group leader,
+  and invalidate claims on the concrete lifecycle events recorded above. Arrival and
+  hold remain commanded indefinitely; elapsed time alone leaves ownership unchanged.
 - [x] Keep stop/hold distinct from release.
   - `stop` cancels movement at the current location and enters hold. `hold` retains the
     controller and suppresses the baseline controller. `release` removes command
     control and restores the applicable Reserve, Builtin, or External baseline.
-- [ ] Confirm death recovery and the post-resurrection state.
+- [x] Confirm death recovery and the post-resurrection state.
   - Death suspends RTS movement while the existing packet-driven release-spirit,
-    ghost-walk, reclaim, and recovery flow runs. Clear the active move, attack, or loot
-    payload at death; retain RTS association and return alive in hold rather than
-    resume a stale order.
+    ghost-walk, reclaim, and recovery flow runs. Clear the active move payload, retain
+    RTS ownership, and return alive in hold rather than resume a stale order.
 
 ### Implementation
 
-- [ ] Define a narrow public commandable-`Player` contract without exposing
+- [x] Define a narrow public commandable-`Player` contract without exposing
   `PlayerbotRecord` or making `mod-rts` depend on playerbot internals.
-- [ ] Add a managed-playerbot lookup and adapter that reuses `PlayerbotWalker` rather
+- [x] Add a managed-playerbot lookup and adapter that reuses `PlayerbotWalker` rather
   than creating another movement system.
-- [ ] Add the separately approved unattended-original-character adapter. It queues
+- [x] Add the separately approved unattended-original-character adapter. It queues
   automated movement only while automation owns that character's controller claim.
-- [ ] Add owner-aware move, stop/hold, and explicit release operations using a narrow
+  Because Trinity normally excludes the apparent sender from a client movement update,
+  the adapter also mirrors each accepted movement state to the owning client and waits
+  for authoritative feet synchronization before reporting arrival.
+- [x] Add owner-aware move, stop/hold, and explicit release operations using a narrow
   request type carrying controller and subject identity.
-- [ ] Store controller identity and generation, requested directive, moving/holding/
+- [x] Store controller identity and generation, requested directive, moving/holding/
   recovering state, and the concrete lifecycle data needed for safe cleanup. Ownership
   expires through explicit release or a concrete lifecycle invalidation.
-- [ ] Quiesce the previous controller at a safe boundary, clear incompatible Builtin or
+- [x] Quiesce the previous controller at a safe boundary, clear incompatible Builtin or
   External work, and reject late work from the old generation before command control
   begins.
-- [ ] While commanded, continue required session housekeeping, death handling, and the
+- [x] While commanded, continue required session housekeeping, death handling, and the
   selected packet walker, but suppress quest, vendor, idle-combat, target acquisition,
   chasing, and loot unless a later explicit order or selected stance permits them.
-- [ ] Clear the active command and suspend command movement across death while normal
+- [x] Clear the active command and suspend command movement across death while normal
   release-spirit and corpse recovery runs, then apply the chosen post-resurrection
   state without releasing RTS control accidentally.
-- [ ] Stop movement without restoring the baseline for stop/hold. Release safely to the
+- [x] Stop movement without restoring the baseline for stop/hold. Release safely to the
   applicable Reserve, Builtin, or External controller on explicit release and the
   chosen logout, group, map, controller, and subject events.
-- [ ] Log command start, redirect, arrival, hold, release, refusal, recovery, and
+- [x] Log command start, redirect, arrival, hold, release, refusal, recovery, and
   invalidation without a per-tick flood.
-- [ ] Add focused automated coverage for subject lookup, controller authorization,
-  latch transitions, redirect, stop/hold, release, invalidation, and death suspension.
-- [ ] Extend `mod-rts-spike` with a test-only command that calls the new API for up to
+- [x] Add focused automated coverage for controller authorization, exclusive ownership,
+  generation barriers, latch transitions, redirect, stop/hold, release, invalidation,
+  death suspension/recovery, original restoration, and Coordinator presence pinning.
+- [x] Extend `mod-rts-spike` with a test-only command that calls the new API for up to
   five grouped bots and assigns five simple, explicit offsets. This is only the scale
   harness; product formation remains Phase 2 work.
-- [ ] Extend the harness to include the unattended original character as a commandable
+- [x] Extend the harness to include the unattended original character as a commandable
   subject only after the Phase 0B boundary decision defines a safe ownership contract;
   the stock switch did not prove a playable control handoff.
-- [ ] Rebuild RelWithDebInfo `worldserver`.
+- [x] Reconfigure after adding the test source, then rebuild RelWithDebInfo `worldserver`,
+  `bnetserver`, `tests`, and `playerbots_executable`.
+
+Source/build evidence, 24 August 2026: the focused commandable/playerbot filter passes
+98 assertions in 18 cases; the complete C++ suite passes 411 assertions in 53 cases;
+the .NET framing suite and the published-`playerbots.exe` fake-worldserver reconnect
+test pass. After the first live original-character test exposed false server-side
+arrival without visible owning-client movement, the module-only movement mirror and
+arrival barrier were added; all four RelWithDebInfo targets rebuilt and both C++ suites
+still pass. A subsequent live test visibly moved the owning client to the requested
+feet and passed the synchronization barrier; redirect, stop, exit restoration, and
+lifecycle coverage remain open.
 
 ### Acceptance gate
 
-- [ ] Order one bot to a valid point; it arrives and stays instead of resuming quest
+- [x] Order one bot to a valid point; it arrives and stays instead of resuming quest
   work.
+  - Live 24 August 2026: Opai entered hold, completed a commanded move, stopped into
+    hold on the next move, and resumed Builtin quest movement only after explicit
+    release.
 - [ ] Redirect that bot mid-walk; it takes the new walk without competing autonomy.
 - [ ] In the RTS test state, order the original character to move, redirect, stop, and
   hold without simultaneous human movement packets.
+  - Basic move passed live on 24 August 2026 after the owning-client mirror fix. Magey
+    visibly followed `.rtsspike command moveoriginal -43.190189 -4308.263672
+    69.915924`; the log recorded synchronization at those commanded feet before arrival
+    and commanded hold. Redirect and explicit stop/hold still require live testing.
 - [ ] Use the throwaway spike harness to order five grouped bots to five formation
   offsets, then redirect all five mid-walk.
 - [ ] Add the original character to the scale test and confirm every subject arrives
@@ -492,6 +560,17 @@ proven path for the player's original character; no product UI or order translat
 - [ ] Kill the unattended original character and confirm release-spirit, ghost walk,
   corpse recovery, and return-to-hold preserve the RTS association without requiring
   commander control of the ghost.
+- [ ] Same-map teleport a commanded bot and the original character. Confirm movement
+  suspends, the generation changes, authoritative revalidation returns the subject to
+  hold, and a stale pre-teleport move cannot resume.
+- [ ] Move a claimed subject to an incompatible map or instance and confirm the
+  applicable claim releases. Repeat group removal, leader transfer, subject logout or
+  destruction, commander logout, explicit RTS exit, and worldserver shutdown; confirm
+  each scope invalidates once and restores the applicable baseline.
+- [ ] In Coordinator login mode, enter RTS, disconnect the owning `playerbots.exe`, and
+  wait beyond its ordinary grace. Confirm valid claimed bots remain online and accept
+  RTS movement. Exit RTS and confirm the normal Coordinator-absence logout behavior
+  resumes. Treat this only as presence-loss evidence, not an External heartbeat test.
 
 Phase 1B begins after this gate passes.
 
@@ -782,3 +861,6 @@ Location: `D:\WOWEmulation\Emulators\Tools\evryOps`
 | 23 Aug 2026 | Phase 0B live run switched Magey's camera and active mover to Opai, but selection and spell casts remained Magey's and Opai's stock spell/action packets did not replace Magey's visible UI. Explicit release restored Magey and resumed Opai's Builtin movement. Current stock-server playable possession is a live-confirmed no-go. |
 | 23 Aug 2026 | Owner selected a capability-negotiated custom client/protocol boundary comparable in responsibility to SuperUI for future direct possession. Client patching, injection, reverse engineering, custom opcodes, a purpose-built client, and companion tooling are available options; exact client form, protocol design, safety proof, and unattended-original policy remain separate decisions. |
 | 24 Aug 2026 | Removed the Phase 0B-only invite, switch, release, lifecycle, actor-UI probe, playerbot-quiescing, and state-test code after retaining the live no-go evidence. No production control seam was carried forward. The cleaned `worldserver`, `bnetserver`, and `tests` targets rebuilt; all remaining 362 C++ assertions in 46 cases and the .NET protocol tests passed. |
+| 24 Aug 2026 | SuperUI source comparison confirmed that its ordinary group orders temporarily override companion follow/assist AI, while evryCore deliberately keeps exclusive RTS claims and persistent commanded hold. The owner selected the stricter RTS posture; automatic follow, combat, and loot must not resume after stop or arrival. |
+| 24 Aug 2026 | First Phase 1A live run passed one-bot enter, move, stop/hold, and release, but the original character remained visually stationary while the internal walker falsely reported arrival. Source traced this to Trinity excluding the apparent movement sender from `SMSG_MOVE_UPDATE`. The module now mirrors only commanded-original movement to its owning client and requires authoritative feet synchronization before arrival; builds and automated tests pass, live retest pending. |
+| 24 Aug 2026 | Phase 1A original-character live retest passed its basic move: Magey visibly followed `moveoriginal` for a 27.3-yard commanded walk, navigated a local obstruction, synchronized the owning client at exactly `(-43.19, -4308.26, 69.92)`, and only then reported arrival and commanded hold. Redirect, explicit stop, exit restoration, and lifecycle cases remain untested. |

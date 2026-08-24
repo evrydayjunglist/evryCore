@@ -20,12 +20,15 @@
 
 #include "PlayerbotClient.h"
 #include "PlayerbotBridge.h"
+#include "CommandablePlayerState.h"
 #include "PlayerbotCoordinatorLease.h"
+#include "PlayerbotCoordinatorPresence.h"
 #include "PlayerbotMovement.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
 #include "Position.h"
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 class Player;
@@ -94,7 +97,20 @@ struct PlayerbotRecord
     std::unordered_set<ObjectGuid> UnreachableGuids;
     std::vector<Position> UnreachablePositions;
     bool LookedForOtherYellowOnFace = false;
+    CommandablePlayerState Command;
+    Position CommandDestination;
+    bool CommandMovePending = false;
+    bool OriginalControlRestorePending = false;
     PlayerbotWalker Walker;
+};
+
+struct CommandableRtsSession
+{
+    ObjectGuid Commander;
+    ObjectGuid Group;
+    uint32 MapId = 0;
+    uint32 InstanceId = 0;
+    std::unordered_set<ObjectGuid> Subjects;
 };
 
 class PlayerbotMgr
@@ -110,8 +126,32 @@ public:
     void Update(uint32 diff);
     bool IsBotAccount(uint32 accountId) const;
     void OnBotLogin(Player* player);
+    void OnPlayerLogout(Player* player);
+    void OnPlayerMapChanged(Player* player);
 
 private:
+    friend class CommandablePlayerService;
+
+    CommandableRtsEnterResult EnterRts(Player* commander);
+    CommandablePlayerResult SubmitCommand(CommandablePlayerRequest const& request);
+    CommandablePlayerResult ExitRts(ObjectGuid commander);
+    std::vector<CommandablePlayerSnapshot> GetRtsSubjects(ObjectGuid commander) const;
+    void UpdateRts(uint32 diff);
+    void UpdateCommanded(PlayerbotRecord& runtime, Player* player, uint32 diff, bool managedBot);
+    void ValidateRtsSessions();
+    void InvalidateRtsSession(ObjectGuid commander, char const* reason);
+    void InvalidateRtsSubject(ObjectGuid commander, ObjectGuid subject, char const* reason);
+    void InvalidateAllRts(char const* reason);
+    PlayerbotRecord* FindManagedBot(ObjectGuid subject);
+    PlayerbotRecord const* FindManagedBot(ObjectGuid subject) const;
+    PlayerbotRecord* FindCommandRuntime(ObjectGuid subject);
+    PlayerbotRecord const* FindCommandRuntime(ObjectGuid subject) const;
+    CommandableRtsSession* FindRtsSession(ObjectGuid commander);
+    CommandableRtsSession const* FindRtsSession(ObjectGuid commander) const;
+    bool IsOriginalCharacter(ObjectGuid subject) const;
+    bool HasValidRtsClaim(ObjectGuid subject) const;
+    void QuiesceForCommand(PlayerbotRecord& runtime, Player* player, bool originalCharacter);
+    void ResumeCoordinatorLogoutAfterRelease();
     void UpdateBridge(uint32 diff);
     std::string HandleBridgeRequest(uint64 connectionId, std::string const& payload);
     void BeginCoordinatorLogout();
@@ -158,6 +198,8 @@ private:
     PlayerbotCoordinatorLease _coordinatorLease;
     PlayerbotLoginMode _loginMode = PlayerbotLoginMode::Automatic;
     bool _bridgeStarted = false;
+    std::unordered_map<ObjectGuid, PlayerbotRecord> _originalCommandRuntimes;
+    std::unordered_map<ObjectGuid, CommandableRtsSession> _rtsSessions;
 };
 
 #define sPlayerbotMgr PlayerbotMgr::instance()

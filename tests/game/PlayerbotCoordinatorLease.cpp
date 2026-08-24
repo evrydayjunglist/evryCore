@@ -10,6 +10,7 @@
 #include "tc_catch2.h"
 
 #include "../../modules/mod-playerbots/src/PlayerbotCoordinatorLease.h"
+#include "../../modules/mod-playerbots/src/PlayerbotCoordinatorPresence.h"
 
 TEST_CASE("Playerbot coordinator loss expires after its grace period", "[playerbots][coordinator]")
 {
@@ -46,4 +47,10 @@ TEST_CASE("A coordinator reconnect during the grace keeps bots online", "[player
     REQUIRE(lease.ConnectionId() == 21);
     REQUIRE(lease.DisconnectGraceMs() == 0);
     REQUIRE_FALSE(lease.Update(PLAYERBOT_COORDINATOR_DISCONNECT_GRACE_MS));
+}
+
+TEST_CASE("A valid RTS claim pins coordinator-owned presence until release", "[playerbots][coordinator]")
+{
+    REQUIRE_FALSE(PlayerbotCoordinatorLogoutAllowed(true));
+    REQUIRE(PlayerbotCoordinatorLogoutAllowed(false));
 }

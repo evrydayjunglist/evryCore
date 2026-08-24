@@ -22,7 +22,11 @@
 #include "Creature.h"
 #include "GameObject.h"
 #include "GameTime.h"
+#include "GridDefines.h"
+#include "Group.h"
 #include "Log.h"
+#include "MapManager.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotFactory.h"
@@ -447,6 +451,8 @@ void PlayerbotMgr::Start()
 
 void PlayerbotMgr::Stop()
 {
+    InvalidateAllRts("worldserver shutdown");
+
     if (!_bridgeStarted)
         return;
 
@@ -459,15 +465,27 @@ void PlayerbotMgr::Stop()
 void PlayerbotMgr::Update(uint32 diff)
 {
     UpdateBridge(diff);
+    ValidateRtsSessions();
 
     for (PlayerbotRecord& bot : _bots)
     {
+        if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
+        {
+            UpdateLogin(bot);
+            WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+            if (Player* player = session ? session->GetPlayer() : nullptr)
+                UpdateCommanded(bot, player, diff, true);
+            continue;
+        }
+
         if (UpdateCoordinatorLogout(bot))
             continue;
 
         UpdateLogin(bot);
         UpdateWorld(bot, diff);
     }
+
+    UpdateRts(diff);
 }
 
 void PlayerbotMgr::UpdateBridge(uint32 diff)
@@ -651,8 +669,14 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
 void PlayerbotMgr::BeginCoordinatorLogout()
 {
     uint32 logoutRequests = 0;
+    uint32 pinnedByRts = 0;
     for (PlayerbotRecord& bot : _bots)
     {
+        if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
+        {
+            ++pinnedByRts;
+            continue;
+        }
         if (!bot.SessionQueued && !sWorld->FindSession(bot.Account.AccountId))
             continue;
         if (bot.CoordinatorLogoutRequested)
@@ -663,12 +687,23 @@ void PlayerbotMgr::BeginCoordinatorLogout()
     }
 
     TC_LOG_INFO(PLAYERBOTS_LOG,
-        "mod-playerbots: coordinator remained disconnected; logging out {} managed bot session(s) in place.",
-        logoutRequests);
+        "mod-playerbots: coordinator remained disconnected; logging out {} managed bot session(s) in place; {} valid RTS claim(s) keep their subjects online.",
+        logoutRequests, pinnedByRts);
 }
 
 bool PlayerbotMgr::UpdateCoordinatorLogout(PlayerbotRecord& bot)
 {
+    if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
+    {
+        if (bot.CoordinatorLogoutRequested && !bot.CoordinatorLogoutKickSent)
+        {
+            bot.CoordinatorLogoutRequested = false;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} coordinator-loss logout is pinned by a valid RTS claim.",
+                bot.Account.AccountId);
+        }
+        return false;
+    }
+
     if (!bot.CoordinatorLogoutRequested)
         return false;
 
@@ -705,8 +740,10 @@ bool PlayerbotMgr::UpdateCoordinatorLogout(PlayerbotRecord& bot)
 void PlayerbotMgr::ResetBotSession(PlayerbotRecord& bot)
 {
     PlayerbotAccount account = std::move(bot.Account);
+    CommandablePlayerState command = bot.Command;
     bot = PlayerbotRecord();
     bot.Account = std::move(account);
+    bot.Command = std::move(command);
 }
 
 bool PlayerbotMgr::IsBotAccount(uint32 accountId) const
@@ -721,6 +758,702 @@ void PlayerbotMgr::OnBotLogin(Player* player)
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is in the world. Cinematic skip, time sync, and walking run from WorldScript::OnUpdate.",
         player->GetName());
+}
+
+PlayerbotRecord* PlayerbotMgr::FindManagedBot(ObjectGuid subject)
+{
+    auto itr = std::ranges::find(_bots, subject,
+        [](PlayerbotRecord const& bot) { return bot.Account.CharacterGuid; });
+    return itr == _bots.end() ? nullptr : &*itr;
+}
+
+PlayerbotRecord const* PlayerbotMgr::FindManagedBot(ObjectGuid subject) const
+{
+    auto itr = std::ranges::find(_bots, subject,
+        [](PlayerbotRecord const& bot) { return bot.Account.CharacterGuid; });
+    return itr == _bots.end() ? nullptr : &*itr;
+}
+
+PlayerbotRecord* PlayerbotMgr::FindCommandRuntime(ObjectGuid subject)
+{
+    if (PlayerbotRecord* bot = FindManagedBot(subject))
+        return bot;
+
+    auto itr = _originalCommandRuntimes.find(subject);
+    return itr == _originalCommandRuntimes.end() ? nullptr : &itr->second;
+}
+
+PlayerbotRecord const* PlayerbotMgr::FindCommandRuntime(ObjectGuid subject) const
+{
+    if (PlayerbotRecord const* bot = FindManagedBot(subject))
+        return bot;
+
+    auto itr = _originalCommandRuntimes.find(subject);
+    return itr == _originalCommandRuntimes.end() ? nullptr : &itr->second;
+}
+
+CommandableRtsSession* PlayerbotMgr::FindRtsSession(ObjectGuid commander)
+{
+    auto itr = _rtsSessions.find(commander);
+    return itr == _rtsSessions.end() ? nullptr : &itr->second;
+}
+
+CommandableRtsSession const* PlayerbotMgr::FindRtsSession(ObjectGuid commander) const
+{
+    auto itr = _rtsSessions.find(commander);
+    return itr == _rtsSessions.end() ? nullptr : &itr->second;
+}
+
+bool PlayerbotMgr::IsOriginalCharacter(ObjectGuid subject) const
+{
+    auto itr = _rtsSessions.find(subject);
+    return itr != _rtsSessions.end() && itr->second.Subjects.contains(subject);
+}
+
+bool PlayerbotMgr::HasValidRtsClaim(ObjectGuid subject) const
+{
+    PlayerbotRecord const* runtime = FindCommandRuntime(subject);
+    if (!runtime || !runtime->Command.Active() || runtime->Command.Controller().Kind != CommandableControllerKind::Rts)
+        return false;
+
+    CommandableRtsSession const* session = FindRtsSession(runtime->Command.Controller().Owner);
+    return session && session->Subjects.contains(subject);
+}
+
+void PlayerbotMgr::QuiesceForCommand(PlayerbotRecord& runtime, Player* player, bool originalCharacter)
+{
+    if (!player)
+        return;
+
+    bool const continueExistingDeathRecovery = !player->IsAlive() && runtime.Death != PlayerbotDeathWork::None;
+    if (!continueExistingDeathRecovery)
+    {
+        if (runtime.Walker.IsMoving())
+            runtime.Walker.Stop(player);
+        else if (originalCharacter)
+            PlayerbotWalker::StopAtFeet(player);
+    }
+
+    if (player->GetVictim() && player->GetSession())
+        PlayerbotClient::QueueAttackStop(player->GetSession());
+
+    if (!continueExistingDeathRecovery)
+        ClearLivingWork(runtime, player);
+    runtime.CommandMovePending = false;
+    runtime.CommandDestination.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+
+    if (originalCharacter)
+        player->SetClientControl(player, false);
+}
+
+CommandableRtsEnterResult PlayerbotMgr::EnterRts(Player* commander)
+{
+    CommandableRtsEnterResult result;
+    if (!commander || !commander->GetSession() || !commander->IsInWorld()
+        || IsBotAccount(commander->GetSession()->GetAccountId()))
+        return result;
+
+    ValidateRtsSessions();
+
+    Group* group = commander->GetGroup();
+    if (!group || !group->IsLeader(commander->GetGUID()))
+    {
+        result.Code = CommandablePlayerResultCode::NotGroupLeader;
+        return result;
+    }
+
+    if (commander->IsBeingTeleported() || commander->GetUnitBeingMoved() != commander
+        || commander->IsInFlight() || commander->IsFlying() || commander->IsInWater()
+        || commander->IsFalling() || commander->GetTransport() || commander->GetVehicle()
+        || !commander->movespline->Finalized())
+    {
+        result.Code = CommandablePlayerResultCode::NotEligible;
+        return result;
+    }
+
+    if (CommandableRtsSession const* existing = FindRtsSession(commander->GetGUID()))
+    {
+        result.Code = CommandablePlayerResultCode::Accepted;
+        result.Group = existing->Group;
+        result.Subjects = GetRtsSubjects(commander->GetGUID());
+        return result;
+    }
+
+    ObjectGuid const groupGuid = group->GetGUID();
+    for (auto const& [otherCommander, session] : _rtsSessions)
+    {
+        if (session.Group == groupGuid)
+        {
+            result.Code = CommandablePlayerResultCode::GroupAlreadyCommanded;
+            return result;
+        }
+    }
+
+    struct EligibleSubject
+    {
+        PlayerbotRecord* Runtime;
+        Player* PlayerObject;
+        bool Original;
+    };
+    std::vector<EligibleSubject> eligible;
+
+    PlayerbotRecord& originalRuntime = _originalCommandRuntimes[commander->GetGUID()];
+    if (originalRuntime.Command.Active())
+    {
+        result.Code = CommandablePlayerResultCode::ControllerMismatch;
+        return result;
+    }
+    eligible.push_back({ &originalRuntime, commander, true });
+
+    for (PlayerbotRecord& bot : _bots)
+    {
+        WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+        Player* player = session ? session->GetPlayer() : nullptr;
+        if (!player || !player->IsInWorld() || player->GetGroup() != group)
+            continue;
+        if (player->GetMapId() != commander->GetMapId() || player->GetInstanceId() != commander->GetInstanceId())
+            continue;
+        if (player->IsBeingTeleported() || bot.CoordinatorLogoutKickSent)
+            continue;
+        if (bot.Command.Active())
+        {
+            result.Code = CommandablePlayerResultCode::ControllerMismatch;
+            return result;
+        }
+        eligible.push_back({ &bot, player, false });
+    }
+
+    CommandableRtsSession session;
+    session.Commander = commander->GetGUID();
+    session.Group = groupGuid;
+    session.MapId = commander->GetMapId();
+    session.InstanceId = commander->GetInstanceId();
+    CommandableControllerIdentity const rts = { CommandableControllerKind::Rts, commander->GetGUID() };
+
+    for (EligibleSubject const& subject : eligible)
+    {
+        subject.Runtime->Walker.SetOwningClientMovementMirror(subject.Original);
+        QuiesceForCommand(*subject.Runtime, subject.PlayerObject, subject.Original);
+        CommandableControllerIdentity const baseline = {
+            subject.Original ? CommandableControllerKind::Human : CommandableControllerKind::Builtin,
+            subject.PlayerObject->GetGUID()
+        };
+        CommandablePlayerResult acquired = subject.Runtime->Command.Acquire(subject.PlayerObject->GetGUID(), baseline, rts);
+        if (!acquired)
+            continue;
+
+        subject.Runtime->CoordinatorLogoutRequested = false;
+        session.Subjects.insert(subject.PlayerObject->GetGUID());
+        if (!subject.PlayerObject->IsAlive())
+            subject.Runtime->Command.SuspendForDeath();
+
+        result.Subjects.push_back({ subject.PlayerObject->GetGUID(), subject.Runtime->Command.Generation(),
+            subject.Runtime->Command.Directive(), subject.Original });
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: RTS commander {} acquired {} generation {} in commanded {}.",
+            commander->GetName(), subject.PlayerObject->GetName(), subject.Runtime->Command.Generation(),
+            CommandablePlayerDirectiveName(subject.Runtime->Command.Directive()));
+    }
+
+    _rtsSessions.emplace(commander->GetGUID(), std::move(session));
+    result.Code = CommandablePlayerResultCode::Accepted;
+    result.Group = groupGuid;
+    return result;
+}
+
+CommandablePlayerResult PlayerbotMgr::SubmitCommand(CommandablePlayerRequest const& request)
+{
+    if (request.Controller.Kind != CommandableControllerKind::Rts || request.Controller.Owner.IsEmpty())
+        return { CommandablePlayerResultCode::InvalidController, 0 };
+
+    // Chat/addon orders can arrive between WorldScript ticks. Recheck ownership now so
+    // a leadership or group change cannot authorize one last command before OnUpdate.
+    ValidateRtsSessions();
+
+    CommandableRtsSession* session = FindRtsSession(request.Controller.Owner);
+    if (!session || !session->Subjects.contains(request.Subject))
+        return { CommandablePlayerResultCode::NoClaim, 0 };
+
+    PlayerbotRecord* runtime = FindCommandRuntime(request.Subject);
+    Player* player = ObjectAccessor::FindConnectedPlayer(request.Subject);
+    if (!runtime || !player || !player->IsInWorld())
+        return { CommandablePlayerResultCode::InvalidSubject, runtime ? runtime->Command.Generation() : 0 };
+
+    if (request.Operation == CommandablePlayerOperation::Release && request.Subject == session->Commander)
+        return { CommandablePlayerResultCode::OriginalReleaseRequiresExit, runtime->Command.Generation() };
+
+    if (player->IsBeingTeleported() && runtime->Command.SuspendForTeleport())
+    {
+        runtime->Walker.Stop(player);
+        runtime->CommandMovePending = false;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} RTS movement suspended for teleport at generation {}.",
+            player->GetName(), runtime->Command.Generation());
+    }
+
+    if (request.Operation == CommandablePlayerOperation::Move
+        && !MapManager::IsValidMapCoord(player->GetMapId(), request.Destination))
+    {
+        return { CommandablePlayerResultCode::InvalidDestination, runtime->Command.Generation() };
+    }
+
+    bool const redirect = runtime->Command.Directive() == CommandablePlayerDirective::Move
+        || runtime->Walker.IsMoving();
+    CommandablePlayerResult applied = runtime->Command.Apply(request);
+    if (!applied)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: RTS request for {} refused: {} (current generation {}).",
+            player->GetName(), CommandablePlayerResultCodeName(applied.Code), applied.Generation);
+        return applied;
+    }
+
+    if (request.Operation == CommandablePlayerOperation::Release)
+    {
+        runtime->Walker.Stop(player);
+        runtime->CommandMovePending = false;
+        session->Subjects.erase(request.Subject);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: RTS commander {} released {} at generation {}; baseline control restored.",
+            request.Controller.Owner.ToString(), player->GetName(), applied.Generation);
+        ResumeCoordinatorLogoutAfterRelease();
+        return applied;
+    }
+
+    if (request.Operation == CommandablePlayerOperation::Hold)
+    {
+        runtime->Walker.Stop(player);
+        runtime->CommandMovePending = false;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} entered commanded hold at generation {}.",
+            player->GetName(), applied.Generation);
+        return applied;
+    }
+
+    runtime->CommandDestination = request.Destination;
+    runtime->CommandMovePending = true;
+    if (runtime->Walker.IsMoving())
+        runtime->Walker.Stop(player);
+
+    if (!runtime->Walker.IsJumping())
+    {
+        runtime->CommandMovePending = false;
+        if (!runtime->Walker.Start(player, runtime->CommandDestination, 0.25f))
+        {
+            runtime->Command.Arrive();
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} RTS move refused by the player-like walker; holding at generation {}.",
+                player->GetName(), runtime->Command.Generation());
+            return { CommandablePlayerResultCode::MovementRefused, runtime->Command.Generation() };
+        }
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} RTS {} accepted for ({:.2f}, {:.2f}, {:.2f}) at generation {}.",
+        player->GetName(), redirect ? "redirect" : "move", request.Destination.GetPositionX(),
+        request.Destination.GetPositionY(), request.Destination.GetPositionZ(), applied.Generation);
+    return applied;
+}
+
+CommandablePlayerResult PlayerbotMgr::ExitRts(ObjectGuid commander)
+{
+    CommandableRtsSession* found = FindRtsSession(commander);
+    if (!found)
+        return { CommandablePlayerResultCode::NoClaim, 0 };
+
+    CommandableControllerIdentity const controller = { CommandableControllerKind::Rts, commander };
+    std::vector<ObjectGuid> subjects(found->Subjects.begin(), found->Subjects.end());
+    uint64 generation = 0;
+    for (ObjectGuid subject : subjects)
+    {
+        PlayerbotRecord* runtime = FindCommandRuntime(subject);
+        Player* player = ObjectAccessor::FindConnectedPlayer(subject);
+        if (!runtime)
+            continue;
+
+        if (player)
+            runtime->Walker.Stop(player);
+        runtime->CommandMovePending = false;
+        CommandablePlayerResult released = runtime->Command.Release(controller, runtime->Command.Generation());
+        generation = std::max(generation, released.Generation);
+        if (subject == commander && player)
+        {
+            if (runtime->Walker.IsJumping())
+                runtime->OriginalControlRestorePending = true;
+            else
+                player->SetClientControl(player, true);
+        }
+
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: RTS exit released subject {} at generation {}; baseline control restored.",
+            subject.ToString(), released.Generation);
+    }
+
+    _rtsSessions.erase(commander);
+    ResumeCoordinatorLogoutAfterRelease();
+    return { CommandablePlayerResultCode::Accepted, generation };
+}
+
+std::vector<CommandablePlayerSnapshot> PlayerbotMgr::GetRtsSubjects(ObjectGuid commander) const
+{
+    std::vector<CommandablePlayerSnapshot> snapshots;
+    CommandableRtsSession const* session = FindRtsSession(commander);
+    if (!session)
+        return snapshots;
+
+    for (ObjectGuid subject : session->Subjects)
+    {
+        PlayerbotRecord const* runtime = FindCommandRuntime(subject);
+        if (!runtime || !runtime->Command.Active())
+            continue;
+        snapshots.push_back({ subject, runtime->Command.Generation(), runtime->Command.Directive(), subject == commander });
+    }
+    return snapshots;
+}
+
+void PlayerbotMgr::OnPlayerLogout(Player* player)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const subject = player->GetGUID();
+    if (PlayerbotRecord* runtime = FindCommandRuntime(subject); runtime && runtime->Walker.IsJumping())
+        runtime->Walker.Stop(nullptr);
+
+    if (_rtsSessions.contains(subject))
+    {
+        InvalidateRtsSession(subject, "commander logout");
+        return;
+    }
+
+    for (auto const& [commander, session] : _rtsSessions)
+    {
+        if (session.Subjects.contains(subject))
+        {
+            InvalidateRtsSubject(commander, subject, "subject logout");
+            return;
+        }
+    }
+}
+
+void PlayerbotMgr::OnPlayerMapChanged(Player* player)
+{
+    if (!player || !HasValidRtsClaim(player->GetGUID()))
+        return;
+
+    ValidateRtsSessions();
+}
+
+void PlayerbotMgr::ValidateRtsSessions()
+{
+    std::vector<ObjectGuid> commanders;
+    commanders.reserve(_rtsSessions.size());
+    for (auto const& [commander, session] : _rtsSessions)
+        commanders.push_back(commander);
+
+    for (ObjectGuid commanderGuid : commanders)
+    {
+        CommandableRtsSession* session = FindRtsSession(commanderGuid);
+        if (!session)
+            continue;
+
+        Player* commander = ObjectAccessor::FindConnectedPlayer(commanderGuid);
+        if (!commander || !commander->IsInWorld())
+        {
+            InvalidateRtsSession(commanderGuid, "commander logout or destruction");
+            continue;
+        }
+
+        Group* group = commander->GetGroup();
+        if (!group || group->GetGUID() != session->Group)
+        {
+            InvalidateRtsSession(commanderGuid, "commander left the claimed group");
+            continue;
+        }
+        if (!group->IsLeader(commanderGuid))
+        {
+            InvalidateRtsSession(commanderGuid, "commander is no longer group leader");
+            continue;
+        }
+        if (!commander->IsBeingTeleported()
+            && (commander->GetMapId() != session->MapId || commander->GetInstanceId() != session->InstanceId))
+        {
+            InvalidateRtsSession(commanderGuid, "commander entered an incompatible map or instance");
+            continue;
+        }
+
+        std::vector<ObjectGuid> subjects(session->Subjects.begin(), session->Subjects.end());
+        for (ObjectGuid subjectGuid : subjects)
+        {
+            PlayerbotRecord* runtime = FindCommandRuntime(subjectGuid);
+            Player* subject = ObjectAccessor::FindConnectedPlayer(subjectGuid);
+            if (!runtime || !runtime->Command.Active() || !subject || !subject->IsInWorld())
+            {
+                if (subjectGuid == commanderGuid)
+                {
+                    InvalidateRtsSession(commanderGuid, "original character logout or destruction");
+                    break;
+                }
+                InvalidateRtsSubject(commanderGuid, subjectGuid, "subject logout or destruction");
+                continue;
+            }
+
+            if (subjectGuid != commanderGuid && subject->GetGroup() != group)
+            {
+                InvalidateRtsSubject(commanderGuid, subjectGuid, "subject left the claimed group");
+                continue;
+            }
+
+            if (subject->IsBeingTeleported())
+                continue;
+
+            if (subject->GetMapId() != commander->GetMapId() || subject->GetInstanceId() != commander->GetInstanceId())
+            {
+                if (subjectGuid == commanderGuid)
+                {
+                    InvalidateRtsSession(commanderGuid, "original character entered an incompatible map or instance");
+                    break;
+                }
+                InvalidateRtsSubject(commanderGuid, subjectGuid, "subject entered an incompatible map or instance");
+            }
+        }
+    }
+}
+
+void PlayerbotMgr::InvalidateRtsSubject(ObjectGuid commander, ObjectGuid subject, char const* reason)
+{
+    CommandableRtsSession* session = FindRtsSession(commander);
+    if (!session || !session->Subjects.contains(subject))
+        return;
+
+    if (subject == commander)
+    {
+        InvalidateRtsSession(commander, reason);
+        return;
+    }
+
+    PlayerbotRecord* runtime = FindCommandRuntime(subject);
+    Player* player = ObjectAccessor::FindConnectedPlayer(subject);
+    if (runtime)
+    {
+        if (player)
+            runtime->Walker.Stop(player);
+        runtime->CommandMovePending = false;
+        runtime->Command.Invalidate();
+    }
+    session->Subjects.erase(subject);
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: RTS claim for subject {} invalidated: {}.", subject.ToString(), reason);
+    ResumeCoordinatorLogoutAfterRelease();
+}
+
+void PlayerbotMgr::InvalidateRtsSession(ObjectGuid commander, char const* reason)
+{
+    CommandableRtsSession* found = FindRtsSession(commander);
+    if (!found)
+        return;
+
+    std::vector<ObjectGuid> subjects(found->Subjects.begin(), found->Subjects.end());
+    _rtsSessions.erase(commander);
+    for (ObjectGuid subject : subjects)
+    {
+        PlayerbotRecord* runtime = FindCommandRuntime(subject);
+        Player* player = ObjectAccessor::FindConnectedPlayer(subject);
+        if (!runtime)
+            continue;
+
+        if (player)
+            runtime->Walker.Stop(player);
+        runtime->CommandMovePending = false;
+        runtime->Command.Invalidate();
+        if (subject == commander && player)
+        {
+            if (runtime->Walker.IsJumping())
+                runtime->OriginalControlRestorePending = true;
+            else
+                player->SetClientControl(player, true);
+        }
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: RTS session owned by {} invalidated: {}.", commander.ToString(), reason);
+    ResumeCoordinatorLogoutAfterRelease();
+}
+
+void PlayerbotMgr::InvalidateAllRts(char const* reason)
+{
+    std::vector<ObjectGuid> commanders;
+    commanders.reserve(_rtsSessions.size());
+    for (auto const& [commander, session] : _rtsSessions)
+        commanders.push_back(commander);
+    for (ObjectGuid commander : commanders)
+        InvalidateRtsSession(commander, reason);
+}
+
+void PlayerbotMgr::ResumeCoordinatorLogoutAfterRelease()
+{
+    if (_loginMode == PlayerbotLoginMode::Coordinator
+        && !_coordinatorLease.ConnectionId() && !_coordinatorLease.DisconnectGraceMs())
+        BeginCoordinatorLogout();
+}
+
+void PlayerbotMgr::UpdateRts(uint32 diff)
+{
+    for (auto& [guid, runtime] : _originalCommandRuntimes)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+        if (runtime.Command.Active())
+        {
+            if (player)
+                UpdateCommanded(runtime, player, diff, false);
+            continue;
+        }
+
+        if (!runtime.OriginalControlRestorePending || !player)
+            continue;
+
+        if (runtime.Walker.IsJumping())
+        {
+            runtime.Walker.Update(player, diff);
+            if (runtime.Walker.IsJumping())
+                continue;
+        }
+
+        runtime.OriginalControlRestorePending = false;
+        player->SetClientControl(player, true);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} finished the validated jump and returned to ordinary human control.",
+            player->GetName());
+    }
+}
+
+void PlayerbotMgr::UpdateCommanded(PlayerbotRecord& runtime, Player* player, uint32 diff, bool managedBot)
+{
+    if (!player || !runtime.Command.Active())
+        return;
+
+    WorldSession* session = player->GetSession();
+    if (!session)
+        return;
+
+    if (managedBot)
+    {
+        ReplyTeleportAcks(player);
+        if (!player->IsInWorld())
+            return;
+        ReplyTimeSync(session);
+
+        if (!runtime.CinematicSkipped)
+        {
+            PlayerbotClient::QueueCompleteCinematic(session);
+            runtime.CinematicSkipped = true;
+        }
+        if (!runtime.InitMoverQueued)
+        {
+            PlayerbotClient::QueueMoveInitActiveMoverComplete(session, GameTime::GetGameTimeMS());
+            runtime.InitMoverQueued = true;
+        }
+    }
+    else if (!player->IsInWorld())
+        return;
+
+    if (player->IsBeingTeleported())
+    {
+        if (runtime.Command.SuspendForTeleport())
+        {
+            runtime.Walker.Stop(player);
+            runtime.CommandMovePending = false;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} RTS movement suspended for teleport at generation {}.",
+                player->GetName(), runtime.Command.Generation());
+        }
+        return;
+    }
+
+    if (runtime.Command.TeleportSuspended())
+    {
+        runtime.Command.FinishTeleportRevalidation();
+        if (!managedBot)
+            player->SetClientControl(player, false);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} teleport revalidated; returning to commanded hold at generation {}.",
+            player->GetName(), runtime.Command.Generation());
+    }
+
+    if (!player->IsAlive())
+    {
+        if (runtime.Command.SuspendForDeath())
+        {
+            runtime.Walker.Stop(player);
+            runtime.CommandMovePending = false;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} died under RTS ownership; movement cleared and recovery suspended generation {}.",
+                player->GetName(), runtime.Command.Generation());
+        }
+        UpdateDeath(runtime, player, diff);
+        return;
+    }
+
+    if (runtime.Command.DeathSuspended())
+    {
+        if (UpdateDeath(runtime, player, diff))
+            return;
+
+        runtime.Command.FinishDeathRecovery();
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} completed death recovery and returned alive in commanded hold at generation {}.",
+            player->GetName(), runtime.Command.Generation());
+    }
+
+    if (runtime.Command.Directive() == CommandablePlayerDirective::Hold)
+    {
+        if (runtime.Walker.IsJumping())
+        {
+            runtime.Walker.Stop(player);
+            runtime.Walker.Update(player, diff);
+            if (runtime.Walker.IsJumping())
+                return;
+        }
+        else if (runtime.Walker.IsMoving())
+            runtime.Walker.Stop(player);
+        return;
+    }
+
+    if (runtime.Command.Directive() != CommandablePlayerDirective::Move)
+        return;
+
+    if (runtime.CommandMovePending && !runtime.Walker.IsMoving())
+    {
+        runtime.CommandMovePending = false;
+        if (!runtime.Walker.Start(player, runtime.CommandDestination, 0.25f))
+        {
+            runtime.Command.Arrive();
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} pending RTS redirect was refused by the player-like walker; holding.",
+                player->GetName());
+            return;
+        }
+    }
+
+    if (runtime.Walker.IsMoving())
+        runtime.Walker.Update(player, diff);
+
+    // A redirect requested in mid-jump must wait for the validated landing. Once the
+    // old arc lands, replace its continuation instead of following the old route.
+    if (runtime.CommandMovePending && !runtime.Walker.IsJumping())
+    {
+        if (runtime.Walker.IsMoving())
+            runtime.Walker.Stop(player);
+        runtime.CommandMovePending = false;
+        if (!runtime.Walker.Start(player, runtime.CommandDestination, 0.25f))
+        {
+            runtime.Command.Arrive();
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} pending RTS redirect was refused by the player-like walker; holding.",
+                player->GetName());
+            return;
+        }
+    }
+
+    if (runtime.Walker.HasArrived())
+    {
+        runtime.Command.Arrive();
+        runtime.Walker.Reset();
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} arrived at the RTS destination and entered commanded hold at generation {}.",
+            player->GetName(), runtime.Command.Generation());
+    }
+    else if (runtime.Walker.HasFailed())
+    {
+        runtime.Command.Arrive();
+        runtime.Walker.Reset();
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} RTS walk failed; the subject is holding at generation {}.",
+            player->GetName(), runtime.Command.Generation());
+    }
 }
 
 bool PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
@@ -1317,6 +2050,8 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
     bot.UseItemOnUnitTarget = {};
     ClearUseItemCast(bot);
     bot.LookedForOtherYellowOnFace = false;
+    bot.CommandMovePending = false;
+    bot.CommandDestination.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     ClearUnreachable(bot);
     bot.Walker.Reset();
 }
@@ -1469,10 +2204,21 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
         return UpdateSitRecover(bot, player, diff);
     }
 
-    if (bot.Death == PlayerbotDeathWork::None || bot.Death == PlayerbotDeathWork::SitRecover)
-        BeginDeath(bot, player);
-
     bool const isGhost = player->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+
+    if (bot.Death == PlayerbotDeathWork::None || bot.Death == PlayerbotDeathWork::SitRecover)
+    {
+        if (isGhost)
+        {
+            ClearLivingWork(bot, player);
+            ClearDeath(bot);
+            bot.Death = PlayerbotDeathWork::WaitForGhost;
+            bot.HadSickness = PlayerbotClient::PlayerHasResurrectionSickness(player);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} entered automated recovery while already a ghost.", player->GetName());
+        }
+        else
+            BeginDeath(bot, player);
+    }
 
     if (!isGhost)
     {

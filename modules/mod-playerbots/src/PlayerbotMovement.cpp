@@ -50,6 +50,8 @@ namespace
     constexpr uint32 HEARTBEAT_INTERVAL_MS = 100;
     constexpr uint32 STUCK_TIMEOUT_MS = 3000;
     constexpr uint32 HEARTBEAT_LOG_INTERVAL_MS = 1000;
+    constexpr uint32 OWNING_CLIENT_SYNC_TIMEOUT_MS = 2000;
+    constexpr float OWNING_CLIENT_SYNC_DISTANCE = 0.75f;
     constexpr uint32 REFUSED_PATH_TYPES = PATHFIND_NOPATH | PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH;
     constexpr float SPELL_FOCUS_AVOID_RADIUS = 2.5f;
     constexpr float VIA_EXTRA_CLEARANCE = 1.0f;
@@ -436,6 +438,24 @@ void PlayerbotWalker::Stop(Player* player)
     ResetNow();
 }
 
+void PlayerbotWalker::StopAtFeet(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    MovementInfo info = player->m_movementInfo;
+    info.guid = player->GetGUID();
+    info.time = GameTime::GetGameTimeMS();
+    info.pos = player->GetPosition();
+    info.RemoveMovementFlag(MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_BACKWARD
+        | MOVEMENTFLAG_STRAFE_LEFT | MOVEMENTFLAG_STRAFE_RIGHT
+        | MOVEMENTFLAG_LEFT | MOVEMENTFLAG_RIGHT | MOVEMENTFLAG_PITCH_UP | MOVEMENTFLAG_PITCH_DOWN
+        | MOVEMENTFLAG_ASCENDING | MOVEMENTFLAG_DESCENDING
+        | MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+    info.jump.Reset();
+    PlayerbotClient::QueueMovement(player->GetSession(), CMSG_MOVE_STOP, info);
+}
+
 void PlayerbotWalker::Reset()
 {
     if (_state == State::Jumping)
@@ -458,6 +478,7 @@ void PlayerbotWalker::ResetNow()
     _heartbeatMs = 0;
     _stuckMs = 0;
     _logMs = 0;
+    _owningClientSyncMs = 0;
     _lastProgressPos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     _lastGrounded.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     _contouring = false;
@@ -693,8 +714,15 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
 void PlayerbotWalker::Update(Player* player, uint32 diff)
 {
-    if ((_state != State::Moving && _state != State::Jumping) || !player || !player->IsInWorld() || !player->GetSession())
+    if ((_state != State::Moving && _state != State::Jumping && _state != State::AwaitingClientSync)
+        || !player || !player->IsInWorld() || !player->GetSession())
         return;
+
+    if (_state == State::AwaitingClientSync)
+    {
+        UpdateOwningClientSync(player, diff);
+        return;
+    }
 
     if (_state == State::Jumping)
     {
@@ -740,12 +768,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         bool const pathDone = _pointIndex + 1 >= _path.size();
         if (atDest)
         {
-            QueueMove(player, grounded, false, false);
-            _state = State::Arrived;
-            _contouring = false;
-            ClearFaceRecovery();
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
-                player->GetName(), grounded.GetPositionX(), grounded.GetPositionY(), grounded.GetPositionZ());
+            FinishGroundedArrival(player, grounded);
             return;
         }
 
@@ -762,11 +785,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
         if (pathDone)
         {
-            QueueMove(player, grounded, false, false);
-            _state = State::Arrived;
-            ClearFaceRecovery();
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
-                player->GetName(), grounded.GetPositionX(), grounded.GetPositionY(), grounded.GetPositionZ());
+            FinishGroundedArrival(player, grounded);
             return;
         }
 
@@ -811,6 +830,11 @@ void PlayerbotWalker::QueueMove(Player* player, Position const& pos, bool moving
         opcode = CMSG_MOVE_STOP;
 
     PlayerbotClient::QueueMovement(player->GetSession(), opcode, info);
+    if (_mirrorOwningClientMovement)
+        // Trinity omits the apparent sender from the normal movement broadcast. The
+        // connected original did not originate this queued packet, so show it the same
+        // state while the queued CMSG remains the authoritative world action.
+        PlayerbotClient::SendMovementUpdate(player->GetSession(), info);
 }
 
 void PlayerbotWalker::QueueJumpMove(Player* player, OpcodeClient opcode, Position const& pos, uint32 fallTime)
@@ -834,6 +858,51 @@ void PlayerbotWalker::QueueJumpMove(Player* player, OpcodeClient opcode, Positio
     info.jump.cosAngle = _jump.DirectionX;
     info.jump.xyspeed = _jump.Trajectory.HorizontalSpeed;
     PlayerbotClient::QueueMovement(player->GetSession(), opcode, info);
+    if (_mirrorOwningClientMovement)
+        PlayerbotClient::SendMovementUpdate(player->GetSession(), info);
+}
+
+void PlayerbotWalker::FinishGroundedArrival(Player* player, Position const& pos)
+{
+    QueueMove(player, pos, false, false);
+    _lastGrounded = pos;
+    _contouring = false;
+    ClearFaceRecovery();
+
+    if (_mirrorOwningClientMovement)
+    {
+        _state = State::AwaitingClientSync;
+        _owningClientSyncMs = 0;
+        return;
+    }
+
+    _state = State::Arrived;
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
+        player->GetName(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ());
+}
+
+void PlayerbotWalker::UpdateOwningClientSync(Player* player, uint32 diff)
+{
+    _owningClientSyncMs += diff;
+    float const distance = player->GetPosition().GetExactDist(_lastGrounded);
+    if (distance <= OWNING_CLIENT_SYNC_DISTANCE)
+    {
+        _state = State::Arrived;
+        _owningClientSyncMs = 0;
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} owning client synchronized at commanded feet ({:.2f}, {:.2f}, {:.2f}).",
+            player->GetName(), _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ());
+        return;
+    }
+
+    if (_owningClientSyncMs < OWNING_CLIENT_SYNC_TIMEOUT_MS)
+        return;
+
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} owning client did not synchronize commanded movement: expected ({:.2f}, {:.2f}, {:.2f}), actual ({:.2f}, {:.2f}, {:.2f}), distance {:.2f}.",
+        player->GetName(), _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ(),
+        player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), distance);
+    Fail(player, "owning client movement synchronization timed out");
 }
 
 Position PlayerbotWalker::Advance(float distance)
@@ -2037,9 +2106,7 @@ void PlayerbotWalker::FinishJump(Player* player)
     }
     if (landing.GetExactDist(_destination) <= _stopDistance)
     {
-        QueueMove(player, landing, false, false);
-        _state = State::Arrived;
-        ClearFaceRecovery();
+        FinishGroundedArrival(player, landing);
         _jump = {};
         return;
     }

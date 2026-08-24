@@ -10,6 +10,15 @@ It is a normal drop-in module (`modules/mod-rts-spike/`), so a static build comp
 2. Copy `addon/RTSSpike/` into the client's `Interface/AddOns/`.
 3. Log in on a GM account (the commands use the `debug` RBAC permission). `/rtsspike` in chat prints usage.
 
+To bootstrap a group with an online managed bot for the movement tests, invite it
+normally and then make the bot queue the stock acceptance packet:
+
+1. `/invite Opai`
+2. `.rtsspike acceptinvite Opai`
+
+The invoking player and bot must be on the same map instance, and the pending invite
+must be from that player. This helper does not directly mutate the group.
+
 ## Spike 1 — commentator free camera (the camera-ladder decider)
 
 This is the one to run first. If it works, the hardest problem on the plan disappears.
@@ -39,9 +48,10 @@ Outcome to write down: destination matches the clicked point yes/no; works while
 
 ## Phase 0B — direct switch to one managed bot
 
-Status: complete and cleaned up. The disposable invite, switch, release, lifecycle,
-actor-UI probe, playerbot-quiescing, and state-test code was removed after the live
-no-go was recorded. The current module does not provide direct-switch commands.
+Status: complete and cleaned up. The disposable switch, release, lifecycle, actor-UI
+probe, playerbot-quiescing, and state-test code was removed after the live no-go was
+recorded. The packet-driven invite-acceptance helper was later restored to bootstrap
+groups for Phase 1A testing; the current module does not provide direct-switch commands.
 
 The measured branch required one alive, stationary, visible, same-group and
 same-instance managed bot. It queued the bot's real party-invite acceptance packet,
@@ -101,9 +111,35 @@ Those spike-only tests were removed with the harness. After cleanup, `worldserve
 assertions in 46 cases and the .NET protocol tests pass. These are source/build results,
 not live retail-client evidence.
 
-## Spike 5 — walker at RTS scale
+## Spike 5 — shared commandable-player movement
 
-Not scripted here — it needs the shared commandable-player movement API that does not exist yet. This is Phase 1A's final acceptance test, not work to run before the API. When Phase 1A lands, order five grouped bots to one point with explicit test offsets and redirect them mid-walk.
+These GM-only commands are a throwaway caller of the public commandable-player API.
+They do not implement the product order translator or formation behavior.
+
+1. Make the human character the group leader and group one online managed bot on the
+   same map and instance.
+2. `.rtsspike command enter` claims the original character and every eligible grouped
+   managed bot in immediate hold. `.rtsspike command state` prints subject generations.
+3. Test one bot first with `.rtsspike command move <name> <x> <y> <z>`. Repeat while it
+   is walking to prove redirect, then `.rtsspike command stop <name>` to hold it.
+4. With up to five eligible bots grouped, `.rtsspike command movefive <x> <y> <z>` sends
+   the same public move request with five fixed four-yard test offsets. Repeat mid-walk.
+5. Test the human character only after the bot tests pass with
+   `.rtsspike command moveoriginal <x> <y> <z>`, redirect it, and stop it with
+   `.rtsspike command stop <human-name>`. Do not press ordinary movement keys while the
+   free-view claim is active. This backend spike does not change the camera or
+   viewpoint. The original action bar may appear disabled while client movement control
+   is off, but the character must visibly follow the commanded walk. Before reporting
+   arrival, `Playerbots.log` must say `owning client synchronized at commanded feet`; a
+   synchronization timeout is a failed move, not an arrival.
+6. `.rtsspike command release <bot-name>` restores that bot's baseline. Releasing the
+   original character is refused while free view remains active.
+7. `.rtsspike command exit` releases every remaining claim and restores ordinary human
+   movement control.
+
+The live run must also cover death/recovery, same-map teleport suspension, incompatible
+map or instance, group removal, leadership loss, logout, and Coordinator disconnect as
+listed in the root Commander Mode checklist. These commands existing is not live proof.
 
 ## Answers (fill in, then delete the module)
 
@@ -218,6 +254,8 @@ Not scripted here — it needs the shared commandable-player movement API that d
   and the stock UI packets did not replace Magey's visible controls. Explicit release
   restored Magey and resumed Opai's Builtin controller. Untested melee, bar-persistence,
   death, and lifecycle cases remain recorded as untested rather than passed.
-- Spike 5 walker at scale: blocked on Phase 1A and retained as that phase's final acceptance test
+- Spike 5 shared movement: one-bot move/stop/release and the original character's basic
+  owning-client-synchronized move pass live. Bot redirect, original redirect/stop/exit,
+  five-bot scale, lifecycle, death, and Coordinator-loss results remain untested.
 
 The living implementation plan and tracker is [COMMANDER_MODE.md](../../COMMANDER_MODE.md).

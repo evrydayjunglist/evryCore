@@ -15,21 +15,28 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-// Throwaway spike harness for the RTS commander-mode plan. Two questions this
-// answers, both about the live client rather than the core: does the retail
-// client still unlock the commentator free camera when the server sets the
-// commentator player flags, and what destination does a ground-targeted cast
-// deliver to the server. Delete this module once the answers are recorded.
+// Throwaway spike harness for the RTS commander-mode plan. It retains the
+// commentator-camera and order-reticle probes and now calls the public
+// commandable-player movement API for Phase 1A live checks. Delete this module
+// once the remaining evidence is recorded.
 
 #include "Chat.h"
 #include "ChatCommand.h"
+#include "Group.h"
+#include "mod-playerbots/src/CommandablePlayerService.h"
+#include "mod-playerbots/src/PlayerbotMgr.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
+#include "ObjectMgr.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
 #include "WorldSession.h"
+#include "WorldPacket.h"
+#include <array>
 #include <atomic>
 
 using namespace Trinity::ChatCommands;
@@ -61,11 +68,24 @@ public:
             { "any",   HandleReticleAnyCommand,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
             { "off",   HandleReticleOffCommand,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
         };
+        static ChatCommandTable commandableTable =
+        {
+            { "enter",        HandleCommandEnter,        rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "state",        HandleCommandState,        rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "move",         HandleCommandMove,         rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "movefive",     HandleCommandMoveFive,     rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "moveoriginal", HandleCommandMoveOriginal, rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "stop",         HandleCommandStop,         rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "release",      HandleCommandRelease,      rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "exit",         HandleCommandExit,         rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+        };
         static ChatCommandTable spikeTable =
         {
-            { "camflags", camFlagsTable },
-            { "reticle",  reticleTable },
-            { "status",   HandleStatusCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "camflags",     camFlagsTable },
+            { "command",      commandableTable },
+            { "reticle",      reticleTable },
+            { "acceptinvite", HandleAcceptInviteCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "status",       HandleStatusCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
         };
         static ChatCommandTable commandTable =
         {
@@ -140,6 +160,216 @@ public:
             flags ? "ON" : "off",
             anyDest ? "every ground cast" : (spellId ? Trinity::StringFormat("spell {}", spellId) : "off"));
         return true;
+    }
+
+    static bool HandleAcceptInviteCommand(ChatHandler* handler, std::string subjectName)
+    {
+        Player* controller = handler->GetPlayer();
+        if (!controller || !normalizePlayerName(subjectName))
+            return false;
+
+        Player* subject = ObjectAccessor::FindPlayerByName(subjectName);
+        if (!subject || !subject->GetSession() || subject->GetSession()->PlayerLogout())
+        {
+            handler->PSendSysMessage("rts-spike: invite acceptance refused: %s is not online.", subjectName.c_str());
+            return true;
+        }
+        if (!sPlayerbotMgr->IsBotAccount(subject->GetSession()->GetAccountId()))
+        {
+            handler->PSendSysMessage("rts-spike: invite acceptance refused: %s is not a managed playerbot.", subject->GetName());
+            return true;
+        }
+        if (!controller->IsInWorld() || !subject->IsInWorld() || controller->GetMap() != subject->GetMap())
+        {
+            handler->SendSysMessage("rts-spike: invite acceptance refused: controller and bot must be on the same map instance.");
+            return true;
+        }
+        if (subject->GetGroup())
+        {
+            handler->PSendSysMessage("rts-spike: invite acceptance refused: %s is already grouped.", subject->GetName());
+            return true;
+        }
+
+        Group* invite = subject->GetGroupInvite();
+        if (!invite)
+        {
+            handler->PSendSysMessage("rts-spike: invite acceptance refused: invite %s normally first.", subject->GetName());
+            return true;
+        }
+        if (invite->GetLeaderGUID() != controller->GetGUID())
+        {
+            handler->PSendSysMessage("rts-spike: invite acceptance refused: %s has an invite from another leader.", subject->GetName());
+            return true;
+        }
+
+        // This is the stock client response with no PartyIndex, Accept set,
+        // and no requested role. The bot acts only by queueing that packet.
+        WorldPacket response(CMSG_PARTY_INVITE_RESPONSE);
+        response.WriteBit(false);
+        response.WriteBit(true);
+        response.WriteBit(false);
+        response.FlushBits();
+        subject->GetSession()->QueuePacket(std::move(response));
+
+        handler->PSendSysMessage("rts-spike: %s queued the normal party-invite acceptance packet.", subject->GetName());
+        TC_LOG_INFO("server.worldserver", "mod-rts-spike: {} queued CMSG_PARTY_INVITE_RESPONSE for invite from {}", subject->GetName(), controller->GetName());
+        return true;
+    }
+
+    static Optional<CommandablePlayerSnapshot> FindSubject(Player* commander, ObjectGuid subject)
+    {
+        for (CommandablePlayerSnapshot const& snapshot : sCommandablePlayerService->GetRtsSubjects(commander->GetGUID()))
+            if (snapshot.Subject == subject)
+                return snapshot;
+        return {};
+    }
+
+    static bool SubmitMove(ChatHandler* handler, Player* commander, CommandablePlayerSnapshot const& snapshot,
+        float x, float y, float z)
+    {
+        CommandablePlayerRequest request;
+        request.Controller = { CommandableControllerKind::Rts, commander->GetGUID() };
+        request.Subject = snapshot.Subject;
+        request.Generation = snapshot.Generation;
+        request.Operation = CommandablePlayerOperation::Move;
+        request.Destination.Relocate(x, y, z);
+        CommandablePlayerResult result = sCommandablePlayerService->Submit(request);
+        handler->PSendSysMessage("rts-spike: move subject %s generation " UI64FMTD ": %s.",
+            snapshot.Subject.ToString(), snapshot.Generation, CommandablePlayerResultCodeName(result.Code));
+        return bool(result);
+    }
+
+    static bool SubmitSimple(ChatHandler* handler, Player* commander, PlayerIdentifier const& subject,
+        CommandablePlayerOperation operation)
+    {
+        Optional<CommandablePlayerSnapshot> snapshot = FindSubject(commander, subject.GetGUID());
+        if (!snapshot)
+        {
+            handler->PSendSysMessage("rts-spike: %s is not claimed by this RTS session.", subject.GetName());
+            return false;
+        }
+
+        CommandablePlayerRequest request;
+        request.Controller = { CommandableControllerKind::Rts, commander->GetGUID() };
+        request.Subject = snapshot->Subject;
+        request.Generation = snapshot->Generation;
+        request.Operation = operation;
+        CommandablePlayerResult result = sCommandablePlayerService->Submit(request);
+        handler->PSendSysMessage("rts-spike: %s subject %s generation " UI64FMTD ": %s.",
+            operation == CommandablePlayerOperation::Hold ? "stop" : "release", subject.GetName(),
+            snapshot->Generation, CommandablePlayerResultCodeName(result.Code));
+        return bool(result);
+    }
+
+    static bool HandleCommandEnter(ChatHandler* handler)
+    {
+        Player* commander = handler->GetPlayer();
+        if (!commander)
+            return false;
+
+        CommandableRtsEnterResult result = sCommandablePlayerService->EnterRts(commander);
+        handler->PSendSysMessage("rts-spike: enter RTS: %s; %u subject(s) claimed in immediate hold.",
+            CommandablePlayerResultCodeName(result.Code), uint32(result.Subjects.size()));
+        for (CommandablePlayerSnapshot const& subject : result.Subjects)
+        {
+            Player* player = ObjectAccessor::FindConnectedPlayer(subject.Subject);
+            handler->PSendSysMessage("  %s%s generation " UI64FMTD " %s",
+                player ? player->GetName() : subject.Subject.ToString(), subject.OriginalCharacter ? " (original)" : "",
+                subject.Generation, CommandablePlayerDirectiveName(subject.Directive));
+        }
+        return bool(result);
+    }
+
+    static bool HandleCommandState(ChatHandler* handler)
+    {
+        Player* commander = handler->GetPlayer();
+        if (!commander)
+            return false;
+
+        std::vector<CommandablePlayerSnapshot> subjects = sCommandablePlayerService->GetRtsSubjects(commander->GetGUID());
+        handler->PSendSysMessage("rts-spike: %u claimed subject(s).", uint32(subjects.size()));
+        for (CommandablePlayerSnapshot const& subject : subjects)
+        {
+            Player* player = ObjectAccessor::FindConnectedPlayer(subject.Subject);
+            handler->PSendSysMessage("  %s%s generation " UI64FMTD " %s",
+                player ? player->GetName() : subject.Subject.ToString(), subject.OriginalCharacter ? " (original)" : "",
+                subject.Generation, CommandablePlayerDirectiveName(subject.Directive));
+        }
+        return true;
+    }
+
+    static bool HandleCommandMove(ChatHandler* handler, PlayerIdentifier subject, float x, float y, float z)
+    {
+        Player* commander = handler->GetPlayer();
+        if (!commander)
+            return false;
+        Optional<CommandablePlayerSnapshot> snapshot = FindSubject(commander, subject.GetGUID());
+        if (!snapshot)
+        {
+            handler->PSendSysMessage("rts-spike: %s is not claimed by this RTS session.", subject.GetName());
+            return false;
+        }
+        return SubmitMove(handler, commander, *snapshot, x, y, z);
+    }
+
+    static bool HandleCommandMoveOriginal(ChatHandler* handler, float x, float y, float z)
+    {
+        Player* commander = handler->GetPlayer();
+        if (!commander)
+            return false;
+        Optional<CommandablePlayerSnapshot> snapshot = FindSubject(commander, commander->GetGUID());
+        if (!snapshot)
+        {
+            handler->PSendSysMessage("rts-spike: the original character is not claimed.");
+            return false;
+        }
+        return SubmitMove(handler, commander, *snapshot, x, y, z);
+    }
+
+    static bool HandleCommandMoveFive(ChatHandler* handler, float x, float y, float z)
+    {
+        Player* commander = handler->GetPlayer();
+        if (!commander)
+            return false;
+
+        static constexpr std::array<std::array<float, 2>, 5> offsets = {{
+            {{ -4.0f, -4.0f }}, {{ 4.0f, -4.0f }}, {{ 0.0f, 0.0f }},
+            {{ -4.0f, 4.0f }}, {{ 4.0f, 4.0f }}
+        }};
+        uint32 ordered = 0;
+        bool allAccepted = true;
+        for (CommandablePlayerSnapshot const& subject : sCommandablePlayerService->GetRtsSubjects(commander->GetGUID()))
+        {
+            if (subject.OriginalCharacter || ordered >= offsets.size())
+                continue;
+            allAccepted = SubmitMove(handler, commander, subject,
+                x + offsets[ordered][0], y + offsets[ordered][1], z) && allAccepted;
+            ++ordered;
+        }
+        handler->PSendSysMessage("rts-spike: issued %u bot move(s) with fixed test offsets.", ordered);
+        return ordered != 0 && allAccepted;
+    }
+
+    static bool HandleCommandStop(ChatHandler* handler, PlayerIdentifier subject)
+    {
+        Player* commander = handler->GetPlayer();
+        return commander && SubmitSimple(handler, commander, subject, CommandablePlayerOperation::Hold);
+    }
+
+    static bool HandleCommandRelease(ChatHandler* handler, PlayerIdentifier subject)
+    {
+        Player* commander = handler->GetPlayer();
+        return commander && SubmitSimple(handler, commander, subject, CommandablePlayerOperation::Release);
+    }
+
+    static bool HandleCommandExit(ChatHandler* handler)
+    {
+        Player* commander = handler->GetPlayer();
+        if (!commander)
+            return false;
+        CommandablePlayerResult result = sCommandablePlayerService->ExitRts(commander->GetGUID());
+        handler->PSendSysMessage("rts-spike: exit RTS: %s.", CommandablePlayerResultCodeName(result.Code));
+        return bool(result);
     }
 };
 

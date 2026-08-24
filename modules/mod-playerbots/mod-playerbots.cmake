@@ -41,6 +41,7 @@ file(GLOB PLAYERBOTS_DOTNET_SOURCES CONFIGURE_DEPENDS
   "${PLAYERBOTS_DOTNET_ROOT}/src/Playerbots.Protocol/*.cs")
 list(APPEND PLAYERBOTS_DOTNET_SOURCES
   "${PLAYERBOTS_HOST_PROJECT}"
+  "${PLAYERBOTS_DOTNET_ROOT}/src/Playerbots.Host/Assets/playerbots.ico"
   "${PLAYERBOTS_DOTNET_ROOT}/src/Playerbots.Protocol/Playerbots.Protocol.csproj"
   "${PLAYERBOTS_DOTNET_ROOT}/Directory.Build.props")
 

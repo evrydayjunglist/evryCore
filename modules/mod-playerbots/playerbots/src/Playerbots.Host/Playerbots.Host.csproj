@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>playerbots</AssemblyName>
     <RootNamespace>Evry.Playerbots</RootNamespace>
+    <ApplicationIcon>Assets/playerbots.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

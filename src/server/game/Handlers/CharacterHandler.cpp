@@ -29,6 +29,7 @@
 #include "CharacterCache.h"
 #include "CharacterPackets.h"
 #include "Chat.h"
+#include "CollectionMgr.h"
 #include "Common.h"
 #include "DB2Stores.h"
 #include "DatabaseEnv.h"
@@ -63,9 +64,11 @@
 #include "SystemPackets.h"
 #include "TransmogMgr.h"
 #include "Util.h"
+#include "WarbandGroupMgr.h"
 #include "World.h"
 #include <boost/circular_buffer.hpp>
 #include <sstream>
+#include <unordered_set>
 
 class LoginQueryHolder : public CharacterDatabaseQueryHolder
 {
@@ -506,6 +509,24 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
         });
     }
 
+    std::vector<ObjectGuid> accountCharacterGuids;
+    accountCharacterGuids.reserve(charEnum.Characters.size());
+    std::unordered_set<ObjectGuid> validCharacterGuids;
+    validCharacterGuids.reserve(charEnum.Characters.size());
+    for (WorldPackets::Character::EnumCharactersResult::CharacterInfo const& charInfo : charEnum.Characters)
+    {
+        accountCharacterGuids.push_back(charInfo.Basic.Guid);
+        validCharacterGuids.insert(charInfo.Basic.Guid);
+    }
+
+    if (!charEnum.IsDeletedCharacters)
+    {
+        _warbandGroupMgr->PruneInvalidMembers(validCharacterGuids);
+        _warbandGroupMgr->EnsureDefaultGroup(accountCharacterGuids);
+    }
+
+    charEnum.WarbandGroups = _warbandGroupMgr->BuildEnumGroups();
+
     SendPacket(charEnum.Write());
 
     if (!charEnum.IsDeletedCharacters)
@@ -530,6 +551,27 @@ void WorldSession::HandleCharEnumOpcode(WorldPackets::Character::EnumCharacters&
     {
         HandleCharEnum(static_cast<EnumCharactersQueryHolder const&>(result));
     });
+}
+
+void WorldSession::HandleSetupWarbandGroups(WorldPackets::Character::SetupWarbandGroups& setupWarbandGroups)
+{
+    std::unordered_set<ObjectGuid> validCharacterGuids;
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ENUM_GUIDS);
+    stmt->setUInt32(0, GetAccountId());
+    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+    {
+        do
+        {
+            validCharacterGuids.insert(ObjectGuid::Create<HighGuid::Player>(result->Fetch()[0].GetUInt64()));
+        } while (result->NextRow());
+    }
+
+    ReplaceGroupsResult result = GetWarbandGroupMgr()->ReplaceGroups(setupWarbandGroups.Groups, *GetCollectionMgr(), validCharacterGuids);
+    if (result != ReplaceGroupsResult::Ok)
+    {
+        TC_LOG_WARN("network", "HandleSetupWarbandGroups: account {} rejected warband group setup ({})",
+            GetBattlenetAccountId(), GetReplaceGroupsResultName(result));
+    }
 }
 
 void WorldSession::HandleCharUndeleteEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/)
@@ -1105,6 +1147,8 @@ void WorldSession::HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& c
 
     sCalendarMgr->RemoveAllPlayerEventsAndInvites(charDelete.Guid);
     Player::DeleteFromDB(charDelete.Guid, accountId);
+
+    _warbandGroupMgr->RemoveMember(charDelete.Guid);
 
     SendCharDelete(CHAR_DELETE_SUCCESS);
 }

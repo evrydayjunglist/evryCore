@@ -32,8 +32,10 @@ uint32 GetMigrationCurrencyMaxCap(CurrencyTypesEntry const* currency, Player con
         return 0;
 
     uint32 maxQuantity = currency->MaxQty;
+    // Login merge runs before SetMap. GetMap() asserts when there is no map; FindMap() returns null instead.
+    // WorldStateMgr::GetValue already accepts a null map (realm value, or 0).
     if (currency->MaxQtyWorldStateID && capPlayer)
-        maxQuantity = WorldStateMgr::GetValue(currency->MaxQtyWorldStateID, capPlayer->GetMap());
+        maxQuantity = WorldStateMgr::GetValue(currency->MaxQtyWorldStateID, capPlayer->FindMap());
 
     if (currency->GetFlags().HasFlag(CurrencyTypesFlags::DynamicMaximum))
         maxQuantity += increasedCapQuantity;

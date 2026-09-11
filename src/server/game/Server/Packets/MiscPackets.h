@@ -30,6 +30,8 @@
 #include "WowTime.h"
 #include <array>
 #include <map>
+#include <string>
+#include <vector>
 
 enum class CountdownTimerType : int32;
 enum class DisplayToastType : uint8;
@@ -132,6 +134,98 @@ namespace WorldPackets
 
             uint32 CurrencyID = 0;
             CurrencyDbFlags Flags = { };
+        };
+
+        class RequestCurrencyDataForAccountCharacters final : public ClientPacket
+        {
+        public:
+            explicit RequestCurrencyDataForAccountCharacters(WorldPacket&& packet) : ClientPacket(CMSG_REQUEST_CURRENCY_DATA_FOR_ACCOUNT_CHARACTERS, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
+        struct AccountCharacterCurrencyListCurrency
+        {
+            uint32 CurrencyID = 0;
+            uint32 Quantity = 0;
+        };
+
+        struct AccountCharacterCurrencyListCharacter
+        {
+            ObjectGuid CharacterGuid;
+            // Local 12.0.7 used characters.slot here, not a virtual realm address. Unverified on 12.1.
+            uint32 MiddleIndex = 0;
+            std::vector<AccountCharacterCurrencyListCurrency> Currencies;
+        };
+
+        class AccountCharacterCurrencyLists final : public ServerPacket
+        {
+        public:
+            explicit AccountCharacterCurrencyLists() : ServerPacket(SMSG_ACCOUNT_CHARACTER_CURRENCY_LISTS, 4) { }
+
+            WorldPacket const* Write() override;
+
+            std::vector<AccountCharacterCurrencyListCharacter> Characters;
+        };
+
+        class TransferCurrencyFromAccountCharacter final : public ClientPacket
+        {
+        public:
+            explicit TransferCurrencyFromAccountCharacter(WorldPacket&& packet) : ClientPacket(CMSG_TRANSFER_CURRENCY_FROM_ACCOUNT_CHARACTER, std::move(packet)) { }
+
+            void Read() override;
+
+            ObjectGuid SourceCharacterGuid;
+            uint32 CurrencyID = 0;
+            uint32 Quantity = 0;
+        };
+
+        class CurrencyTransferResult final : public ServerPacket
+        {
+        public:
+            explicit CurrencyTransferResult() : ServerPacket(SMSG_CURRENCY_TRANSFER_RESULT, 37) { }
+
+            WorldPacket const* Write() override;
+
+            uint32 Result = 0;
+            ObjectGuid SourceCharacterGuid;
+            uint32 CurrencyID = 0;
+            uint32 Quantity = 0;
+            uint32 TotalQuantityConsumed = 0;
+            uint32 SourceRemainingQuantity = 0;
+            uint64 Timestamp = 0;
+        };
+
+        class GetCharacterCurrencyTransferLog final : public ClientPacket
+        {
+        public:
+            explicit GetCharacterCurrencyTransferLog(WorldPacket&& packet) : ClientPacket(CMSG_GET_CHARACTER_CURRENCY_TRANSFER_LOG, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
+        struct CurrencyTransferLogEntry
+        {
+            ObjectGuid SourceCharacterGuid;
+            std::string SourceCharacterName;
+            std::string FullSourceCharacterName;
+            ObjectGuid DestinationCharacterGuid;
+            std::string DestinationCharacterName;
+            std::string FullDestinationCharacterName;
+            uint32 CurrencyID = 0;
+            uint32 QuantityTransferred = 0;
+            uint32 TotalQuantityConsumed = 0;
+            uint64 Timestamp = 0;
+        };
+
+        class CurrencyTransferLog final : public ServerPacket
+        {
+        public:
+            explicit CurrencyTransferLog() : ServerPacket(SMSG_CURRENCY_TRANSFER_LOG, 4) { }
+
+            WorldPacket const* Write() override;
+
+            std::vector<CurrencyTransferLogEntry> Entries;
         };
 
         class SetSelection final : public ClientPacket

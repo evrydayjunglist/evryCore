@@ -1612,6 +1612,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool HasCurrency(uint32 id, uint32 amount) const;
         void SetCurrencyFlagsFromClient(uint32 id, CurrencyDbFlags flags);
 
+        static bool IsCurrencyAccountWide(CurrencyTypesEntry const* currency);
+        static bool IsCurrencyAccountTransferable(CurrencyTypesEntry const* currency);
+        static uint32 GetCurrencyTransferTotalCost(CurrencyTypesEntry const* currency, uint32 quantityToReceive);
+        uint32 ValidateCurrencyTransferReceive(CurrencyTypesEntry const* currency, uint32 quantity) const;
+
         void SetInvSlot(uint32 slot, ObjectGuid guid) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::InvSlots, slot), guid); }
 
         void ApplyEquipCooldown(Item* pItem);
@@ -3180,6 +3185,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult entriesResult);
         void _LoadPetStable(uint32 summonedPetNumber, PreparedQueryResult result);
         void _LoadCurrency(PreparedQueryResult result);
+        void ConsolidateLegacyAccountWideCurrency();
+        void OverlayAccountWideCurrencies();
         void _LoadCUFProfiles(PreparedQueryResult result);
         void _LoadPlayerData(PreparedQueryResult elementsResult, PreparedQueryResult flagsResult);
         void _LoadCharacterBankTabSettings(PreparedQueryResult result);

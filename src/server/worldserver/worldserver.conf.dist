@@ -1449,6 +1449,15 @@ CacheDataQueries = 1
 FeatureSystem.CharacterUndelete.Enabled = 0
 
 #
+#   FeatureSystem.AccountCurrencyTransfer.Enabled
+#        Description: Enables the warband currency transfer UI, handlers, and transfer log.
+#                     Account-wide currencies still persist on the Battle.net account when this is off.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+FeatureSystem.AccountCurrencyTransfer.Enabled = 1
+
+#
 #   FeatureSystem.CharacterUndelete.Cooldown
 #        Description: Time between available character restorations. (in sec)
 #        Default:     2592000 (30 days)

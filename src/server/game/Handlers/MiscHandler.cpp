@@ -21,6 +21,7 @@
 #include "AchievementPackets.h"
 #include "AreaTriggerPackets.h"
 #include "Battleground.h"
+#include "CharacterCache.h"
 #include "CharacterPackets.h"
 #include "Chat.h"
 #include "CinematicMgr.h"
@@ -47,6 +48,7 @@
 #include "ObjectMgr.h"
 #include "OutdoorPvP.h"
 #include "Player.h"
+#include "RealmList.h"
 #include "RestMgr.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
@@ -1238,4 +1240,337 @@ void WorldSession::HandleQueryCountdownTimer(WorldPackets::Misc::QueryCountdownT
 void WorldSession::HandleSetCurrencyFlags(WorldPackets::Misc::SetCurrencyFlags const& setCurrenctFlags)
 {
     _player->SetCurrencyFlagsFromClient(setCurrenctFlags.CurrencyID, setCurrenctFlags.Flags);
+}
+
+namespace
+{
+    constexpr uint32 MaxAccountCurrencyTransferLogEntries = 50;
+
+    bool IsAccountCurrencyTransferEnabled()
+    {
+        return sWorld->getBoolConfig(CONFIG_FEATURE_SYSTEM_ACCOUNT_CURRENCY_TRANSFER_ENABLED);
+    }
+
+    std::string GetRealmNormalizedName()
+    {
+        if (std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm())
+            return realm->NormalizedName;
+
+        return {};
+    }
+
+    std::string BuildFullCharacterName(std::string const& characterName)
+    {
+        std::string const realmName = GetRealmNormalizedName();
+        if (realmName.empty())
+            return characterName;
+
+        return characterName + '-' + realmName;
+    }
+
+    bool TryResolveCharacterName(ObjectGuid guid, std::string& characterName)
+    {
+        if (Player* connectedPlayer = ObjectAccessor::FindConnectedPlayer(guid))
+        {
+            characterName = connectedPlayer->GetName();
+            return true;
+        }
+
+        return sCharacterCache->GetCharacterNameByGuid(guid, characterName);
+    }
+
+    void SendCurrencyTransferResultPacket(WorldSession* session, uint32 result, ObjectGuid sourceCharacterGuid, uint32 currencyId, uint32 quantity, uint32 totalQuantityConsumed, uint32 sourceRemainingQuantity = 0, uint64 timestamp = 0)
+    {
+        WorldPackets::Misc::CurrencyTransferResult packet;
+        packet.Result = result;
+        packet.SourceCharacterGuid = sourceCharacterGuid;
+        packet.CurrencyID = currencyId;
+        packet.Quantity = quantity;
+        packet.TotalQuantityConsumed = totalQuantityConsumed;
+        packet.SourceRemainingQuantity = sourceRemainingQuantity;
+        packet.Timestamp = timestamp ? timestamp : uint64(GameTime::GetGameTime());
+        session->SendPacket(packet.Write());
+    }
+
+    bool IsSourceCharacterOnline(ObjectGuid guid, WorldSession* session)
+    {
+        // FindConnectedPlayer covers in-world and transferring characters.
+        if (ObjectAccessor::FindConnectedPlayer(guid))
+            return true;
+
+        if (session->PlayerLoading() && session->GetPlayerLoadingGuid() == guid)
+            return true;
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_ONLINE_BY_GUID);
+        stmt->setUInt64(0, guid.GetCounter());
+        stmt->setUInt32(1, session->GetAccountId());
+
+        if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+            return result->Fetch()[0].GetUInt8() != 0;
+
+        return false;
+    }
+
+    bool DeductOfflineCharacterCurrency(ObjectGuid sourceGuid, uint32 currencyId, uint32 amount, uint32* outRemainingQuantity = nullptr)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_CURRENCY_QUANTITY);
+        stmt->setUInt64(0, sourceGuid.GetCounter());
+        stmt->setUInt16(1, currencyId);
+
+        PreparedQueryResult result = CharacterDatabase.Query(stmt);
+        if (!result)
+            return false;
+
+        uint32 const currentQuantity = result->Fetch()[0].GetUInt32();
+        if (currentQuantity < amount)
+            return false;
+
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_CURRENCY_QUANTITY_DEBIT);
+        stmt->setUInt32(0, amount);
+        stmt->setUInt64(1, sourceGuid.GetCounter());
+        stmt->setUInt16(2, currencyId);
+        stmt->setUInt32(3, amount);
+        CharacterDatabase.DirectExecute(stmt);
+
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_CURRENCY_QUANTITY);
+        stmt->setUInt64(0, sourceGuid.GetCounter());
+        stmt->setUInt16(1, currencyId);
+        result = CharacterDatabase.Query(stmt);
+        if (!result)
+            return false;
+
+        uint32 const newQuantity = result->Fetch()[0].GetUInt32();
+        uint32 const expectedQuantity = currentQuantity - amount;
+        if (newQuantity > expectedQuantity)
+            return false;
+
+        if (outRemainingQuantity)
+            *outRemainingQuantity = newQuantity;
+
+        if (newQuantity == 0)
+        {
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_CURRENCY_BY_GUID);
+            stmt->setUInt64(0, sourceGuid.GetCounter());
+            stmt->setUInt16(1, currencyId);
+            CharacterDatabase.DirectExecute(stmt);
+        }
+
+        return true;
+    }
+
+    void InsertAccountCurrencyTransferLog(uint32 accountId, ObjectGuid sourceCharacterGuid, ObjectGuid destinationCharacterGuid,
+        std::string const& sourceCharacterName, std::string const& fullSourceCharacterName,
+        std::string const& destinationCharacterName, std::string const& fullDestinationCharacterName,
+        uint32 currencyId, uint32 quantityTransferred, uint32 totalQuantityConsumed, uint64 timestamp)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ACCOUNT_CURRENCY_TRANSFER_LOG);
+        stmt->setUInt32(0, accountId);
+        stmt->setUInt64(1, sourceCharacterGuid.GetCounter());
+        stmt->setUInt64(2, destinationCharacterGuid.GetCounter());
+        stmt->setString(3, sourceCharacterName);
+        stmt->setString(4, fullSourceCharacterName);
+        stmt->setString(5, destinationCharacterName);
+        stmt->setString(6, fullDestinationCharacterName);
+        stmt->setUInt16(7, currencyId);
+        stmt->setUInt32(8, quantityTransferred);
+        stmt->setUInt32(9, totalQuantityConsumed);
+        stmt->setUInt64(10, timestamp);
+        CharacterDatabase.Execute(stmt);
+    }
+
+    void SendAccountCurrencyTransferLog(WorldSession* session)
+    {
+        WorldPackets::Misc::CurrencyTransferLog response;
+
+        if (IsAccountCurrencyTransferEnabled() && session->GetBattlenetAccountId())
+        {
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_CURRENCY_TRANSFER_LOG);
+            stmt->setUInt32(0, session->GetAccountId());
+            stmt->setUInt32(1, MaxAccountCurrencyTransferLogEntries);
+
+            if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+            {
+                do
+                {
+                    Field* fields = result->Fetch();
+                    WorldPackets::Misc::CurrencyTransferLogEntry& entry = response.Entries.emplace_back();
+                    entry.SourceCharacterGuid = ObjectGuid::Create<HighGuid::Player>(fields[0].GetUInt64());
+                    entry.DestinationCharacterGuid = ObjectGuid::Create<HighGuid::Player>(fields[1].GetUInt64());
+                    entry.SourceCharacterName = fields[2].GetString();
+                    entry.FullSourceCharacterName = fields[3].GetString();
+                    entry.DestinationCharacterName = fields[4].GetString();
+                    entry.FullDestinationCharacterName = fields[5].GetString();
+                    entry.CurrencyID = fields[6].GetUInt16();
+                    entry.QuantityTransferred = fields[7].GetUInt32();
+                    entry.TotalQuantityConsumed = fields[8].GetUInt32();
+                    entry.Timestamp = fields[9].GetUInt64();
+                }
+                while (result->NextRow());
+            }
+        }
+
+        session->SendPacket(response.Write());
+    }
+
+    struct CurrencyTransferInProgress
+    {
+        ObjectGuid Source;
+        explicit CurrencyTransferInProgress(ObjectGuid guid) : Source(guid) { }
+        ~CurrencyTransferInProgress() { sWorld->EndCurrencyTransfer(Source); }
+    };
+}
+
+void WorldSession::HandleRequestCurrencyDataForAccountCharacters(WorldPackets::Misc::RequestCurrencyDataForAccountCharacters& /*packet*/)
+{
+    Player* player = GetPlayer();
+    if (!player)
+        return;
+
+    WorldPackets::Misc::AccountCharacterCurrencyLists response;
+
+    if (!IsAccountCurrencyTransferEnabled() || !GetBattlenetAccountId())
+    {
+        SendPacket(response.Write());
+        return;
+    }
+
+    ObjectGuid const playerGuid = player->GetGUID();
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_CHARACTER_CURRENCY_FOR_TRANSFER);
+    stmt->setUInt32(0, GetAccountId());
+
+    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            ObjectGuid characterGuid = ObjectGuid::Create<HighGuid::Player>(fields[0].GetUInt64());
+            if (characterGuid == playerGuid)
+                continue;
+
+            if (!IsLegitCharacterForAccount(characterGuid))
+                continue;
+
+            uint32 const currencyId = fields[1].GetUInt16();
+            CurrencyTypesEntry const* currency = sCurrencyTypesStore.LookupEntry(currencyId);
+            if (!Player::IsCurrencyAccountTransferable(currency) || Player::IsCurrencyAccountWide(currency))
+                continue;
+
+            WorldPackets::Misc::AccountCharacterCurrencyListCharacter* character = nullptr;
+            for (WorldPackets::Misc::AccountCharacterCurrencyListCharacter& existing : response.Characters)
+            {
+                if (existing.CharacterGuid == characterGuid)
+                {
+                    character = &existing;
+                    break;
+                }
+            }
+
+            if (!character)
+            {
+                character = &response.Characters.emplace_back();
+                character->CharacterGuid = characterGuid;
+                character->MiddleIndex = fields[3].GetUInt8();
+            }
+
+            WorldPackets::Misc::AccountCharacterCurrencyListCurrency& currencyEntry = character->Currencies.emplace_back();
+            currencyEntry.CurrencyID = currencyId;
+            currencyEntry.Quantity = fields[2].GetUInt32();
+        }
+        while (result->NextRow());
+    }
+
+    SendPacket(response.Write());
+}
+
+void WorldSession::HandleTransferCurrencyFromAccountCharacter(WorldPackets::Misc::TransferCurrencyFromAccountCharacter& packet)
+{
+    Player* player = GetPlayer();
+    if (!player)
+        return;
+
+    if (!IsAccountCurrencyTransferEnabled())
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_DISABLED), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    if (!GetBattlenetAccountId())
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_SERVER_ERROR), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    CurrencyTypesEntry const* currency = sCurrencyTypesStore.LookupEntry(packet.CurrencyID);
+    if (!Player::IsCurrencyAccountTransferable(currency))
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_INVALID_CURRENCY), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    if (packet.SourceCharacterGuid == player->GetGUID())
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_INVALID_CHARACTER), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    if (!IsLegitCharacterForAccount(packet.SourceCharacterGuid))
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_INVALID_CHARACTER), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    if (IsSourceCharacterOnline(packet.SourceCharacterGuid, this))
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_CHARACTER_LOGGED_IN), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    if (uint32 const receiveError = player->ValidateCurrencyTransferReceive(currency, packet.Quantity))
+    {
+        SendCurrencyTransferResultPacket(this, receiveError, packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    uint32 const totalQuantityConsumed = Player::GetCurrencyTransferTotalCost(currency, packet.Quantity);
+    if (!totalQuantityConsumed)
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_INVALID_CURRENCY), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
+    if (!sWorld->BeginCurrencyTransfer(packet.SourceCharacterGuid))
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_TRANSACTION_IN_PROGRESS), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, totalQuantityConsumed);
+        return;
+    }
+
+    CurrencyTransferInProgress inProgress(packet.SourceCharacterGuid);
+
+    uint32 sourceRemainingQuantity = 0;
+    if (!DeductOfflineCharacterCurrency(packet.SourceCharacterGuid, packet.CurrencyID, totalQuantityConsumed, &sourceRemainingQuantity))
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_INSUFFICIENT_CURRENCY), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, totalQuantityConsumed);
+        return;
+    }
+
+    player->ModifyCurrency(packet.CurrencyID, int32(packet.Quantity), CurrencyGainSource::AccountCopy);
+
+    uint64 const transferTimestamp = uint64(GameTime::GetGameTime());
+    std::string sourceCharacterName;
+    std::string destinationCharacterName = player->GetName();
+    if (TryResolveCharacterName(packet.SourceCharacterGuid, sourceCharacterName))
+    {
+        InsertAccountCurrencyTransferLog(GetAccountId(), packet.SourceCharacterGuid, player->GetGUID(),
+            sourceCharacterName, BuildFullCharacterName(sourceCharacterName),
+            destinationCharacterName, BuildFullCharacterName(destinationCharacterName),
+            packet.CurrencyID, packet.Quantity, totalQuantityConsumed, transferTimestamp);
+    }
+
+    SendCurrencyTransferResultPacket(this, 0, packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, totalQuantityConsumed, sourceRemainingQuantity, transferTimestamp);
+}
+
+void WorldSession::HandleGetCharacterCurrencyTransferLog(WorldPackets::Misc::GetCharacterCurrencyTransferLog& /*packet*/)
+{
+    SendAccountCurrencyTransferLog(this);
 }

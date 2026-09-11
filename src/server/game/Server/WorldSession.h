@@ -39,6 +39,7 @@
 #include <unordered_map>
 
 class BlackMarketEntry;
+class AccountCurrencyMgr;
 class CollectionMgr;
 class WarbandGroupMgr;
 class Creature;
@@ -546,6 +547,9 @@ namespace WorldPackets
         class RequestLatestSplashScreen;
         class QueryCountdownTimer;
         class SetCurrencyFlags;
+        class RequestCurrencyDataForAccountCharacters;
+        class TransferCurrencyFromAccountCharacter;
+        class GetCharacterCurrencyTransferLog;
     }
 
     namespace Movement
@@ -992,6 +996,7 @@ class TC_GAME_API WorldSession
         ~WorldSession();
 
         bool PlayerLoading() const { return !m_playerLoading.IsEmpty(); }
+        ObjectGuid GetPlayerLoadingGuid() const { return m_playerLoading; }
         bool PlayerLogout() const { return m_playerLogout; }
         bool PlayerLogoutWithSave() const { return m_playerLogout && m_playerSave; }
         bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
@@ -1243,6 +1248,7 @@ class TC_GAME_API WorldSession
 
         CollectionMgr* GetCollectionMgr() const { return _collectionMgr.get(); }
         WarbandGroupMgr* GetWarbandGroupMgr() const { return _warbandGroupMgr.get(); }
+        AccountCurrencyMgr* GetAccountCurrencyMgr() const { return _accountCurrencyMgr.get(); }
 
     public:                                                 // opcodes handlers
 
@@ -1849,6 +1855,9 @@ class TC_GAME_API WorldSession
         void HandleKeyboundOverride(WorldPackets::Spells::KeyboundOverride& keyboundOverride);
         void HandleQueryCountdownTimer(WorldPackets::Misc::QueryCountdownTimer& queryCountdownTimer);
         void HandleSetCurrencyFlags(WorldPackets::Misc::SetCurrencyFlags const& setCurrenctFlags);
+        void HandleRequestCurrencyDataForAccountCharacters(WorldPackets::Misc::RequestCurrencyDataForAccountCharacters& packet);
+        void HandleTransferCurrencyFromAccountCharacter(WorldPackets::Misc::TransferCurrencyFromAccountCharacter& packet);
+        void HandleGetCharacterCurrencyTransferLog(WorldPackets::Misc::GetCharacterCurrencyTransferLog& packet);
 
         // Adventure Journal
         void HandleAdventureJournalOpenQuest(WorldPackets::AdventureJournal::AdventureJournalOpenQuest& openQuest);
@@ -2072,6 +2081,7 @@ class TC_GAME_API WorldSession
 
         std::unique_ptr<CollectionMgr> _collectionMgr;
         std::unique_ptr<WarbandGroupMgr> _warbandGroupMgr;
+        std::unique_ptr<AccountCurrencyMgr> _accountCurrencyMgr;
 
         ConnectToKey _instanceConnectKey;
 

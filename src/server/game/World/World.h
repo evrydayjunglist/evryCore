@@ -35,7 +35,9 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -175,6 +177,7 @@ enum WorldBoolConfigs : uint32
     CONFIG_CALCULATE_CREATURE_ZONE_AREA_DATA,
     CONFIG_CALCULATE_GAMEOBJECT_ZONE_AREA_DATA,
     CONFIG_FEATURE_SYSTEM_CHARACTER_UNDELETE_ENABLED,
+    CONFIG_FEATURE_SYSTEM_ACCOUNT_CURRENCY_TRANSFER_ENABLED,
     CONFIG_RESET_DUEL_COOLDOWNS,
     CONFIG_RESET_DUEL_HEALTH_MANA,
     CONFIG_BASEMAP_LOAD_GRIDS,
@@ -767,6 +770,11 @@ class TC_GAME_API World
 
         bool IsBattlePetJournalLockAcquired(ObjectGuid battlenetAccountGuid);
 
+        // One in-flight transfer per source character. Two overlapping transfers from the same
+        // source must not both read the same balance. Release on every exit path.
+        bool BeginCurrencyTransfer(ObjectGuid sourceCharacterGuid);
+        void EndCurrencyTransfer(ObjectGuid sourceCharacterGuid);
+
         uint32 GetCleaningFlags() const { return m_CleaningFlags; }
         void SetCleaningFlags(uint32 flags) { m_CleaningFlags = flags; }
         void ResetEventSeasonalQuests(uint16 event_id, time_t eventStartTime);
@@ -834,6 +842,8 @@ class TC_GAME_API World
 
         SessionMap m_sessions;
         std::unordered_multimap<ObjectGuid, WorldSession*> m_sessionsByBnetGuid;
+        std::unordered_set<ObjectGuid> m_currencyTransfersInProgress;
+        std::mutex m_currencyTransferMutex;
         typedef std::unordered_map<uint32, time_t> DisconnectMap;
         DisconnectMap m_disconnects;
         uint32 m_maxActiveSessionCount;

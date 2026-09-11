@@ -5241,6 +5241,19 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx &= ~SPELL_ATTR1_IS_CHANNELLED;
     });
 
+    // Spirit Heal (22012) is dest-area resurrection. SpellTargetRestrictions still asks for an
+    // explicit dead unit. Spirit Heal Channel is on the living guide, so that unit fails
+    // SPELL_ATTR3_ONLY_ON_GHOSTS and the wave never searches. Ghosts come from the area effect.
+    // LoadSpellInfoCustomAttributes rebuilds the explicit mask after this, but reset it here too
+    // so a later load-order change still picks up the new Targets.
+    ApplySpellFix({ 22012 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Targets &= ~TARGET_FLAG_UNIT_DEAD;
+        spellInfo->ExplicitTargetMask = 0;
+        spellInfo->RequiredExplicitTargetMask = 0;
+        spellInfo->_InitializeExplicitTargetMask();
+    });
+
     for (SpellInfo const& s : mSpellInfoMap)
     {
         SpellInfo* spellInfo = &const_cast<SpellInfo&>(s);

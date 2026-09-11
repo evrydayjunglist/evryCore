@@ -30931,10 +30931,11 @@ void Player::SetChromieTimeExpansion(uint32 uiExpansionId)
 
     UF::CTROptions const& current = *m_playerData->CtrOptions;
     UF::CTROptions options = BuildCtrOptionsForChromieTime(uiExpansionId);
+    bool const changed = current != options || m_activePlayerData->UiChromieTimeExpansionID != int32(uiExpansionId);
 
     // Leaving and selecting: SMSG_SET_CTR_OPTIONS (from → to) with Chromie CTR changes.
     // Skip during load (not in world) and when nothing changed.
-    if (IsInWorld() && (current != options || m_activePlayerData->UiChromieTimeExpansionID != int32(uiExpansionId)))
+    if (IsInWorld() && changed)
     {
         WorldPackets::ChromieTime::SetCtrOptions setCtrOptions;
         setCtrOptions.From.ConditionalFlags = current.ConditionalFlags;
@@ -30953,6 +30954,10 @@ void Player::SetChromieTimeExpansion(uint32 uiExpansionId)
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::FactionGroup), options.FactionGroup);
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::ChromieTimeExpansionMask), options.ChromieTimeExpansionMask);
     SetUpdateFieldValue(ctrOptions.ModifyValue(&UF::CTROptions::ConditionalFlags), std::move(options.ConditionalFlags));
+
+    // Terrain swaps and other condition-driven visibility read UiChromieTimeExpansionID.
+    if (IsInWorld() && changed)
+        PhasingHandler::OnConditionChange(this);
 }
 
 void Player::RemoveFromChromieTime(bool teleportToCapital /*= false*/)

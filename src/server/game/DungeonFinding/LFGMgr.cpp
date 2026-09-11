@@ -1738,6 +1738,7 @@ LfgLockMap LFGMgr::GetLockedDungeons(ObjectGuid guid)
 
     uint8 level = player->GetLevel();
     uint8 expansion = player->GetSession()->GetExpansion();
+    uint32 chromieTimeExpansionMask = player->m_playerData->CtrOptions->ChromieTimeExpansionMask;
     LfgDungeonSet const& dungeons = GetDungeonsByRandom(0);
     bool denyJoin = !player->GetSession()->HasPermission(rbac::RBAC_PERM_JOIN_DUNGEON_FINDER);
 
@@ -1753,6 +1754,10 @@ LfgLockMap LFGMgr::GetLockedDungeons(ObjectGuid guid)
                 return LFG_LOCKSTATUS_RAID_LOCKED;
             if (dungeon->expansion > expansion)
                 return LFG_LOCKSTATUS_INSUFFICIENT_EXPANSION;
+            // Chromie Time mask bits are Expansions, not Ui ids. Present (mask 0) does not filter.
+            // Dungeon Finder has no Chromie-specific lock in this enum, so these use the generic restriction.
+            if (chromieTimeExpansionMask && !(chromieTimeExpansionMask & (1u << dungeon->expansion)))
+                return LFG_LOCKSTATUS_HAS_RESTRICTION;
             if (DisableMgr::IsDisabledFor(DISABLE_TYPE_MAP, dungeon->map, player))
                 return LFG_LOCKSTATUS_NOT_IN_SEASON;
             if (DisableMgr::IsDisabledFor(DISABLE_TYPE_LFG_MAP, dungeon->map, player))
@@ -2200,7 +2205,7 @@ uint32 LFGMgr::GetLFGDungeonEntry(uint32 id)
     return 0;
 }
 
-LfgDungeonSet LFGMgr::GetRandomAndSeasonalDungeons(uint8 level, uint8 expansion, std::span<uint32 const> contentTuningReplacementConditionMask)
+LfgDungeonSet LFGMgr::GetRandomAndSeasonalDungeons(uint8 level, uint8 expansion, std::span<uint32 const> contentTuningReplacementConditionMask, uint32 chromieTimeExpansionMask)
 {
     LfgDungeonSet randomDungeons;
     for (lfg::LFGDungeonContainer::const_iterator itr = LfgDungeonStore.begin(); itr != LfgDungeonStore.end(); ++itr)
@@ -2210,6 +2215,9 @@ LfgDungeonSet LFGMgr::GetRandomAndSeasonalDungeons(uint8 level, uint8 expansion,
             continue;
 
         if (dungeon.expansion > expansion)
+            continue;
+
+        if (chromieTimeExpansionMask && !(chromieTimeExpansionMask & (1u << dungeon.expansion)))
             continue;
 
         if (Optional<ContentTuningLevels> levels = sDB2Manager.GetContentTuningData(dungeon.contentTuningId, contentTuningReplacementConditionMask))

@@ -1223,7 +1223,7 @@ class TC_GAME_API ObjectMgr
         void LoadCreatureQuestEnders();
 
         TreasurePickerTemplate const* GetTreasurePicker(uint32 treasurePickerId) const;
-        // ItemSparse.AllowableClass, plus weapon skill when AllowableClass is -1.
+        // ItemSparse.AllowableClass, weapon/armor skill when AllowableClass is -1, race, faction flags.
         bool IsTreasurePickerItemEligibleForPlayer(Player const* player, uint32 itemId) const;
         // Non-choice pickers grant the first row this player can use. Choice pickers grant the matching item id if they can use it.
         TreasurePickerItem const* SelectTreasurePickerItem(TreasurePickerTemplate const* treasurePicker, Player const* player, uint32 choiceItemId = 0) const;

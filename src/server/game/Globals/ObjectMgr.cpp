@@ -5439,16 +5439,31 @@ bool ObjectMgr::IsTreasurePickerItemEligibleForPlayer(Player const* player, uint
     if ((proto->GetAllowableClass() & player->GetClassMask()) == 0)
         return false;
 
-    // A weapon with AllowableClass -1 still needs the class weapon skill.
-    // Illidari Warglaive 160513 is AllowableClass -1 (ItemSparse 12.0.7.67808);
+    // AllowableClass -1 weapons and armor still need the matching skill.
+    // Weapons: Illidari Warglaive 160513 is AllowableClass -1 (ItemSparse 12.0.7.67808);
     // Priest, Hunter, and Warrior sniff 12.0.7.68453 omit it; only Demon Hunter has SKILL_WARGLAIVES.
-    // Bags with AllowableClass -1 are not weapons and stay usable by any class.
-    if (proto->GetAllowableClass() == -1 && proto->GetClass() == ITEM_CLASS_WEAPON)
+    // Armor: Expeditionary Cloth Hood 175220 has a Horde race list and no Classes line on Wowhead;
+    // plate/mail/leather twins of that kit are the same shape. Cloth/leather/mail/plate skill
+    // is what separates them. Necks, cloaks, and other armor with skill 0 stay ungated here.
+    // Bags are neither weapon nor armor and stay class-any.
+    if (proto->GetAllowableClass() == -1 &&
+        (proto->GetClass() == ITEM_CLASS_WEAPON || proto->GetClass() == ITEM_CLASS_ARMOR))
     {
         if (uint32 skill = proto->GetSkill())
             if (player->GetSkillValue(skill) == 0)
                 return false;
     }
+
+    // Same race and faction checks as Player::CanUseItem. Faction-paired rows in one picker
+    // (DH Mardum Alliance/Horde recolours; Expeditionary race lists) must not all be offered.
+    if (!proto->GetAllowableRace().HasRace(player->GetRace()))
+        return false;
+
+    if (proto->HasFlag(ITEM_FLAG2_FACTION_HORDE) && player->GetTeam() != HORDE)
+        return false;
+
+    if (proto->HasFlag(ITEM_FLAG2_FACTION_ALLIANCE) && player->GetTeam() != ALLIANCE)
+        return false;
 
     return true;
 }

@@ -304,6 +304,22 @@ void WorldSession::HandleQuestgiverChooseRewardOpcode(WorldPackets::Quest::Quest
 
                 if (!itemValid)
                 {
+                    for (int32 treasurePickerId : quest->GetTreasurePickerId())
+                    {
+                        TreasurePickerTemplate const* treasurePicker = sObjectMgr->GetTreasurePicker(uint32(treasurePickerId));
+                        if (!treasurePicker || !treasurePicker->IsChoice)
+                            continue;
+
+                        if (sObjectMgr->SelectTreasurePickerItem(treasurePicker, _player, packet.Choice.Item.ItemID))
+                        {
+                            itemValid = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!itemValid)
+                {
                     TC_LOG_ERROR("entities.player.cheat", "Error in CMSG_QUESTGIVER_CHOOSE_REWARD: player {} {} tried to get reward item (Item Entry: {}) wich is not a reward for quest {} (possible packet-hacking detected)",
                         _player->GetName(), _player->GetGUID().ToString(), packet.Choice.Item.ItemID, packet.QuestID);
                     return;

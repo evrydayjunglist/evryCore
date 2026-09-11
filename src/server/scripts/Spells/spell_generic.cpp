@@ -5283,6 +5283,23 @@ private:
 // 22011 - Spirit Heal Channel
 class spell_gen_spirit_heal_channel : public AuraScript
 {
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SPIRIT_HEAL });
+    }
+
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        // The channel sits on the living guide. The default tick would pass that NPC as
+        // 22012's unit target; SPELL_ATTR3_ONLY_ON_GHOSTS then fails the whole cast.
+        // Cast with no unit. Dest falls back to the guide. Area targeting finds queued ghosts.
+        PreventDefaultAction();
+        GetTarget()->CastSpell(nullptr, SPELL_SPIRIT_HEAL, CastSpellExtraArgsInit{
+            .TriggerFlags = TRIGGERED_FULL_MASK & ~(TRIGGERED_IGNORE_POWER_COST | TRIGGERED_IGNORE_REAGENT_COST),
+            .TriggeringAura = aurEff
+        });
+    }
+
     void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE)
@@ -5294,6 +5311,7 @@ class spell_gen_spirit_heal_channel : public AuraScript
 
     void Register() override
     {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_gen_spirit_heal_channel::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
         AfterEffectRemove += AuraEffectRemoveFn(spell_gen_spirit_heal_channel::OnRemove, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL);
     }
 };

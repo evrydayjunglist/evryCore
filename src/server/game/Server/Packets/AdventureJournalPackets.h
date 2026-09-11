@@ -44,6 +44,14 @@ namespace WorldPackets
             bool OnLevelUp = false;
         };
 
+        class EncounterJournalStartArathiRpe final : public ClientPacket
+        {
+        public:
+            explicit EncounterJournalStartArathiRpe(WorldPacket&& packet) : ClientPacket(CMSG_ENCOUNTER_JOURNAL_START_ARATHI_RPE, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
         struct AdventureJournalEntry
         {
             int32 AdventureJournalID = 0;

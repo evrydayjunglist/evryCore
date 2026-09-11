@@ -19,8 +19,10 @@
 #include "AdventureJournalPackets.h"
 #include "DB2Stores.h"
 #include "GossipDef.h"
+#include "Log.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "SpellMgr.h"
 
 void WorldSession::HandleAdventureJournalOpenQuest(WorldPackets::AdventureJournal::AdventureJournalOpenQuest& openQuest)
 {
@@ -64,4 +66,31 @@ void WorldSession::HandleAdventureJournalUpdateSuggestions(WorldPackets::Adventu
     }
 
     SendPacket(response.Write());
+}
+
+void WorldSession::HandleEncounterJournalStartArathiRpe(WorldPackets::AdventureJournal::EncounterJournalStartArathiRpe& /*packet*/)
+{
+    Player* player = GetPlayer();
+    if (!player)
+        return;
+
+    constexpr uint32 ARATHI_RPE_MAP_ID = 2927;
+    constexpr uint32 ARATHI_RPE_LAUNCH_SPELL = 1260320;
+    constexpr uint8 ARATHI_RPE_JOURNAL_MIN_LEVEL = 20;
+
+    if (player->GetMapId() == ARATHI_RPE_MAP_ID)
+        return;
+
+    // Adventure Guide Catch Up is available without the inactivity window. Character-select login still uses that window.
+    if (player->GetLevel() < ARATHI_RPE_JOURNAL_MIN_LEVEL)
+        return;
+
+    if (!sSpellMgr->GetSpellInfo(ARATHI_RPE_LAUNCH_SPELL, DIFFICULTY_NONE))
+    {
+        TC_LOG_ERROR("network", "Player {} requested Arathi Catch Up from the journal but spell {} is missing",
+            player->GetGUID().ToString(), ARATHI_RPE_LAUNCH_SPELL);
+        return;
+    }
+
+    player->CastSpell(player, ARATHI_RPE_LAUNCH_SPELL);
 }

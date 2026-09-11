@@ -122,6 +122,83 @@ void SetCurrencyFlags::Read()
     _worldPacket >> As<uint8>(Flags);
 }
 
+void TransferCurrencyFromAccountCharacter::Read()
+{
+    // Unverified on 12.1. Local 12.0.7 read: source guid, CurrencyID, Quantity (amount the destination receives).
+    _worldPacket >> SourceCharacterGuid;
+    _worldPacket >> CurrencyID;
+    _worldPacket >> Quantity;
+}
+
+WorldPacket const* AccountCharacterCurrencyLists::Write()
+{
+    // Unverified on 12.1. Local 12.0.7 wrote character count, then per character: guid, a uint32
+    // (characters.slot), then that character's currency id/quantity pairs. A per-character
+    // currency count is required to parse more than one character, so this write includes
+    // Currencies.size() after the slot field. First playtest is a 12.1 capture of request/list.
+    _worldPacket << uint32(Characters.size());
+
+    for (AccountCharacterCurrencyListCharacter const& character : Characters)
+    {
+        _worldPacket << character.CharacterGuid;
+        _worldPacket << uint32(character.MiddleIndex);
+        _worldPacket << uint32(character.Currencies.size());
+
+        for (AccountCharacterCurrencyListCurrency const& currency : character.Currencies)
+        {
+            _worldPacket << uint32(currency.CurrencyID);
+            _worldPacket << uint32(currency.Quantity);
+        }
+    }
+
+    return &_worldPacket;
+}
+
+WorldPacket const* CurrencyTransferResult::Write()
+{
+    // Unverified on 12.1. Local 12.0.7 wrote Result, source guid, CurrencyID, Quantity,
+    // TotalQuantityConsumed, SourceRemainingQuantity, uint64 Timestamp. Result 0 = ok.
+    _worldPacket << uint32(Result);
+    _worldPacket << SourceCharacterGuid;
+    _worldPacket << uint32(CurrencyID);
+    _worldPacket << uint32(Quantity);
+    _worldPacket << uint32(TotalQuantityConsumed);
+    _worldPacket << uint32(SourceRemainingQuantity);
+    _worldPacket << uint64(Timestamp);
+
+    return &_worldPacket;
+}
+
+WorldPacket const* CurrencyTransferLog::Write()
+{
+    // Unverified on 12.1. Local 12.0.7 wrote count, then per entry bitpacked names (7/9 bits)
+    // plus guids, amounts, and timestamp.
+    _worldPacket << uint32(Entries.size());
+
+    for (CurrencyTransferLogEntry const& entry : Entries)
+    {
+        _worldPacket << entry.SourceCharacterGuid;
+        _worldPacket << SizedString::BitsSize<7>(entry.SourceCharacterName);
+        _worldPacket << SizedString::BitsSize<9>(entry.FullSourceCharacterName);
+        _worldPacket << entry.DestinationCharacterGuid;
+        _worldPacket << SizedString::BitsSize<7>(entry.DestinationCharacterName);
+        _worldPacket << SizedString::BitsSize<9>(entry.FullDestinationCharacterName);
+        _worldPacket.FlushBits();
+
+        _worldPacket << SizedString::Data(entry.SourceCharacterName);
+        _worldPacket << SizedString::Data(entry.FullSourceCharacterName);
+        _worldPacket << SizedString::Data(entry.DestinationCharacterName);
+        _worldPacket << SizedString::Data(entry.FullDestinationCharacterName);
+
+        _worldPacket << uint32(entry.CurrencyID);
+        _worldPacket << uint32(entry.QuantityTransferred);
+        _worldPacket << uint32(entry.TotalQuantityConsumed);
+        _worldPacket << uint64(entry.Timestamp);
+    }
+
+    return &_worldPacket;
+}
+
 void SetSelection::Read()
 {
     _worldPacket >> Selection;

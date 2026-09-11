@@ -405,6 +405,19 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_UPD_PLAYER_CURRENCY, "UPDATE character_currency SET Quantity = ?, WeeklyQuantity = ?, TrackedQuantity = ?, IncreasedCapQuantity = ?, EarnedQuantity = ?, Flags = ? WHERE CharacterGuid = ? AND Currency = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_REP_PLAYER_CURRENCY, "REPLACE INTO character_currency (CharacterGuid, Currency, Quantity, WeeklyQuantity, TrackedQuantity, IncreasedCapQuantity, EarnedQuantity, Flags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_PLAYER_CURRENCY, "DELETE FROM character_currency WHERE CharacterGuid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_ACCOUNT_CHARACTER_CURRENCY_FOR_TRANSFER, "SELECT cc.CharacterGuid, cc.Currency, cc.Quantity, c.slot FROM character_currency cc "
+                     "INNER JOIN characters c ON c.guid = cc.CharacterGuid WHERE c.account = ? AND c.deleteInfos_Name IS NULL AND cc.Quantity > 0", CONNECTION_BOTH);
+    PrepareStatement(CHAR_SEL_ACCOUNT_CHARACTER_CURRENCY_BY_ACCOUNT, "SELECT cc.CharacterGuid, cc.Currency, cc.Quantity, cc.WeeklyQuantity, cc.TrackedQuantity, cc.IncreasedCapQuantity, cc.EarnedQuantity, cc.Flags FROM character_currency cc "
+                     "INNER JOIN characters c ON c.guid = cc.CharacterGuid WHERE c.account = ? AND c.deleteInfos_Name IS NULL", CONNECTION_BOTH);
+    PrepareStatement(CHAR_SEL_CHARACTER_CURRENCY_QUANTITY, "SELECT Quantity FROM character_currency WHERE CharacterGuid = ? AND Currency = ?", CONNECTION_BOTH);
+    PrepareStatement(CHAR_UPD_CHARACTER_CURRENCY_QUANTITY_DEBIT, "UPDATE character_currency SET Quantity = Quantity - ? WHERE CharacterGuid = ? AND Currency = ? AND Quantity >= ?", CONNECTION_BOTH);
+    PrepareStatement(CHAR_DEL_CHARACTER_CURRENCY_BY_GUID, "DELETE FROM character_currency WHERE CharacterGuid = ? AND Currency = ?", CONNECTION_BOTH);
+    PrepareStatement(CHAR_SEL_CHARACTER_ONLINE_BY_GUID, "SELECT online FROM characters WHERE guid = ? AND account = ? AND deleteInfos_Name IS NULL", CONNECTION_BOTH);
+    PrepareStatement(CHAR_INS_ACCOUNT_CURRENCY_TRANSFER_LOG, "INSERT INTO account_currency_transfer_log "
+                     "(accountId, sourceCharacterGuid, destinationCharacterGuid, sourceCharacterName, fullSourceCharacterName, destinationCharacterName, fullDestinationCharacterName, currencyId, quantityTransferred, totalQuantityConsumed, timestamp) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_ACCOUNT_CURRENCY_TRANSFER_LOG, "SELECT sourceCharacterGuid, destinationCharacterGuid, sourceCharacterName, fullSourceCharacterName, destinationCharacterName, fullDestinationCharacterName, currencyId, quantityTransferred, totalQuantityConsumed, timestamp "
+                     "FROM account_currency_transfer_log WHERE accountId = ? ORDER BY timestamp DESC LIMIT ?", CONNECTION_BOTH);
 
     // Account data
     PrepareStatement(CHAR_SEL_ACCOUNT_DATA, "SELECT type, time, data FROM account_data WHERE accountId = ?", CONNECTION_ASYNC);

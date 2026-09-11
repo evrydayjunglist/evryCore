@@ -665,6 +665,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "ShowMuteInWorld"sv, .DefaultValue = false, .Index = CONFIG_SHOW_MUTE_IN_WORLD },
         { .Name = "ShowBanInWorld"sv, .DefaultValue = false, .Index = CONFIG_SHOW_BAN_IN_WORLD },
         { .Name = "FeatureSystem.CharacterUndelete.Enabled"sv, .DefaultValue = false, .Index = CONFIG_FEATURE_SYSTEM_CHARACTER_UNDELETE_ENABLED },
+        { .Name = "FeatureSystem.AccountCurrencyTransfer.Enabled"sv, .DefaultValue = true, .Index = CONFIG_FEATURE_SYSTEM_ACCOUNT_CURRENCY_TRANSFER_ENABLED },
         { .Name = "DBC.EnforceItemAttributes"sv, .DefaultValue = true, .Index = CONFIG_DBC_ENFORCE_ITEM_ATTRIBUTES },
         { .Name = "InstancesResetAnnounce"sv, .DefaultValue = false, .Index = CONFIG_INSTANCES_RESET_ANNOUNCE },
         { .Name = "AutoBroadcast.On"sv, .DefaultValue = false, .Index = CONFIG_AUTOBROADCAST },
@@ -3286,6 +3287,7 @@ void World::InitCurrencyResetTime()
 void World::ResetCurrencyWeekCap()
 {
     CharacterDatabase.Execute("UPDATE `character_currency` SET `WeeklyQuantity` = 0");
+    LoginDatabase.Execute("UPDATE `battlenet_account_currency` SET `WeeklyQuantity` = 0");
 
     for (SessionMap::const_iterator itr = m_sessions.begin(); itr != m_sessions.end(); ++itr)
         if (itr->second->GetPlayer())
@@ -3384,6 +3386,21 @@ bool World::IsBattlePetJournalLockAcquired(ObjectGuid battlenetAccountGuid)
             return true;
 
     return false;
+}
+
+bool World::BeginCurrencyTransfer(ObjectGuid sourceCharacterGuid)
+{
+    if (sourceCharacterGuid.IsEmpty())
+        return false;
+
+    std::lock_guard<std::mutex> guard(m_currencyTransferMutex);
+    return m_currencyTransfersInProgress.insert(sourceCharacterGuid).second;
+}
+
+void World::EndCurrencyTransfer(ObjectGuid sourceCharacterGuid)
+{
+    std::lock_guard<std::mutex> guard(m_currencyTransferMutex);
+    m_currencyTransfersInProgress.erase(sourceCharacterGuid);
 }
 
 bool World::IsPvPRealm() const

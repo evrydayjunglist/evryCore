@@ -17,6 +17,7 @@
 
 #include "WorldSession.h"
 #include "Account.h"
+#include "AccountCurrencyMgr.h"
 #include "WarbandGroupMgr.h"
 #include "AccountMgr.h"
 #include "AuthenticationPackets.h"
@@ -150,7 +151,8 @@ WorldSession::WorldSession(uint32 id, std::string&& name, uint32 battlenetAccoun
     _calendarEventCreationCooldown(0),
     _battlePetMgr(std::make_unique<BattlePets::BattlePetMgr>(this)),
     _collectionMgr(std::make_unique<CollectionMgr>(this)),
-    _warbandGroupMgr(std::make_unique<WarbandGroupMgr>(this))
+    _warbandGroupMgr(std::make_unique<WarbandGroupMgr>(this)),
+    _accountCurrencyMgr(std::make_unique<AccountCurrencyMgr>(this))
 {
     if (m_Socket[CONNECTION_TYPE_REALM])
     {
@@ -1326,6 +1328,7 @@ public:
         WARBAND_GROUP_MEMBERS,
         PLAYER_DATA_ELEMENTS_ACCOUNT,
         PLAYER_DATA_FLAGS_ACCOUNT,
+        BNET_ACCOUNT_CURRENCY,
 
         MAX_QUERIES
     };
@@ -1397,6 +1400,10 @@ public:
         stmt->setUInt32(0, battlenetAccountId);
         ok = SetPreparedQuery(PLAYER_DATA_FLAGS_ACCOUNT, stmt) && ok;
 
+        stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_ACCOUNT_CURRENCY);
+        stmt->setUInt32(0, battlenetAccountId);
+        ok = SetPreparedQuery(BNET_ACCOUNT_CURRENCY, stmt) && ok;
+
         return ok;
     }
 };
@@ -1454,6 +1461,7 @@ void WorldSession::InitializeSessionCallback(LoginDatabaseQueryHolder const& hol
     _collectionMgr->LoadAccountWarbandScenes(holder.GetPreparedResult(AccountInfoQueryHolder::WARBAND_SCENES));
     _warbandGroupMgr->LoadAccountGroups(holder.GetPreparedResult(AccountInfoQueryHolder::WARBAND_GROUPS), holder.GetPreparedResult(AccountInfoQueryHolder::WARBAND_GROUP_MEMBERS));
     LoadPlayerDataAccount(holder.GetPreparedResult(AccountInfoQueryHolder::PLAYER_DATA_ELEMENTS_ACCOUNT), holder.GetPreparedResult(AccountInfoQueryHolder::PLAYER_DATA_FLAGS_ACCOUNT));
+    _accountCurrencyMgr->LoadFromDB(holder.GetPreparedResult(AccountInfoQueryHolder::BNET_ACCOUNT_CURRENCY));
 
     if (!m_inQueue)
         SendAuthResponse(ERROR_OK, false);

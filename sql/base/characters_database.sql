@@ -41,6 +41,40 @@ LOCK TABLES `account_data` WRITE;
 UNLOCK TABLES;
 
 --
+-- Table structure for table `account_currency_transfer_log`
+--
+
+DROP TABLE IF EXISTS `account_currency_transfer_log`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `account_currency_transfer_log` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `accountId` int unsigned NOT NULL,
+  `sourceCharacterGuid` bigint unsigned NOT NULL,
+  `destinationCharacterGuid` bigint unsigned NOT NULL,
+  `sourceCharacterName` varchar(12) NOT NULL,
+  `fullSourceCharacterName` varchar(64) NOT NULL,
+  `destinationCharacterName` varchar(12) NOT NULL,
+  `fullDestinationCharacterName` varchar(64) NOT NULL,
+  `currencyId` smallint unsigned NOT NULL,
+  `quantityTransferred` int unsigned NOT NULL,
+  `totalQuantityConsumed` int unsigned NOT NULL,
+  `timestamp` bigint unsigned NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_account_timestamp` (`accountId`,`timestamp`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `account_currency_transfer_log`
+--
+
+LOCK TABLES `account_currency_transfer_log` WRITE;
+/*!40000 ALTER TABLE `account_currency_transfer_log` DISABLE KEYS */;
+/*!40000 ALTER TABLE `account_currency_transfer_log` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
 -- Table structure for table `account_instance_times`
 --
 
@@ -4097,7 +4131,8 @@ INSERT INTO `updates` VALUES
 ('2026_04_22_00_characters.sql','34E7E4659F8C2FF778042CF21267F8045BDC197E','ARCHIVED','2026-04-22 19:26:05',0),
 ('2026_05_26_00_characters_2023_09_10_00_characters.sql','5DE09CA31B5168CF3622CB462816B6C598893D96','ARCHIVED','2023-09-10 12:23:34',0),
 ('2026_05_26_01_characters_2024_02_05_00_characters.sql','1777CBCA822AD85777DA4A390DF7AAF41AF68EBD','ARCHIVED','2024-02-05 12:17:19',0),
-('2026_09_09_00_characters.sql','9EB606225808248A1E36372BE1953FF9949038F5','ARCHIVED','2026-09-09 08:23:05',0);
+('2026_09_09_00_characters.sql','9EB606225808248A1E36372BE1953FF9949038F5','ARCHIVED','2026-09-09 08:23:05',0),
+('2026_09_10_00_characters.sql','154B3890AADBA9E927D736493F2F53360E418D81','ARCHIVED','2026-09-10 16:30:00',0);
 /*!40000 ALTER TABLE `updates` ENABLE KEYS */;
 UNLOCK TABLES;
 

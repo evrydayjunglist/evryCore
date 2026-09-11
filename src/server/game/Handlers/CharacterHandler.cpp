@@ -45,6 +45,7 @@
 #include "Language.h"
 #include "Log.h"
 #include "Map.h"
+#include "MapManager.h"
 #include "MapUtils.h"
 #include "Metric.h"
 #include "MiscPackets.h"
@@ -372,6 +373,32 @@ bool LoginQueryHolder::Initialize()
     return res;
 }
 
+namespace
+{
+// Catch Up login lands here (retail sniff, map 2927 Arathi Highlands RPE).
+constexpr uint32 ARATHI_RPE_MAP_ID = 2927;
+constexpr float ARATHI_RPE_POSITION_X = -1101.67f;
+constexpr float ARATHI_RPE_POSITION_Y = -3554.37f;
+constexpr float ARATHI_RPE_POSITION_Z = 48.9203f;
+constexpr float ARATHI_RPE_ORIENTATION = 6.2583666f;
+
+// Character-select Catch Up is offered after this much inactivity. The retail window is still unsniffed.
+constexpr time_t ARATHI_RPE_INACTIVE_SECONDS = time_t(60) * DAY;
+constexpr uint32 ARATHI_RPE_NO_REASON_RECENTLY_ACTIVE = 4;
+
+bool IsArathiRpeEligible(time_t lastActive)
+{
+    return lastActive > 0 && GameTime::GetGameTime() >= lastActive + ARATHI_RPE_INACTIVE_SECONDS;
+}
+
+void ApplyArathiRpeEnumEligibility(WorldPackets::Character::EnumCharactersResult::CharacterInfo& characterInfo)
+{
+    bool const eligible = IsArathiRpeEligible(time_t(characterInfo.Basic.LastActiveTime));
+    characterInfo.RestrictionsAndMails.RpeAvailable = eligible;
+    characterInfo.RestrictionsAndMails.NoRpeReason = eligible ? 0 : ARATHI_RPE_NO_REASON_RECENTLY_ACTIVE;
+}
+}
+
 class EnumCharactersQueryHolder : public CharacterDatabaseQueryHolder
 {
 public:
@@ -445,10 +472,14 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
         {
             charEnum.Characters.emplace_back(result->Fetch());
 
-            WorldPackets::Character::EnumCharactersResult::CharacterInfoBasic& charInfo = charEnum.Characters.back().Basic;
+            WorldPackets::Character::EnumCharactersResult::CharacterInfo& characterInfo = charEnum.Characters.back();
+            WorldPackets::Character::EnumCharactersResult::CharacterInfoBasic& charInfo = characterInfo.Basic;
 
             if (std::vector<UF::ChrCustomizationChoice>* customizationsForChar = Trinity::Containers::MapGetValuePtr(customizations, charInfo.Guid.GetCounter()))
                 charInfo.Customizations = std::move(*customizationsForChar);
+
+            if (!charEnum.IsDeletedCharacters)
+                ApplyArathiRpeEnumEligibility(characterInfo);
 
             TC_LOG_INFO("network", "Loading char guid {} from account {}.", charInfo.Guid.ToString(), GetAccountId());
 
@@ -1163,12 +1194,14 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPackets::Character::PlayerLogin&
     }
 
     m_playerLoading = playerLogin.Guid;
+    m_playerLoginRPE = playerLogin.RPE;
 
-    TC_LOG_DEBUG("network", "Character {} logging in", playerLogin.Guid.ToString());
+    TC_LOG_DEBUG("network", "Character {} logging in (RPE={})", playerLogin.Guid.ToString(), playerLogin.RPE);
 
     if (!IsLegitCharacterForAccount(playerLogin.Guid))
     {
         TC_LOG_ERROR("network", "Account ({}) can't login with that character ({}).", GetAccountId(), playerLogin.Guid.ToString());
+        m_playerLoginRPE = false;
         KickPlayer("WorldSession::HandlePlayerLoginOpcode Trying to login with a character of another account");
         return;
     }
@@ -1188,6 +1221,7 @@ void WorldSession::HandleContinuePlayerLogin()
     if (!holder->Initialize())
     {
         m_playerLoading.Clear();
+        m_playerLoginRPE = false;
         return;
     }
 
@@ -1211,6 +1245,7 @@ void WorldSession::AbortLogin(WorldPackets::Character::LoginFailureReason reason
     }
 
     m_playerLoading.Clear();
+    m_playerLoginRPE = false;
     SendPacket(WorldPackets::Character::CharacterLoginFailed(reason).Write());
 }
 
@@ -1234,7 +1269,48 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         KickPlayer("WorldSession::HandlePlayerLogin Player::LoadFromDB failed"); // disconnect client, player no set to session and it will not deleted or saved at kick
         delete pCurrChar;                                   // delete it manually
         m_playerLoading.Clear();
+        m_playerLoginRPE = false;
         return;
+    }
+
+    // Catch Up Experience: honor CMSG_PLAYER_LOGIN.RPE. Re-check inactivity here; the journal path does not use this gate.
+    bool enterArathiRpe = m_playerLoginRPE;
+    m_playerLoginRPE = false;
+    if (enterArathiRpe && !IsArathiRpeEligible(time_t(pCurrChar->m_playerData->LogoutTime)))
+    {
+        TC_LOG_ERROR("network", "Player {} requested Arathi Catch Up login but is not eligible (LogoutTime={})",
+            pCurrChar->GetGUID().ToString(), int64(pCurrChar->m_playerData->LogoutTime));
+        enterArathiRpe = false;
+    }
+    if (enterArathiRpe)
+    {
+        if (!sMapStore.LookupEntry(ARATHI_RPE_MAP_ID))
+            TC_LOG_ERROR("network", "Player {} requested Arathi Catch Up login but map {} is missing from Map.db2",
+                pCurrChar->GetGUID().ToString(), ARATHI_RPE_MAP_ID);
+        else
+        {
+            uint32 const oldMapId = pCurrChar->GetMapId();
+            Position const oldPos = pCurrChar->GetPosition();
+            Map* const oldMap = pCurrChar->GetMap();
+
+            pCurrChar->ResetMap();
+            pCurrChar->WorldRelocate(ARATHI_RPE_MAP_ID, ARATHI_RPE_POSITION_X, ARATHI_RPE_POSITION_Y,
+                ARATHI_RPE_POSITION_Z, ARATHI_RPE_ORIENTATION);
+            if (Map* rpeMap = sMapMgr->CreateMap(ARATHI_RPE_MAP_ID, pCurrChar))
+            {
+                pCurrChar->SetMap(rpeMap);
+                pCurrChar->UpdatePositionData();
+                pCurrChar->SetFallInformation(0, ARATHI_RPE_POSITION_Z);
+                TC_LOG_DEBUG("network", "Player {} entering Arathi Catch Up map {}", pCurrChar->GetGUID().ToString(), ARATHI_RPE_MAP_ID);
+            }
+            else
+            {
+                pCurrChar->WorldRelocate(oldMapId, oldPos);
+                pCurrChar->SetMap(oldMap);
+                TC_LOG_ERROR("network", "Player {} requested Arathi Catch Up login but CreateMap({}) failed",
+                    pCurrChar->GetGUID().ToString(), ARATHI_RPE_MAP_ID);
+            }
+        }
     }
 
     if (!_timeSyncClockDeltaQueue->empty())

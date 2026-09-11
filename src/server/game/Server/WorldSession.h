@@ -112,6 +112,7 @@ namespace WorldPackets
     {
         class AdventureJournalOpenQuest;
         class AdventureJournalUpdateSuggestions;
+        class EncounterJournalStartArathiRpe;
     }
 
     namespace AdventureMap
@@ -1862,6 +1863,7 @@ class TC_GAME_API WorldSession
         // Adventure Journal
         void HandleAdventureJournalOpenQuest(WorldPackets::AdventureJournal::AdventureJournalOpenQuest& openQuest);
         void HandleAdventureJournalUpdateSuggestions(WorldPackets::AdventureJournal::AdventureJournalUpdateSuggestions& updateSuggestions);
+        void HandleEncounterJournalStartArathiRpe(WorldPackets::AdventureJournal::EncounterJournalStartArathiRpe& packet);
 
         // Adventure Map
         void HandleCheckIsAdventureMapPoiValid(WorldPackets::AdventureMap::CheckIsAdventureMapPoiValid& CheckIsAdventureMapPoiValid);
@@ -2042,6 +2044,7 @@ class TC_GAME_API WorldSession
         time_t _logoutTime;
         bool m_inQueue;                                     // session wait in auth.queue
         ObjectGuid m_playerLoading;                         // code processed in LoginPlayer
+        bool m_playerLoginRPE = false;                      // CMSG_PLAYER_LOGIN.RPE — Catch Up Experience enter
         bool m_playerLogout;                                // code processed in LogoutPlayer
         bool m_playerRecentlyLogout;
         bool m_playerSave;

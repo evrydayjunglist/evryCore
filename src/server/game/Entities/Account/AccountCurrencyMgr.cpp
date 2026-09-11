@@ -32,8 +32,9 @@ uint32 GetMigrationCurrencyMaxCap(CurrencyTypesEntry const* currency, Player con
         return 0;
 
     uint32 maxQuantity = currency->MaxQty;
+    // LoadFromDB consolidate is pre-SetMap; GetMap() ASSERTs. GetValue allows null.
     if (currency->MaxQtyWorldStateID && capPlayer)
-        maxQuantity = WorldStateMgr::GetValue(currency->MaxQtyWorldStateID, capPlayer->GetMap());
+        maxQuantity = WorldStateMgr::GetValue(currency->MaxQtyWorldStateID, capPlayer->FindMap());
 
     if (currency->GetFlags().HasFlag(CurrencyTypesFlags::DynamicMaximum))
         maxQuantity += increasedCapQuantity;

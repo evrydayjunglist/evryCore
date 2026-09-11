@@ -53,6 +53,23 @@
 #include "WorldSession.h"
 #include "WorldStateMgr.h"
 #include "WowTime.h"
+#include <optional>
+
+namespace
+{
+std::optional<uint64> GetArchaeologyCriteriaProgressDelta(CriteriaType type)
+{
+    switch (type)
+    {
+        case CriteriaType::CompleteAnyResearchProject:
+        case CriteriaType::FindResearchObject:
+        case CriteriaType::ExhaustAnyResearchSite:
+            return 1;
+        default:
+            return std::nullopt;
+    }
+}
+}
 
 bool CriteriaData::IsValid(Criteria const* criteria)
 {
@@ -504,6 +521,12 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
         if (!data->Meets(referencePlayer, ref, uint32(miscValue1), uint32(miscValue2)))
             return;
 
+    if (std::optional<uint64> progressDelta = GetArchaeologyCriteriaProgressDelta(CriteriaType(criteria->Entry->Type)))
+    {
+        SetCriteriaProgress(criteria, *progressDelta, referencePlayer, PROGRESS_ACCUMULATE);
+        return;
+    }
+
     switch (CriteriaType(criteria->Entry->Type))
     {
         // std. case: increment at 1
@@ -821,7 +844,6 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
         case CriteriaType::CompleteQuestsCountForGuild:
         case CriteriaType::HonorableKillsForGuild:
         case CriteriaType::KillAnyCreatureForGuild:
-        case CriteriaType::CompleteAnyResearchProject:
         case CriteriaType::CompleteGuildChallenge:
         case CriteriaType::CompleteAnyGuildChallenge:
         case CriteriaType::CompletedLFRDungeon:
@@ -845,8 +867,6 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
         case CriteriaType::LevelChangedForGarrisonFollower:
         case CriteriaType::LearnToy:
         case CriteriaType::LearnAnyToy:
-        case CriteriaType::FindResearchObject:
-        case CriteriaType::ExhaustAnyResearchSite:
         case CriteriaType::CompleteInternalCriteria:
         case CriteriaType::CompleteAnyChallengeMode:
         case CriteriaType::KilledAllUnitsInSpawnRegion:
@@ -1183,6 +1203,9 @@ bool CriteriaHandler::IsCompletedCriteria(Criteria const* criteria, uint64 requi
     {
         case CriteriaType::WinBattleground:
         case CriteriaType::KillCreature:
+        case CriteriaType::CompleteAnyResearchProject:
+        case CriteriaType::FindResearchObject:
+        case CriteriaType::ExhaustAnyResearchSite:
         case CriteriaType::ReachLevel:
         case CriteriaType::GuildAttainedLevel:
         case CriteriaType::SkillRaised:
@@ -1614,6 +1637,10 @@ bool CriteriaHandler::RequirementsSatisfied(Criteria const* criteria, uint64 mis
             break;
         case CriteriaType::UseGameobject:
         case CriteriaType::CatchFishInFishingHole:
+            if (!miscValue1 || miscValue1 != uint32(criteria->Entry->Asset.GameObjectID))
+                return false;
+            break;
+        case CriteriaType::FindResearchObject:
             if (!miscValue1 || miscValue1 != uint32(criteria->Entry->Asset.GameObjectID))
                 return false;
             break;
@@ -2080,9 +2107,14 @@ bool CriteriaHandler::ModifierSatisfied(ModifierTreeEntry const* modifier, uint6
             if (referencePlayer->GetRBGPersonalRating() < reqValue)
                 return false;
             break;
-        case ModifierTreeType::ResearchProjectRarity: // 65 NYI
-        case ModifierTreeType::ResearchProjectBranch: // 66 NYI
-            return false;
+        case ModifierTreeType::ResearchProjectRarity: // 65
+            if (miscValue1 != reqValue)
+                return false;
+            break;
+        case ModifierTreeType::ResearchProjectBranch: // 66
+            if (miscValue2 != reqValue)
+                return false;
+            break;
         case ModifierTreeType::WorldStateExpression: // 67
             if (WorldStateExpressionEntry const* worldStateExpression = sWorldStateExpressionStore.LookupEntry(reqValue))
                 return ConditionMgr::IsMeetingWorldStateExpression(referencePlayer->GetMap(), worldStateExpression);
@@ -4583,6 +4615,7 @@ inline bool IsCriteriaTypeStoredByAsset(CriteriaType type)
         case CriteriaType::UseGameobject:
         case CriteriaType::GainAura:
         case CriteriaType::CatchFishInFishingHole:
+        case CriteriaType::FindResearchObject:
         case CriteriaType::LearnSpellFromSkillLine:
         case CriteriaType::DefeatDungeonEncounterWhileElegibleForLoot:
         case CriteriaType::GetLootByType:

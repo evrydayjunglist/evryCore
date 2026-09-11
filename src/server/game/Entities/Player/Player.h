@@ -33,12 +33,14 @@
 #include "PlayerTaxi.h"
 #include "QuestDef.h"
 #include "SceneMgr.h"
+#include <unordered_set>
 #include <variant>
 
 struct AccessRequirement;
 struct AchievementEntry;
 struct AreaTableEntry;
 struct AreaTriggerEntry;
+struct ArchaeologySolvePlan;
 struct ArtifactPowerRankEntry;
 struct AzeriteEssencePowerEntry;
 struct AzeriteItemMilestonePowerEntry;
@@ -79,6 +81,7 @@ class Channel;
 class CinematicMgr;
 class Creature;
 class DynamicObject;
+class GameObject;
 class Garrison;
 class Group;
 class Guild;
@@ -1026,6 +1029,9 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_DATA_FLAGS,
     PLAYER_LOGIN_QUERY_LOAD_BANK_TAB_SETTINGS,
     PLAYER_LOGIN_QUERY_LOAD_CHROMIE_TIME,
+    PLAYER_LOGIN_QUERY_LOAD_RESEARCH_SITES,
+    PLAYER_LOGIN_QUERY_LOAD_RESEARCH_PROJECTS,
+    PLAYER_LOGIN_QUERY_LOAD_RESEARCH_HISTORY,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -2328,6 +2334,21 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool UpdatePosition(float x, float y, float z, float orientation, bool teleport = false) override;
         bool UpdatePosition(Position const& pos, bool teleport = false) override { return UpdatePosition(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), teleport); }
         void ProcessPositionDataChanged(PositionFullTerrainStatus const& data) override;
+
+        void InitializeResearchSites();
+        void HandleArchaeologySurvey();
+        bool CanUseArchaeologyFind(GameObject const* find) const;
+        void OnArchaeologyFindLooted(GameObject* find);
+        void ReplaceResearchSite(uint32 siteIndex, uint32 mapId);
+        void InitializeResearchProjects();
+        int32 GetCurrentResearchProject(uint32 branchId) const;
+        uint32 EnsureResearchProject(uint32 branchId);
+        std::unordered_set<uint32> GetCompletedResearchProjects() const;
+        bool CanCastResearchProjectSpell(uint32 spellId) const;
+        bool CanSolveResearchProject(ArchaeologySolvePlan const& plan) const;
+        bool ConsumeResearchProjectSolveResources(ArchaeologySolvePlan const& plan);
+        void CompleteResearchProjectSolve(ArchaeologySolvePlan const& plan);
+
         void UpdateLiquidMirrorTimerFlagsOnPositionChange(Optional<LiquidData> const& newLiquidData);
         void AtEnterCombat() override;
         void AtExitCombat() override;
@@ -3169,6 +3190,13 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _LoadRandomBGStatus(PreparedQueryResult result);
         void _LoadGroup(PreparedQueryResult result);
         void _LoadSkills(PreparedQueryResult result);
+        void _LoadResearchSites(PreparedQueryResult result);
+        bool _EnsureResearchSiteFindLocation(uint32 researchSiteId, float& x, float& y);
+        void _UpdateArchaeologySurveyIndicator();
+        void _LoadResearchProjects(PreparedQueryResult result);
+        void _LoadResearchHistory(PreparedQueryResult result);
+        void RecordCompletedProject(uint32 projectId);
+        void AdvanceResearchProject(uint32 branchId, uint32 completedProjectId);
         void _LoadSpells(PreparedQueryResult result, PreparedQueryResult favoritesResult);
         void _LoadStoredAuraTeleportLocations(PreparedQueryResult result);
         bool _LoadHomeBind(PreparedQueryResult result);
@@ -3207,6 +3235,9 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _SaveMonthlyQuestStatus(CharacterDatabaseTransaction trans);
         void _SaveSeasonalQuestStatus(CharacterDatabaseTransaction trans);
         void _SaveSkills(CharacterDatabaseTransaction trans);
+        void _SaveResearchSites(CharacterDatabaseTransaction trans);
+        void _SaveResearchProjects(CharacterDatabaseTransaction trans);
+        void _SaveResearchHistory(CharacterDatabaseTransaction trans);
         void _SaveSpells(CharacterDatabaseTransaction trans);
         void _SaveStoredAuraTeleportLocations(CharacterDatabaseTransaction trans);
         void _SaveEquipmentSets(CharacterDatabaseTransaction trans);
@@ -3430,6 +3461,15 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         uint32 _pendingBindId;
         uint32 _pendingBindTimer;
+
+        struct PendingArchaeologyFind
+        {
+            ObjectGuid GameObjectGuid;
+            uint32 ResearchSiteId = 0;
+            uint32 ResearchBranchId = 0;
+        };
+        Optional<PendingArchaeologyFind> _pendingArchaeologyFind;
+        std::unordered_map<uint32 /*researchSiteId*/, std::pair<float, float>> _researchSiteFindLocations;
 
         uint32 _activeCheats;
 

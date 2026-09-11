@@ -547,10 +547,10 @@ enum class CriteriaType : int16
     KillCreature                                   = 0,   // Kill NPC "{Creature}"
     WinBattleground                                = 1,   // Win battleground "{Map}"
     CompleteResearchProject                        = 2,   /*NYI*/ // Complete research project "{ResearchProject}"
-    CompleteAnyResearchProject                     = 3,   /*NYI*/ // Complete any research project
-    FindResearchObject                             = 4,   /*NYI*/ // Find research object "{GameObjects}"
+    CompleteAnyResearchProject                     = 3,   // Complete any research project
+    FindResearchObject                             = 4,   // Find research object "{GameObjects}"
     ReachLevel                                     = 5,   // Reach level
-    ExhaustAnyResearchSite                         = 6,   /*NYI*/ // Exhaust any research site
+    ExhaustAnyResearchSite                         = 6,   // Exhaust any research site
     SkillRaised                                    = 7,   // Skill "{SkillLine}" raised
     EarnAchievement                                = 8,   // Earn achievement "{Achievement}"
     CompleteQuestsCount                            = 9,   // Count of complete quests (quest count)
@@ -1756,8 +1756,8 @@ enum class ModifierTreeType : int32
     PlayerGuildReputationEqualOrGreaterThan                             = 62,  // Player has guild reputation of {#Guild Reputation} or more
     PlayerInRatedBattleground                                           = 63,  // Player is in rated battleground
     PlayerBattlegroundRatingEqualOrGreaterThan                          = 64,  // Player has a battleground rating of {#Battleground Rating} or more
-    ResearchProjectRarity                                               = 65,  /*NYI*/ // Research project rarity is "{$Project Rarity}"
-    ResearchProjectBranch                                               = 66,  /*NYI*/ // Research project is in branch "{ResearchBranch}"
+    ResearchProjectRarity                                               = 65,  // Research project rarity is "{$Project Rarity}"
+    ResearchProjectBranch                                               = 66,  // Research project is in branch "{ResearchBranch}"
     WorldStateExpression                                                = 67,  // World state expression "{WorldStateExpression}" is true
     DungeonDifficulty                                                   = 68,  // Dungeon difficulty is "{Difficulty}"
     PlayerLevelEqualOrGreaterThan                                       = 69,  // Player level is {#Level} or more

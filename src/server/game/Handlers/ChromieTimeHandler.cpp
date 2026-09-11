@@ -18,6 +18,7 @@
 #include "WorldSession.h"
 #include "ChromieTimePackets.h"
 #include "Creature.h"
+#include "CreatureTextMgr.h"
 #include "DB2Stores.h"
 #include "GossipDef.h"
 #include "ObjectMgr.h"
@@ -28,6 +29,32 @@
 
 namespace
 {
+// Female Chromie BroadcastText ids from hotfix rows (Text1). Shadowlands (Ui 14) has no id in that set.
+uint32 GetChromieTimeSelectBroadcastTextId(uint32 uiExpansionId)
+{
+    switch (uiExpansionId)
+    {
+        case 5:  return 195758; // Cataclysm
+        case 6:  return 195193; // Burning Crusade
+        case 7:  return 194977; // Wrath of the Lich King
+        case 8:  return 195172; // Mists of Pandaria
+        case 9:  return 195151; // Warlords of Draenor
+        case 10: return 195757; // Legion
+        case 15: return 266403; // Battle for Azeroth
+        case 16: return 266404; // Dragonflight
+        default: return 0;
+    }
+}
+
+void SpeakChromieTimeSelectLine(Creature* chromie, Player* player, uint32 uiExpansionId)
+{
+    uint32 const textId = GetChromieTimeSelectBroadcastTextId(uiExpansionId);
+    if (!textId)
+        return;
+
+    chromie->Talk(textId, CHAT_MSG_MONSTER_SAY, CreatureTextMgr::GetRangeForChatType(CHAT_MSG_MONSTER_SAY), player);
+}
+
 void PushChromieTimeBreadcrumbQuest(Player* player, uint32 uiExpansionId)
 {
     ChromieTimeExpansionQuest const* mapping = sObjectMgr->GetChromieTimeExpansionQuest(uiExpansionId);
@@ -66,6 +93,9 @@ void WorldSession::HandleChromieTimeSelectExpansion(WorldPackets::ChromieTime::C
     if (!chromie)
         return;
 
+    if (!player->PlayerTalkClass->GetInteractionData().IsInteractingWith(selectExpansion.GUID, PlayerInteractionType::ChromieTime))
+        return;
+
     UIChromieTimeExpansionInfoEntry const* expansionInfo = sUIChromieTimeExpansionInfoStore.LookupEntry(selectExpansion.Expansion);
     if (!expansionInfo || !expansionInfo->SpellID)
         return;
@@ -87,6 +117,8 @@ void WorldSession::HandleChromieTimeSelectExpansion(WorldPackets::ChromieTime::C
 
     WorldPackets::ChromieTime::ChromieTimeSelectExpansionSuccess success;
     SendPacket(success.Write());
+
+    SpeakChromieTimeSelectLine(chromie, player, selectExpansion.Expansion);
 
     // Auto-launched QUEST_GIVER_QUEST_DETAILS after select (separate from spell 325400)
     PushChromieTimeBreadcrumbQuest(player, selectExpansion.Expansion);

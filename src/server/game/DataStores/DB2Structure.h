@@ -3562,6 +3562,15 @@ struct QuestXPEntry
     std::array<uint16, 10> Difficulty;
 };
 
+struct QuestPOIPointEntry
+{
+    uint32 ID;
+    int16 X;
+    int16 Y;
+    int16 Z;
+    int32 QuestPOIBlobID;
+};
+
 struct RandPropPointsEntry
 {
     uint32 ID;
@@ -3575,6 +3584,46 @@ struct RandPropPointsEntry
     std::array<uint32, 5> Epic;
     std::array<uint32, 5> Superior;
     std::array<uint32, 5> Good;
+};
+
+struct ResearchBranchEntry
+{
+    uint32 ID;
+    LocalizedString Name;
+    uint8 ResearchFieldID;
+    uint16 CurrencyID;
+    int32 TextureFileID;
+    int32 BigTextureFileID;
+    int32 ItemID;
+};
+
+struct ResearchFieldEntry
+{
+    uint32 ID;
+    LocalizedString Name;
+    uint8 Slot;
+};
+
+struct ResearchProjectEntry
+{
+    uint32 ID;
+    LocalizedString Name;
+    LocalizedString Description;
+    uint8 Rarity;
+    int32 SpellID;
+    uint16 ResearchBranchID;
+    uint8 NumSockets;
+    int32 TextureFileID;
+    uint32 RequiredWeight;
+};
+
+struct ResearchSiteEntry
+{
+    uint32 ID;
+    LocalizedString Name;
+    int16 MapID;
+    int32 QuestPOIBlobID;
+    uint32 AreaPOIIconEnum;
 };
 
 struct RewardPackEntry

@@ -861,6 +861,16 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_SEL_CHARACTER_CHROMIE_TIME, "SELECT uiExpansionId FROM character_chromie_time WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHARACTER_CHROMIE_TIME, "DELETE FROM character_chromie_time WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_INS_CHARACTER_CHROMIE_TIME, "INSERT INTO character_chromie_time (guid, uiExpansionId) VALUES (?, ?)", CONNECTION_ASYNC);
+
+    PrepareStatement(CHAR_SEL_CHARACTER_RESEARCH_SITE, "SELECT researchSiteId, progress, findX, findY FROM character_research_site WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_CHARACTER_RESEARCH_SITE, "DELETE FROM character_research_site WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_CHARACTER_RESEARCH_SITE, "INSERT INTO character_research_site (guid, researchSiteId, progress, findX, findY) VALUES (?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_CHARACTER_RESEARCH_PROJECT, "SELECT projectId FROM character_research_project WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_CHARACTER_RESEARCH_PROJECT, "DELETE FROM character_research_project WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_CHARACTER_RESEARCH_PROJECT, "INSERT INTO character_research_project (guid, projectId) VALUES (?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_CHARACTER_RESEARCH_HISTORY, "SELECT projectId, firstCompleted, completionCount FROM character_research_history WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_CHARACTER_RESEARCH_HISTORY, "DELETE FROM character_research_history WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_CHARACTER_RESEARCH_HISTORY, "INSERT INTO character_research_history (guid, projectId, firstCompleted, completionCount) VALUES (?, ?, ?, ?)", CONNECTION_ASYNC);
 }
 
 CharacterDatabaseConnection::CharacterDatabaseConnection(MySQLConnectionInfo& connInfo, ConnectionFlags connectionFlags) : MySQLConnection(connInfo, connectionFlags)

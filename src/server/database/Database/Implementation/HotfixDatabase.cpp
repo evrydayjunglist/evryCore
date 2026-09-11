@@ -1470,12 +1470,38 @@ void HotfixDatabaseConnection::DoPrepareStatements()
         "Difficulty8, Difficulty9, Difficulty10 FROM quest_xp WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
     PREPARE_MAX_ID_STMT(HOTFIX_SEL_QUEST_XP, "SELECT MAX(ID) + 1 FROM quest_xp", CONNECTION_SYNCH);
 
+    // QuestPOIPoint.db2
+    PrepareStatement(HOTFIX_SEL_QUEST_POI_POINT, "SELECT ID, X, Y, Z, QuestPOIBlobID FROM quest_poi_point WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
+    PREPARE_MAX_ID_STMT(HOTFIX_SEL_QUEST_POI_POINT, "SELECT MAX(ID) + 1 FROM quest_poi_point", CONNECTION_SYNCH);
+
     // RandPropPoints.db2
     PrepareStatement(HOTFIX_SEL_RAND_PROP_POINTS, "SELECT ID, DamageReplaceStatF, DamageSecondaryF, DamageReplaceStat, DamageSecondary, EpicF1, "
         "EpicF2, EpicF3, EpicF4, EpicF5, SuperiorF1, SuperiorF2, SuperiorF3, SuperiorF4, SuperiorF5, GoodF1, GoodF2, GoodF3, GoodF4, GoodF5, Epic1, "
         "Epic2, Epic3, Epic4, Epic5, Superior1, Superior2, Superior3, Superior4, Superior5, Good1, Good2, Good3, Good4, Good5 FROM rand_prop_points"
         " WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
     PREPARE_MAX_ID_STMT(HOTFIX_SEL_RAND_PROP_POINTS, "SELECT MAX(ID) + 1 FROM rand_prop_points", CONNECTION_SYNCH);
+
+    // ResearchBranch.db2
+    PrepareStatement(HOTFIX_SEL_RESEARCH_BRANCH, "SELECT ID, Name, ResearchFieldID, CurrencyID, TextureFileID, BigTextureFileID, ItemID FROM research_branch"
+        " WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
+    PREPARE_MAX_ID_STMT(HOTFIX_SEL_RESEARCH_BRANCH, "SELECT MAX(ID) + 1 FROM research_branch", CONNECTION_SYNCH);
+    PREPARE_LOCALE_STMT(HOTFIX_SEL_RESEARCH_BRANCH, "SELECT ID, Name_lang FROM research_branch_locale WHERE (`VerifiedBuild` > 0) = ? AND locale = ?", CONNECTION_SYNCH);
+
+    // ResearchField.db2
+    PrepareStatement(HOTFIX_SEL_RESEARCH_FIELD, "SELECT ID, Name, Slot FROM research_field WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
+    PREPARE_MAX_ID_STMT(HOTFIX_SEL_RESEARCH_FIELD, "SELECT MAX(ID) + 1 FROM research_field", CONNECTION_SYNCH);
+    PREPARE_LOCALE_STMT(HOTFIX_SEL_RESEARCH_FIELD, "SELECT ID, Name_lang FROM research_field_locale WHERE (`VerifiedBuild` > 0) = ? AND locale = ?", CONNECTION_SYNCH);
+
+    // ResearchProject.db2
+    PrepareStatement(HOTFIX_SEL_RESEARCH_PROJECT, "SELECT ID, Name, Description, Rarity, SpellID, ResearchBranchID, NumSockets, TextureFileID, RequiredWeight FROM research_project"
+        " WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
+    PREPARE_MAX_ID_STMT(HOTFIX_SEL_RESEARCH_PROJECT, "SELECT MAX(ID) + 1 FROM research_project", CONNECTION_SYNCH);
+    PREPARE_LOCALE_STMT(HOTFIX_SEL_RESEARCH_PROJECT, "SELECT ID, Name_lang, Description_lang FROM research_project_locale WHERE (`VerifiedBuild` > 0) = ? AND locale = ?", CONNECTION_SYNCH);
+
+    // ResearchSite.db2
+    PrepareStatement(HOTFIX_SEL_RESEARCH_SITE, "SELECT ID, Name, MapID, QuestPOIBlobID, AreaPOIIconEnum FROM research_site WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
+    PREPARE_MAX_ID_STMT(HOTFIX_SEL_RESEARCH_SITE, "SELECT MAX(ID) + 1 FROM research_site", CONNECTION_SYNCH);
+    PREPARE_LOCALE_STMT(HOTFIX_SEL_RESEARCH_SITE, "SELECT ID, Name_lang FROM research_site_locale WHERE (`VerifiedBuild` > 0) = ? AND locale = ?", CONNECTION_SYNCH);
 
     // RewardPack.db2
     PrepareStatement(HOTFIX_SEL_REWARD_PACK, "SELECT ID, CharTitleID, Money, ArtifactXPDifficulty, ArtifactXPMultiplier, ArtifactXPCategoryID, "

@@ -189,8 +189,14 @@ void AccountCurrencyMgr::MergeMigrationCurrency(CurrencyTypesEntry const* curren
     accountCurrency->EarnedQuantity = std::max(accountCurrency->EarnedQuantity, aggregatedFromCharacters.EarnedQuantity);
     accountCurrency->Flags = CurrencyDbFlags(std::max(AsUnderlyingType(accountCurrency->Flags), AsUnderlyingType(aggregatedFromCharacters.Flags)));
 
+    // Leftover character rows and the Battle.net pool can both have a quantity when a
+    // previous login already migrated those rows and the delete has not landed yet.
+    // Keep the larger amount instead of adding, so that leftover is not counted twice
+    // and a larger leftover is not thrown away.
     uint32 mergedQuantity = accountCurrency->Quantity;
-    if (!(authQuantityBeforeMerge > 0 && aggregatedFromCharacters.Quantity > 0))
+    if (authQuantityBeforeMerge > 0 && aggregatedFromCharacters.Quantity > 0)
+        mergedQuantity = std::max(mergedQuantity, aggregatedFromCharacters.Quantity);
+    else
         mergedQuantity += aggregatedFromCharacters.Quantity;
 
     if (capPlayer)

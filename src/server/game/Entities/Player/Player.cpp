@@ -7083,10 +7083,6 @@ void Player::ConsolidateLegacyAccountWideCurrency()
         if (PlayerCurrency const* existing = accountCurrencyMgr->GetCurrency(aggregatePair.first))
             authQuantityBeforeMerge = existing->Quantity;
 
-        // Auth already has a quantity and character rows also have one: do not double-add.
-        if (authQuantityBeforeMerge > 0 && aggregatePair.second.Quantity > 0)
-            continue;
-
         accountCurrencyMgr->MergeMigrationCurrency(currency, aggregatePair.second, this, authQuantityBeforeMerge);
         _currencyStorage.erase(aggregatePair.first);
     }

@@ -20,6 +20,8 @@
 #include "Log.h"
 #include "ScriptMgr.h"
 #include "World.h"
+#include <filesystem>
+#include <system_error>
 
 class CatalogShopWorldScript : public WorldScript
 {
@@ -36,6 +38,13 @@ public:
             // Live path while the module is on. Empty disables Free Buy polling.
             std::string const dir = sConfigMgr->GetStringDefault("CatalogShop.FreeBuySignalDir", "temp/catalogshop-free-buy");
             sWorld->setCatalogShopFreeBuySignalDir(dir);
+            if (!dir.empty())
+            {
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                if (ec)
+                    TC_LOG_ERROR("module.catalogshop", "Failed to create CatalogShop Free Buy signal dir '{}': {}", dir, ec.message());
+            }
         }
 
         TC_LOG_INFO("module.catalogshop", "mod-catalogshop config{}: CatalogShop.Enable = {}",

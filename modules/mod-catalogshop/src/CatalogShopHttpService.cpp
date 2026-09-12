@@ -144,6 +144,25 @@ bool CatalogShopHttpService::StartFromConfig()
     std::string keyFile = sConfigMgr->GetStringDefault("CatalogShop.PrivateKeyFile",
         "temp/catalogshop-certs/catalogshop-localhost-key.pem");
     _freeBuySignalDir = ResolveFreeBuySignalDir();
+    if (!_freeBuySignalDir.empty())
+    {
+        std::error_code dirEc;
+        std::filesystem::create_directories(_freeBuySignalDir, dirEc);
+        if (dirEc)
+            TC_LOG_ERROR("module.catalogshop", "Failed to create CatalogShop Free Buy signal dir '{}': {}", _freeBuySignalDir, dirEc.message());
+    }
+
+    std::error_code existsEc;
+    if (!std::filesystem::exists(certFile, existsEc) || existsEc)
+    {
+        TC_LOG_ERROR("module.catalogshop", "CatalogShop certificate file is missing: '{}' (SAN must include DNS:localhost)", certFile);
+        return false;
+    }
+    if (!std::filesystem::exists(keyFile, existsEc) || existsEc)
+    {
+        TC_LOG_ERROR("module.catalogshop", "CatalogShop private key file is missing: '{}'", keyFile);
+        return false;
+    }
 
     if (!SslContext::Initialize(certFile, keyFile))
         return false;

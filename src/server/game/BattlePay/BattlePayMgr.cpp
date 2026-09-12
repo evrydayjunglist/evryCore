@@ -23,6 +23,7 @@
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "Field.h"
+#include "GameTime.h"
 #include "Item.h"
 #include "Log.h"
 #include "Mail.h"
@@ -30,14 +31,20 @@
 #include "MapManager.h"
 #include "MiscPackets.h"
 #include "ObjectAccessor.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "StringConvert.h"
 #include "Util.h"
 #include "World.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <unordered_map>
 #include <vector>
+
+#include "CatalogShopLicenseData.inc"
 
 namespace
 {
@@ -54,6 +61,16 @@ constexpr int32 BATTLE_PAY_L80_LOADOUT_PURPOSE = 23;
 constexpr ItemContext BATTLE_PAY_L80_ITEM_CONTEXT = ItemContext::Character_Boost_Shadowlands_50; // 62
 constexpr uint64 BATTLE_PAY_L80_GOLD = 100000;
 constexpr uint32 BATTLE_PAY_MAX_AVAILABLE_L80 = 16;
+constexpr uint32 CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID = 1969052;
+constexpr uint32 CATALOG_SHOP_L80_ENHANCED_CHILD_PRODUCT_ID = 1960794;
+constexpr uint32 CATALOG_SHOP_L80_STANDARD_PRODUCT_ID = 1977499;
+
+void SendRawServerOpcode(WorldSession* session, OpcodeServer opcode, uint8 const* bytes, size_t size)
+{
+    WorldPacket data(opcode, size);
+    data.append(bytes, size);
+    session->SendPacket(&data);
+}
 
 WorldPackets::BattlePay::ProductDisplayInfo MakeL80DisplayInfo()
 {
@@ -205,6 +222,11 @@ bool BattlePayMgr::IsEnabled()
     return sWorld->getBoolConfig(CONFIG_BATTLE_PAY_ENABLED);
 }
 
+bool BattlePayMgr::IsCatalogShopEnabled()
+{
+    return IsEnabled() && sWorld->getBoolConfig(CONFIG_BATTLE_PAY_SHOP2_ENABLED);
+}
+
 uint32 BattlePayMgr::GetL80ProductId()
 {
     return BATTLE_PAY_L80_PRODUCT_ID;
@@ -336,6 +358,11 @@ uint32 BattlePayMgr::ResolveFreeBuyProductId(uint32 shopProductId) const
     if (shopProductId == deliverableId || shopProductId == BATTLE_PAY_L80_SHOP_PRODUCT_INFO_ID)
         return deliverableId;
 
+    if (shopProductId == CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID
+        || shopProductId == CATALOG_SHOP_L80_ENHANCED_CHILD_PRODUCT_ID
+        || shopProductId == CATALOG_SHOP_L80_STANDARD_PRODUCT_ID)
+        return deliverableId;
+
     return 0;
 }
 
@@ -434,11 +461,12 @@ void BattlePayMgr::SendStartPurchaseResult(uint32 clientToken, uint64 purchaseId
     _session->SendPacket(response.Write());
 }
 
-bool BattlePayMgr::BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken)
+bool BattlePayMgr::BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken, bool sendStartPurchaseResponse)
 {
     if (!IsEnabled())
     {
-        SendStartPurchaseResult(clientToken, 0, 13);
+        if (sendStartPurchaseResponse)
+            SendStartPurchaseResult(clientToken, 0, 13);
         return false;
     }
 
@@ -448,7 +476,8 @@ bool BattlePayMgr::BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken
     {
         TC_LOG_INFO("network", "BattlePay: Free StartPurchase denied shopProduct {} (account {})",
             shopProductId, _session->GetAccountId());
-        SendStartPurchaseResult(clientToken, 0, 3);
+        if (sendStartPurchaseResponse)
+            SendStartPurchaseResult(clientToken, 0, 3);
         SendPurchaseUpdate(0, shopProductId, BattlePay::PURCHASE_STATUS_FINISH, 3);
         return false;
     }
@@ -461,6 +490,8 @@ bool BattlePayMgr::BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken
     if (!PrepareAvailableL80Distribution(staged))
     {
         SendDistributionList();
+        if (sendStartPurchaseResponse)
+            SendStartPurchaseResult(clientToken, 0, 3);
         SendPurchaseUpdate(0, deliverableId, BattlePay::PURCHASE_STATUS_FINISH, 3);
         return false;
     }
@@ -474,7 +505,8 @@ bool BattlePayMgr::BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken
     _pendingPurchase.CurrentPriceFixedPoint = 0;
     _pendingPurchase.AwaitingConfirm = true;
 
-    SendStartPurchaseResult(clientToken, staged.PurchaseID, 0);
+    if (sendStartPurchaseResponse)
+        SendStartPurchaseResult(clientToken, staged.PurchaseID, 0);
     SendPurchaseUpdate(staged.PurchaseID, deliverableId, BattlePay::PURCHASE_STATUS_READY, 0);
     SendConfirmPurchase(_pendingPurchase);
     return true;
@@ -578,6 +610,143 @@ void BattlePayMgr::SendDistributionUpdate(BattlePay::PendingDistribution const& 
 void BattlePayMgr::HandleStartPurchase(uint32 clientToken, uint32 productId, ObjectGuid /*targetCharacter*/)
 {
     BeginFreePurchaseConfirm(productId, clientToken);
+}
+
+void BattlePayMgr::SendCatalogShopObtainLicenses()
+{
+    if (!IsCatalogShopEnabled())
+        return;
+
+    // Retail shop-lists: two OBTAIN_LICENSE uint32 ids sent with shop2 chrome.
+    static constexpr uint32 CatalogShopLicenseIds[] = { 0x11BD37u, 0x11BD35u };
+    for (uint32 licenseId : CatalogShopLicenseIds)
+    {
+        WorldPackets::CatalogShop::ObtainLicense packet;
+        packet.LicenseId = licenseId;
+        _session->SendPacket(packet.Write());
+    }
+}
+
+void BattlePayMgr::SendLastCatalogFetchResponse()
+{
+    if (!IsCatalogShopEnabled())
+        return;
+
+    WorldPackets::CatalogShop::LastCatalogFetchResponse response;
+    response.LastFetchUnixTime = 0x6A658BEFull;
+    _session->SendPacket(response.Write());
+}
+
+void BattlePayMgr::HandleCatalogShopLicenseGameDataRequest(uint32 requestSize)
+{
+    if (!IsCatalogShopEnabled())
+        return;
+
+    uint8 const* payload = nullptr;
+    size_t payloadSize = 0;
+    switch (requestSize)
+    {
+        case 872:
+            payload = CatalogShopRetailLicenseData344;
+            payloadSize = sizeof(CatalogShopRetailLicenseData344);
+            break;
+        case 136:
+            payload = CatalogShopRetailLicenseData358;
+            payloadSize = sizeof(CatalogShopRetailLicenseData358);
+            break;
+        case 32:
+            payload = CatalogShopRetailLicenseData359;
+            payloadSize = sizeof(CatalogShopRetailLicenseData359);
+            break;
+        case 20:
+            payload = CatalogShopRetailLicenseData361;
+            payloadSize = sizeof(CatalogShopRetailLicenseData361);
+            break;
+        default:
+            TC_LOG_DEBUG("network", "BattlePay: CatalogShop LICENSE_GAME_DATA_REQUEST size {} — using primary companion stub",
+                requestSize);
+            payload = CatalogShopRetailLicenseData344;
+            payloadSize = sizeof(CatalogShopRetailLicenseData344);
+            break;
+    }
+
+    SendRawServerOpcode(_session, SMSG_CATALOG_SHOP_LICENSE_DATA, payload, payloadSize);
+}
+
+void BattlePayMgr::HandleOpenCheckout(uint32 checkoutRequestId)
+{
+    if (!IsCatalogShopEnabled())
+        return;
+
+    uint64 const issued = uint64(GameTime::GetGameTime());
+    uint64 const expires = issued + 14400;
+    // Local dummy token — retail shape XUS-{32hex}-{8hex} (45 chars), not Blizzard cloud SSO.
+    // Account id is the first 8 hex after the prefix so local checkout can map Buy to this session.
+    std::string const token = Trinity::StringFormat("XUS-{:08x}{:08x}{:08x}{:08x}-{:08x}",
+        _session->GetAccountId(),
+        checkoutRequestId,
+        uint32(issued),
+        uint32(expires),
+        0x55867037u);
+
+    WorldPackets::BattlePay::GenerateSSOTokenResponse response;
+    response.CheckoutRequestID = checkoutRequestId;
+    response.Unk0 = 0;
+    response.IssuedUnixTime = issued;
+    response.ExpiresUnixTime = expires;
+    response.Token = token;
+
+    _session->SendPacket(response.Write());
+    TC_LOG_INFO("network", "BattlePay: OpenCheckout {} account {} → GENERATE_SSO_TOKEN_RESPONSE",
+        checkoutRequestId, _session->GetAccountId());
+}
+
+void BattlePayMgr::TryConsumeCatalogShopFreeBuySignal(uint32 diff)
+{
+    if (!IsCatalogShopEnabled())
+        return;
+
+    std::string const& signalDir = sWorld->GetCatalogShopFreeBuySignalDir();
+    if (signalDir.empty())
+        return;
+
+    constexpr uint32 kPollPeriodMs = 250;
+    if (diff)
+    {
+        _freeBuySignalPollAccumMs += diff;
+        if (_freeBuySignalPollAccumMs < kPollPeriodMs)
+            return;
+        _freeBuySignalPollAccumMs = 0;
+    }
+
+    std::filesystem::path const signalPath =
+        std::filesystem::path(signalDir) / Trinity::StringFormat("{}.signal", _session->GetAccountId());
+
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(signalPath, ec))
+        return;
+
+    std::ifstream in(signalPath);
+    std::string body;
+    if (in)
+        std::getline(in, body);
+    in.close();
+    std::filesystem::remove(signalPath, ec);
+
+    uint32 shopProductId = 0;
+    if (Optional<uint32> parsed = Trinity::StringTo<uint32>(body))
+        shopProductId = *parsed;
+    if (!shopProductId)
+        shopProductId = CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID;
+
+    TC_LOG_INFO("network", "BattlePay: CatalogShop Free Buy signal shopProduct {} account {} → Free Confirm",
+        shopProductId, _session->GetAccountId());
+
+    if (!BeginFreePurchaseConfirm(shopProductId, shopProductId, false))
+        return;
+
+    if (_pendingPurchase.AwaitingConfirm)
+        HandleConfirmPurchaseResponse(true, _pendingPurchase.ServerToken, 0);
 }
 
 void BattlePayMgr::HandleConfirmPurchaseResponse(bool confirm, uint32 serverToken, uint64 clientCurrentPriceFixedPoint)

@@ -4067,7 +4067,8 @@ BlackMarket.UpdatePeriod = 24
 # BATTLE PAY SETTINGS
 #
 #    BattlePay.Enabled
-#        Description: Classic in-game Store glue. CatalogShop (shop2) stays off.
+#        Description: Classic in-game Store glue. CatalogShop chrome stays off unless the
+#                     CatalogShop module also sets CONFIG_BATTLE_PAY_SHOP2_ENABLED.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 #
@@ -4083,6 +4084,18 @@ BattlePay.Enabled = 0
 #
 
 BattlePay.FreeProductIDs = "1161"
+
+#
+#    BattlePay.CatalogShopFreeBuySignalDir
+#        Description: Directory polled for CatalogShop Free Buy. The HTTPS module writes
+#                     <dir>/<accountId>.signal; this process consumes it and runs the same
+#                     Free Confirm path as classic Store (AVAILABLE 1161, price 0).
+#                     Empty = polling off. Use the same path as CatalogShop.FreeBuySignalDir.
+#                     Relative paths are from the worldserver working directory.
+#        Default:     "temp/catalogshop-free-buy"
+#
+
+BattlePay.CatalogShopFreeBuySignalDir = "temp/catalogshop-free-buy"
 
 #
 #

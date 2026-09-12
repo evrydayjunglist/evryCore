@@ -213,8 +213,15 @@ namespace WorldPackets
         class GetProductList;
         class GetPurchaseList;
         class StartPurchase;
+        class OpenCheckout;
         class ConfirmPurchaseResponse;
         class DistributionAssignToTarget;
+    }
+
+    namespace CatalogShop
+    {
+        class GetLastCatalogFetch;
+        class LicenseGameDataRequest;
     }
 
     namespace BattlePet
@@ -1916,8 +1923,11 @@ class TC_GAME_API WorldSession
         void HandleBattlePayGetProductList(WorldPackets::BattlePay::GetProductList& packet);
         void HandleBattlePayGetPurchaseList(WorldPackets::BattlePay::GetPurchaseList& packet);
         void HandleBattlePayStartPurchase(WorldPackets::BattlePay::StartPurchase& packet);
+        void HandleBattlePayOpenCheckout(WorldPackets::BattlePay::OpenCheckout& packet);
         void HandleBattlePayConfirmPurchaseResponse(WorldPackets::BattlePay::ConfirmPurchaseResponse& packet);
         void HandleBattlePayDistributionAssignToTarget(WorldPackets::BattlePay::DistributionAssignToTarget& packet);
+        void HandleGetLastCatalogFetch(WorldPackets::CatalogShop::GetLastCatalogFetch& packet);
+        void HandleCatalogShopLicenseGameDataRequest(WorldPackets::CatalogShop::LicenseGameDataRequest& packet);
 
         // Battle Pets
         void HandleBattlePetRequestJournal(WorldPackets::BattlePet::BattlePetRequestJournal& battlePetRequestJournal);

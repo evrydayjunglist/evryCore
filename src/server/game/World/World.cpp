@@ -695,6 +695,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Loot.EnableAELoot"sv, .DefaultValue = true, .Index = CONFIG_ENABLE_AE_LOOT },
         { .Name = "Load.Locales"sv, .DefaultValue = true, .Index = CONFIG_LOAD_LOCALES },
         { .Name = "BattlePay.Enabled"sv, .DefaultValue = false, .Index = CONFIG_BATTLE_PAY_ENABLED },
+        // CONFIG_BATTLE_PAY_SHOP2_ENABLED is not loaded here. The CatalogShop module sets it from CatalogShop.Enable.
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint32, INT_CONFIG_VALUE_COUNT> ints =
@@ -1040,6 +1041,9 @@ void World::LoadConfigSettings(bool reload)
 
     ///- Get string for new logins (newly created characters)
     SetNewCharString(sConfigMgr->GetStringDefault("PlayerStart.String"sv, ""sv));
+
+    // Empty disables CatalogShop Free Buy signal polling. Same path as CatalogShop.FreeBuySignalDir.
+    m_catalogShopFreeBuySignalDir = sConfigMgr->GetStringDefault("BattlePay.CatalogShopFreeBuySignalDir"sv, "temp/catalogshop-free-buy"sv);
 
     for (uint8 i = 0; i < MAX_MOVE_TYPE; ++i)
         playerBaseMoveSpeed[i] = baseMoveSpeed[i] * rate_values[RATE_MOVESPEED];

@@ -36,6 +36,11 @@ void WorldSession::HandleBattlePayStartPurchase(WorldPackets::BattlePay::StartPu
     GetBattlePayMgr()->HandleStartPurchase(packet.ClientToken, packet.ProductID, packet.TargetCharacter);
 }
 
+void WorldSession::HandleBattlePayOpenCheckout(WorldPackets::BattlePay::OpenCheckout& packet)
+{
+    GetBattlePayMgr()->HandleOpenCheckout(packet.CheckoutRequestID);
+}
+
 void WorldSession::HandleBattlePayConfirmPurchaseResponse(WorldPackets::BattlePay::ConfirmPurchaseResponse& packet)
 {
     GetBattlePayMgr()->HandleConfirmPurchaseResponse(packet.ConfirmPurchase, packet.ServerToken, packet.ClientCurrentPriceFixedPoint);
@@ -49,6 +54,16 @@ void WorldSession::HandleBattlePayDistributionAssignToTarget(WorldPackets::Battl
     // Same path as CMSG_ENUM_CHARACTERS so the plate shows the assigned boost level.
     RequestCharacterEnum();
     SendFeatureSystemStatusGlueScreen();
+}
+
+void WorldSession::HandleGetLastCatalogFetch(WorldPackets::CatalogShop::GetLastCatalogFetch& /*packet*/)
+{
+    GetBattlePayMgr()->SendLastCatalogFetchResponse();
+}
+
+void WorldSession::HandleCatalogShopLicenseGameDataRequest(WorldPackets::CatalogShop::LicenseGameDataRequest& packet)
+{
+    GetBattlePayMgr()->HandleCatalogShopLicenseGameDataRequest(packet.RequestSize);
 }
 
 void WorldSession::RequestCharacterEnum()

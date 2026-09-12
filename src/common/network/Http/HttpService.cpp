@@ -234,9 +234,11 @@ void SessionService::KillInactiveSessions()
         for (auto itr = inactiveSessions.begin(); itr != inactiveSessions.end(); )
         {
             auto sessionItr = _sessions.find(*itr);
+            // A nil or never-stored id is not in _sessions. Do not erase(end()).
             if (sessionItr == _sessions.end() || sessionItr->second->InactiveTimestamp < now)
             {
-                _sessions.erase(sessionItr);
+                if (sessionItr != _sessions.end())
+                    _sessions.erase(sessionItr);
                 itr = inactiveSessions.erase(itr);
             }
             else

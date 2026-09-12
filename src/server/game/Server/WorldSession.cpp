@@ -531,6 +531,9 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
 
     ProcessQueryCallbacks();
 
+    if (updater.ProcessUnsafe() && _battlePayMgr)
+        _battlePayMgr->TryConsumeCatalogShopFreeBuySignal(diff);
+
     //check if we are safe to proceed with logout
     //logout procedure should happen only in World::UpdateSessions() method!!!
     if (updater.ProcessUnsafe())

@@ -56,6 +56,16 @@ namespace WorldPackets
             ObjectGuid TargetCharacter;
         };
 
+        class OpenCheckout final : public ClientPacket
+        {
+        public:
+            explicit OpenCheckout(WorldPacket&& packet) : ClientPacket(CMSG_BATTLE_PAY_OPEN_CHECKOUT, std::move(packet)) { }
+
+            void Read() override;
+
+            uint32 CheckoutRequestID = 0;
+        };
+
         class ConfirmPurchaseResponse final : public ClientPacket
         {
         public:
@@ -260,6 +270,63 @@ namespace WorldPackets
             uint32 Result = 0;
             uint32 ClientToken = 0;
             uint64 DistributionID = 0;
+        };
+
+        // CatalogShop browse: OPEN_CHECKOUT is answered with this dummy local token, not Blizzard SSO.
+        // Wire: uint32 requestId, uint32 unk0, uint64 issuedUnix, uint64 expiresUnix, 45-char token (no length).
+        class GenerateSSOTokenResponse final : public ServerPacket
+        {
+        public:
+            explicit GenerateSSOTokenResponse() : ServerPacket(SMSG_GENERATE_SSO_TOKEN_RESPONSE, 69) { }
+
+            WorldPacket const* Write() override;
+
+            uint32 CheckoutRequestID = 0;
+            uint32 Unk0 = 0;
+            uint64 IssuedUnixTime = 0;
+            uint64 ExpiresUnixTime = 0;
+            std::string Token;
+        };
+    }
+
+    namespace CatalogShop
+    {
+        class GetLastCatalogFetch final : public ClientPacket
+        {
+        public:
+            explicit GetLastCatalogFetch(WorldPacket&& packet) : ClientPacket(CMSG_GET_LAST_CATALOG_FETCH, std::move(packet)) { }
+
+            void Read() override;
+        };
+
+        class LicenseGameDataRequest final : public ClientPacket
+        {
+        public:
+            explicit LicenseGameDataRequest(WorldPacket&& packet) : ClientPacket(CMSG_CATALOG_SHOP_LICENSE_GAME_DATA_REQUEST, std::move(packet)) { }
+
+            void Read() override;
+
+            uint32 RequestSize = 0;
+        };
+
+        class LastCatalogFetchResponse final : public ServerPacket
+        {
+        public:
+            explicit LastCatalogFetchResponse() : ServerPacket(SMSG_LAST_CATALOG_FETCH_RESPONSE, 8) { }
+
+            WorldPacket const* Write() override;
+
+            uint64 LastFetchUnixTime = 0;
+        };
+
+        class ObtainLicense final : public ServerPacket
+        {
+        public:
+            explicit ObtainLicense() : ServerPacket(SMSG_CATALOG_SHOP_OBTAIN_LICENSE, 4) { }
+
+            WorldPacket const* Write() override;
+
+            uint32 LicenseId = 0;
         };
     }
 }

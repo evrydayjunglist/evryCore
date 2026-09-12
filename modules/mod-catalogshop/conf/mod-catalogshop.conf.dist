@@ -1,0 +1,64 @@
+###############################################################################
+# CatalogShop local shop2 HTTPS (mod-catalogshop)
+#
+# Copied to bin/.../modules/mod-catalogshop.conf.dist at build time.
+# Override with modules/mod-catalogshop.conf beside worldserver.exe (not overwritten).
+# Do not put these keys in worldserver.conf.dist except BattlePay.CatalogShopFreeBuySignalDir.
+#
+# Browse: stock client dials https://localhost (no hosts file). Cert SAN must include
+# localhost. Bare https://127.0.0.1 is refused by the client.
+#
+# Buy: stock CatalogShop Buy still dials us.checkout.battle.net. That is an ops
+# exception, not automatic. If you later pin 127.0.0.1 us.checkout.battle.net,
+# this listener serves a local checkout stub and can write the Free Buy signal.
+# Do not bake that hostname into the game core or write hosts from C++.
+#
+# Port 443 on Windows requires an elevated worldserver process.
+# Leave Enable = 0 unless you intend to bind the shop2 listener.
+# When Enable = 1, stop any Python shop2 stub — this module owns browse + Free Buy checkout.
+#
+# Classic Store still needs BattlePay.Enabled. CatalogShop chrome is on only when this
+# module is enabled AND BattlePay.Enabled is 1.
+###############################################################################
+
+[worldserver]
+
+#
+# Start the embedded shop2 HTTPS listener. Off by default.
+# 1 = bind TLS and set the World shop2 bool so AuthHandler can send shop2Enabled=1.
+# 0 = no listener, shop2Enabled stays "0" even if BattlePay.Enabled is 1.
+#
+CatalogShop.Enable = 0
+
+#
+# Bind address / port. Browse MirrorVars use https://localhost (port 443).
+#
+CatalogShop.BindIP = "127.0.0.1"
+CatalogShop.Port = 443
+
+#
+# TLS certificate + private key (PEM). SAN must include DNS:localhost.
+# Generate a local-only cert (do not commit a private key):
+#
+#   openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes ^
+#     -keyout catalogshop-localhost-key.pem -out catalogshop-localhost.pem ^
+#     -subj "/CN=localhost" ^
+#     -addext "subjectAltName=DNS:localhost"
+#
+# Trust the cert once in the user store (certutil -addstore -user Root <crt>).
+# If you pin us.checkout.battle.net for Buy, add that name to the SAN and re-trust.
+#
+CatalogShop.CertificateFile = "temp/catalogshop-certs/catalogshop-localhost.pem"
+CatalogShop.PrivateKeyFile = "temp/catalogshop-certs/catalogshop-localhost-key.pem"
+
+#
+# Free Buy signal directory. Must match BattlePay.CatalogShopFreeBuySignalDir.
+# The checkout stub writes <dir>/<accountId>.signal. Empty BattlePay key disables
+# world polling. Relative paths are from the worldserver working directory.
+#
+CatalogShop.FreeBuySignalDir = "temp/catalogshop-free-buy"
+
+#
+# HttpService network worker threads.
+#
+CatalogShop.Threads = 1

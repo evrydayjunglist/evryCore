@@ -17,6 +17,7 @@
 
 #include "WorldSession.h"
 #include "AuthenticationPackets.h"
+#include "BattlePayMgr.h"
 #include "BattlenetRpcErrorCodes.h"
 #include "CharacterTemplateDataStore.h"
 #include "ClientConfigPackets.h"
@@ -29,6 +30,7 @@
 #include "Timezone.h"
 #include "Util.h"
 #include "World.h"
+#include <vector>
 
 void WorldSession::SendAuthResponse(uint32 code, bool queued, uint32 queuePos)
 {
@@ -143,25 +145,65 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
 
     SendPacket(features.Write());
 
-    WorldPackets::System::MirrorVarSingle vars[] =
+    bool const catalogShopEnabled = battlePayEnabled && sWorld->getBoolConfig(CONFIG_BATTLE_PAY_SHOP2_ENABLED);
+    constexpr std::string_view shop2LocalUrl = "https://localhost"sv;
+    constexpr std::string_view shop2ClientId = "33dad602838b47bfa5ca03adaebac54c"sv;
+    constexpr std::string_view shop2Pop = "b94aa31b-f910-4ec8-a180-3fb6bdac3215"sv;
+    constexpr std::string_view shop2VcPlacement = "9aad42ec-a68c-487b-a300-b67518267a85"sv;
+    constexpr std::string_view shop2VcSegment = "T2_WOW_US"sv;
+
+    std::vector<WorldPackets::System::MirrorVarSingle> vars;
+    vars.emplace_back("raidLockoutExtendEnabled"sv, "1"sv);
+    vars.emplace_back("sellAllJunkEnabled"sv, "1"sv);
+    vars.emplace_back("bypassItemLevelScalingCode"sv, "0"sv);
+    vars.emplace_back("shop2Enabled"sv, catalogShopEnabled ? "1"sv : "0"sv);
+    vars.emplace_back("bpayStoreEnable"sv, battlePayEnabled ? "1"sv : "0"sv);
+    if (catalogShopEnabled)
     {
-        { "raidLockoutExtendEnabled"sv, "1"sv },
-        { "sellAllJunkEnabled"sv, "1"sv },
-        { "bypassItemLevelScalingCode"sv, "0"sv },
-        { "shop2Enabled"sv, "0"sv },
-        { "bpayStoreEnable"sv, battlePayEnabled ? "1"sv : "0"sv },
-        { "recentAlliesEnabledClient"sv, "0"sv },
-        { "browserEnabled"sv, "0"sv },
-        { "housingEnableCreateGuildNeighborhood"sv, "0"sv },
-        { "housingEnableDeleteHouse"sv, "0"sv },
-        { "housingServiceEnabled"sv, "0"sv },
-        { "housingEnableMoveHouse"sv, "0"sv },
-        { "housingEnableCreateCharterNeighborhood"sv, "0"sv },
-        { "housingEnableBuyHouse"sv, "0"sv },
-        { "housingMarketEnabled"sv, "0"sv },
-    };
+        vars.emplace_back("shop2HostUrlRequests"sv, shop2LocalUrl);
+        vars.emplace_back("shop2HostUrlAuth"sv, shop2LocalUrl);
+        vars.emplace_back("shop2ClientIdStr"sv, shop2ClientId);
+        vars.emplace_back("shop2ClientRetriesEnabled"sv, "1"sv);
+        vars.emplace_back("shop2PMTMaxTries"sv, "15"sv);
+        vars.emplace_back("shop2SFMMaxTries"sv, "15"sv);
+        vars.emplace_back("shop2SSOMaxTries"sv, "15"sv);
+        vars.emplace_back("shop2PMTPerMilliseconds"sv, "1000"sv);
+        vars.emplace_back("shop2SFMPerMilliseconds"sv, "1000"sv);
+        vars.emplace_back("shop2SSOPerMilliseconds"sv, "1000"sv);
+        vars.emplace_back("shop2DefaultCurrencyMaxTries"sv, "5"sv);
+        vars.emplace_back("shop2DefaultCurrencyPerMilliseconds"sv, "1000"sv);
+        vars.emplace_back("shop2DynamicBundleMaxTries"sv, "10"sv);
+        vars.emplace_back("shop2DynamicBundlePerMilliseconds"sv, "1000"sv);
+        vars.emplace_back("shop2OrderStatusMaxTries"sv, "3"sv);
+        vars.emplace_back("shop2OrderStatusPerMilliseconds"sv, "1000"sv);
+        vars.emplace_back("shop2VirtualCurrencyBalanceMaxTries"sv, "3"sv);
+        vars.emplace_back("shop2VirtualCurrencyBalancePerMilliseconds"sv, "1000"sv);
+        vars.emplace_back("shop2PendingOrderPollSeconds"sv, "5"sv);
+        vars.emplace_back("shop2PendingOrderPollFileEnabled"sv, "1"sv);
+        vars.emplace_back("shop2PendingOrderPollCheckoutEnabled"sv, "1"sv);
+        vars.emplace_back("shop2TelemetryAllowed"sv, "0"sv);
+        vars.emplace_back("shop2ClientErrorTelemetryAllowed"sv, "0"sv);
+        vars.emplace_back("shop2UseConnectedRealmGameServiceRegionId"sv, "0"sv);
+        vars.emplace_back("shop2AdditionalScopesStr"sv, ""sv);
+        vars.emplace_back("shop2BlockedPlacements"sv, ""sv);
+        vars.emplace_back("shop2POPStr"sv, shop2Pop);
+        vars.emplace_back("shop2VCPlacementStr"sv, shop2VcPlacement);
+        vars.emplace_back("shop2VCSegmentStr"sv, shop2VcSegment);
+    }
+    vars.emplace_back("recentAlliesEnabledClient"sv, "0"sv);
+    vars.emplace_back("browserEnabled"sv, catalogShopEnabled ? "1"sv : "0"sv);
+    vars.emplace_back("housingEnableCreateGuildNeighborhood"sv, "0"sv);
+    vars.emplace_back("housingEnableDeleteHouse"sv, "0"sv);
+    vars.emplace_back("housingServiceEnabled"sv, "0"sv);
+    vars.emplace_back("housingEnableMoveHouse"sv, "0"sv);
+    vars.emplace_back("housingEnableCreateCharterNeighborhood"sv, "0"sv);
+    vars.emplace_back("housingEnableBuyHouse"sv, "0"sv);
+    vars.emplace_back("housingMarketEnabled"sv, "0"sv);
 
     WorldPackets::System::MirrorVars variables;
     variables.Variables = vars;
     SendPacket(variables.Write());
+
+    if (catalogShopEnabled)
+        GetBattlePayMgr()->SendCatalogShopObtainLicenses();
 }

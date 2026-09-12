@@ -80,16 +80,22 @@ public:
     explicit BattlePayMgr(WorldSession* session);
 
     static bool IsEnabled();
+    static bool IsCatalogShopEnabled();
     static uint32 GetL80ProductId();
     static bool IsFreeDeliverableProduct(uint32 productId);
 
     void SendProductList();
     void SendPurchaseList();
     void SendDistributionList();
+    void SendCatalogShopObtainLicenses();
+    void SendLastCatalogFetchResponse();
+    void HandleCatalogShopLicenseGameDataRequest(uint32 requestSize);
 
     void HandleStartPurchase(uint32 clientToken, uint32 productId, ObjectGuid targetCharacter);
+    void HandleOpenCheckout(uint32 checkoutRequestId);
     void HandleConfirmPurchaseResponse(bool confirm, uint32 serverToken, uint64 clientCurrentPriceFixedPoint);
     bool HandleDistributionAssignToTarget(uint32 clientToken, uint64 distributionId, ObjectGuid targetCharacter, uint32 productChoice);
+    void TryConsumeCatalogShopFreeBuySignal(uint32 diff = 0);
 
     void OverlayEnumExperienceLevel(ObjectGuid character, uint8& experienceLevel) const;
     bool ApplyPendingBoostOnLogin(Player* player);
@@ -108,7 +114,7 @@ private:
     void SendPurchaseUpdate(uint64 purchaseId, uint32 productId, uint32 status, uint32 resultCode);
     void SendConfirmPurchase(BattlePay::PendingPurchase const& purchase);
     void SendStartPurchaseResult(uint32 clientToken, uint64 purchaseId, uint32 purchaseResult);
-    bool BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken);
+    bool BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken, bool sendStartPurchaseResponse = true);
     void SendDistributionUpdate(BattlePay::PendingDistribution const& distribution);
     void ResurfaceRemainingAvailableL80Distributions();
     bool CanAssignToCharacter(ObjectGuid targetCharacter, uint32 productChoice) const;
@@ -124,6 +130,7 @@ private:
     uint32 _distributionCounter = 1;
     uint32 _purchaseCounter = 1;
     uint32 _serverTokenCounter = 1;
+    uint32 _freeBuySignalPollAccumMs = 0;
 };
 
 #endif

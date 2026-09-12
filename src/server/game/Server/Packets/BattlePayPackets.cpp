@@ -39,6 +39,11 @@ void StartPurchase::Read()
         _worldPacket.read_skip(_worldPacket.size() - _worldPacket.rpos());
 }
 
+void OpenCheckout::Read()
+{
+    _worldPacket >> CheckoutRequestID;
+}
+
 void ConfirmPurchaseResponse::Read()
 {
     ConfirmPurchase = _worldPacket.ReadBit();
@@ -147,6 +152,44 @@ WorldPacket const* StartDistributionAssignToTargetResponse::Write()
     _worldPacket << uint32(Result);
     _worldPacket << uint32(ClientToken);
     _worldPacket << uint64(DistributionID);
+    return &_worldPacket;
+}
+
+WorldPacket const* GenerateSSOTokenResponse::Write()
+{
+    _worldPacket << uint32(CheckoutRequestID);
+    _worldPacket << uint32(Unk0);
+    _worldPacket << uint64(IssuedUnixTime);
+    _worldPacket << uint64(ExpiresUnixTime);
+    // Retail length 69 with no string size prefix — raw 45-char XUS-… body.
+    _worldPacket.append(Token.data(), Token.size());
+    return &_worldPacket;
+}
+}
+
+namespace WorldPackets::CatalogShop
+{
+void GetLastCatalogFetch::Read()
+{
+    if (_worldPacket.rpos() < _worldPacket.size())
+        _worldPacket.read_skip(_worldPacket.size() - _worldPacket.rpos());
+}
+
+void LicenseGameDataRequest::Read()
+{
+    RequestSize = _worldPacket.size();
+    _worldPacket.read_skip(_worldPacket.size() - _worldPacket.rpos());
+}
+
+WorldPacket const* LastCatalogFetchResponse::Write()
+{
+    _worldPacket << uint64(LastFetchUnixTime);
+    return &_worldPacket;
+}
+
+WorldPacket const* ObtainLicense::Write()
+{
+    _worldPacket << uint32(LicenseId);
     return &_worldPacket;
 }
 }

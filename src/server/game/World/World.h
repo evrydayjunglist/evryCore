@@ -202,6 +202,8 @@ enum WorldBoolConfigs : uint32
     CONFIG_ENABLE_AE_LOOT,
     CONFIG_LOAD_LOCALES,
     CONFIG_BATTLE_PAY_ENABLED,
+    CONFIG_BATTLE_PAY_SHOP2_ENABLED, // CatalogShop.Enable; AuthHandler shop2 chrome. Not a worldserver.conf key.
+
     BOOL_CONFIG_VALUE_COUNT
 };
 
@@ -721,6 +723,16 @@ class TC_GAME_API World
             return index < INT_CONFIG_VALUE_COUNT ? m_int_configs[index] : 0;
         }
 
+        void setCatalogShopFreeBuySignalDir(std::string dir)
+        {
+            m_catalogShopFreeBuySignalDir = std::move(dir);
+        }
+
+        std::string const& GetCatalogShopFreeBuySignalDir() const
+        {
+            return m_catalogShopFreeBuySignalDir;
+        }
+
         uint64 GetUInt64Config(WorldInt64Configs index) const
         {
             return index < INT64_CONFIG_VALUE_COUNT ? m_int64_configs[index] : 0;
@@ -867,6 +879,7 @@ class TC_GAME_API World
         bool m_allowMovement;
         std::vector<std::string> _motd;
         std::string m_dataPath;
+        std::string m_catalogShopFreeBuySignalDir;
 
         // CLI command holder to be thread safe
         LockedQueue<CliCommandHolder*> cliCmdQueue;

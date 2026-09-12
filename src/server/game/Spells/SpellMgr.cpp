@@ -552,14 +552,18 @@ bool SpellMgr::CanSpellTriggerProcOnEvent(SpellProcEntry const& procEntry, ProcE
     if (procEntry.SchoolMask && !(eventInfo.GetSchoolMask() & procEntry.SchoolMask))
         return false;
 
-    // check spell family name/flags (if set) for spells
-    if (eventInfo.GetTypeMask() & SPELL_PROC_FLAG_MASK)
+    // Successful-cast procs live in PROC_FLAG_2_CAST_SUCCESSFUL, outside SPELL_PROC_FLAG_MASK.
+    // Family name/mask still has to apply to those events or a cast-successful aura matches every spell.
+    if ((eventInfo.GetTypeMask() & SPELL_PROC_FLAG_MASK) || (eventInfo.GetTypeMask() & PROC_FLAG_2_CAST_SUCCESSFUL))
     {
         if (SpellInfo const* eventSpellInfo = eventInfo.GetSpellInfo())
             if (!eventSpellInfo->IsAffected(procEntry.SpellFamilyName, procEntry.SpellFamilyMask))
                 return false;
+    }
 
-        // check spell type mask (if set)
+    // Spell type mask is only meaningful for SPELL_PROC_FLAG_MASK events.
+    if (eventInfo.GetTypeMask() & SPELL_PROC_FLAG_MASK)
+    {
         if (procEntry.SpellTypeMask && !(eventInfo.GetSpellTypeMask() & procEntry.SpellTypeMask))
             return false;
     }

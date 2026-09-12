@@ -930,6 +930,26 @@ namespace WorldPackets
 
             int32 Error;
         };
+
+        class CharacterUpgradeStarted final : public ServerPacket
+        {
+        public:
+            explicit CharacterUpgradeStarted() : ServerPacket(SMSG_CHARACTER_UPGRADE_STARTED, 16) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid CharacterGUID;
+        };
+
+        class CharacterUpgradeComplete final : public ServerPacket
+        {
+        public:
+            explicit CharacterUpgradeComplete() : ServerPacket(SMSG_CHARACTER_UPGRADE_COMPLETE, 16) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid CharacterGUID;
+        };
     }
 }
 

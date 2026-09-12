@@ -40,6 +40,7 @@
 
 class BlackMarketEntry;
 class AccountCurrencyMgr;
+class BattlePayMgr;
 class CollectionMgr;
 class WarbandGroupMgr;
 class Creature;
@@ -205,6 +206,15 @@ namespace WorldPackets
     {
         class ChangeRealmTicket;
         class Request;
+    }
+
+    namespace BattlePay
+    {
+        class GetProductList;
+        class GetPurchaseList;
+        class StartPurchase;
+        class ConfirmPurchaseResponse;
+        class DistributionAssignToTarget;
     }
 
     namespace BattlePet
@@ -1247,6 +1257,8 @@ class TC_GAME_API WorldSession
         // Battle Pets
         BattlePets::BattlePetMgr* GetBattlePetMgr() const { return _battlePetMgr.get(); }
 
+        BattlePayMgr* GetBattlePayMgr() const { return _battlePayMgr.get(); }
+
         CollectionMgr* GetCollectionMgr() const { return _collectionMgr.get(); }
         WarbandGroupMgr* GetWarbandGroupMgr() const { return _warbandGroupMgr.get(); }
         AccountCurrencyMgr* GetAccountCurrencyMgr() const { return _accountCurrencyMgr.get(); }
@@ -1259,6 +1271,7 @@ class TC_GAME_API WorldSession
 
         void HandleCharEnum(CharacterDatabaseQueryHolder const& holder);
         void HandleCharEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/);
+        void RequestCharacterEnum();
         void HandleSetupWarbandGroups(WorldPackets::Character::SetupWarbandGroups& setupWarbandGroups);
         void HandleCharUndeleteEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/);
         void HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& charDelete);
@@ -1899,6 +1912,13 @@ class TC_GAME_API WorldSession
         void HandleGarrisonRequestBlueprintAndSpecializationData(WorldPackets::Garrison::GarrisonRequestBlueprintAndSpecializationData& garrisonRequestBlueprintAndSpecializationData);
         void HandleGarrisonGetMapData(WorldPackets::Garrison::GarrisonGetMapData& garrisonGetMapData);
 
+        // Battle Pay
+        void HandleBattlePayGetProductList(WorldPackets::BattlePay::GetProductList& packet);
+        void HandleBattlePayGetPurchaseList(WorldPackets::BattlePay::GetPurchaseList& packet);
+        void HandleBattlePayStartPurchase(WorldPackets::BattlePay::StartPurchase& packet);
+        void HandleBattlePayConfirmPurchaseResponse(WorldPackets::BattlePay::ConfirmPurchaseResponse& packet);
+        void HandleBattlePayDistributionAssignToTarget(WorldPackets::BattlePay::DistributionAssignToTarget& packet);
+
         // Battle Pets
         void HandleBattlePetRequestJournal(WorldPackets::BattlePet::BattlePetRequestJournal& battlePetRequestJournal);
         void HandleBattlePetRequestJournalLock(WorldPackets::BattlePet::BattlePetRequestJournalLock& battlePetRequestJournalLock);
@@ -2081,6 +2101,7 @@ class TC_GAME_API WorldSession
         time_t _calendarEventCreationCooldown;
 
         std::unique_ptr<BattlePets::BattlePetMgr> _battlePetMgr;
+        std::unique_ptr<BattlePayMgr> _battlePayMgr;
 
         std::unique_ptr<CollectionMgr> _collectionMgr;
         std::unique_ptr<WarbandGroupMgr> _warbandGroupMgr;

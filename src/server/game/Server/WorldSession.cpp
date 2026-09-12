@@ -25,6 +25,7 @@
 #include "BattlePetMgr.h"
 #include "BattlegroundMgr.h"
 #include "BattlenetPackets.h"
+#include "BattlePayMgr.h"
 #include "CharacterPackets.h"
 #include "ChatPackets.h"
 #include "ClientConfigPackets.h"
@@ -151,6 +152,7 @@ WorldSession::WorldSession(uint32 id, std::string&& name, uint32 battlenetAccoun
     _timeSyncTimer(0),
     _calendarEventCreationCooldown(0),
     _battlePetMgr(std::make_unique<BattlePets::BattlePetMgr>(this)),
+    _battlePayMgr(std::make_unique<BattlePayMgr>(this)),
     _collectionMgr(std::make_unique<CollectionMgr>(this)),
     _warbandGroupMgr(std::make_unique<WarbandGroupMgr>(this)),
     _accountCurrencyMgr(std::make_unique<AccountCurrencyMgr>(this))

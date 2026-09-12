@@ -22,6 +22,7 @@
 #include "ArtifactPackets.h"
 #include "AuctionHousePackets.h"
 #include "AuthenticationPackets.h"
+#include "BattlePayMgr.h"
 #include "BattlePetMgr.h"
 #include "Battleground.h"
 #include "BattlegroundPackets.h"
@@ -492,6 +493,8 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
 
             if (!charEnum.IsDeletedCharacters)
                 ApplyArathiRpeEnumEligibility(characterInfo);
+
+            GetBattlePayMgr()->OverlayEnumExperienceLevel(charInfo.Guid, charInfo.ExperienceLevel);
 
             TC_LOG_INFO("network", "Loading char guid {} from account {}.", charInfo.Guid.ToString(), GetAccountId());
 
@@ -1285,8 +1288,10 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         return;
     }
 
+    bool const appliedL80Boost = GetBattlePayMgr()->ApplyPendingBoostOnLogin(pCurrChar);
+
     // Catch Up Experience: honor CMSG_PLAYER_LOGIN.RPE. Re-check inactivity here; the journal path does not use this gate.
-    bool enterArathiRpe = m_playerLoginRPE;
+    bool enterArathiRpe = m_playerLoginRPE && !appliedL80Boost;
     m_playerLoginRPE = false;
     if (enterArathiRpe && !IsArathiRpeEligible(time_t(pCurrChar->m_playerData->LogoutTime)))
     {
@@ -1692,6 +1697,7 @@ void WorldSession::SendFeatureSystemStatus()
     features.CharUndeleteEnabled = sWorld->getBoolConfig(CONFIG_FEATURE_SYSTEM_CHARACTER_UNDELETE_ENABLED);
     features.IsAccountCurrencyTransferEnabled = sWorld->getBoolConfig(CONFIG_FEATURE_SYSTEM_ACCOUNT_CURRENCY_TRANSFER_ENABLED);
     features.IsChatMuted = !CanSpeak();
+    features.BpayStoreAvailable = sWorld->getBoolConfig(CONFIG_BATTLE_PAY_ENABLED);
 
     features.SpeakForMeAllowed = false;
 

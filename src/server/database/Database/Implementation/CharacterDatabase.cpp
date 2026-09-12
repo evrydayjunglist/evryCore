@@ -871,6 +871,13 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_SEL_CHARACTER_RESEARCH_HISTORY, "SELECT projectId, firstCompleted, completionCount FROM character_research_history WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHARACTER_RESEARCH_HISTORY, "DELETE FROM character_research_history WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_INS_CHARACTER_RESEARCH_HISTORY, "INSERT INTO character_research_history (guid, projectId, firstCompleted, completionCount) VALUES (?, ?, ?, ?)", CONNECTION_ASYNC);
+
+    PrepareStatement(CHAR_SEL_BATTLEPAY_DISTRIBUTIONS, "SELECT distributionId, purchaseId, productId, status, consumed, applied, targetCharacter, specId FROM battlepay_account_distribution WHERE accountId = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_SEL_BATTLEPAY_DIST_MAX, "SELECT COALESCE(MAX(distributionId & 0xFFFFFFFF), 0) FROM battlepay_account_distribution WHERE accountId = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_INS_BATTLEPAY_DISTRIBUTION, "INSERT INTO battlepay_account_distribution (distributionId, accountId, productId, purchaseId, status, consumed, applied, targetCharacter, specId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_ASSIGN, "UPDATE battlepay_account_distribution SET status = ?, consumed = 1, applied = 0, targetCharacter = ?, specId = ? WHERE distributionId = ? AND accountId = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_APPLIED, "UPDATE battlepay_account_distribution SET applied = 1 WHERE distributionId = ? AND accountId = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_SEL_BATTLEPAY_CHARACTER, "SELECT account, class, level, race FROM characters WHERE guid = ? AND deleteInfos_Name IS NULL", CONNECTION_SYNCH);
 }
 
 CharacterDatabaseConnection::CharacterDatabaseConnection(MySQLConnectionInfo& connInfo, ConnectionFlags connectionFlags) : MySQLConnection(connInfo, connectionFlags)

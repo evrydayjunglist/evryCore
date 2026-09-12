@@ -108,7 +108,8 @@ void WorldSession::SendSetTimeZoneInformation()
 void WorldSession::SendFeatureSystemStatusGlueScreen()
 {
     WorldPackets::System::FeatureSystemStatusGlueScreen features;
-    features.BpayStoreAvailable = false;
+    bool const battlePayEnabled = sWorld->getBoolConfig(CONFIG_BATTLE_PAY_ENABLED);
+    features.BpayStoreAvailable = battlePayEnabled;
     features.BpayStoreDisabledByParentalControls = false;
     features.CharUndeleteEnabled = sWorld->getBoolConfig(CONFIG_FEATURE_SYSTEM_CHARACTER_UNDELETE_ENABLED);
     features.MaxCharactersOnThisRealm = sWorld->getIntConfig(CONFIG_CHARACTERS_PER_REALM);
@@ -148,7 +149,7 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
         { "sellAllJunkEnabled"sv, "1"sv },
         { "bypassItemLevelScalingCode"sv, "0"sv },
         { "shop2Enabled"sv, "0"sv },
-        { "bpayStoreEnable"sv, "0"sv },
+        { "bpayStoreEnable"sv, battlePayEnabled ? "1"sv : "0"sv },
         { "recentAlliesEnabledClient"sv, "0"sv },
         { "browserEnabled"sv, "0"sv },
         { "housingEnableCreateGuildNeighborhood"sv, "0"sv },

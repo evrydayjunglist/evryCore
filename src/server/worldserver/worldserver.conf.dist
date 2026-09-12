@@ -4064,6 +4064,31 @@ BlackMarket.UpdatePeriod = 24
 ###################################################################################################
 
 ###################################################################################################
+# BATTLE PAY SETTINGS
+#
+#    BattlePay.Enabled
+#        Description: Classic in-game Store glue. CatalogShop (shop2) stays off.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+
+BattlePay.Enabled = 0
+
+#
+#    BattlePay.FreeProductIDs
+#        Description: Comma-separated deliverable ProductIDs that Confirm forges at price 0.
+#                     Product numbers themselves are code constants (1161 is the L80 boost).
+#                     Empty = none.
+#        Default:     "1161"
+#
+
+BattlePay.FreeProductIDs = "1161"
+
+#
+#
+###################################################################################################
+
+###################################################################################################
 # LOGGING SYSTEM SETTINGS
 #
 #  Appender config values: Given an appender "name"

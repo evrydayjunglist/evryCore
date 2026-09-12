@@ -951,4 +951,16 @@ WorldPacket const* PlayerSavePersonalEmblem::Write()
 
     return &_worldPacket;
 }
+
+WorldPacket const* CharacterUpgradeStarted::Write()
+{
+    _worldPacket << CharacterGUID;
+    return &_worldPacket;
+}
+
+WorldPacket const* CharacterUpgradeComplete::Write()
+{
+    _worldPacket << CharacterGUID;
+    return &_worldPacket;
+}
 }

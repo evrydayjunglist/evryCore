@@ -145,7 +145,7 @@ void ArchaeologyMgr::LoadDigSitePoints()
 {
     uint32 oldMSTime = getMSTime();
 
-    std::unordered_map<int32, std::vector<std::pair<float, float>>> pointsByBlob;
+    std::unordered_map<uint32, std::vector<std::pair<float, float>>> pointsByBlob;
     for (QuestPOIPointEntry const* point : sQuestPOIPointStore)
         pointsByBlob[point->QuestPOIBlobID].emplace_back(float(point->X), float(point->Y));
 
@@ -156,7 +156,7 @@ void ArchaeologyMgr::LoadDigSitePoints()
         if (!site || site->QuestPOIBlobID <= 0)
             continue;
 
-        auto itr = pointsByBlob.find(site->QuestPOIBlobID);
+        auto itr = pointsByBlob.find(uint32(site->QuestPOIBlobID));
         if (itr == pointsByBlob.end() || itr->second.size() < 3)
             continue;
 

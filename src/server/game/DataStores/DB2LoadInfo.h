@@ -4874,7 +4874,7 @@ struct QuestPOIPointLoadInfo
         { .IsSigned = true, .Type = FT_SHORT, .Name = "X" },
         { .IsSigned = true, .Type = FT_SHORT, .Name = "Y" },
         { .IsSigned = true, .Type = FT_SHORT, .Name = "Z" },
-        { .IsSigned = true, .Type = FT_INT, .Name = "QuestPOIBlobID" },
+        { .IsSigned = false, .Type = FT_INT, .Name = "QuestPOIBlobID" },
     };
 
     static constexpr DB2LoadInfo Instance{ Fields, 5, &QuestPOIPointMeta::Instance, HOTFIX_SEL_QUEST_POI_POINT };

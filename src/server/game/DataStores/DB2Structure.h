@@ -3568,7 +3568,7 @@ struct QuestPOIPointEntry
     int16 X;
     int16 Y;
     int16 Z;
-    int32 QuestPOIBlobID;
+    uint32 QuestPOIBlobID;
 };
 
 struct RandPropPointsEntry

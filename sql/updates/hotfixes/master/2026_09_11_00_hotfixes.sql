@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS `quest_poi_point` (
   `X` smallint NOT NULL DEFAULT '0',
   `Y` smallint NOT NULL DEFAULT '0',
   `Z` smallint NOT NULL DEFAULT '0',
-  `QuestPOIBlobID` int NOT NULL DEFAULT '0',
+  `QuestPOIBlobID` int unsigned NOT NULL DEFAULT '0',
   `VerifiedBuild` int NOT NULL DEFAULT '0',
   PRIMARY KEY (`ID`,`VerifiedBuild`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

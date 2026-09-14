@@ -388,6 +388,18 @@ namespace WorldPackets
             ObjectGuid Guid; ///< Guid of the character to delete
         };
 
+        /// Try-new / class-trial boost finish. Packed character GUID + SpecID.
+        class CharacterUpgradeStart final : public ClientPacket
+        {
+        public:
+            explicit CharacterUpgradeStart(WorldPacket&& packet) : ClientPacket(CMSG_CHARACTER_UPGRADE_START, std::move(packet)) { }
+
+            void Read() override;
+
+            ObjectGuid CharacterGUID;
+            uint32 ProductChoice = 0; ///< ChrSpecialization ID
+        };
+
         class DeleteChar final : public ServerPacket
         {
         public:

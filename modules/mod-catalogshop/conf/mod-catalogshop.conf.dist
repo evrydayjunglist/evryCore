@@ -7,11 +7,18 @@
 #
 # Browse: stock client dials https://localhost (no hosts file). Cert SAN must include
 # localhost. Bare https://127.0.0.1 is refused by the client.
+# Windows resolves localhost as ::1 first, then 127.0.0.1. Binding 127.0.0.1 alone
+# misses the first dial. The module listens on both addresses when BindIP is
+# 127.0.0.1 or localhost. Do not add us.checkout.battle.net to the SAN unless
+# you pin Buy.
 #
-# Buy: stock CatalogShop Buy still dials us.checkout.battle.net. That is an ops
-# exception, not automatic. If you later pin 127.0.0.1 us.checkout.battle.net,
-# this listener serves a local checkout stub and can write the Free Buy signal.
-# Do not bake that hostname into the game core or write hosts from C++.
+# Browse request lines (Accepted connection, POST /sso, GetCurrentPages) use
+# Logger.module.catalogshop. Logger.root=5 is Error and does not inherit those Info
+# lines. worldserver.conf sets Logger.module.catalogshop=3 (Info) onto Console+Server.
+#
+# Buy: stock CatalogShop Buy dials us.checkout.battle.net (ops pin to 127.0.0.1).
+# This listener completes Free Buy on checkout loading / client-purchase and writes
+# the signal file. Do not bake that hostname into the game core or write hosts from C++.
 #
 # Port 443 on Windows requires an elevated worldserver process.
 # Leave Enable = 0 unless you intend to bind the shop2 listener.
@@ -32,6 +39,7 @@ CatalogShop.Enable = 0
 
 #
 # Bind address / port. Browse MirrorVars use https://localhost (port 443).
+# 127.0.0.1 and localhost start both loopback listeners. Other addresses bind as set.
 #
 CatalogShop.BindIP = "127.0.0.1"
 CatalogShop.Port = 443

@@ -18,11 +18,15 @@
 #ifndef MOD_CATALOGSHOP_HTTP_SERVICE_H
 #define MOD_CATALOGSHOP_HTTP_SERVICE_H
 
+#include "AsyncAcceptor.h"
 #include "CatalogShopHttpSession.h"
 #include "HttpService.h"
 #include "IoContext.h"
+#include <boost/beast/http/field.hpp>
 #include <atomic>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 
@@ -61,11 +65,21 @@ private:
     std::string BuildLocalJwt(std::string_view scope) const;
     std::string ResolveFreeBuySignalDir() const;
     bool WriteFreeBuySignal(uint32 accountId, uint32 productId) const;
+    bool StartComplementaryLoopback(std::string const& bindIp, uint16 port);
+    static std::string ListenUrl(std::string const& bindIp, uint16 port);
 
+    uint32 ResolveCheckoutAccountId(HttpRequestContext const& context) const;
+    static uint32 ResolveCheckoutProductId(std::string_view path, std::string_view target, std::string_view body);
+    static std::string HeaderValue(HttpRequestContext const& context, boost::beast::http::field field);
+    static std::string ExtractXusToken(std::string_view haystack);
+    static uint32 FindXusAccountId(std::string_view haystack);
+    static std::string MakeCheckoutCompleteHtml(uint32 productId);
+    static std::string MakeCheckoutConfirmHtml(uint32 productId, std::string_view token, bool autoSubmit);
     static std::string Base64UrlEncode(std::string_view raw);
     static std::unordered_map<std::string, std::string> ParseForm(std::string_view body);
     static uint32 ParseSsoAccountId(std::string_view token);
     static uint32 ParseProductIdFromPath(std::string_view path);
+    static uint32 ParseProductIdFromMap(std::unordered_map<std::string, std::string> const& fields);
     static std::string HostWithoutPort(std::string_view hostHeader);
     static int64 NowUnixSeconds();
     static int64 NowUnixMillis();
@@ -75,6 +89,8 @@ private:
 
     std::shared_ptr<Trinity::Asio::IoContext> _ioContext;
     std::thread _ioThread;
+    std::unique_ptr<Trinity::Net::AsyncAcceptor> _loopbackAcceptor;
+    std::string _loopbackBindIp;
     std::atomic<bool> _listening { false };
     bool _handlersRegistered = false;
 };

@@ -23,6 +23,7 @@
 #include "ClientConfigPackets.h"
 #include "DisableMgr.h"
 #include "GameTime.h"
+#include "Log.h"
 #include "ObjectMgr.h"
 #include "RBAC.h"
 #include "RealmList.h"
@@ -112,6 +113,8 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
     WorldPackets::System::FeatureSystemStatusGlueScreen features;
     bool const battlePayEnabled = sWorld->getBoolConfig(CONFIG_BATTLE_PAY_ENABLED);
     features.BpayStoreAvailable = battlePayEnabled;
+    // CatalogShop chrome on retail arrives with CommerceServerEnabled true beside shop2 MirrorVars.
+    features.CommerceServerEnabled = battlePayEnabled;
     features.BpayStoreDisabledByParentalControls = false;
     features.CharUndeleteEnabled = sWorld->getBoolConfig(CONFIG_FEATURE_SYSTEM_CHARACTER_UNDELETE_ENABLED);
     features.MaxCharactersOnThisRealm = sWorld->getIntConfig(CONFIG_CHARACTERS_PER_REALM);
@@ -143,7 +146,22 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
 
     features.AvailableGameModeIDs.push_back(8); // GameMode.db2, standard
 
+    // Use Boost token: C_SharedCharacterServices.GetUpgradeDistributions()[11].amount
+    // (Dist nest UnkInt4). Glue ActiveBoostType + TrialBoostType 11 match that boost type.
+    // TrialBoostEnabled is also IsTrialBoostEnabled() (Try New Class / Enter World).
+    // Retail unused-boost glue also had BoostEnabled true with ActiveBoostType 11.
+    if (GetBattlePayMgr() && GetBattlePayMgr()->HasAvailableL80Distribution())
+    {
+        features.BoostEnabled = true;
+        features.TrialBoostEnabled = true;
+        features.ActiveBoostType = BattlePayMgr::GetL80BoostType();
+        features.TrialBoostType = BattlePayMgr::GetL80BoostType();
+    }
+
     SendPacket(features.Write());
+    TC_LOG_INFO("server.worldserver",
+        "BattlePay: glue screen TrialBoostEnabled={} BoostEnabled={} ActiveBoostType={} TrialBoostType={} account {}",
+        features.TrialBoostEnabled, features.BoostEnabled, features.ActiveBoostType, features.TrialBoostType, GetAccountId());
 
     bool const catalogShopEnabled = battlePayEnabled && sWorld->getBoolConfig(CONFIG_BATTLE_PAY_SHOP2_ENABLED);
     constexpr std::string_view shop2LocalUrl = "https://localhost"sv;
@@ -206,4 +224,9 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
 
     if (catalogShopEnabled)
         GetBattlePayMgr()->SendCatalogShopObtainLicenses();
+
+    // Char-select OnShow reads GetUpgradeDistributions before GET_PRODUCT_LIST returns.
+    // Push Dist with glue so the Use Boost token is already counted.
+    if (GetBattlePayMgr())
+        GetBattlePayMgr()->SendAvailableL80Distributions();
 }

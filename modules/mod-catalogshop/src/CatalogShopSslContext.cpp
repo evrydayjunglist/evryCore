@@ -24,6 +24,8 @@ bool ModCatalogShop::SslContext::Initialize(std::string const& certificateFile, 
     instance().set_options(boost::asio::ssl::context::default_workarounds
         | boost::asio::ssl::context::no_sslv2
         | boost::asio::ssl::context::no_sslv3
+        | boost::asio::ssl::context::no_tlsv1
+        | boost::asio::ssl::context::no_tlsv1_1
         | boost::asio::ssl::context::single_dh_use, err);
     if (err)
     {

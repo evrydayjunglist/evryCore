@@ -32,9 +32,11 @@ void WorldSession::HandleCommerceTokenGetMarketPrice(WorldPackets::Token::Commer
 {
     WorldPackets::Token::CommerceTokenGetMarketPriceResponse response;
 
+    // CatalogShop opens at character select. Retail answers with Result 0, price 0, duration 14400.
     response.Price = 0;
     response.ClientToken = commerceTokenGetMarketPrice.ClientToken;
-    response.Result = TOKEN_RESULT_ERROR_DISABLED;
+    response.Result = TOKEN_RESULT_SUCCESS;
+    response.ExpectedSecondsUntilSold = 14400;
 
     SendPacket(response.Write());
 }

@@ -4193,6 +4193,9 @@ Appender.DBErrors=2,2,0,DBErrors.log
 
 Logger.root=5,Console Server
 Logger.server=3,Console Server
+# CatalogShop HTTPS browse (mod-catalogshop). Info so /sso and GetCurrentPages land in Server.log.
+# Logger.root=5 is Error and does not inherit these Info lines.
+Logger.module.catalogshop=3,Console Server
 Logger.commands.gm=3,Console GM
 Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors

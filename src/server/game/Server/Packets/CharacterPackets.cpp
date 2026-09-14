@@ -558,6 +558,12 @@ void CharDelete::Read()
     _worldPacket >> Guid;
 }
 
+void CharacterUpgradeStart::Read()
+{
+    _worldPacket >> CharacterGUID;
+    _worldPacket >> ProductChoice;
+}
+
 WorldPacket const* DeleteChar::Write()
 {
     _worldPacket << uint32(Code);

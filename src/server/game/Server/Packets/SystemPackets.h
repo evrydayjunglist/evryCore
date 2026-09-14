@@ -227,8 +227,8 @@ namespace WorldPackets
             bool ExpansionPreorderInStore            = false; // NYI
             bool KioskModeEnabled                    = false; // NYI
             bool CompetitiveModeEnabled              = false; // NYI
-            bool BoostEnabled                        = false; // classic only
-            bool TrialBoostEnabled                   = false; // NYI
+            bool BoostEnabled                        = false; // true while an L80 Dist is AVAILABLE
+            bool TrialBoostEnabled                   = false; // true while an L80 Dist is AVAILABLE
             bool RedeemForBalanceAvailable           = false; // NYI
             bool LiveRegionCharacterListEnabled      = false; // NYI
             bool LiveRegionCharacterCopyEnabled      = false; // NYI
@@ -253,8 +253,8 @@ namespace WorldPackets
             uint32 CommercePricePollTimeSeconds      = 0;     // NYI
             int64 RedeemForBalanceAmount             = 0;     // NYI
             int32 MaxCharactersOnThisRealm           = 0;
-            int32 ActiveBoostType                    = 0;     // NYI
-            int32 TrialBoostType                     = 0;     // NYI
+            int32 ActiveBoostType                    = 0;     // 11 while an L80 Dist is AVAILABLE
+            int32 TrialBoostType                     = 0;     // same as ActiveBoostType for L80 Assign
             int32 MinimumExpansionLevel              = 0;
             int32 MaximumExpansionLevel              = 0;
             uint32 KioskSessionDurationMinutes       = 0;

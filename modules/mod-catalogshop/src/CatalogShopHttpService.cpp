@@ -16,6 +16,7 @@
  */
 
 #include "CatalogShopHttpService.h"
+#include "AsyncAcceptor.h"
 #include "Base64.h"
 #include "CatalogShopSslContext.h"
 #include "Config.h"
@@ -23,6 +24,9 @@
 #include "StringConvert.h"
 #include "Util.h"
 #include "World.h"
+#include <boost/beast/http/field.hpp>
+#include <boost/system/system_error.hpp>
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -39,12 +43,13 @@ namespace
 {
 constexpr char const* VC_PLACEMENT = "9aad42ec-a68c-487b-a300-b67518267a85";
 constexpr char const* POP_PLACEMENT = "b94aa31b-f910-4ec8-a180-3fb6bdac3215";
-constexpr char const* SHELF_PLACEMENT = "c0000000-0000-4000-8000-000000000003";
 constexpr char const* CHECKOUT_HOST = "us.checkout.battle.net";
 
 constexpr uint64 CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID = 1969052;
 constexpr uint64 CATALOG_SHOP_L80_ENHANCED_CHILD_PRODUCT_ID = 1960794;
 constexpr uint64 CATALOG_SHOP_L80_STANDARD_PRODUCT_ID = 1977499;
+
+#include "CatalogShopRetailResponses.inc"
 
 bool IsFreeL80CommerceProduct(uint64 productId)
 {
@@ -85,27 +90,54 @@ std::string MakeMetaJson(int64 serverTimeMs)
         serverTimeMs);
 }
 
-std::string MakeFreePriceRow()
+std::string SerializeJson(rapidjson::Document const& doc)
 {
-    return R"({"currencyCode":"USD","currencyTypeId":1,"currentPrice":"0.00","localizedCurrentPrice":"Free","localizedOriginalPrice":"Free","originalPrice":"0.00"})";
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    doc.Accept(writer);
+    return buffer.GetString();
 }
 
-std::string MakeProductJson(uint64 productId, char const* name, bool withChild, std::string const& locale)
+std::string RefreshRetailResponse(std::string_view json, int64 serverTimeMs)
 {
-    std::string childIds = withChild
-        ? Trinity::StringFormat("[{}]", CATALOG_SHOP_L80_ENHANCED_CHILD_PRODUCT_ID)
-        : "[]";
-    return Trinity::StringFormat(
-        R"({{"productId":{},"name":"{}","productType":1,"serviceItemId":43,"childProductIds":{},"prices":[{}],"localization":{{"locale":"{}","name":"{}","description":""}}}})",
-        productId, name, childIds, MakeFreePriceRow(), locale, name);
+    rapidjson::Document doc;
+    doc.Parse(json.data(), json.size());
+    if (doc.IsObject() && doc.HasMember("metaData") && doc["metaData"].IsObject())
+    {
+        rapidjson::Value& metaData = doc["metaData"];
+        if (metaData.HasMember("serverTimeMs"))
+            metaData["serverTimeMs"].SetInt64(serverTimeMs);
+    }
+    return SerializeJson(doc);
 }
 
-std::string MakePlacementJson(std::string const& placementId, std::string const& pageId,
-    std::string const& pageName, std::string const& locale, std::string const& sectionsJson)
+std::string FilterRetailPlacements(std::vector<std::string> const& placementIds, int64 serverTimeMs)
 {
-    return Trinity::StringFormat(
-        R"({{"placementId":"{}","nextScheduledPageDisplayTimeMs":null,"page":{{"pageId":"{}","name":"{}","localization":{{"locale":"{}","name":"{}","description":""}},"attributes":[],"sections":{}}}}})",
-        placementId, pageId, pageName, locale, pageName, sectionsJson);
+    rapidjson::Document source;
+    source.Parse(RetailChildPlacementPages.data(), RetailChildPlacementPages.size());
+
+    rapidjson::Document out;
+    out.SetObject();
+    rapidjson::Document::AllocatorType& allocator = out.GetAllocator();
+    out.AddMember("error", rapidjson::Value().SetNull(), allocator);
+
+    rapidjson::Value metaData(source["metaData"], allocator);
+    metaData["serverTimeMs"].SetInt64(serverTimeMs);
+    out.AddMember("metaData", metaData, allocator);
+
+    rapidjson::Value placements(rapidjson::kArrayType);
+    for (rapidjson::Value const& placement : source["placements"].GetArray())
+    {
+        if (!placement.HasMember("placementId") || !placement["placementId"].IsString())
+            continue;
+
+        std::string_view id = placement["placementId"].GetString();
+        if (std::find_if(placementIds.begin(), placementIds.end(),
+            [id](std::string const& requested) { return requested == id; }) != placementIds.end())
+            placements.PushBack(rapidjson::Value(placement, allocator), allocator);
+    }
+    out.AddMember("placements", placements, allocator);
+    return SerializeJson(out);
 }
 }
 
@@ -133,7 +165,8 @@ bool CatalogShopHttpService::StartFromConfig()
         return true;
     }
 
-    std::string bindIp = sConfigMgr->GetStringDefault("CatalogShop.BindIP", "127.0.0.1");
+    std::string configuredBindIp = sConfigMgr->GetStringDefault("CatalogShop.BindIP", "127.0.0.1");
+    std::string bindIp = configuredBindIp == "localhost" ? "127.0.0.1" : configuredBindIp;
     uint16 port = uint16(sConfigMgr->GetIntDefault("CatalogShop.Port", 443));
     int32 threads = sConfigMgr->GetIntDefault("CatalogShop.Threads", 1);
     if (threads < 1)
@@ -173,6 +206,17 @@ bool CatalogShopHttpService::StartFromConfig()
     if (!StartNetwork(*_ioContext, bindIp, port, threads))
     {
         TC_LOG_ERROR("module.catalogshop", "Failed to bind CatalogShop HTTPS on {}:{} (elevated shell needed for port 443 on Windows)", bindIp, port);
+        TC_LOG_ERROR("server.worldserver", "CatalogShop HTTPS failed to bind {}", ListenUrl(bindIp, port));
+        _ioContext.reset();
+        return false;
+    }
+    TC_LOG_INFO("server.worldserver", "CatalogShop HTTPS listening on {}", ListenUrl(bindIp, port));
+
+    // Windows resolves localhost as ::1 first, then 127.0.0.1. IPv4-only bind misses the first dial.
+    if (!StartComplementaryLoopback(bindIp, port))
+    {
+        TC_LOG_ERROR("server.worldserver", "CatalogShop HTTPS requires both loopback listeners when BindIP is '{}'", configuredBindIp);
+        StopNetwork();
         _ioContext.reset();
         return false;
     }
@@ -183,8 +227,8 @@ bool CatalogShopHttpService::StartFromConfig()
     });
 
     _listening.store(true, std::memory_order_release);
-    TC_LOG_INFO("server.worldserver", "CatalogShop HTTPS listening on https://{}:{} (browse https://localhost; Free Buy signal dir '{}')",
-        bindIp, port, _freeBuySignalDir);
+    TC_LOG_INFO("server.worldserver", "CatalogShop HTTPS ready for https://localhost (Free Buy signal dir '{}')",
+        _freeBuySignalDir);
     TC_LOG_INFO("module.catalogshop", "Stop any Python shop2 stub — this module owns browse and local checkout");
     return true;
 }
@@ -194,7 +238,12 @@ void CatalogShopHttpService::Stop()
     if (!_listening.exchange(false, std::memory_order_acq_rel) && !_ioContext)
         return;
 
+    if (_loopbackAcceptor)
+        _loopbackAcceptor->Close();
+
     StopNetwork();
+    _loopbackAcceptor.reset();
+    _loopbackBindIp.clear();
 
     if (_ioContext)
         _ioContext->stop();
@@ -204,6 +253,50 @@ void CatalogShopHttpService::Stop()
 
     _ioContext.reset();
     TC_LOG_INFO("module.catalogshop", "CatalogShop HTTPS listener stopped");
+}
+
+bool CatalogShopHttpService::StartComplementaryLoopback(std::string const& bindIp, uint16 port)
+{
+    if (bindIp == "127.0.0.1")
+        _loopbackBindIp = "::1";
+    else
+        return true;
+
+    try
+    {
+        _loopbackAcceptor = std::make_unique<Trinity::Net::AsyncAcceptor>(*_ioContext, _loopbackBindIp, port);
+    }
+    catch (boost::system::system_error const& err)
+    {
+        TC_LOG_ERROR("server.worldserver", "CatalogShop HTTPS failed to open complementary listener {}:{}: {}",
+            _loopbackBindIp, port, err.what());
+        _loopbackAcceptor.reset();
+        _loopbackBindIp.clear();
+        return false;
+    }
+
+    if (!_loopbackAcceptor->Bind())
+    {
+        TC_LOG_ERROR("server.worldserver", "CatalogShop HTTPS failed to bind complementary {} (Windows localhost uses ::1 first)",
+            ListenUrl(_loopbackBindIp, port));
+        _loopbackAcceptor.reset();
+        _loopbackBindIp.clear();
+        return false;
+    }
+
+    _loopbackAcceptor->AsyncAccept(
+        [this] { return SelectThreadWithMinConnections(); },
+        [this](Trinity::Net::IoContextTcpSocket&& sock) { OnSocketOpen(std::move(sock)); });
+
+    TC_LOG_INFO("server.worldserver", "CatalogShop HTTPS listening on {}", ListenUrl(_loopbackBindIp, port));
+    return true;
+}
+
+std::string CatalogShopHttpService::ListenUrl(std::string const& bindIp, uint16 port)
+{
+    if (bindIp.find(':') != std::string::npos)
+        return Trinity::StringFormat("https://[{}]:{}", bindIp, port);
+    return Trinity::StringFormat("https://{}:{}", bindIp, port);
 }
 
 void CatalogShopHttpService::RegisterBrowseHandlers()
@@ -278,71 +371,70 @@ bool CatalogShopHttpService::TryHandleCheckout(HttpRequestContext& context)
     if (host != CHECKOUT_HOST)
         return false;
 
-    std::string_view path = Trinity::Net::Http::ToStdStringView(context.request.target());
+    std::string_view const target = Trinity::Net::Http::ToStdStringView(context.request.target());
+    std::string_view path = target;
     size_t queryIndex = path.find('?');
     if (queryIndex != std::string_view::npos)
         path = path.substr(0, queryIndex);
 
-    uint32 productId = ParseProductIdFromPath(path);
     bool const isClientPurchase = path.find("/client-purchase/") != std::string_view::npos;
+    bool const isLoading = path.find("/blizzard-checkout/loading") != std::string_view::npos;
 
-    if (productId && isClientPurchase)
+    uint32 productId = ResolveCheckoutProductId(path, target, context.request.body());
+    uint32 accountId = ResolveCheckoutAccountId(context);
+
+    if (isClientPurchase || isLoading)
     {
-        uint32 accountId = 0;
-        std::string_view const target = Trinity::Net::Http::ToStdStringView(context.request.target());
-        size_t const targetQuery = target.find('?');
-        if (targetQuery != std::string_view::npos)
-        {
-            auto query = ParseForm(target.substr(targetQuery + 1));
-            if (query.contains("token"))
-                accountId = ParseSsoAccountId(query["token"]);
-        }
-        if (!accountId)
-        {
-            auto form = ParseForm(context.request.body());
-            if (form.contains("token"))
-                accountId = ParseSsoAccountId(form["token"]);
-        }
-        if (!accountId)
-            accountId = _lastSsoAccountId.load(std::memory_order_acquire);
+        if (!productId)
+            productId = uint32(CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID);
+
         bool wrote = false;
         if (accountId && IsFreeL80CommerceProduct(productId))
             wrote = WriteFreeBuySignal(accountId, productId);
 
+        TC_LOG_INFO("server.worldserver",
+            "CatalogShop checkout Free Buy host={} path={} productId={} account={} signal={}",
+            host, path, productId, accountId, wrote ? "wrote" : "skip");
         TC_LOG_INFO("module.catalogshop",
             "Checkout Free Buy host={} path={} productId={} account={} signal={}",
             host, path, productId, accountId, wrote ? "wrote" : "skip");
 
-        ReplyHtml(context, Trinity::StringFormat(
-            R"(<!DOCTYPE html><html><head><meta charset="utf-8"><title>Free grant</title></head>)"
-            R"(<body style="font-family:Segoe UI,sans-serif;background:#1a1a1e;color:#eee;display:flex;)"
-            R"(align-items:center;justify-content:center;height:100vh;margin:0">)"
-            R"(<div style="text-align:center"><h1>Free purchase complete</h1>)"
-            R"(<p>Product {} → pending Level 80 Boost (local Free mode).</p></div></body></html>)",
-            productId));
+        if (wrote)
+        {
+            ReplyHtml(context, MakeCheckoutCompleteHtml(productId));
+            return true;
+        }
+
+        std::string token = ExtractXusToken(target);
+        if (token.empty())
+            token = ExtractXusToken(context.request.body());
+        if (token.empty())
+            token = ExtractXusToken(HeaderValue(context, boost::beast::http::field::cookie));
+        // Auto-POST only from loading. client-purchase already is that POST; do not loop.
+        ReplyHtml(context, MakeCheckoutConfirmHtml(productId, token, !isClientPurchase));
         return true;
     }
 
+    TC_LOG_INFO("server.worldserver", "CatalogShop checkout shell host={} path={}", host, path);
     TC_LOG_INFO("module.catalogshop", "Checkout shell host={} path={}", host, path);
     ReplyHtml(context,
-        R"(<!DOCTYPE html><html><head><meta charset="utf-8"><title>Local Free checkout</title></head>)"
-        R"(<body style="font-family:Segoe UI,sans-serif;background:#1a1a1e;color:#eee;display:flex;)"
-        R"(align-items:center;justify-content:center;height:100vh;margin:0">)"
-        R"(<p>Local Free checkout. Stock CatalogShop Buy still needs a hosts pin for us.checkout.battle.net.</p></body></html>)");
+        R"(<!DOCTYPE html><html><head><meta charset="utf-8"><title></title></head><body></body></html>)");
     return true;
 }
 
 CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleSso(
-    std::shared_ptr<CatalogShopHttpSession> /*session*/, HttpRequestContext& context)
+    std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     auto form = ParseForm(context.request.body());
     std::string scope = form.contains("scope") ? form["scope"] : std::string();
     std::string ssoToken = form.contains("token") ? form["token"] : std::string();
     uint32 accountId = ParseSsoAccountId(ssoToken);
+    if (!accountId)
+        accountId = FindXusAccountId(context.request.body());
     if (accountId)
         _lastSsoAccountId.store(accountId, std::memory_order_release);
-    if (!accountId)
-        accountId = 1;
+    // JWT `sub` only. Free Buy never falls back to account 1 when SSO does not parse.
+    uint32 jwtAccountId = accountId ? accountId : 1;
 
     std::string token = BuildLocalJwt(scope);
     int64 now = NowUnixSeconds();
@@ -354,9 +446,9 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleSso(
     doc.AddMember("token_type", "bearer", a);
     doc.AddMember("expires_in", 86399, a);
     doc.AddMember("scope", rapidjson::Value(scope.c_str(), a), a);
-    std::string sub = std::to_string(accountId);
+    std::string sub = std::to_string(jwtAccountId);
     doc.AddMember("sub", rapidjson::Value(sub.c_str(), a), a);
-    doc.AddMember("account_id", accountId, a);
+    doc.AddMember("account_id", jwtAccountId, a);
 
     rapidjson::Value accountRoles(rapidjson::kArrayType);
     accountRoles.PushBack("ROLE_USER", a);
@@ -376,7 +468,7 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleSso(
     programs.PushBack("WoW", a);
     doc.AddMember("programs", programs, a);
     doc.AddMember("env", "local", a);
-    std::string iss = "https://localhost";
+    std::string iss = "https://auth.catalogshop.local";
     doc.AddMember("iss", rapidjson::Value(iss.c_str(), a), a);
     doc.AddMember("iat", now, a);
     doc.AddMember("game_accounts", rapidjson::Value(rapidjson::kArrayType), a);
@@ -385,21 +477,25 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleSso(
     rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
     doc.Accept(writer);
 
-    TC_LOG_INFO("module.catalogshop", "POST /sso → 200 local JWT account={}", accountId);
+    TC_LOG_INFO("server.worldserver", "CatalogShop POST /sso → 200 local JWT account={} client={}",
+        jwtAccountId, session->GetClientInfo());
+    TC_LOG_INFO("module.catalogshop", "POST /sso → 200 local JWT account={} client={}",
+        jwtAccountId, session->GetClientInfo());
     ReplyJson(context, buffer.GetString());
     return RequestHandlerResult::Handled;
 }
 
 CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleDefaultCurrency(
-    std::shared_ptr<CatalogShopHttpSession> /*session*/, HttpRequestContext& context)
+    std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     ReplyJson(context, R"({"currencyAlphaCode":"USD","error":null})");
-    TC_LOG_INFO("module.catalogshop", "POST /PurchaseService/v1/GetAccountDefaultCurrency → 200");
+    TC_LOG_INFO("module.catalogshop", "POST /PurchaseService/v1/GetAccountDefaultCurrency → 200 client={}",
+        session->GetClientInfo());
     return RequestHandlerResult::Handled;
 }
 
 CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleCurrentPages(
-    std::shared_ptr<CatalogShopHttpSession> /*session*/, HttpRequestContext& context)
+    std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
     req.Parse(context.request.body().c_str());
@@ -414,56 +510,22 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleCurre
     if (placementIds.empty())
         placementIds.emplace_back(POP_PLACEMENT);
 
-    std::string locale = "enUS";
-    if (req.IsObject() && req.HasMember("locale") && req["locale"].IsString())
-        locale = req["locale"].GetString();
+    std::string body;
+    if (placementIds.size() == 1 && placementIds.front() == VC_PLACEMENT)
+        body = RefreshRetailResponse(RetailVirtualCurrencyPage, NowUnixMillis());
+    else if (placementIds.size() == 1 && placementIds.front() == POP_PLACEMENT)
+        body = RefreshRetailResponse(RetailPlacementPage, NowUnixMillis());
+    else
+        body = FilterRetailPlacements(placementIds, NowUnixMillis());
 
-    std::string vcPage = MakePlacementJson(VC_PLACEMENT, "a0000000-0000-4000-8000-000000000010",
-        "Currency", locale, "[]");
-
-    std::string popSections = Trinity::StringFormat(
-        R"([{{"sectionId":"a0000000-0000-4000-8000-000000000002","localization":{{"locale":"{}","name":"Character Boosts","description":""}},"attributes":[{{"sectionAttributeKey":"placementID","value":"{}"}}],"cards":[{{"productId":{}}},{{"productId":{}}}]}}])",
-        locale, SHELF_PLACEMENT, CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID, CATALOG_SHOP_L80_STANDARD_PRODUCT_ID);
-    std::string popPage = MakePlacementJson(POP_PLACEMENT, "a0000000-0000-4000-8000-000000000001",
-        "Services", locale, popSections);
-
-    std::string shelfSections = Trinity::StringFormat(
-        R"([{{"sectionId":"a0000000-0000-4000-8000-000000000004","localization":{{"locale":"{}","name":"Level 80","description":""}},"attributes":[],"cards":[{{"productId":{}}},{{"productId":{}}}]}}])",
-        locale, CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID, CATALOG_SHOP_L80_STANDARD_PRODUCT_ID);
-    std::string shelfPage = MakePlacementJson(SHELF_PLACEMENT, "a0000000-0000-4000-8000-000000000003",
-        "Level 80 Boosts", locale, shelfSections);
-
-    std::string placements;
-    for (std::string const& id : placementIds)
-    {
-        std::string const* chosen = nullptr;
-        if (id == VC_PLACEMENT)
-            chosen = &vcPage;
-        else if (id == POP_PLACEMENT)
-            chosen = &popPage;
-        else if (id == SHELF_PLACEMENT)
-            chosen = &shelfPage;
-        else
-            continue;
-        if (!placements.empty())
-            placements.push_back(',');
-        placements += *chosen;
-    }
-    if (placements.empty())
-        placements = popPage;
-
-    std::string body = Trinity::StringFormat(
-        R"({{"error":null,{},"placements":[{}]}})",
-        MakeMetaJson(NowUnixMillis()), placements);
-
-    TC_LOG_INFO("module.catalogshop", "POST /StorefrontService/v1/GetCurrentPages → 200 placements={}",
-        placementIds.size());
+    TC_LOG_INFO("module.catalogshop", "POST /StorefrontService/v1/GetCurrentPages → 200 placements={} client={}",
+        placementIds.size(), session->GetClientInfo());
     ReplyJson(context, std::move(body));
     return RequestHandlerResult::Handled;
 }
 
 CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleProductsByStoreId(
-    std::shared_ptr<CatalogShopHttpSession> /*session*/, HttpRequestContext& context)
+    std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
     req.Parse(context.request.body().c_str());
@@ -481,22 +543,14 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleProdu
         body = Trinity::StringFormat(
             R"({{"error":null,"childProducts":[],{},"paginationToken":null,"products":[]}})",
             MakeMetaJson(NowUnixMillis()));
-        TC_LOG_INFO("module.catalogshop", "POST /ProductCatalogService/v1/GetProductsByStoreId → 200 variant=empty");
+        TC_LOG_INFO("module.catalogshop", "POST /ProductCatalogService/v1/GetProductsByStoreId → 200 variant=empty client={}",
+            session->GetClientInfo());
     }
     else
     {
-        std::string locale = "enUS";
-        if (req.IsObject() && req.HasMember("locale") && req["locale"].IsString())
-            locale = req["locale"].GetString();
-
-        std::string products = Trinity::StringFormat("{},{}",
-            MakeProductJson(CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID, "Enhanced Level 80 Character Boost", true, locale),
-            MakeProductJson(CATALOG_SHOP_L80_STANDARD_PRODUCT_ID, "Level 80 Character Boost", false, locale));
-        std::string child = MakeProductJson(CATALOG_SHOP_L80_ENHANCED_CHILD_PRODUCT_ID, "Level 80 Character Boost", false, locale);
-        body = Trinity::StringFormat(
-            R"({{"error":null,"childProducts":[{}],{},"paginationToken":null,"products":[{}]}})",
-            child, MakeMetaJson(NowUnixMillis()), products);
-        TC_LOG_INFO("module.catalogshop", "POST /ProductCatalogService/v1/GetProductsByStoreId → 200 variant=l80-shelf");
+        body = RefreshRetailResponse(RetailProducts, NowUnixMillis());
+        TC_LOG_INFO("module.catalogshop", "POST /ProductCatalogService/v1/GetProductsByStoreId → 200 variant=retail-l80-replay client={}",
+            session->GetClientInfo());
     }
 
     ReplyJson(context, std::move(body));
@@ -504,7 +558,7 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleProdu
 }
 
 CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleVcBalance(
-    std::shared_ptr<CatalogShopHttpSession> /*session*/, HttpRequestContext& context)
+    std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
     req.Parse(context.request.body().c_str());
@@ -521,19 +575,20 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleVcBal
 
     uint32 accountId = _lastSsoAccountId.load(std::memory_order_acquire);
     if (!accountId)
-        accountId = 1;
+        accountId = 1; // browse JSON only; checkout signal never uses this fallback
 
     std::string body = Trinity::StringFormat(
         R"({{"error":null,"softCapped":false,"balance":{{"ledgerId":{{"accountId":{},"ledgerKey":{{"gameServiceRegionId":null,"titleSegment":"{}"}},"currencyCode":"{}"}},"balance":"0","ecosystem":0,"ecosystemGroupComposition":{{"universalBalance":"0","ecosystemGroupBalances":[]}}}}}})",
         accountId, title, code);
 
-    TC_LOG_INFO("module.catalogshop", "POST /VirtualCurrencyLedgerService/v1/GetBalance → 200");
+    TC_LOG_INFO("module.catalogshop", "POST /VirtualCurrencyLedgerService/v1/GetBalance → 200 client={}",
+        session->GetClientInfo());
     ReplyJson(context, std::move(body));
     return RequestHandlerResult::Handled;
 }
 
 CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleQuoteDynamicBundle(
-    std::shared_ptr<CatalogShopHttpSession> /*session*/, HttpRequestContext& context)
+    std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
     req.Parse(context.request.body().c_str());
@@ -553,7 +608,8 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleQuote
         R"({{"error":null,"result":{{"amount":"0","localizedAmount":"Free","currencyCode":"{}","discounts":[],"quoteToken":"local-free-quote","components":[{{"amount":"0","localizedAmount":"Free","productId":{}}}]}}}})",
         currency, productId);
 
-    TC_LOG_INFO("module.catalogshop", "POST /PurchaseService/v1/QuoteDynamicBundle → 200");
+    TC_LOG_INFO("module.catalogshop", "POST /PurchaseService/v1/QuoteDynamicBundle → 200 client={}",
+        session->GetClientInfo());
     ReplyJson(context, std::move(body));
     return RequestHandlerResult::Handled;
 }
@@ -584,7 +640,136 @@ bool CatalogShopHttpService::WriteFreeBuySignal(uint32 accountId, uint32 product
         return false;
     }
     out << productId;
+    TC_LOG_INFO("server.worldserver", "CatalogShop Free Buy signal wrote {} productId={}",
+        path.string(), productId);
     return true;
+}
+
+uint32 CatalogShopHttpService::ResolveCheckoutAccountId(HttpRequestContext const& context) const
+{
+    std::string_view const target = Trinity::Net::Http::ToStdStringView(context.request.target());
+    std::unordered_map<std::string, std::string> query;
+    size_t const queryIndex = target.find('?');
+    if (queryIndex != std::string_view::npos)
+        query = ParseForm(target.substr(queryIndex + 1));
+    auto const form = ParseForm(context.request.body());
+
+    auto fromMap = [](std::unordered_map<std::string, std::string> const& fields) -> uint32
+    {
+        for (char const* key : { "token", "ssoToken", "sso_token", "sso" })
+        {
+            auto it = fields.find(key);
+            if (it == fields.end() || it->second.empty())
+                continue;
+            if (uint32 id = ParseSsoAccountId(it->second))
+                return id;
+            if (uint32 id = FindXusAccountId(it->second))
+                return id;
+        }
+        return 0;
+    };
+
+    if (uint32 id = fromMap(query))
+        return id;
+    if (uint32 id = fromMap(form))
+        return id;
+
+    if (uint32 id = FindXusAccountId(target))
+        return id;
+    if (uint32 id = FindXusAccountId(context.request.body()))
+        return id;
+    if (uint32 id = FindXusAccountId(HeaderValue(context, boost::beast::http::field::cookie)))
+        return id;
+    if (uint32 id = FindXusAccountId(HeaderValue(context, boost::beast::http::field::referer)))
+        return id;
+    if (uint32 id = FindXusAccountId(HeaderValue(context, boost::beast::http::field::authorization)))
+        return id;
+
+    return _lastSsoAccountId.load(std::memory_order_acquire);
+}
+
+uint32 CatalogShopHttpService::ResolveCheckoutProductId(std::string_view path, std::string_view target, std::string_view body)
+{
+    if (uint32 id = ParseProductIdFromPath(path))
+        return id;
+
+    size_t const queryIndex = target.find('?');
+    if (queryIndex != std::string_view::npos)
+        if (uint32 id = ParseProductIdFromMap(ParseForm(target.substr(queryIndex + 1))))
+            return id;
+    if (uint32 id = ParseProductIdFromMap(ParseForm(body)))
+        return id;
+
+    auto findSku = [](std::string_view haystack) -> uint32
+    {
+        if (haystack.find("1969052") != std::string_view::npos)
+            return uint32(CATALOG_SHOP_L80_ENHANCED_PRODUCT_ID);
+        if (haystack.find("1960794") != std::string_view::npos)
+            return uint32(CATALOG_SHOP_L80_ENHANCED_CHILD_PRODUCT_ID);
+        if (haystack.find("1977499") != std::string_view::npos)
+            return uint32(CATALOG_SHOP_L80_STANDARD_PRODUCT_ID);
+        return 0;
+    };
+    if (uint32 id = findSku(target))
+        return id;
+    return findSku(body);
+}
+
+std::string CatalogShopHttpService::HeaderValue(HttpRequestContext const& context, boost::beast::http::field field)
+{
+    auto it = context.request.find(field);
+    if (it == context.request.end())
+        return {};
+    return std::string(Trinity::Net::Http::ToStdStringView(it->value()));
+}
+
+std::string CatalogShopHttpService::ExtractXusToken(std::string_view haystack)
+{
+    size_t pos = haystack.find("XUS-");
+    if (pos == std::string_view::npos)
+        return {};
+    std::string_view token = haystack.substr(pos);
+    size_t end = token.find_first_of("&; \t\"'");
+    if (end != std::string_view::npos)
+        token = token.substr(0, end);
+    if (token.size() < 8)
+        return {};
+    return std::string(token);
+}
+
+uint32 CatalogShopHttpService::FindXusAccountId(std::string_view haystack)
+{
+    std::string token = ExtractXusToken(haystack);
+    if (token.empty())
+        return 0;
+    return ParseSsoAccountId(token);
+}
+
+std::string CatalogShopHttpService::MakeCheckoutCompleteHtml(uint32 productId)
+{
+    return Trinity::StringFormat(
+        R"(<!DOCTYPE html><html><head><meta charset="utf-8"><title>Free grant</title></head>)"
+        R"(<body style="font-family:Segoe UI,sans-serif;background:#1a1a1e;color:#eee;display:flex;)"
+        R"(align-items:center;justify-content:center;height:100vh;margin:0">)"
+        R"(<div style="text-align:center"><h1>Free purchase complete</h1>)"
+        R"(<p>Product {} → pending Level 80 Boost (local Free mode).</p></div></body></html>)",
+        productId);
+}
+
+std::string CatalogShopHttpService::MakeCheckoutConfirmHtml(uint32 productId, std::string_view token, bool autoSubmit)
+{
+    return Trinity::StringFormat(
+        R"(<!DOCTYPE html><html><head><meta charset="utf-8"><title>Local Free checkout</title></head>)"
+        R"(<body style="font-family:Segoe UI,sans-serif;background:#1a1a1e;color:#eee;display:flex;)"
+        R"(align-items:center;justify-content:center;height:100vh;margin:0">)"
+        R"(<div style="text-align:center"><h1>Local Free checkout</h1>)"
+        R"(<p>Confirm Free Buy for product {}.</p>)"
+        R"(<form id="freebuy" method="POST" action="/shop/en-us/client-purchase/{}">)"
+        R"(<input type="hidden" name="token" value="{}">)"
+        R"(<button type="submit" style="font-size:1.1rem;padding:0.6rem 1.2rem">Confirm Free Buy</button>)"
+        R"(</form>{}</div></body></html>)",
+        productId, productId, token,
+        autoSubmit ? R"(<script>document.getElementById("freebuy").submit();</script>)" : "");
 }
 
 uint32 CatalogShopHttpService::ParseSsoAccountId(std::string_view token)
@@ -620,6 +805,19 @@ uint32 CatalogShopHttpService::ParseProductIdFromPath(std::string_view path)
     return 0;
 }
 
+uint32 CatalogShopHttpService::ParseProductIdFromMap(std::unordered_map<std::string, std::string> const& fields)
+{
+    for (char const* key : { "productId", "product_id", "sku", "product" })
+    {
+        auto it = fields.find(key);
+        if (it == fields.end() || it->second.empty())
+            continue;
+        if (Optional<uint32> parsed = Trinity::StringTo<uint32>(it->second))
+            return *parsed;
+    }
+    return 0;
+}
+
 std::string CatalogShopHttpService::HostWithoutPort(std::string_view hostHeader)
 {
     std::string host(hostHeader);
@@ -640,7 +838,7 @@ std::string CatalogShopHttpService::BuildLocalJwt(std::string_view scope) const
     int64 now = NowUnixSeconds();
     std::string header = R"({"alg":"none","typ":"JWT"})";
     std::string payload = Trinity::StringFormat(
-        R"({{"iss":"local-catalogshop","sub":"local-account","aud":"33dad602838b47bfa5ca03adaebac54c","iat":{},"exp":{},"scope":"{}"}})",
+        R"({{"iss":"local-catalogshop-stub","sub":"local-account","aud":"33dad602838b47bfa5ca03adaebac54c","iat":{},"exp":{},"scope":"{}"}})",
         now, now + 86400, scope);
     return Trinity::StringFormat("{}.{}.", Base64UrlEncode(header), Base64UrlEncode(payload));
 }

@@ -175,6 +175,12 @@ void GetLastCatalogFetch::Read()
         _worldPacket.read_skip(_worldPacket.size() - _worldPacket.rpos());
 }
 
+void UpdateLastCatalogFetch::Read()
+{
+    if (_worldPacket.rpos() < _worldPacket.size())
+        _worldPacket.read_skip(_worldPacket.size() - _worldPacket.rpos());
+}
+
 void LicenseGameDataRequest::Read()
 {
     RequestSize = _worldPacket.size();
@@ -296,58 +302,37 @@ ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::BattlePay::BattlePayDistr
 {
     using namespace WorldPackets;
 
-    // Enhanced L80 Boost (1161): sniff-backed object body. AVAILABLE is 101 bytes
-    // (header + 21-byte mid + 56-byte product nest). Assign statuses 2-4 add a 7-byte
-    // zero trailer (108 bytes). Do not write nested display cards here.
-    if (object.ProductID == 1161 && !object.Revoked && object.Status >= 1 && object.Status <= 4)
-    {
-        static constexpr uint8 L80ProductNest[] =
-        {
-            0x80, 0x89, 0x04, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x54, 0x06, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-        };
-        static_assert(sizeof(L80ProductNest) == 56);
-
-        ByteBuffer mid;
-        if (!object.TargetPlayer.IsEmpty())
-        {
-            mid << object.TargetPlayer;
-            mid << uint32(object.TargetVirtualRealm);
-            mid << uint32(object.TargetNativeRealm);
-        }
-
-        data << uint64(object.DistributionID);
-        data << uint32(object.Status);
-        data << uint32(object.ProductID);
-        data << uint64(object.PurchaseID);
-        uint8 midBytes[21] = {};
-        if (mid.size())
-            memcpy(midBytes, mid.data(), std::min(mid.size(), sizeof(midBytes)));
-        data.append(midBytes, sizeof(midBytes));
-        data.append(L80ProductNest, sizeof(L80ProductNest));
-        if (object.Status >= 2 && object.Status <= 4)
-        {
-            uint8 const assignTrailer[7] = {};
-            data.append(assignTrailer, sizeof(assignTrailer));
-        }
-        return data;
-    }
-
     data << uint64(object.DistributionID);
     data << uint32(object.Status);
     data << uint32(object.ProductID);
-    data << uint64(object.PurchaseID);
+    // Both GUIDs are packed, so the product offset changes with the account and character.
+    data << object.AccountGUID;
     data << object.TargetPlayer;
     data << uint32(object.TargetVirtualRealm);
     data << uint32(object.TargetNativeRealm);
-
+    data << uint64(object.PurchaseID);
+    data << uint32(object.UnkInt);
     data << OptionalInit(object.Product);
     data << Bits<1>(object.Revoked);
     data.FlushBits();
 
-    if (object.Product)
+    if (!object.Product)
+        return data;
+
+    // This product body matches the retail L80 boost. Assignment only changes the header.
+    if (object.ProductID == 1161 && object.Status >= 1 && object.Status <= 4)
+    {
+        static constexpr uint8 L80ProductNest[] =
+        {
+            0x89, 0x04, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x54, 0x06, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };
+        static_assert(sizeof(L80ProductNest) == 55);
+        data.append(L80ProductNest, sizeof(L80ProductNest));
+    }
+    else
         data << *object.Product;
 
     return data;

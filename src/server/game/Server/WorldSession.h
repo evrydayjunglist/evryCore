@@ -221,6 +221,9 @@ namespace WorldPackets
     namespace CatalogShop
     {
         class GetLastCatalogFetch;
+        class UpdateLastCatalogFetch;
+        class GetDecorRefundList;
+        class GetAllLicensedDecorQuantities;
         class LicenseGameDataRequest;
     }
 
@@ -279,6 +282,7 @@ namespace WorldPackets
         class EnumCharacters;
         class CreateCharacter;
         class CharDelete;
+        class CharacterUpgradeStart;
         class CharacterRenameRequest;
         class CharCustomize;
         class CharRaceOrFactionChange;
@@ -1926,7 +1930,11 @@ class TC_GAME_API WorldSession
         void HandleBattlePayOpenCheckout(WorldPackets::BattlePay::OpenCheckout& packet);
         void HandleBattlePayConfirmPurchaseResponse(WorldPackets::BattlePay::ConfirmPurchaseResponse& packet);
         void HandleBattlePayDistributionAssignToTarget(WorldPackets::BattlePay::DistributionAssignToTarget& packet);
+        void HandleCharacterUpgradeStart(WorldPackets::Character::CharacterUpgradeStart& packet);
         void HandleGetLastCatalogFetch(WorldPackets::CatalogShop::GetLastCatalogFetch& packet);
+        void HandleUpdateLastCatalogFetch(WorldPackets::CatalogShop::UpdateLastCatalogFetch& packet);
+        void HandleGetDecorRefundList(WorldPackets::CatalogShop::GetDecorRefundList& packet);
+        void HandleGetAllLicensedDecorQuantities(WorldPackets::CatalogShop::GetAllLicensedDecorQuantities& packet);
         void HandleCatalogShopLicenseGameDataRequest(WorldPackets::CatalogShop::LicenseGameDataRequest& packet);
 
         // Battle Pets

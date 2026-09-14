@@ -4290,6 +4290,19 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             stmt->setUInt64(0, guid);
             trans->Append(stmt);
 
+            // Assigned L80 boosts are keyed by targetCharacter. Default CharDelete.Method
+            // hard-deletes the row, so worldserver restart can reuse that guid. Return an
+            // unapplied assign; drop an applied row so the reused guid is not blocked.
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN_BY_CHAR);
+            stmt->setUInt64(0, guid);
+            stmt->setUInt32(1, accountId);
+            trans->Append(stmt);
+
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_BATTLEPAY_DISTRIBUTION_APPLIED_BY_CHAR);
+            stmt->setUInt64(0, guid);
+            stmt->setUInt32(1, accountId);
+            trans->Append(stmt);
+
             sCharacterCache->DeleteCharacterCacheEntry(playerguid, name);
             break;
         }

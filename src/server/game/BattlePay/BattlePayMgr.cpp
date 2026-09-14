@@ -239,26 +239,44 @@ void BattlePayMgr::LoadFromDatabase()
             _distributionCounter = maxLow + 1;
     }
 
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_BATTLEPAY_DISTRIBUTIONS);
-    stmt->setUInt32(0, _session->GetAccountId());
-    PreparedQueryResult result = CharacterDatabase.Query(stmt);
-    if (!result)
-        return;
-
-    do
+    struct LoadedDistribution
     {
-        Field* fields = result->Fetch();
-        BattlePay::PendingDistribution distribution;
-        distribution.DistributionID = fields[0].GetUInt64();
-        distribution.PurchaseID = fields[1].GetUInt64();
-        distribution.ProductID = fields[2].GetUInt32();
-        distribution.Status = fields[3].GetUInt32();
-        uint8 const consumed = fields[4].GetUInt8();
-        uint8 const applied = fields[5].GetUInt8();
-        uint64 const target = fields[6].GetUInt64();
-        distribution.SpecId = fields[7].GetUInt32();
-        if (target)
-            distribution.TargetCharacter = ObjectGuid::Create<HighGuid::Player>(target);
+        BattlePay::PendingDistribution Distribution;
+        uint8 Consumed = 0;
+        uint8 Applied = 0;
+        uint64 Target = 0;
+    };
+
+    std::vector<LoadedDistribution> loaded;
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_BATTLEPAY_DISTRIBUTIONS);
+        stmt->setUInt32(0, _session->GetAccountId());
+        PreparedQueryResult result = CharacterDatabase.Query(stmt);
+        if (!result)
+            return;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            LoadedDistribution& row = loaded.emplace_back();
+            row.Distribution.DistributionID = fields[0].GetUInt64();
+            row.Distribution.PurchaseID = fields[1].GetUInt64();
+            row.Distribution.ProductID = fields[2].GetUInt32();
+            row.Distribution.Status = fields[3].GetUInt32();
+            row.Consumed = fields[4].GetUInt8();
+            row.Applied = fields[5].GetUInt8();
+            row.Target = fields[6].GetUInt64();
+            row.Distribution.SpecId = fields[7].GetUInt32();
+            if (row.Target)
+                row.Distribution.TargetCharacter = ObjectGuid::Create<HighGuid::Player>(row.Target);
+        } while (result->NextRow());
+    }
+
+    std::vector<BattlePay::PendingDistribution> returnToAvailable;
+    std::vector<uint64> deleteApplied;
+    for (LoadedDistribution& row : loaded)
+    {
+        BattlePay::PendingDistribution& distribution = row.Distribution;
 
         uint32 const low = uint32(distribution.DistributionID & 0xFFFFFFFFu);
         if (low >= _distributionCounter)
@@ -275,16 +293,44 @@ void BattlePayMgr::LoadFromDatabase()
         purchase.ResultCode = 0;
         _purchases.push_back(purchase);
 
-        if (!consumed)
+        if (!row.Consumed)
         {
             distribution.Status = BattlePay::DIST_STATUS_AVAILABLE;
             _distributions[distribution.DistributionID] = distribution;
         }
-        else if (!applied && target)
-            _pendingApply[target] = distribution;
-        else if (applied && target)
-            _boostedCharacters.insert(target);
-    } while (result->NextRow());
+        else if (!row.Applied && row.Target)
+        {
+            // Hard-deleted (or other-account) target: do not apply GiveLevel to a reused guid.
+            if (IsLivingCharacterOnAccount(row.Target))
+                _pendingApply[row.Target] = distribution;
+            else
+            {
+                TC_LOG_INFO("network", "BattlePay: returning L80 distribution {} — target {} is gone (account {})",
+                    distribution.DistributionID, row.Target, _session->GetAccountId());
+                distribution.Status = BattlePay::DIST_STATUS_AVAILABLE;
+                distribution.TargetCharacter = ObjectGuid::Empty;
+                distribution.SpecId = 0;
+                _distributions[distribution.DistributionID] = distribution;
+                returnToAvailable.push_back(distribution);
+            }
+        }
+        else if (row.Applied && row.Target)
+        {
+            if (IsLivingCharacterOnAccount(row.Target))
+                _boostedCharacters.insert(row.Target);
+            else
+            {
+                TC_LOG_INFO("network", "BattlePay: dropping applied distribution {} — target {} is gone (account {})",
+                    distribution.DistributionID, row.Target, _session->GetAccountId());
+                deleteApplied.push_back(distribution.DistributionID);
+            }
+        }
+    }
+
+    for (BattlePay::PendingDistribution const& distribution : returnToAvailable)
+        PersistReturnedDistribution(distribution);
+    for (uint64 const distributionId : deleteApplied)
+        PersistDeletedDistribution(distributionId);
 }
 
 void BattlePayMgr::PersistAvailableDistribution(BattlePay::PendingDistribution const& distribution)
@@ -325,6 +371,38 @@ void BattlePayMgr::PersistAppliedDistribution(uint64 distributionId)
     stmt->setUInt32(1, _session->GetAccountId());
     trans->Append(stmt);
     CharacterDatabase.DirectCommitTransaction(trans);
+}
+
+void BattlePayMgr::PersistReturnedDistribution(BattlePay::PendingDistribution const& distribution)
+{
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN);
+    stmt->setUInt8(0, uint8(BattlePay::DIST_STATUS_AVAILABLE));
+    stmt->setUInt64(1, distribution.DistributionID);
+    stmt->setUInt32(2, _session->GetAccountId());
+    trans->Append(stmt);
+    CharacterDatabase.DirectCommitTransaction(trans);
+}
+
+void BattlePayMgr::PersistDeletedDistribution(uint64 distributionId)
+{
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_BATTLEPAY_DISTRIBUTION);
+    stmt->setUInt64(0, distributionId);
+    stmt->setUInt32(1, _session->GetAccountId());
+    trans->Append(stmt);
+    CharacterDatabase.DirectCommitTransaction(trans);
+}
+
+bool BattlePayMgr::IsLivingCharacterOnAccount(ObjectGuid::LowType characterGuid) const
+{
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_BATTLEPAY_CHARACTER);
+    stmt->setUInt64(0, characterGuid);
+    PreparedQueryResult result = CharacterDatabase.Query(stmt);
+    if (!result)
+        return false;
+
+    return result->Fetch()[0].GetUInt32() == _session->GetAccountId();
 }
 
 uint32 BattlePayMgr::ResolveFreeBuyProductId(uint32 shopProductId) const
@@ -858,4 +936,29 @@ bool BattlePayMgr::ApplyPendingBoostOnLogin(Player* player)
         player->GetGUID().ToString(), pending.SpecId, relocated);
     // Skip Catch Up even if relocate failed, so it cannot move a granted L80 to Arathi.
     return true;
+}
+
+void BattlePayMgr::OnCharacterDeleted(ObjectGuid character)
+{
+    ObjectGuid::LowType const guid = character.GetCounter();
+    _boostedCharacters.erase(guid);
+
+    auto itr = _pendingApply.find(guid);
+    if (itr == _pendingApply.end())
+        return;
+
+    BattlePay::PendingDistribution distribution = itr->second;
+    _pendingApply.erase(itr);
+
+    distribution.Status = BattlePay::DIST_STATUS_AVAILABLE;
+    distribution.TargetCharacter = ObjectGuid::Empty;
+    distribution.SpecId = 0;
+    _distributions[distribution.DistributionID] = distribution;
+
+    SendDistributionUpdate(distribution);
+    SendDistributionList();
+    ResurfaceRemainingAvailableL80Distributions();
+
+    TC_LOG_INFO("network", "BattlePay: returned L80 distribution {} after delete of {} (account {})",
+        distribution.DistributionID, character.ToString(), _session->GetAccountId());
 }

@@ -94,6 +94,10 @@ public:
     void OverlayEnumExperienceLevel(ObjectGuid character, uint8& experienceLevel) const;
     bool ApplyPendingBoostOnLogin(Player* player);
 
+    // Character wipe (CHAR_DELETE_REMOVE). Return an unapplied assign so GUID reuse
+    // cannot GiveLevel a new character, and drop applied rows so the reused guid is not blocked.
+    void OnCharacterDeleted(ObjectGuid character);
+
 private:
     uint32 ResolveFreeBuyProductId(uint32 shopProductId) const;
     bool PrepareAvailableL80Distribution(BattlePay::PendingDistribution& out);
@@ -101,6 +105,9 @@ private:
     void PersistAvailableDistribution(BattlePay::PendingDistribution const& distribution);
     void PersistAssignedDistribution(BattlePay::PendingDistribution const& distribution);
     void PersistAppliedDistribution(uint64 distributionId);
+    void PersistReturnedDistribution(BattlePay::PendingDistribution const& distribution);
+    void PersistDeletedDistribution(uint64 distributionId);
+    bool IsLivingCharacterOnAccount(ObjectGuid::LowType characterGuid) const;
     uint64 GenerateDistributionId();
     uint64 GeneratePurchaseId();
     uint32 GenerateServerToken();

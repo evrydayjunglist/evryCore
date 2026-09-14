@@ -1194,6 +1194,12 @@ void WorldSession::HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& c
     sCalendarMgr->RemoveAllPlayerEventsAndInvites(charDelete.Guid);
     Player::DeleteFromDB(charDelete.Guid, accountId);
 
+    // Soft-delete keeps the cache entry so undelete can still consume the assigned boost.
+    // Hard-delete drops it; return the unused assign in this session.
+    if (!sCharacterCache->GetCharacterCacheByGuid(charDelete.Guid))
+        if (BattlePayMgr* battlePayMgr = GetBattlePayMgr())
+            battlePayMgr->OnCharacterDeleted(charDelete.Guid);
+
     _warbandGroupMgr->RemoveMember(charDelete.Guid);
 
     SendCharDelete(CHAR_DELETE_SUCCESS);

@@ -368,6 +368,9 @@ bool AreaTrigger::LoadFromDB(ObjectGuid::LowType spawnId, Map* map, bool /*addTo
     if (!spawnData)
         return false;
 
+    if (!map->IsSpawnGroupAllowed(spawnData->spawnGroupData->groupId))
+        return false;
+
     AreaTriggerCreateProperties const* createProperties = sAreaTriggerDataStore->GetAreaTriggerCreateProperties(spawnData->Id);
     if (!createProperties)
         return false;

@@ -70,6 +70,7 @@ struct SpawnGroupTemplateData
     std::string name;
     uint32 mapId;
     SpawnGroupFlags flags;
+    uint8 timerunningSeasonMask = 1; // Ordinary worlds unless explicitly assigned to an event.
 };
 
 struct SpawnTrackingTemplateData

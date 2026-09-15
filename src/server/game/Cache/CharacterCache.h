@@ -36,6 +36,7 @@ struct CharacterCacheEntry
     ObjectGuid::LowType GuildId;
     uint32 ArenaTeamId[3];
     bool IsDeleted;
+    int32 TimerunningSeasonId = 0;
 };
 
 class TC_GAME_API CharacterCache
@@ -50,7 +51,8 @@ class TC_GAME_API CharacterCache
         static CharacterCache* instance();
 
         void LoadCharacterCacheStorage();
-        void AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accountId, std::string const& name, uint8 gender, uint8 race, uint8 playerClass, uint8 level, bool isDeleted);
+        void AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accountId, std::string const& name, uint8 gender, uint8 race, uint8 playerClass, uint8 level, bool isDeleted, int32 timerunningSeasonId = 0);
+        void UpdateCharacterTimerunningSeason(ObjectGuid const& guid, int32 timerunningSeasonId);
         void DeleteCharacterCacheEntry(ObjectGuid const& guid, std::string const& name);
 
         void UpdateCharacterData(ObjectGuid const& guid, std::string const& name, Optional<uint8> gender = {}, Optional<uint8> race = {});

@@ -139,7 +139,7 @@ class TC_GAME_API MapManager
 
         Map* FindMap_i(uint32 mapId, uint32 instanceId) const;
 
-        Map* CreateWorldMap(uint32 mapId, uint32 instanceId);
+        Map* CreateWorldMap(uint32 mapId, uint32 instanceId, int32 timerunningSeasonId);
         InstanceMap* CreateInstance(uint32 mapId, uint32 instanceId, InstanceLock* instanceLock, Difficulty difficulty, TeamId team, Group* group,
             Optional<uint32> lfgDungeonsId);
         BattlegroundMap* CreateBattleground(uint32 mapId, uint32 instanceId, Battleground* bg);

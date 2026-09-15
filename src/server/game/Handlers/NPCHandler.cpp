@@ -392,6 +392,9 @@ void WorldSession::HandleSetPetSlot(WorldPackets::NPC::SetPetSlot& setPetSlot)
 
 void WorldSession::HandleRepairItemOpcode(WorldPackets::Item::RepairItem& packet)
 {
+    if (_player->GetTimerunningSeasonId() && packet.UseGuildBank)
+        return;
+
     TC_LOG_DEBUG("network", "WORLD: CMSG_REPAIR_ITEM: Npc {}, Item {}, UseGuildBank: {}",
         packet.NpcGUID.ToString(), packet.ItemGUID.ToString(), packet.UseGuildBank);
 

@@ -888,6 +888,10 @@ bool BattlePayMgr::CanAssignToCharacter(ObjectGuid targetCharacter, uint32 produ
     if (fields[0].GetUInt32() != _session->GetAccountId())
         return false;
 
+    CharacterCacheEntry const* character = sCharacterCache->GetCharacterCacheByGuid(targetCharacter);
+    if (!character || character->TimerunningSeasonId)
+        return false;
+
     classId = fields[1].GetUInt8();
     uint8 const level = fields[2].GetUInt8();
     raceId = fields[3].GetUInt8();

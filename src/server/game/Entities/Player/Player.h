@@ -2121,6 +2121,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void ResurrectUsingRequestDataImpl();
 
         PlayerCreateMode GetCreateMode() const { return m_createMode;  }
+        int32 GetTimerunningSeasonId() const { return m_activePlayerData->TimerunningSeasonID; }
 
         uint8 getCinematic() const { return m_cinematic; }
         void setCinematic(uint8 cine) { m_cinematic = cine; }

@@ -25,6 +25,7 @@
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Timerunning.h"
 #include "SocialMgr.h"
 #include "Spell.h"
 #include "SpellMgr.h"
@@ -239,6 +240,12 @@ void WorldSession::HandleAcceptTradeOpcode(WorldPackets::Trade::AcceptTrade& acc
         return;
 
     Player* trader = my_trade->GetTrader();
+
+    if (!Timerunning::CanShareGameplay(_player->GetTimerunningSeasonId(), trader->GetTimerunningSeasonId()))
+    {
+        _player->TradeCancel(true);
+        return;
+    }
 
     TradeData* his_trade = trader->m_trade;
     if (!his_trade)
@@ -640,6 +647,13 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPackets::Trade::InitiateTrade&
     if (!pOther)
     {
         info.Status = TRADE_STATUS_NO_TARGET;
+        SendTradeStatus(info);
+        return;
+    }
+
+    if (!Timerunning::CanShareGameplay(GetPlayer()->GetTimerunningSeasonId(), pOther->GetTimerunningSeasonId()))
+    {
+        info.Status = TRADE_STATUS_TOO_FAR_AWAY;
         SendTradeStatus(info);
         return;
     }

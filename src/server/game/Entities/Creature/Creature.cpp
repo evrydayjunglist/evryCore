@@ -1862,6 +1862,15 @@ bool Creature::CreateFromProto(ObjectGuid::LowType guidlow, uint32 entry, Creatu
 
 bool Creature::LoadFromDB(ObjectGuid::LowType spawnId, Map* map, bool addToMap, bool allowDuplicate)
 {
+    CreatureData const* data = sObjectMgr->GetCreatureData(spawnId);
+    if (!data)
+    {
+        TC_LOG_ERROR("sql.sql", "Creature (SpawnID {}) not found in table `creature`, can't load. ", spawnId);
+        return false;
+    }
+    if (!map->IsSpawnGroupAllowed(data->spawnGroupData->groupId))
+        return false;
+
     if (!allowDuplicate)
     {
         // If an alive instance of this spawnId is already found, skip creation
@@ -1890,13 +1899,6 @@ bool Creature::LoadFromDB(ObjectGuid::LowType spawnId, Map* map, bool addToMap, 
                 despawnCreature->AddObjectToRemoveList();
             }
         }
-    }
-
-    CreatureData const* data = sObjectMgr->GetCreatureData(spawnId);
-    if (!data)
-    {
-        TC_LOG_ERROR("sql.sql", "Creature (SpawnID {}) not found in table `creature`, can't load. ", spawnId);
-        return false;
     }
 
     m_spawnId = spawnId;

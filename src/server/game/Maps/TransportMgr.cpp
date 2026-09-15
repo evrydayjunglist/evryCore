@@ -575,6 +575,10 @@ Transport* TransportMgr::CreateTransport(uint32 entry, Map* map, ObjectGuid::Low
         return nullptr;
     }
 
+    // Event passengers must never be carried onto an ordinary continent.
+    if (map->GetTimerunningSeasonId() && (tInfo->MapIds.size() != 1 || !tInfo->MapIds.contains(map->GetId())))
+        return nullptr;
+
     if (tInfo->MapIds.find(map->GetId()) == tInfo->MapIds.end())
     {
         TC_LOG_ERROR("entities.transport", "Transport {} attempted creation on map it has no path for {}!", entry, map->GetId());

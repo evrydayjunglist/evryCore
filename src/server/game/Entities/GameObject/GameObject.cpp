@@ -2010,6 +2010,9 @@ bool GameObject::LoadFromDB(ObjectGuid::LowType spawnId, Map* map, bool addToMap
         return false;
     }
 
+    if (!map->IsSpawnGroupAllowed(data->spawnGroupData->groupId))
+        return false;
+
     uint32 entry = data->id;
     //uint32 map_id = data->mapid;                          // already used before call
 

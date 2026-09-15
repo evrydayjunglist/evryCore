@@ -25,10 +25,12 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "ObjectMgr.h"
+#include "Player.h"
 #include "RBAC.h"
 #include "RealmList.h"
 #include "SystemPackets.h"
 #include "Timezone.h"
+#include "Timerunning.h"
 #include "Util.h"
 #include "World.h"
 #include <vector>
@@ -111,6 +113,14 @@ void WorldSession::SendSetTimeZoneInformation()
 void WorldSession::SendFeatureSystemStatusGlueScreen()
 {
     WorldPackets::System::FeatureSystemStatusGlueScreen features;
+    Timerunning::State timerunning = sTimerunningMgr->GetState();
+    features.TimerunningEnabled = timerunning.IsEnabled();
+    features.ActiveTimerunningSeasonID = int32(timerunning.ActiveSeason);
+    features.RemainingTimerunningSeasonSeconds = timerunning.RemainingSeconds;
+    features.TimerunningConversionMaxSeasonID = -1;
+    _timerunningStatusSent = true;
+    _timerunningSeasonId = features.ActiveTimerunningSeasonID;
+    _timerunningSeasonEnd = timerunning.EndTime;
     bool const battlePayEnabled = sWorld->getBoolConfig(CONFIG_BATTLE_PAY_ENABLED);
     features.BpayStoreAvailable = battlePayEnabled;
     // CatalogShop chrome on retail arrives with CommerceServerEnabled true beside shop2 MirrorVars.
@@ -229,4 +239,23 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
     // Push Dist with glue so the Use Boost token is already counted.
     if (GetBattlePayMgr())
         GetBattlePayMgr()->SendAvailableL80Distributions();
+}
+
+void WorldSession::UpdateTimerunningSeason()
+{
+    if (!_timerunningStatusSent)
+        return;
+
+    Timerunning::State timerunning = sTimerunningMgr->GetState();
+    if (GetPlayer() && !timerunning.CanEnterWorld(GetPlayer()->GetTimerunningSeasonId()))
+    {
+        KickPlayer("Timerunning season is no longer available; retaining seasonal character state");
+        return;
+    }
+    if (_timerunningSeasonId == int32(timerunning.ActiveSeason) && _timerunningSeasonEnd == timerunning.EndTime)
+        return;
+
+    SendFeatureSystemStatusGlueScreen();
+    if (GetPlayer() && GetPlayer()->IsInWorld())
+        SendFeatureSystemStatus();
 }

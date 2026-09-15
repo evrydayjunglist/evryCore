@@ -72,6 +72,7 @@
 #include "Timer.h"
 #include "TransmogMgr.h"
 #include "TransportMgr.h"
+#include "Timerunning.h"
 #include "VMapFactory.h"
 #include "VMapManager.h"
 #include "Vehicle.h"
@@ -2741,6 +2742,7 @@ void ObjectMgr::LoadSpawnGroupTemplates()
             group.groupId = groupId;
             group.name = fields[1].GetString();
             group.mapId = SPAWNGROUP_MAP_UNSET;
+            group.timerunningSeasonMask = 1;
             uint32 flags = fields[2].GetUInt32();
             if (flags & ~SPAWNGROUP_FLAGS_ALL)
             {
@@ -2779,6 +2781,29 @@ void ObjectMgr::LoadSpawnGroupTemplates()
         TC_LOG_INFO("server.loading", ">> Loaded {} spawn group templates in {} ms", _spawnGroupDataStore.size(), GetMSTimeDiffToNow(oldMSTime));
     else
         TC_LOG_INFO("server.loading", ">> Loaded 0 spawn group templates. DB table `spawn_group_template` is empty.");
+
+    if (QueryResult seasons = WorldDatabase.Query("SELECT GroupId, SeasonMask FROM spawn_group_timerunning"))
+    {
+        do
+        {
+            Field* fields = seasons->Fetch();
+            uint32 groupId = fields[0].GetUInt32();
+            auto group = _spawnGroupDataStore.find(groupId);
+            if (group == _spawnGroupDataStore.end())
+            {
+                TC_LOG_ERROR("sql.sql", "Table `spawn_group_timerunning` references missing spawn group {}.", groupId);
+                continue;
+            }
+
+            uint8 mask = fields[1].GetUInt8();
+            if (mask & ~Timerunning::AllSeasonMask)
+            {
+                TC_LOG_ERROR("sql.sql", "Spawn group {} has invalid Timerunning season mask {}. Disabled in all worlds.", groupId, mask);
+                mask = 0;
+            }
+            group->second.timerunningSeasonMask = mask;
+        } while (seasons->NextRow());
+    }
 
     return;
 }

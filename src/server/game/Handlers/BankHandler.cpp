@@ -227,6 +227,9 @@ void WorldSession::HandleBuyBankTab(WorldPackets::Bank::BuyBankTab const& buyBan
 
 void WorldSession::HandleUpdateBankTabSettings(WorldPackets::Bank::UpdateBankTabSettings const& updateBankTabSettings)
 {
+    if (_player->GetTimerunningSeasonId() && updateBankTabSettings.BankType != BankType::Character)
+        return;
+
     if (!CanUseBank(updateBankTabSettings.Banker))
     {
         TC_LOG_ERROR("network", "WorldSession::HandleUpdateBankTabSettings {} - Banker {} not found or can't interact with him.",
@@ -299,6 +302,13 @@ void WorldSession::HandleAutoDepositCharacterBank(WorldPackets::Bank::AutoDeposi
 
 void WorldSession::SendShowBank(ObjectGuid guid, PlayerInteractionType interactionType)
 {
+    if (_player->GetTimerunningSeasonId())
+    {
+        if (interactionType == PlayerInteractionType::AccountBanker)
+            return;
+        interactionType = PlayerInteractionType::CharacterBanker;
+    }
+
     _player->PlayerTalkClass->GetInteractionData().StartInteraction(guid, interactionType);
 
     WorldPackets::NPC::NPCInteractionOpenResult npcInteraction;

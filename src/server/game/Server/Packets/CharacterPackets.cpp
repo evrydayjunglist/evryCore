@@ -94,7 +94,9 @@ EnumCharactersResult::CharacterInfoBasic::CharacterInfoBasic(Field const* fields
     // "characters.personalTabardEmblemStyle, characters.personalTabardEmblemColor, characters.personalTabardBorderStyle, characters.personalTabardBorderColor, characters.personalTabardBackgroundColor "
     // 19 * 8 fields of equipment cache...
     //  180
-    // "character_declinedname.genitive"
+    // "character_declinedname.genitive" (empty for queries without declined names)
+    //  181
+    // "characters.timerunningSeasonId"
 
     Guid              = ObjectGuid::Create<HighGuid::Player>(fields[0].GetUInt64());
     VirtualRealmAddress = GetVirtualRealmAddress();
@@ -104,6 +106,7 @@ EnumCharactersResult::CharacterInfoBasic::CharacterInfoBasic(Field const* fields
     ClassID           = fields[3].GetUInt8();
     SexID             = fields[4].GetUInt8();
     ExperienceLevel   = fields[5].GetUInt8();
+    TimerunningSeasonID = fields[181].GetInt32();
     ZoneID            = int32(fields[6].GetUInt16());
     MapID             = int32(fields[7].GetUInt16());
     PreloadPos        = Position(fields[8].GetFloat(), fields[9].GetFloat(), fields[10].GetFloat());

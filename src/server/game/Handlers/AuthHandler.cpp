@@ -23,10 +23,12 @@
 #include "DisableMgr.h"
 #include "GameTime.h"
 #include "ObjectMgr.h"
+#include "Player.h"
 #include "RBAC.h"
 #include "RealmList.h"
 #include "SystemPackets.h"
 #include "Timezone.h"
+#include "Timerunning.h"
 #include "Util.h"
 #include "World.h"
 
@@ -108,6 +110,14 @@ void WorldSession::SendSetTimeZoneInformation()
 void WorldSession::SendFeatureSystemStatusGlueScreen()
 {
     WorldPackets::System::FeatureSystemStatusGlueScreen features;
+    Timerunning::State timerunning = sTimerunningMgr->GetState();
+    features.TimerunningEnabled = timerunning.IsEnabled();
+    features.ActiveTimerunningSeasonID = int32(timerunning.ActiveSeason);
+    features.RemainingTimerunningSeasonSeconds = timerunning.RemainingSeconds;
+    features.TimerunningConversionMaxSeasonID = -1;
+    _timerunningStatusSent = true;
+    _timerunningSeasonId = features.ActiveTimerunningSeasonID;
+    _timerunningSeasonEnd = timerunning.EndTime;
     bool const battlePayEnabled = sWorld->getBoolConfig(CONFIG_BATTLE_PAY_ENABLED);
     features.BpayStoreAvailable = battlePayEnabled;
     features.BpayStoreDisabledByParentalControls = false;
@@ -164,4 +174,23 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
     WorldPackets::System::MirrorVars variables;
     variables.Variables = vars;
     SendPacket(variables.Write());
+}
+
+void WorldSession::UpdateTimerunningSeason()
+{
+    if (!_timerunningStatusSent)
+        return;
+
+    Timerunning::State timerunning = sTimerunningMgr->GetState();
+    if (GetPlayer() && !timerunning.CanEnterWorld(GetPlayer()->GetTimerunningSeasonId()))
+    {
+        KickPlayer("Timerunning season is no longer available; retaining seasonal character state");
+        return;
+    }
+    if (_timerunningSeasonId == int32(timerunning.ActiveSeason) && _timerunningSeasonEnd == timerunning.EndTime)
+        return;
+
+    SendFeatureSystemStatusGlueScreen();
+    if (GetPlayer() && GetPlayer()->IsInWorld())
+        SendFeatureSystemStatus();
 }

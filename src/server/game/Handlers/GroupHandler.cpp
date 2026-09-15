@@ -28,6 +28,7 @@
 #include "PartyPackets.h"
 #include "Player.h"
 #include "SocialMgr.h"
+#include "Timerunning.h"
 #include "World.h"
 
 class Aura;
@@ -65,6 +66,12 @@ void WorldSession::HandlePartyInviteOpcode(WorldPackets::Party::PartyInviteClien
     if (!invitedPlayer)
     {
         SendPartyResult(PARTY_OP_INVITE, packet.TargetName, ERR_BAD_PLAYER_NAME_S);
+        return;
+    }
+
+    if (!Timerunning::CanShareGameplay(invitingPlayer->GetTimerunningSeasonId(), invitedPlayer->GetTimerunningSeasonId()))
+    {
+        SendPartyResult(PARTY_OP_INVITE, invitedPlayer->GetName(), ERR_INVITE_RESTRICTED);
         return;
     }
 
@@ -197,6 +204,13 @@ void WorldSession::HandlePartyInviteResponseOpcode(WorldPackets::Party::PartyInv
 
     if (packet.Accept)
     {
+        if (!group->CanJoinTimerunningSeason(GetPlayer()->GetTimerunningSeasonId()))
+        {
+            SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
+            GetPlayer()->UninviteFromGroup();
+            return;
+        }
+
         // Remove player from invitees in any case
         group->RemoveInvite(GetPlayer());
 

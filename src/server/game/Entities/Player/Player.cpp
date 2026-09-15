@@ -16,6 +16,8 @@
  */
 
 #include "Player.h"
+#include "Timerunning.h"
+#include "TimerunningPandaria.h"
 #include "AccountCurrencyMgr.h"
 #include "AreaTrigger.h"
 #include "Account.h"
@@ -397,6 +399,20 @@ void Player::CleanupsBeforeDelete(bool finalCleanup)
 
 bool Player::Create(ObjectGuid::LowType guidlow, WorldPackets::Character::CharacterCreateInfo const* createInfo)
 {
+    if (!sTimerunningMgr->GetState().CanCreateCharacter(createInfo->TimerunningSeasonID))
+        return false;
+
+    bool const isPandariaTimerunner = createInfo->TimerunningSeasonID == int32(Timerunning::Season::Pandaria);
+    CharacterLoadoutEntry const* timerunningLoadout = nullptr;
+    if (isPandariaTimerunner)
+    {
+        if (createInfo->UseNPE || createInfo->TemplateSet || TeamForRace(createInfo->Race) == PANDARIA_NEUTRAL)
+            return false;
+        timerunningLoadout = Timerunning::Pandaria::GetStartingLoadout(createInfo->Class);
+        if (!timerunningLoadout)
+            return false;
+    }
+
     //FIXME: outfitId not used in player creating
     /// @todo need more checks against packet modifications
 
@@ -430,14 +446,27 @@ bool Player::Create(ObjectGuid::LowType guidlow, WorldPackets::Character::Charac
         return false;
     }
 
-    PlayerInfo::CreatePosition const& position = createInfo->UseNPE && info->createPositionNPE ? *info->createPositionNPE : info->createPosition;
+    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::TimerunningSeasonID), createInfo->TimerunningSeasonID);
+
+    PlayerInfo::CreatePosition position = createInfo->UseNPE && info->createPositionNPE ? *info->createPositionNPE : info->createPosition;
+    if (isPandariaTimerunner)
+    {
+        position.Loc = Timerunning::Pandaria::StartLocation;
+        position.TransportGuid.reset();
+        // CreateMap picks the seasonal world copy from the team, so the team must be known here.
+        // The normal SetFactionForRace call further down runs after the map is chosen.
+        SetFactionForRace(createInfo->Race);
+    }
 
     m_createTime = GameTime::GetGameTime();
     m_createMode = createInfo->UseNPE && info->createPositionNPE ? PlayerCreateMode::NPE : PlayerCreateMode::Normal;
 
     Relocate(position.Loc);
 
-    SetMap(sMapMgr->CreateMap(position.Loc.GetMapId(), this));
+    Map* createMap = sMapMgr->CreateMap(position.Loc.GetMapId(), this);
+    if (!createMap)
+        return false;
+    SetMap(createMap);
 
     if (position.TransportGuid)
     {
@@ -486,11 +515,11 @@ bool Player::Create(ObjectGuid::LowType guidlow, WorldPackets::Character::Charac
     SetInventorySlotCount(INVENTORY_DEFAULT_SIZE);
 
     // set starting level
-    SetLevel(GetStartLevel(createInfo->Race, createInfo->Class, createInfo->TemplateSet), false);
+    SetLevel(isPandariaTimerunner ? Timerunning::Pandaria::StartLevel : GetStartLevel(createInfo->Race, createInfo->Class, createInfo->TemplateSet), false);
 
     InitRunes();
 
-    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::Coinage), GetStartMoney(createInfo->Race, createInfo->Class));
+    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::Coinage), isPandariaTimerunner ? 0 : GetStartMoney(createInfo->Race, createInfo->Class));
 
     // Played time
     m_Last_tick = GameTime::GetGameTime();
@@ -529,8 +558,16 @@ bool Player::Create(ObjectGuid::LowType guidlow, WorldPackets::Character::Charac
     EquipTransmogOutfit(0, TransmogSituationTrigger::Manual, false);
 
     // original items
-    for (PlayerCreateInfoItem initialItem : info->item)
-        StoreNewItemInBestSlots(initialItem.item_id, initialItem.item_amount, info->itemContext);
+    if (timerunningLoadout)
+    {
+        for (CharacterLoadoutItemEntry const* initialItem : sCharacterLoadoutItemStore)
+            if (initialItem->CharacterLoadoutID == timerunningLoadout->ID)
+                if (!StoreNewItemInBestSlots(initialItem->ItemID, 1, ItemContext(timerunningLoadout->ItemContext)))
+                    return false;
+    }
+    else
+        for (PlayerCreateInfoItem initialItem : info->item)
+            StoreNewItemInBestSlots(initialItem.item_id, initialItem.item_amount, info->itemContext);
 
     // bags and main-hand weapon must equipped at this moment
     // now second pass for not equipped (offhand weapon/shield if it attempt equipped before main-hand weapon)
@@ -1857,6 +1894,10 @@ bool Player::CanInteractWithQuestGiver(Object* questGiver) const
 
 Creature* Player::GetNPCIfCanInteractWith(ObjectGuid const& guid, NPCFlags npcFlags, NPCFlags2 npcFlags2) const
 {
+    if (GetTimerunningSeasonId() && ((npcFlags & (UNIT_NPC_FLAG_AUCTIONEER | UNIT_NPC_FLAG_GUILD_BANKER)) ||
+        ((npcFlags & UNIT_NPC_FLAG_ACCOUNT_BANKER) && !(npcFlags & UNIT_NPC_FLAG_BANKER))))
+        return nullptr;
+
     // unit checks
     if (!guid)
         return nullptr;
@@ -1940,6 +1981,9 @@ GameObject* Player::GetGameObjectIfCanInteractWith(ObjectGuid const& guid) const
 
 GameObject* Player::GetGameObjectIfCanInteractWith(ObjectGuid const& guid, GameobjectTypes type) const
 {
+    if (GetTimerunningSeasonId() && type == GAMEOBJECT_TYPE_GUILD_BANK)
+        return nullptr;
+
     GameObject* go = GetGameObjectIfCanInteractWith(guid);
     if (!go)
         return nullptr;
@@ -2441,6 +2485,8 @@ void Player::InitStatsForLevel(bool reapplyMods)
 
     uint8 exp_max_lvl = GetMaxLevelForExpansion(GetSession()->GetExpansion());
     uint8 conf_max_lvl = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    if (GetTimerunningSeasonId() == int32(Timerunning::Season::Pandaria))
+        conf_max_lvl = std::min(conf_max_lvl, Timerunning::Pandaria::MaxLevel);
     if (exp_max_lvl == GetMaxLevelForExpansion(CURRENT_EXPANSION) || exp_max_lvl >= conf_max_lvl)
         SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::MaxLevel), conf_max_lvl);
     else
@@ -18445,7 +18491,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         // "totalKills, todayKills, yesterdayKills, chosenTitle, watchedFaction, drunk, "
         // "health, power1, power2, power3, power4, power5, power6, power7, power8, power9, power10, instance_id, activeTalentGroup, lootSpecId, exploredZones, knownTitles, actionBars, "
         // "raidDifficulty, legacyRaidDifficulty, fishingSteps, honor, honorLevel, honorRestState, honorRestBonus, numRespecs, "
-        // "personalTabardEmblemStyle, personalTabardEmblemColor, personalTabardBorderStyle, personalTabardBorderColor, personalTabardBackgroundColor, transmogOutfitEquippedId, transmogOutfitLocked "
+        // "personalTabardEmblemStyle, personalTabardEmblemColor, personalTabardBorderStyle, personalTabardBorderColor, personalTabardBackgroundColor, transmogOutfitEquippedId, transmogOutfitLocked, timerunningSeasonId "
         // "FROM characters c LEFT JOIN character_fishingsteps cfs ON c.guid = cfs.guid WHERE c.guid = ?", CONNECTION_ASYNC);
 
         ObjectGuid::LowType guid;
@@ -18525,6 +18571,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         int32 personalTabardBackgroundColor;
         int32 transmogOutfitEquippedId;
         bool transmogOutfitLocked;
+        int32 timerunningSeasonId;
 
         explicit PlayerLoadData(Field const* fields)
         {
@@ -18608,6 +18655,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             personalTabardBackgroundColor = fields[i++].GetInt32();
             transmogOutfitEquippedId = fields[i++].GetInt32();
             transmogOutfitLocked = fields[i++].GetBool();
+            timerunningSeasonId = fields[i++].GetInt32();
         }
 
     } fields(result->Fetch());
@@ -18619,6 +18667,16 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) loading from wrong account (is: {}, should be: {})", guid.ToString(), GetSession()->GetAccountId(), fields.account);
         return false;
     }
+
+    // Do this before loading or repairing any character state. An unavailable season is not a conversion.
+    if (!sTimerunningMgr->GetState().CanEnterWorld(fields.timerunningSeasonId))
+    {
+        TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) has {} Timerunning season {}; login is disabled and character data is preserved.",
+            guid.ToString(), Timerunning::IsKnownSeason(fields.timerunningSeasonId) ? "unavailable" : "invalid", fields.timerunningSeasonId);
+        return false;
+    }
+
+    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::TimerunningSeasonID), fields.timerunningSeasonId);
 
     if (holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_BANNED))
     {
@@ -20750,6 +20808,14 @@ bool Player::_LoadHomeBind(PreparedQueryResult result)
         CharacterDatabase.Execute(stmt);
     };
 
+    if (GetTimerunningSeasonId() == int32(Timerunning::Season::Pandaria) && (!ok || m_homebind.GetMapId() != Timerunning::Pandaria::MapId))
+    {
+        m_homebind = Timerunning::Pandaria::StartLocation;
+        m_homebindAreaId = Timerunning::Pandaria::StartAreaId;
+        saveHomebindToDb();
+        ok = true;
+    }
+
     if (!ok && HasAtLoginFlag(AT_LOGIN_FIRST))
     {
         PlayerInfo::CreatePosition const& createPosition = m_createMode == PlayerCreateMode::NPE && info->createPositionNPE ? *info->createPositionNPE : info->createPosition;
@@ -21057,6 +21123,7 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
         stmt->setInt32(index++, m_playerData->PersonalTabard->BackgroundColor);
         stmt->setInt32(index++, m_activePlayerData->TransmogMetadata->TransmogOutfitID);
         stmt->setBool(index++, m_activePlayerData->TransmogMetadata->Locked);
+        stmt->setInt32(index++, m_activePlayerData->TimerunningSeasonID);
     }
     else
     {
@@ -24917,6 +24984,9 @@ void Player::LeaveBattleground(bool teleportToEntryPoint /*= true*/, bool withou
 
 bool Player::CanJoinToBattleground(BattlegroundTemplate const* bg) const
 {
+    if (GetTimerunningSeasonId())
+        return false;
+
     uint32 perm = rbac::RBAC_PERM_JOIN_NORMAL_BG;
     if (bg->IsArena())
         perm = rbac::RBAC_PERM_JOIN_ARENAS;

@@ -177,6 +177,7 @@ bool PlayerGuidLookupData::Initialize(ObjectGuid const& guid, Player const* play
         ClassID       = characterInfo->Class;
         Level         = characterInfo->Level;
         PvpFaction    = Player::TeamIdForRace(characterInfo->Race) == TEAM_ALLIANCE ? 1 : 0;
+        TimerunningSeasonID = characterInfo->TimerunningSeasonId;
     }
 
     IsDeleted = characterInfo->IsDeleted;

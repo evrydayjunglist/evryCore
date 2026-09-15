@@ -1520,6 +1520,13 @@ void WorldSession::HandleTransferCurrencyFromAccountCharacter(WorldPackets::Misc
         return;
     }
 
+    CharacterCacheEntry const* sourceCharacter = sCharacterCache->GetCharacterCacheByGuid(packet.SourceCharacterGuid);
+    if (player->GetTimerunningSeasonId() || !sourceCharacter || sourceCharacter->TimerunningSeasonId)
+    {
+        SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_INVALID_CHARACTER), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);
+        return;
+    }
+
     if (IsSourceCharacterOnline(packet.SourceCharacterGuid, this))
     {
         SendCurrencyTransferResultPacket(this, uint32(GameError::ERR_CURRENCY_TRANSFER_CHARACTER_LOGGED_IN), packet.SourceCharacterGuid, packet.CurrencyID, packet.Quantity, 0);

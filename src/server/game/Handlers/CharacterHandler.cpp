@@ -68,6 +68,7 @@
 #include "Util.h"
 #include "WarbandGroupMgr.h"
 #include "World.h"
+#include "Timerunning.h"
 #include <boost/circular_buffer.hpp>
 #include <sstream>
 #include <unordered_set>
@@ -522,7 +523,9 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
             }
 
             if (!sCharacterCache->HasCharacterCacheEntry(charInfo.Guid)) // This can happen if characters are inserted into the database manually. Core hasn't loaded name data yet.
-                sCharacterCache->AddCharacterCacheEntry(charInfo.Guid, GetAccountId(), charInfo.Name, charInfo.SexID, charInfo.RaceID, charInfo.ClassID, charInfo.ExperienceLevel, false);
+                sCharacterCache->AddCharacterCacheEntry(charInfo.Guid, GetAccountId(), charInfo.Name, charInfo.SexID, charInfo.RaceID, charInfo.ClassID, charInfo.ExperienceLevel, false, charInfo.TimerunningSeasonID);
+            else
+                sCharacterCache->UpdateCharacterTimerunningSeason(charInfo.Guid, charInfo.TimerunningSeasonID);
 
             charEnum.MaxCharacterLevel = std::max<int32>(charEnum.MaxCharacterLevel, charInfo.ExperienceLevel);
         }
@@ -894,7 +897,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
         return;
     }
 
-    if (charCreate.CreateInfo->TimerunningSeasonID)
+    if (!sTimerunningMgr->GetState().CanCreateCharacter(charCreate.CreateInfo->TimerunningSeasonID))
     {
         SendCharCreate(CHAR_CREATE_TIMERUNNING);
         return;
@@ -1071,6 +1074,13 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
                 return;
             }
 
+            // The season may have ended or changed while the account queries were running.
+            if (!sTimerunningMgr->GetState().CanCreateCharacter(createInfo->TimerunningSeasonID))
+            {
+                SendCharCreate(CHAR_CREATE_TIMERUNNING);
+                return;
+            }
+
             std::shared_ptr<Player> newChar(new Player(this), [](Player* ptr)
             {
                 ptr->CleanupsBeforeDelete();
@@ -1110,7 +1120,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
 
                     TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     sScriptMgr->OnPlayerCreate(newChar.get());
-                    sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel(), false);
+                    sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel(), false, newChar->GetTimerunningSeasonId());
 
                     SendCharCreate(CHAR_CREATE_SUCCESS, newChar->GetGUID());
                 }
@@ -1273,6 +1283,17 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 {
     ObjectGuid playerGuid = holder.GetGuid();
 
+    if (PreparedQueryResult result = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_FROM))
+    {
+        int32 season = (*result)["timerunningSeasonId"].GetInt32();
+        if ((*result)["account"].GetUInt32() == GetAccountId() && !sTimerunningMgr->GetState().CanEnterWorld(season))
+        {
+            TC_LOG_INFO("entities.player.loading", "Player {} cannot enter unavailable Timerunning season {}; character data is preserved.", playerGuid.ToString(), season);
+            AbortLogin(WorldPackets::Character::LoginFailureReason::Disabled);
+            return;
+        }
+    }
+
     Player* pCurrChar = new Player(this);
      // for send server info and strings (config)
     ChatHandler chH = ChatHandler(pCurrChar->GetSession());
@@ -1299,7 +1320,7 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
             pCurrChar->GetGUID().ToString(), int64(pCurrChar->m_playerData->LogoutTime));
         enterArathiRpe = false;
     }
-    if (enterArathiRpe)
+    if (enterArathiRpe && !pCurrChar->GetTimerunningSeasonId())
     {
         if (!sMapStore.LookupEntry(ARATHI_RPE_MAP_ID))
             TC_LOG_ERROR("network", "Player {} requested Arathi Catch Up login but map {} is missing from Map.db2",
@@ -1410,7 +1431,7 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     {
         pCurrChar->setCinematic(1);
 
-        if (PlayerInfo const* playerInfo = sObjectMgr->GetPlayerInfo(pCurrChar->GetRace(), pCurrChar->GetClass()))
+        if (PlayerInfo const* playerInfo = pCurrChar->GetTimerunningSeasonId() ? nullptr : sObjectMgr->GetPlayerInfo(pCurrChar->GetRace(), pCurrChar->GetClass()))
         {
             switch (pCurrChar->GetCreateMode())
             {
@@ -1553,8 +1574,9 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         pCurrChar->RemoveAtLoginFlag(AT_LOGIN_FIRST);
 
         PlayerInfo const* info = sObjectMgr->GetPlayerInfo(pCurrChar->GetRace(), pCurrChar->GetClass());
-        for (uint32 spellId : info->castSpells[AsUnderlyingType(pCurrChar->GetCreateMode())])
-            pCurrChar->CastSpell(pCurrChar, spellId, true);
+        if (!pCurrChar->GetTimerunningSeasonId())
+            for (uint32 spellId : info->castSpells[AsUnderlyingType(pCurrChar->GetCreateMode())])
+                pCurrChar->CastSpell(pCurrChar, spellId, true);
 
         // start with every map explored
         if (sWorld->getBoolConfig(CONFIG_START_ALL_EXPLORED))
@@ -1663,6 +1685,10 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 void WorldSession::SendFeatureSystemStatus()
 {
     WorldPackets::System::FeatureSystemStatus features;
+    Timerunning::State timerunning = sTimerunningMgr->GetState();
+    features.TimerunningEnabled = timerunning.IsEnabled();
+    features.ActiveTimerunningSeasonID = int32(timerunning.ActiveSeason);
+    features.RemainingTimerunningSeasonSeconds = timerunning.RemainingSeconds;
 
     /// START OF DUMMY VALUES
     features.ComplaintStatus = COMPLAINT_ENABLED_WITH_AUTO_IGNORE;
@@ -2329,7 +2355,7 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
 
     // get the players old (at this moment current) race
     CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(factionChangeInfo->Guid);
-    if (!characterInfo)
+    if (!characterInfo || characterInfo->TimerunningSeasonId)
     {
         SendCharFactionChange(CHAR_CREATE_ERROR, factionChangeInfo.get());
         return;

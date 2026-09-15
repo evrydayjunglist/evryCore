@@ -11,6 +11,7 @@
 #    PERFORMANCE SETTINGS
 #    SERVER LOGGING
 #    SERVER SETTINGS
+#    TIMERUNNING
 #    CRYPTOGRAPHY
 #    UPDATE SETTINGS
 #    HOTSWAP SETTINGS
@@ -1474,6 +1475,43 @@ FeatureSystem.CharacterUndelete.Cooldown = 2592000
 AllowLoggingIPAddressesInDatabase = 1
 
 #
+###################################################################################################
+
+###################################################################################################
+# TIMERUNNING
+#
+#    Timerunning.Season
+#        Description: Schedule a retail Timerunning season, or disable the schedule with None.
+#        Important:   Pandaria creation requires the introduction's world updates and validated
+#                     scripts and starter data. Legion gameplay and conversion remain unavailable.
+#                     Expiry or None closes seasonal login and saves/logs out online Timerunners.
+#                     Their seasonal identity and items are retained; ordinary characters are unaffected.
+#        Default:     "None"
+#        Options:     "None", "Pandaria", "Legion" (case-insensitive)
+
+Timerunning.Season = "None"
+
+#
+#    Timerunning.StartTime
+#        Description: Fixed UTC start date in YYYY-MM-DD HH:MM:SS format, year 1970 or later.
+#                     Required when a season is selected. Ignored when Season is None.
+#                     Restarting worldserver does not restart the countdown.
+#        Example:     "2026-10-01 00:00:00"
+#        Default:     ""
+
+Timerunning.StartTime = ""
+
+#
+#    Timerunning.DurationDays
+#        Description: Season length in whole 24-hour days, from 1 through 24855.
+#                     The season is active from StartTime up to, but not including, its end.
+#                     Before the start and after the end, no season is active.
+#                     All three settings support .reload config. Invalid settings keep the
+#                     previous schedule, or None on initial startup, and log the reason.
+#        Default:     90
+
+Timerunning.DurationDays = 90
+
 ###################################################################################################
 
 ###################################################################################################

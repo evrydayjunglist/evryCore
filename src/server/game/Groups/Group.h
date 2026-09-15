@@ -261,6 +261,7 @@ class TC_GAME_API Group
         void RemoveAllInvites();
         bool AddLeaderInvite(Player* player);
         bool AddMember(Player* player);
+        bool CanJoinTimerunningSeason(int32 seasonId) const;
         bool RemoveMember(ObjectGuid guid, RemoveMethod method = GROUP_REMOVEMETHOD_DEFAULT, ObjectGuid kicker = ObjectGuid::Empty, const char* reason = nullptr);
         void ChangeLeader(ObjectGuid guid);
         void SetLootMethod(LootMethod method);

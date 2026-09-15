@@ -33,6 +33,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "Timerunning.h"
 #include "World.h"
 
 bool WorldSession::CanOpenMailBox(ObjectGuid guid)
@@ -142,6 +143,14 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
     {
         if (_player != player)
             return;
+
+        // Recheck after the asynchronous receiver lookup, before moving money or attachments.
+        CharacterCacheEntry const* receiver = sCharacterCache->GetCharacterCacheByGuid(receiverGuid);
+        if (!receiver || !Timerunning::CanShareGameplay(player->GetTimerunningSeasonId(), receiver->TimerunningSeasonId))
+        {
+            player->SendMailResult(0, MAIL_SEND, MAIL_ERR_RECIPIENT_NOT_FOUND);
+            return;
+        }
 
         if (!player->HasEnoughMoney(reqmoney) && !player->IsGameMaster())
         {

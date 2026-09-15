@@ -20,6 +20,7 @@
 */
 
 #include "World.h"
+#include "Timerunning.h"
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
 #include "ArchaeologyMgr.h"
@@ -1204,6 +1205,8 @@ void World::LoadConfigSettings(bool reload)
     //packet spoof punishment
     if (m_int_configs[CONFIG_PACKET_SPOOF_BANMODE] == BAN_CHARACTER)
         m_int_configs[CONFIG_PACKET_SPOOF_BANMODE] = BAN_ACCOUNT;
+
+    sTimerunningMgr->LoadConfig();
 
     _gameRules =
     {

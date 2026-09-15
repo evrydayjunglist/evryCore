@@ -1345,6 +1345,8 @@ void Guild::HandleRoster(WorldSession* session)
         WorldPackets::Guild::GuildRosterMemberData& memberData = roster.MemberData.emplace_back();
 
         memberData.Guid = member.GetGUID();
+        if (CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(memberData.Guid))
+            memberData.TimerunningSeasonID = characterInfo->TimerunningSeasonId;
         memberData.RankID = int32(member.GetRankId());
         memberData.AreaID = int32(member.GetZoneId());
         memberData.PersonalAchievementPoints = int32(member.GetAchievementPoints());

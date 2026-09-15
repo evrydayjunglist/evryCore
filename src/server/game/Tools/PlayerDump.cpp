@@ -922,6 +922,7 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
     uint8 race = RACE_NONE;
     uint8 playerClass = CLASS_NONE;
     uint8 level = 1;
+    int32 timerunningSeasonId = 0;
 
     // for logs
     size_t lineNumber = 0;
@@ -1021,6 +1022,7 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
                 playerClass = Trinity::StringTo<uint8>(GetColumn(ts, line, "class")).value_or<uint8>(0);
                 gender = Trinity::StringTo<uint8>(GetColumn(ts, line, "gender")).value_or<uint8>(0);
                 level = Trinity::StringTo<uint8>(GetColumn(ts, line, "level")).value_or<uint8>(0);
+                timerunningSeasonId = Trinity::StringTo<int32>(GetColumn(ts, line, "timerunningSeasonId")).value_or(0);
                 if (name.empty())
                 {
                     // generate a temporary name
@@ -1054,7 +1056,7 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
     CharacterDatabase.CommitTransaction(trans);
 
     // in case of name conflict player has to rename at login anyway
-    sCharacterCache->AddCharacterCacheEntry(ObjectGuid::Create<HighGuid::Player>(guid), account, name, gender, race, playerClass, level, false);
+    sCharacterCache->AddCharacterCacheEntry(ObjectGuid::Create<HighGuid::Player>(guid), account, name, gender, race, playerClass, level, false, timerunningSeasonId);
 
     sObjectMgr->GetGenerator<HighGuid::Item>().Set(sObjectMgr->GetGenerator<HighGuid::Item>().GetNextAfterMaxUsed() + items.size());
     sObjectMgr->_mailId += mails.size();

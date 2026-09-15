@@ -432,7 +432,9 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons)
     }
 
     // Check player or group member restrictions
-    if (!player->GetSession()->HasPermission(rbac::RBAC_PERM_JOIN_DUNGEON_FINDER))
+    if (player->GetTimerunningSeasonId())
+        joinData.result = LFG_JOIN_CANT_USE_DUNGEONS;
+    else if (!player->GetSession()->HasPermission(rbac::RBAC_PERM_JOIN_DUNGEON_FINDER))
         joinData.result = LFG_JOIN_NO_SLOTS;
     else if (player->InBattleground() || player->InArena() || player->InBattlegroundQueue())
         joinData.result = LFG_JOIN_CANT_USE_DUNGEONS;

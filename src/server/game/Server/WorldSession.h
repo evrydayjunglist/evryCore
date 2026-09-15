@@ -1094,6 +1094,7 @@ class TC_GAME_API WorldSession
         void SendSetTimeZoneInformation();
         void SendFeatureSystemStatus();
         void SendFeatureSystemStatusGlueScreen();
+        void UpdateTimerunningSeason();
 
         void BuildNameQueryData(ObjectGuid guid, WorldPackets::Query::NameCacheLookupResult& lookupData);
 
@@ -2062,6 +2063,10 @@ class TC_GAME_API WorldSession
         bool m_inQueue;                                     // session wait in auth.queue
         ObjectGuid m_playerLoading;                         // code processed in LoginPlayer
         bool m_playerLoginRPE = false;                      // CMSG_PLAYER_LOGIN.RPE — Catch Up Experience enter
+        bool _timerunningStatusSent = false;
+        int32 _timerunningSeasonId = 0;
+        int64 _timerunningSeasonEnd = 0;
+        time_t _timerunningLastUpdate = 0;
         bool m_playerLogout;                                // code processed in LogoutPlayer
         bool m_playerRecentlyLogout;
         bool m_playerSave;

@@ -18,6 +18,7 @@
 #include "BattlePayMgr.h"
 #include "BattlePayPackets.h"
 #include "Bag.h"
+#include "CharacterCache.h"
 #include "CharacterPackets.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -697,6 +698,10 @@ bool BattlePayMgr::CanAssignToCharacter(ObjectGuid targetCharacter, uint32 produ
     if (fields[0].GetUInt32() != _session->GetAccountId())
         return false;
 
+    CharacterCacheEntry const* character = sCharacterCache->GetCharacterCacheByGuid(targetCharacter);
+    if (!character || character->TimerunningSeasonId)
+        return false;
+
     uint8 const classId = fields[1].GetUInt8();
     uint8 const level = fields[2].GetUInt8();
     uint8 const raceId = fields[3].GetUInt8();
@@ -831,7 +836,7 @@ bool BattlePayMgr::RelocateToBoostStart(Player* player) const
 
 bool BattlePayMgr::ApplyPendingBoostOnLogin(Player* player)
 {
-    if (!player)
+    if (!player || player->GetTimerunningSeasonId())
         return false;
 
     auto itr = _pendingApply.find(player->GetGUID().GetCounter());

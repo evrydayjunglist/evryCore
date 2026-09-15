@@ -36,6 +36,7 @@
 #include "PartyPackets.h"
 #include "Pet.h"
 #include "Player.h"
+#include "Timerunning.h"
 #include "UpdateData.h"
 #include "WorldSession.h"
 
@@ -353,7 +354,7 @@ void Group::ConvertToGroup()
 
 bool Group::AddInvite(Player* player)
 {
-    if (!player || player->GetGroupInvite())
+    if (!player || player->GetGroupInvite() || !CanJoinTimerunningSeason(player->GetTimerunningSeasonId()))
         return false;
     Group* group = player->GetGroup();
     if (group && (group->isBGGroup() || group->isBFGroup()))
@@ -421,8 +422,39 @@ Player* Group::GetInvited(const std::string& name) const
     return nullptr;
 }
 
+bool Group::CanJoinTimerunningSeason(int32 seasonId) const
+{
+    if (!Timerunning::IsKnownSeason(seasonId))
+        return false;
+
+    auto compatibleMember = [seasonId](ObjectGuid guid)
+    {
+        if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
+            return Timerunning::CanShareGameplay(seasonId, player->GetTimerunningSeasonId());
+
+        CharacterCacheEntry const* character = sCharacterCache->GetCharacterCacheByGuid(guid);
+        return character && Timerunning::CanShareGameplay(seasonId, character->TimerunningSeasonId);
+    };
+
+    if (!m_leaderGuid.IsEmpty() && !compatibleMember(m_leaderGuid))
+        return false;
+
+    for (MemberSlot const& member : m_memberSlots)
+        if (!compatibleMember(member.guid))
+            return false;
+
+    for (Player const* invitee : m_invitees)
+        if (!Timerunning::CanShareGameplay(seasonId, invitee->GetTimerunningSeasonId()))
+            return false;
+
+    return true;
+}
+
 bool Group::AddMember(Player* player)
 {
+    if (!player || !CanJoinTimerunningSeason(player->GetTimerunningSeasonId()))
+        return false;
+
     // Get first not-full group
     uint8 subGroup = 0;
     if (m_subGroupsCounts)

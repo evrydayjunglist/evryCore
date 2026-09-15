@@ -86,6 +86,7 @@ public:
     void SendProductList();
     void SendPurchaseList();
     void SendDistributionList();
+    void SendAvailableL80Distributions();
 
     void HandleStartPurchase(uint32 clientToken, uint32 productId, ObjectGuid targetCharacter);
     void HandleConfirmPurchaseResponse(bool confirm, uint32 serverToken, uint64 clientCurrentPriceFixedPoint);

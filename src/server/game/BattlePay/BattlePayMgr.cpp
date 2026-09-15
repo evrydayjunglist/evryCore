@@ -55,6 +55,27 @@ constexpr ItemContext BATTLE_PAY_L80_ITEM_CONTEXT = ItemContext::Character_Boost
 constexpr uint64 BATTLE_PAY_L80_GOLD = 100000;
 constexpr uint32 BATTLE_PAY_MAX_AVAILABLE_L80 = 16;
 
+void FillL80DistributionObject(WorldPackets::BattlePay::BattlePayDistributionObject& object, BattlePay::PendingDistribution const& distribution, ObjectGuid accountGuid)
+{
+    object.DistributionID = distribution.DistributionID;
+    object.Status = distribution.Status;
+    object.ProductID = distribution.ProductID;
+    object.AccountGUID = accountGuid;
+    object.PurchaseID = distribution.PurchaseID;
+    object.TargetPlayer = distribution.TargetCharacter;
+    if (!object.TargetPlayer.IsEmpty())
+    {
+        object.TargetVirtualRealm = GetVirtualRealmAddress();
+        object.TargetNativeRealm = GetVirtualRealmAddress();
+    }
+
+    WorldPackets::BattlePay::BattlePayProduct product;
+    product.ProductID = distribution.ProductID;
+    product.Type = 1;
+    product.UnkInt4 = uint32(BATTLE_PAY_L80_BOOST_TYPE);
+    object.Product = product;
+}
+
 WorldPackets::BattlePay::ProductDisplayInfo MakeL80DisplayInfo()
 {
     WorldPackets::BattlePay::ProductDisplayInfo display;
@@ -516,10 +537,7 @@ void BattlePayMgr::SendProductList()
     }
 
     _session->SendPacket(response.Write());
-    SendDistributionList();
-    for (auto const& [_, distribution] : _distributions)
-        if (distribution.Status == BattlePay::DIST_STATUS_AVAILABLE)
-            SendDistributionUpdate(distribution);
+    SendAvailableL80Distributions();
 }
 
 void BattlePayMgr::SendPurchaseList()
@@ -540,39 +558,36 @@ void BattlePayMgr::SendPurchaseList()
 
 void BattlePayMgr::SendDistributionList()
 {
+    if (!IsEnabled())
+        return;
+
     WorldPackets::BattlePay::DistributionListResponse response;
     response.Result = 0;
     for (auto const& [_, distribution] : _distributions)
-    {
-        WorldPackets::BattlePay::BattlePayDistributionObject& object = response.Distributions.emplace_back();
-        object.DistributionID = distribution.DistributionID;
-        object.Status = distribution.Status;
-        object.ProductID = distribution.ProductID;
-        object.PurchaseID = distribution.PurchaseID;
-        object.TargetPlayer = distribution.TargetCharacter;
-        if (!object.TargetPlayer.IsEmpty())
-        {
-            object.TargetVirtualRealm = GetVirtualRealmAddress();
-            object.TargetNativeRealm = GetVirtualRealmAddress();
-        }
-    }
+        FillL80DistributionObject(response.Distributions.emplace_back(), distribution, _session->GetAccountGUID());
     _session->SendPacket(response.Write());
+    TC_LOG_INFO("server.worldserver", "BattlePay: sent DistributionList count {} account {}",
+        response.Distributions.size(), _session->GetAccountId());
+}
+
+void BattlePayMgr::SendAvailableL80Distributions()
+{
+    if (!IsEnabled())
+        return;
+
+    SendDistributionList();
+    for (auto const& [_, distribution] : _distributions)
+        if (distribution.Status == BattlePay::DIST_STATUS_AVAILABLE)
+            SendDistributionUpdate(distribution);
 }
 
 void BattlePayMgr::SendDistributionUpdate(BattlePay::PendingDistribution const& distribution)
 {
     WorldPackets::BattlePay::DistributionUpdate update;
-    update.Distribution.DistributionID = distribution.DistributionID;
-    update.Distribution.Status = distribution.Status;
-    update.Distribution.ProductID = distribution.ProductID;
-    update.Distribution.PurchaseID = distribution.PurchaseID;
-    update.Distribution.TargetPlayer = distribution.TargetCharacter;
-    if (!update.Distribution.TargetPlayer.IsEmpty())
-    {
-        update.Distribution.TargetVirtualRealm = GetVirtualRealmAddress();
-        update.Distribution.TargetNativeRealm = GetVirtualRealmAddress();
-    }
+    FillL80DistributionObject(update.Distribution, distribution, _session->GetAccountGUID());
     _session->SendPacket(update.Write());
+    TC_LOG_INFO("server.worldserver", "BattlePay: sent DistributionUpdate product {} status {} dist {} account {}",
+        distribution.ProductID, distribution.Status, distribution.DistributionID, _session->GetAccountId());
 }
 
 void BattlePayMgr::HandleStartPurchase(uint32 clientToken, uint32 productId, ObjectGuid /*targetCharacter*/)

@@ -81,6 +81,14 @@ namespace WorldPackets
             uint32 ProductChoice = 0;
         };
 
+        struct ProductDisplayCard
+        {
+            std::string Name;
+            uint32 UnkInt1 = 0;
+            uint32 UnkInt2 = 0;
+            uint32 UnkInt3 = 0;
+        };
+
         struct ProductDisplayInfo
         {
             Optional<uint32> CreatureDisplayInfoID;
@@ -94,19 +102,46 @@ namespace WorldPackets
             std::string Name3;
             std::string Name4;
             std::string Name5;
+            std::string Name6;
+            std::string Name7;
+            uint32 UnkInt1 = 0;
+            uint32 UnkInt2 = 0;
+            uint32 UnkInt3 = 0;
+            std::vector<ProductDisplayCard> DisplayCards;
+        };
+
+        struct ProductItem
+        {
+            uint32 ID = 0;
+            uint32 ItemID = 0;
+            uint32 Quantity = 0;
+            uint32 UnkInt1 = 0;
+            uint32 UnkInt2 = 0;
+            uint32 UnkInt3 = 0;
+            bool HasPet = false;
+            Optional<uint8> PetResult;
+            Optional<ProductDisplayInfo> DisplayInfo;
         };
 
         struct BattlePayProduct
         {
             uint32 ProductID = 0;
-            uint8 Type = 0;
+            uint32 Type = 0;
             uint32 Flags = 0;
             uint32 UnkInt1 = 0;
             uint32 DisplayId = 0;
             uint32 ItemId = 0;
             uint32 UnkInt4 = 0;
-            uint8 UnkInt5 = 0;
+            uint32 UnkInt5 = 0;
+            uint32 UnkInt6 = 0;
+            uint32 UnkInt7 = 0;
+            uint32 UnkInt8 = 0;
+            uint32 UnkInt9 = 0;
+            uint32 UnkInt10 = 0;
             std::string UnkString;
+            bool UnkBit = false;
+            Optional<uint8> UnkBits;
+            std::vector<ProductItem> Items;
             Optional<ProductDisplayInfo> DisplayInfo;
         };
 
@@ -116,7 +151,10 @@ namespace WorldPackets
             uint64 NormalPriceFixedPoint = 0;
             uint64 CurrentPriceFixedPoint = 0;
             uint32 UnkInt2 = 0;
-            uint32 ChoiceType = 0;
+            uint32 UnkInt3 = 0;
+            uint32 UnkInt4 = 0;
+            uint32 UnkInt5 = 0;
+            uint64 UnkLong = 0;
             std::vector<uint32> ProductIDs;
             std::vector<uint32> UnkInts;
             Optional<ProductDisplayInfo> DisplayInfo;
@@ -129,6 +167,7 @@ namespace WorldPackets
             uint8 DisplayType = 0;
             uint32 Ordering = 0;
             uint32 UnkInt = 0;
+            uint32 UnkInt2 = 0;
             std::string Name;
             std::string IsAvailableDescription;
         };
@@ -149,10 +188,12 @@ namespace WorldPackets
             uint64 DistributionID = 0;
             uint32 Status = 0;
             uint32 ProductID = 0;
-            uint64 PurchaseID = 0;
+            ObjectGuid AccountGUID;
             ObjectGuid TargetPlayer;
             uint32 TargetVirtualRealm = 0;
             uint32 TargetNativeRealm = 0;
+            uint64 PurchaseID = 0;
+            uint32 UnkInt = 0;
             Optional<BattlePayProduct> Product;
             bool Revoked = false;
         };
@@ -165,14 +206,14 @@ namespace WorldPackets
             uint32 ProductID = 0;
             uint64 UnkLong = 0;
             uint64 UnkLong2 = 0;
-            uint32 UnkInt = 0;
+            uint64 UnkLong3 = 0;
             std::string WalletName;
         };
 
         class ProductListResponse final : public ServerPacket
         {
         public:
-            explicit ProductListResponse() : ServerPacket(SMSG_BATTLE_PAY_GET_PRODUCT_LIST_RESPONSE, 20) { }
+            explicit ProductListResponse() : ServerPacket(SMSG_BATTLE_PAY_GET_PRODUCT_LIST_RESPONSE, 24) { }
 
             WorldPacket const* Write() override;
 
@@ -265,6 +306,8 @@ namespace WorldPackets
 }
 
 ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::BattlePay::ProductDisplayInfo const& displayInfo);
+ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::BattlePay::ProductDisplayCard const& card);
+ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::BattlePay::ProductItem const& item);
 ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::BattlePay::BattlePayProduct const& product);
 ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::BattlePay::ProductInfoStruct const& info);
 ByteBuffer& operator<<(ByteBuffer& data, WorldPackets::BattlePay::BattlePayDistributionObject const& object);

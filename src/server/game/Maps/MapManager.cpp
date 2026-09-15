@@ -30,6 +30,7 @@
 #include "Map.h"
 #include "OutdoorPvPMgr.h"
 #include "Player.h"
+#include "Timerunning.h"
 #include "ScenarioMgr.h"
 #include "ScriptMgr.h"
 #include "World.h"
@@ -75,9 +76,9 @@ Map* MapManager::FindMap_i(uint32 mapId, uint32 instanceId) const
     return itr != i_maps.end() ? itr->second.get() : nullptr;
 }
 
-Map* MapManager::CreateWorldMap(uint32 mapId, uint32 instanceId)
+Map* MapManager::CreateWorldMap(uint32 mapId, uint32 instanceId, int32 timerunningSeasonId)
 {
-    Map* map = new Map(mapId, i_gridCleanUpDelay, instanceId, DIFFICULTY_NONE);
+    Map* map = new Map(mapId, i_gridCleanUpDelay, instanceId, DIFFICULTY_NONE, timerunningSeasonId);
     map->LoadRespawnTimes();
     map->LoadCorpseData();
     map->InitSpawnGroupState();
@@ -158,6 +159,10 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
 
     MapEntry const* entry = sMapStore.LookupEntry(mapId);
     if (!entry)
+        return nullptr;
+
+    int32 const timerunningSeasonId = player->GetTimerunningSeasonId();
+    if (!Timerunning::CanEnterMap(timerunningSeasonId, mapId, entry->IsWorldMap(), entry->IsGarrison()))
         return nullptr;
 
     std::scoped_lock lock(_mapsLock);
@@ -243,13 +248,15 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
     }
     else
     {
-        newInstanceId = 0;
-        if (entry->IsSplitByFaction())
-            newInstanceId = player->GetTeamId();
+        Optional<uint32> worldInstanceId = Timerunning::GetWorldInstanceId(timerunningSeasonId, entry->IsSplitByFaction(), player->GetTeamId());
+        if (!worldInstanceId)
+            return nullptr;
+
+        newInstanceId = *worldInstanceId;
 
         map = FindMap_i(mapId, newInstanceId);
         if (!map)
-            map = CreateWorldMap(mapId, newInstanceId);
+            map = CreateWorldMap(mapId, newInstanceId, timerunningSeasonId);
     }
 
     if (map)
@@ -261,8 +268,11 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
             map->SetWeakPtr(ptr);
 
             sScriptMgr->OnCreateMap(map);
-            sOutdoorPvPMgr->CreateOutdoorPvPForMap(map);
-            sBattlefieldMgr->CreateBattlefieldsForMap(map);
+            if (!timerunningSeasonId)
+            {
+                sOutdoorPvPMgr->CreateOutdoorPvPForMap(map);
+                sBattlefieldMgr->CreateBattlefieldsForMap(map);
+            }
         }
     }
 
@@ -311,10 +321,7 @@ uint32 MapManager::FindInstanceIdForPlayer(uint32 mapId, Player const* player) c
         return uint32(player->GetGUID().GetCounter());
     else
     {
-        if (entry->IsSplitByFaction())
-            return player->GetTeamId();
-
-        return 0;
+        return Timerunning::GetWorldInstanceId(player->GetTimerunningSeasonId(), entry->IsSplitByFaction(), player->GetTeamId()).value_or(0);
     }
 }
 

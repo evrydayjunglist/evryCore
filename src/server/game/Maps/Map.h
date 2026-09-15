@@ -227,7 +227,7 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
 {
     friend class MapReference;
     public:
-        Map(uint32 id, time_t, uint32 InstanceId, Difficulty SpawnMode);
+        Map(uint32 id, time_t, uint32 InstanceId, Difficulty SpawnMode, int32 timerunningSeasonId = 0);
         virtual ~Map();
 
         MapEntry const* GetEntry() const { return i_mapEntry; }
@@ -351,12 +351,13 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         static bool CheckGridIntegrity(T* object, bool moved, char const* objType);
 
         uint32 GetInstanceId() const { return i_InstanceId; }
+        int32 GetTimerunningSeasonId() const { return _timerunningSeasonId; }
 
         Trinity::unique_weak_ptr<Map> GetWeakPtr() const { return m_weakRef; }
         void SetWeakPtr(Trinity::unique_weak_ptr<Map> weakRef) { m_weakRef = std::move(weakRef); }
 
         static TransferAbortParams PlayerCannotEnter(uint32 mapid, Player* player);
-        virtual TransferAbortParams CannotEnter(Player* /*player*/) { return { TRANSFER_ABORT_NONE }; }
+        virtual TransferAbortParams CannotEnter(Player* player);
         char const* GetMapName() const;
 
         // have meaning only for instanced map (that have set real difficulty)
@@ -651,6 +652,7 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         MapEntry const* i_mapEntry;
         Difficulty i_spawnMode;
         uint32 i_InstanceId;
+        int32 const _timerunningSeasonId;
         Trinity::unique_weak_ptr<Map> m_weakRef;
         uint32 m_unloadTimer;
         float m_VisibleDistance;
@@ -743,6 +745,7 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         SpawnGroupTemplateData const* GetSpawnGroupData(uint32 groupId) const;
 
         bool IsSpawnGroupActive(uint32 groupId) const;
+        bool IsSpawnGroupAllowed(uint32 groupId) const;
 
         // Enable the spawn group, which causes all creatures in it to respawn (unless they have a respawn timer)
         // The force flag can be used to force spawning additional copies even if old copies are still around from a previous spawn

@@ -53,6 +53,7 @@
 #include "ScriptMgr.h"
 #include "SpellAuras.h"
 #include "TerrainMgr.h"
+#include "Timerunning.h"
 #include "Transport.h"
 #include "VMapFactory.h"
 #include "VMapManager.h"
@@ -135,9 +136,9 @@ void Map::DeleteStateMachine()
     delete si_GridStates[GRID_STATE_REMOVAL];
 }
 
-Map::Map(uint32 id, time_t expiry, uint32 InstanceId, Difficulty SpawnMode) :
+Map::Map(uint32 id, time_t expiry, uint32 InstanceId, Difficulty SpawnMode, int32 timerunningSeasonId) :
 _creatureToMoveLock(false), _gameObjectsToMoveLock(false), _dynamicObjectsToMoveLock(false), _areaTriggersToMoveLock(false),
-i_mapEntry(sMapStore.LookupEntry(id)), i_spawnMode(SpawnMode), i_InstanceId(InstanceId),
+i_mapEntry(sMapStore.LookupEntry(id)), i_spawnMode(SpawnMode), i_InstanceId(InstanceId), _timerunningSeasonId(timerunningSeasonId),
 m_unloadTimer(0), m_VisibleDistance(DEFAULT_VISIBILITY_DISTANCE), m_mapRefIter(m_mapRefManager.end()),
 m_VisibilityNotifyPeriod(DEFAULT_VISIBILITY_NOTIFY_PERIOD),
 m_activeNonPlayersIter(m_activeNonPlayers.end()), _transportsUpdateIter(_transports.end()),
@@ -391,6 +392,13 @@ void Map::LoadGridsInRange(float x, float y, float radius)
 
 bool Map::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 {
+    if (Map::CannotEnter(player))
+    {
+        TC_LOG_ERROR("maps", "Player {} in Timerunning season {} cannot join map {} instance {} in season {}.",
+            player->GetGUID().ToString(), player->GetTimerunningSeasonId(), GetId(), GetInstanceId(), GetTimerunningSeasonId());
+        return false;
+    }
+
     CellCoord cellCoord = Trinity::ComputeCellCoord(player->GetPositionX(), player->GetPositionY());
     if (!cellCoord.IsCoordValid())
     {
@@ -1804,10 +1812,23 @@ void Map::RequestRebuildNavMeshOnGameObjectModelChange(GameObjectModel const& mo
             m_mmapTileRebuilder->AddTile(terrainMapId, x, y);
 }
 
+TransferAbortParams Map::CannotEnter(Player* player)
+{
+    if (!Timerunning::CanShareGameplay(GetTimerunningSeasonId(), player->GetTimerunningSeasonId()) ||
+        !Timerunning::CanEnterMap(player->GetTimerunningSeasonId(), GetId(), GetEntry()->IsWorldMap(), GetEntry()->IsGarrison()))
+        return TRANSFER_ABORT_MAP_NOT_ALLOWED;
+
+    return TRANSFER_ABORT_NONE;
+}
+
 TransferAbortParams Map::PlayerCannotEnter(uint32 mapid, Player* player)
 {
     MapEntry const* entry = sMapStore.LookupEntry(mapid);
     if (!entry)
+        return TRANSFER_ABORT_MAP_NOT_ALLOWED;
+
+    // Dungeon, battleground and garrison ownership must also be separated before seasonal entry is available.
+    if (!Timerunning::CanEnterMap(player->GetTimerunningSeasonId(), mapid, entry->IsWorldMap(), entry->IsGarrison()))
         return TRANSFER_ABORT_MAP_NOT_ALLOWED;
 
     if (!entry->IsDungeon())
@@ -2338,9 +2359,8 @@ bool Map::ShouldBeSpawnedOnGridLoad(SpawnObjectType type, ObjectGuid::LowType sp
     SpawnMetadata const* spawnData = ASSERT_NOTNULL(sObjectMgr->GetSpawnMetadata(type, spawnId));
     // check if the object is part of a spawn group
     SpawnGroupTemplateData const* spawnGroup = ASSERT_NOTNULL(spawnData->spawnGroupData);
-    if (!(spawnGroup->flags & SPAWNGROUP_FLAG_SYSTEM))
-        if (!IsSpawnGroupActive(spawnGroup->groupId))
-            return false;
+    if (!IsSpawnGroupActive(spawnGroup->groupId))
+        return false;
 
     if (spawnData->ToSpawnData()->poolId)
         if (!GetPoolData().IsSpawnedObject(type, spawnId))
@@ -2365,6 +2385,9 @@ bool Map::SpawnGroupSpawn(uint32 groupId, bool ignoreRespawn, bool force, std::v
         TC_LOG_ERROR("maps", "Tried to spawn non-existing (or system) spawn group {} on map {}. Blocked.", groupId, GetId());
         return false;
     }
+
+    if (!IsSpawnGroupAllowed(groupId))
+        return false;
 
     SetSpawnGroupActive(groupId, true); // start processing respawns for the group
 
@@ -2491,10 +2514,19 @@ bool Map::IsSpawnGroupActive(uint32 groupId) const
         TC_LOG_ERROR("maps", "Tried to query state of non-existing spawn group {} on map {}.", groupId, GetId());
         return false;
     }
+
+    if (!Timerunning::CanUseSpawnGroup(GetTimerunningSeasonId(), data->timerunningSeasonMask))
+        return false;
     if (data->flags & SPAWNGROUP_FLAG_SYSTEM)
         return true;
     // either manual spawn group and toggled, or not manual spawn group and not toggled...
     return (_toggledSpawnGroupIds.find(groupId) != _toggledSpawnGroupIds.end()) != !(data->flags & SPAWNGROUP_FLAG_MANUAL_SPAWN);
+}
+
+bool Map::IsSpawnGroupAllowed(uint32 groupId) const
+{
+    SpawnGroupTemplateData const* data = GetSpawnGroupData(groupId);
+    return data && Timerunning::CanUseSpawnGroup(GetTimerunningSeasonId(), data->timerunningSeasonMask);
 }
 
 void Map::InitSpawnGroupState()
@@ -2524,7 +2556,8 @@ void Map::UpdateSpawnGroupConditions()
         SpawnGroupTemplateData const* spawnGroupTemplate = ASSERT_NOTNULL(GetSpawnGroupData(spawnGroupId));
 
         bool isActive = IsSpawnGroupActive(spawnGroupId);
-        bool shouldBeActive = sConditionMgr->IsMapMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_SPAWN_GROUP, spawnGroupId, this);
+        bool shouldBeActive = IsSpawnGroupAllowed(spawnGroupId) &&
+            sConditionMgr->IsMapMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_SPAWN_GROUP, spawnGroupId, this);
 
         if (spawnGroupTemplate->flags & SPAWNGROUP_FLAG_MANUAL_SPAWN)
         {
@@ -2950,6 +2983,9 @@ TransferAbortParams InstanceMap::CannotEnter(Player* player)
 */
 bool InstanceMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 {
+    if (Map::CannotEnter(player))
+        return false;
+
     // increase current instances (hourly limit)
     player->GetSession()->AddInstanceEnterTime(GetInstanceId(), GameTime::GetSystemTime());
 
@@ -2979,7 +3015,8 @@ bool InstanceMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     m_unloadTimer = 0;
 
     // this will acquire the same mutex so it cannot be in the previous block
-    Map::AddPlayerToMap(player, initPlayer);
+    if (!Map::AddPlayerToMap(player, initPlayer))
+        return false;
 
     if (i_data)
         i_data->OnPlayerEnter(player);
@@ -3520,6 +3557,9 @@ TransferAbortParams BattlegroundMap::CannotEnter(Player* player)
 
 bool BattlegroundMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 {
+    if (Map::CannotEnter(player))
+        return false;
+
     player->m_InstanceValid = true;
     return Map::AddPlayerToMap(player, initPlayer);
 }

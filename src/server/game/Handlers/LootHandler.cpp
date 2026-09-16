@@ -459,6 +459,27 @@ void WorldSession::HandleLootMasterGiveOpcode(WorldPackets::Loot::MasterLootItem
             return;
         }
 
+        ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(item.itemid);
+        if (itemTemplate && itemTemplate->IsAppliedWhenLooted())
+        {
+            if (!item.HasAllowedLooter(target->GetGUID()))
+            {
+                _player->SendLootError(req.Object, loot->GetOwnerGUID(), LOOT_ERROR_MASTER_OTHER);
+                return;
+            }
+
+            target->ApplyItemForcedLootedSpells(itemTemplate, item.count);
+            target->UpdateCriteria(CriteriaType::LootItem, item.itemid, item.count);
+            target->UpdateCriteria(CriteriaType::GetLootByType, item.itemid, item.count, loot->loot_type);
+            target->UpdateCriteria(CriteriaType::LootAnyItem, item.itemid, item.count);
+
+            item.count = 0;
+            item.is_looted = true;
+            loot->NotifyItemRemoved(req.LootListID, GetPlayer()->GetMap());
+            --loot->unlootedCount;
+            continue;
+        }
+
         ItemPosCountVec dest;
         InventoryResult msg = target->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item.itemid, item.count);
         if (!item.HasAllowedLooter(target->GetGUID()))

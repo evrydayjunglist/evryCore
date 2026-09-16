@@ -11377,6 +11377,10 @@ void Unit::SetMeleeAnimKitId(uint16 animKitId)
             }
         }
 
+        // Credit the kill before building loot. A quest item whose objective is sequenced
+        // after this kill is only allowed once the kill has been counted.
+        KillRewarder(Trinity::IteratorPair(tappers.data(), tappers.data() + tappers.size()), victim, false).Reward();
+
         // Generate loot before updating looter
         if (creature)
         {
@@ -11447,8 +11451,6 @@ void Unit::SetMeleeAnimKitId(uint16 animKitId)
                     tapper->SetRewardedQuest(vignette->Data->VisibleTrackingQuestID);
             }
         }
-
-        KillRewarder(Trinity::IteratorPair(tappers.data(), tappers.data() + tappers.size()), victim, false).Reward();
     }
 
     // Do KILL and KILLED procs. KILL proc is called only for the unit who landed the killing blow (and its owner - for pets and totems) regardless of who tapped the victim

@@ -2591,6 +2591,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void CastItemUseSpell(Item* item, uint32 spellId, SpellCastTargets const& targets, ObjectGuid castCount, std::array<int32, 3> const& misc);
         void ApplyItemLootedSpell(Item* item, bool apply);
         void ApplyItemLootedSpell(ItemTemplate const* itemTemplate);
+        void ApplyItemForcedLootedSpells(ItemTemplate const* itemTemplate, uint32 count);
 
         void SendEquipmentSetList();
         void SetEquipmentSet(EquipmentSetInfo::EquipmentSetData const& newEqSet);

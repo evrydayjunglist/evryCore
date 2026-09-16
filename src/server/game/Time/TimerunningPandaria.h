@@ -30,7 +30,8 @@ inline constexpr uint32 MapId = 870;
 inline constexpr uint8 StartLevel = 10;
 inline constexpr uint8 MaxLevel = 70;
 inline constexpr uint32 SpawnGroupId = 1286;
-inline constexpr WorldLocation StartLocation{ MapId, -930.0f, -4730.0f, 1.81421f, 1.570796f };
+// A few yards in front of Eternus on the Timeless Shore, facing her. Retail's exact arrival point is not known.
+inline constexpr WorldLocation StartLocation{ MapId, -596.0f, -4677.0f, 3.3598f, 2.446854f };
 inline constexpr uint32 StartAreaId = 6832;
 
 // These installed CharacterLoadout rows contain the class-specific Pandaria Timerunner kits.

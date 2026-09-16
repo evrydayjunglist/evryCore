@@ -9333,6 +9333,19 @@ void Player::ApplyItemLootedSpell(ItemTemplate const* itemTemplate)
     }
 }
 
+// An item that takes effect the moment it is looted is never stored. Its spells are cast
+// once for each item looted.
+void Player::ApplyItemForcedLootedSpells(ItemTemplate const* itemTemplate, uint32 count)
+{
+    if (!itemTemplate->IsAppliedWhenLooted())
+        return;
+
+    for (uint32 i = 0; i < count; ++i)
+        for (ItemEffectEntry const* effect : itemTemplate->Effects)
+            if (effect->TriggerType == ITEM_SPELLTRIGGER_ON_LOOTED_FORCED && effect->SpellID > 0)
+                CastSpell(this, effect->SpellID, true);
+}
+
 void Player::_RemoveAllItemMods()
 {
     TC_LOG_DEBUG("entities.player.items", "_RemoveAllItemMods start.");
@@ -11820,7 +11833,9 @@ Item* Player::StoreNewItem(ItemPosCountVec const& pos, uint32 itemId, bool updat
             CharacterDatabase.Execute(stmt);
         }
 
-        if (addToCollection)
+        // A character still being created is not yet the session's player, and the collection
+        // updates go through that player. Its items are collected when it first logs in.
+        if (addToCollection && GetSession()->GetPlayer() == this)
             GetSession()->GetCollectionMgr()->OnItemAdded(item);
 
         if (ItemChildEquipmentEntry const* childItemEntry = sDB2Manager.GetItemChildEquipment(itemId))
@@ -28368,6 +28383,16 @@ void Player::StoreLootItem(ObjectGuid lootWorldObjectGuid, uint8 lootSlot, Loot*
     {
         case LootItemType::Item:
         {
+            ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(item->itemid);
+            if (itemTemplate && itemTemplate->IsAppliedWhenLooted())
+            {
+                ApplyItemForcedLootedSpells(itemTemplate, item->count);
+                UpdateCriteria(CriteriaType::LootItem, item->itemid, item->count);
+                UpdateCriteria(CriteriaType::GetLootByType, item->itemid, item->count, GetLootTypeForClient(loot->loot_type));
+                UpdateCriteria(CriteriaType::LootAnyItem, item->itemid, item->count);
+                break;
+            }
+
             ItemPosCountVec dest;
             InventoryResult msg = CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item->itemid, item->count);
             if (msg != EQUIP_ERR_OK)

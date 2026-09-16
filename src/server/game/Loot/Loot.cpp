@@ -998,6 +998,13 @@ bool Loot::AutoStore(Player* player, uint8 bag, uint8 slot, bool broadcast, bool
         {
             case LootItemType::Item:
             {
+                ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(lootItem->itemid);
+                if (itemTemplate && itemTemplate->IsAppliedWhenLooted())
+                {
+                    player->ApplyItemForcedLootedSpells(itemTemplate, lootItem->count);
+                    break;
+                }
+
                 ItemPosCountVec dest;
                 InventoryResult msg = player->CanStoreNewItem(bag, slot, dest, lootItem->itemid, lootItem->count);
                 if (msg != EQUIP_ERR_OK && slot != NULL_SLOT)
@@ -1124,6 +1131,12 @@ bool Loot::hasItemFor(Player const* player) const
     // quest items
     for (LootItem const& lootItem : items)
         if (!lootItem.is_looted && !lootItem.follow_loot_rules && lootItem.GetAllowedLooters().contains(player->GetGUID()))
+            return true;
+
+    // conditional items, which hasItemForAll() leaves out
+    for (LootItem const& lootItem : items)
+        if (!lootItem.is_looted && lootItem.follow_loot_rules && !lootItem.freeforall && !lootItem.conditions.IsEmpty()
+            && lootItem.GetAllowedLooters().contains(player->GetGUID()))
             return true;
 
     if (NotNormalLootItemList const* ffaItems = Trinity::Containers::MapGetValuePtr(GetPlayerFFAItems(), player->GetGUID()))

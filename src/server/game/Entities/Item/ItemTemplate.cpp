@@ -72,6 +72,17 @@ bool ItemTemplate::HasSignature() const
         GetId() != ITEM_HEARTHSTONE;
 }
 
+bool ItemTemplate::IsAppliedWhenLooted() const
+{
+    if (HasFlag(ITEM_FLAG_LEGACY))
+        return false;
+
+    return std::ranges::any_of(Effects, [](ItemEffectEntry const* effect)
+    {
+        return effect->TriggerType == ITEM_SPELLTRIGGER_ON_LOOTED_FORCED && effect->SpellID > 0;
+    });
+}
+
 bool ItemTemplate::CanChangeEquipStateInCombat() const
 {
     switch (GetInventoryType())

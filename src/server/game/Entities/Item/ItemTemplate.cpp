@@ -72,15 +72,37 @@ bool ItemTemplate::HasSignature() const
         GetId() != ITEM_HEARTHSTONE;
 }
 
+// The Remix threads, epoch mementos, Bronze Cluster and Infinite Knowledge take effect when looted
+// and also carry a use effect with no charges, so a copy kept in the bags could be used again and
+// again. They are applied when looted instead of being stored. Other items with the looted trigger
+// are stored as before: those that are not consumables, have their own loot, have no use effect,
+// or have any other kind of effect.
 bool ItemTemplate::IsAppliedWhenLooted() const
 {
-    if (HasFlag(ITEM_FLAG_LEGACY))
+    if (GetClass() != ITEM_CLASS_CONSUMABLE || HasFlag(ITEM_FLAG_LEGACY) || HasFlag(ITEM_FLAG_HAS_LOOT))
         return false;
 
-    return std::ranges::any_of(Effects, [](ItemEffectEntry const* effect)
+    bool takesEffectWhenLooted = false;
+    bool hasUseEffect = false;
+    for (ItemEffectEntry const* effect : Effects)
     {
-        return effect->TriggerType == ITEM_SPELLTRIGGER_ON_LOOTED_FORCED && effect->SpellID > 0;
-    });
+        switch (effect->TriggerType)
+        {
+            case ITEM_SPELLTRIGGER_ON_LOOTED_FORCED:
+                if (effect->SpellID > 0)
+                    takesEffectWhenLooted = true;
+                break;
+            case ITEM_SPELLTRIGGER_ON_USE:
+                if (effect->Charges != 0)
+                    return false;
+                hasUseEffect = true;
+                break;
+            default:
+                return false;
+        }
+    }
+
+    return takesEffectWhenLooted && hasUseEffect;
 }
 
 bool ItemTemplate::CanChangeEquipStateInCombat() const

@@ -933,7 +933,7 @@ struct TC_GAME_API ItemTemplate
     bool IsConjuredConsumable() const { return GetClass() == ITEM_CLASS_CONSUMABLE && HasFlag(ITEM_FLAG_CONJURED); }
     bool IsCraftingReagent() const { return HasFlag(ITEM_FLAG2_USED_IN_A_TRADESKILL); }
     bool HasSignature() const;
-    // The item takes effect the moment it is looted and is never kept.
+    // A consumable that takes effect the moment it is looted and is never kept.
     bool IsAppliedWhenLooted() const;
 
     bool IsWeapon() const { return GetClass() == ITEM_CLASS_WEAPON; }

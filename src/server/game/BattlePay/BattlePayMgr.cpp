@@ -161,6 +161,12 @@ void MailOldKitForL80Boost(Player* player)
         take(INVENTORY_SLOT_BAG_0, bagSlot);
     }
 
+    // Backpack is INVENTORY_SLOT_ITEM_*, not a bag slot. Leaving it filled blocks
+    // StoreNewItemInBestSlots after the bags above have already been mailed away.
+    uint8 const inventoryEnd = INVENTORY_SLOT_ITEM_START + player->GetInventorySlotCount();
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < inventoryEnd; ++slot)
+        take(INVENTORY_SLOT_BAG_0, slot);
+
     MailRecoveredBoostItems(player, toMail);
 }
 

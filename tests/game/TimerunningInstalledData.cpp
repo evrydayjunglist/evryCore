@@ -46,8 +46,9 @@ TEST_CASE("Pandaria introduction placements match installed terrain", "[.Timerun
     Position const& start = Timerunning::Pandaria::StartLocation;
     checkPosition(start.GetPositionX(), start.GetPositionY(), start.GetPositionZ());
 
+    // The latest placement update holds the sixteen opening creatures and the Unstable Rift object.
     std::filesystem::path repo = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
-    std::ifstream input(repo / "sql/updates/world/master/2026_09_13_02_world.sql");
+    std::ifstream input(repo / "sql/updates/world/master/2026_09_13_03_world.sql");
     REQUIRE(input.is_open());
     std::string sql(std::istreambuf_iterator<char>{ input }, {});
     std::regex spawn(R"(\(118010[0-9]{2},[0-9]+,870,[0-9]+,[0-9]+,'0',([-0-9.]+),([-0-9.]+),([-0-9.]+),)");
@@ -57,5 +58,5 @@ TEST_CASE("Pandaria introduction placements match installed terrain", "[.Timerun
         checkPosition(std::stof((*itr)[1]), std::stof((*itr)[2]), std::stof((*itr)[3]));
         ++count;
     }
-    REQUIRE(count == 16);
+    REQUIRE(count == 17);
 }

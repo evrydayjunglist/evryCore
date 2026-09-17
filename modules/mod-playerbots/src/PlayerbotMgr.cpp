@@ -64,6 +64,8 @@ namespace
     constexpr uint32 CAMPED_WAIT_MS = 20000;
     constexpr uint32 GHOST_WAIT_LONG_MS = 180000;
     constexpr uint32 GHOST_GIVE_UP_MS = 300000;
+    constexpr float STILL_SHORT_REPEAT_YARDS = 1.0f;
+    constexpr size_t STILL_SHORT_MEMORY = 8;
     std::string NormalizeLoginMode(std::string_view value)
     {
         while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
@@ -336,6 +338,32 @@ namespace
     {
         bot.UnreachableGuids.clear();
         bot.UnreachablePositions.clear();
+    }
+
+    // Walk the rest of the way to a target again only from new feet. From feet she already walked it from, the walk
+    // ends where it did before, and restarting the arrive wait on every walk means she never gives up on the target.
+    bool CanWalkRestOfWay(PlayerbotRecord const& bot, Player const* player, ObjectGuid const& target)
+    {
+        if (bot.StillShortGuid != target)
+            return true;
+
+        return std::none_of(bot.StillShortFeet.begin(), bot.StillShortFeet.end(), [player](Position const& feet)
+        {
+            return player->GetExactDist(feet) <= STILL_SHORT_REPEAT_YARDS;
+        });
+    }
+
+    void NoteWalkRestOfWay(PlayerbotRecord& bot, Player const* player, ObjectGuid const& target)
+    {
+        if (bot.StillShortGuid != target)
+        {
+            bot.StillShortGuid = target;
+            bot.StillShortFeet.clear();
+        }
+
+        if (bot.StillShortFeet.size() >= STILL_SHORT_MEMORY)
+            bot.StillShortFeet.erase(bot.StillShortFeet.begin());
+        bot.StillShortFeet.push_back(player->GetPosition());
     }
 
     void ClearUseItemCast(PlayerbotRecord& bot)
@@ -1756,13 +1784,15 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
         Creature* creature = ObjectAccessor::GetCreature(*player, bot.QuestTarget.NpcGuid);
         if (creature && creature->IsAlive()
-            && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
+            && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f)
+            && CanWalkRestOfWay(bot, player, bot.QuestTarget.NpcGuid))
         {
             Position standPos;
             float const standDistance = creature->GetCombatReach() + 1.0f;
             if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
                 && bot.Walker.Start(player, standPos, bot.QuestTarget.StopDistance, RecoveryGoalFor(player, bot.QuestTarget)))
             {
+                NoteWalkRestOfWay(bot, player, bot.QuestTarget.NpcGuid);
                 bot.QuestTarget.Pos = standPos;
                 bot.QuestArriveWaitMs = 0;
                 TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
@@ -1799,7 +1829,8 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             }
 
             GameObject* go = ObjectAccessor::GetGameObject(*player, bot.GameObjectTarget.GoGuid);
-            if (go && go->isSpawned() && !go->IsWithinDistInMap(player))
+            if (go && go->isSpawned() && !go->IsWithinDistInMap(player)
+                && CanWalkRestOfWay(bot, player, bot.GameObjectTarget.GoGuid))
             {
                 float size = 1.0f;
                 if (go->GetGOInfo())
@@ -1808,6 +1839,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                 if (PlayerbotWalker::PickApproachPosition(player, go, size + 1.0f, standPos)
                     && bot.Walker.Start(player, standPos, bot.GameObjectTarget.StopDistance, RecoveryGoalFor(player, bot.GameObjectTarget)))
                 {
+                    NoteWalkRestOfWay(bot, player, bot.GameObjectTarget.GoGuid);
                     bot.GameObjectTarget.Pos = standPos;
                     bot.QuestArriveWaitMs = 0;
                     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
@@ -2156,6 +2188,7 @@ bool PlayerbotMgr::BeginHealerWalk(PlayerbotRecord& bot, Player* player)
     bot.HealerSent = false;
     bot.QuestArriveWaitMs = 0;
     bot.SpiritHealerGuid.Clear();
+    bot.StillShortGuid.Clear();
 
     Position nearPos = bot.SpiritReleasePos;
     if (nearPos.GetPositionX() == 0.0f && nearPos.GetPositionY() == 0.0f)
@@ -2460,7 +2493,8 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
         bot.DeathWaitMs += diff;
         Creature* healer = ObjectAccessor::GetCreature(*player, bot.SpiritHealerGuid);
         if (healer && healer->IsAlive()
-            && !player->IsWithinDistInMap(healer, healer->GetCombatReach() + 4.0f))
+            && !player->IsWithinDistInMap(healer, healer->GetCombatReach() + 4.0f)
+            && CanWalkRestOfWay(bot, player, bot.SpiritHealerGuid))
         {
             Position standPos;
             float const standDistance = healer->GetCombatReach() + 1.0f;
@@ -2468,6 +2502,7 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
                 && bot.Walker.Start(player, standPos, 0.25f,
                     GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::Creature, bot.SpiritHealerGuid)))
             {
+                NoteWalkRestOfWay(bot, player, bot.SpiritHealerGuid);
                 bot.Death = PlayerbotDeathWork::WalkToHealer;
                 bot.DeathWaitMs = 0;
                 return true;
@@ -3136,6 +3171,7 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
     bot.UseItemOnUnitTarget = {};
     ClearUseItemCast(bot);
     bot.CombatTarget = {};
+    bot.StillShortGuid.Clear();
     bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
@@ -3172,6 +3208,7 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
     bot.UseItemOnUnitTarget = {};
     ClearUseItemCast(bot);
     bot.CombatTarget = {};
+    bot.StillShortGuid.Clear();
     bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
@@ -3305,7 +3342,8 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
     if (bot.Walker.IsMoving())
         return false;
 
-    if (look == PlayerbotClient::UseItemLook::Closer || !inRange)
+    if ((look == PlayerbotClient::UseItemLook::Closer || !inRange)
+        && CanWalkRestOfWay(bot, player, bot.UseItemOnUnitTarget.CreatureGuid))
     {
         Position standPos;
         float const standDistance = creature->GetCombatReach() + 1.0f;
@@ -3314,6 +3352,7 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
             && bot.Walker.Start(player, standPos, bot.UseItemOnUnitTarget.StopDistance,
                 RecoveryGoalFor(player, bot.UseItemOnUnitTarget)))
         {
+            NoteWalkRestOfWay(bot, player, bot.UseItemOnUnitTarget.CreatureGuid);
             bot.UseItemOnUnitTarget.Pos = standPos;
             bot.QuestArriveWaitMs = 0;
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
@@ -3351,6 +3390,7 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
     bot.UseItemOnUnitTarget = target;
     bot.CombatTarget = {};
     ClearUseItemCast(bot);
+    bot.StillShortGuid.Clear();
     bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
@@ -3797,6 +3837,7 @@ bool PlayerbotMgr::BeginVendorTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.VendorTarget = target;
     bot.VendorListSent = false;
     bot.VendorActed = false;
+    bot.StillShortGuid.Clear();
     bot.LookedForOtherYellowOnFace = false;
     bot.Walker.Reset();
 
@@ -3840,7 +3881,8 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
 
         Creature* creature = ObjectAccessor::GetCreature(*player, bot.VendorTarget.NpcGuid);
         if (creature && creature->IsAlive()
-            && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f))
+            && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f)
+            && CanWalkRestOfWay(bot, player, bot.VendorTarget.NpcGuid))
         {
             Position standPos;
             float const standDistance = creature->GetCombatReach() + 1.0f;
@@ -3848,6 +3890,7 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
                 && bot.Walker.Start(player, standPos, bot.VendorTarget.StopDistance,
                     RecoveryGoalFor(player, bot.VendorTarget)))
             {
+                NoteWalkRestOfWay(bot, player, bot.VendorTarget.NpcGuid);
                 bot.VendorTarget.Pos = standPos;
                 bot.QuestArriveWaitMs = 0;
                 TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of vendor {} and is walking the rest of the way.",

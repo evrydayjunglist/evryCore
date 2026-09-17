@@ -24,6 +24,7 @@
 #include "PlayerbotCoordinatorLease.h"
 #include "PlayerbotCoordinatorPresence.h"
 #include "PlayerbotMovement.h"
+#include "PlayerbotSessionPresence.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
 #include "Position.h"
@@ -45,11 +46,24 @@ enum class PlayerbotDeathWork
     SitRecover
 };
 
+enum class PlayerbotLoginRefusal
+{
+    None,
+    WorldClosed,
+    AccountBanned,
+    SecurityLimit,
+    CharacterBanned
+};
+
 struct PlayerbotRecord
 {
     PlayerbotAccount Account;
     bool SessionQueued = false;
     bool SessionSeen = false;
+    // Time left before she may log in again after losing her session or having a login refused.
+    uint32 LoginWaitMs = 0;
+    // The refusal already written to the log, so a refusal that repeats after every wait is logged once.
+    PlayerbotLoginRefusal LoggedLoginRefusal = PlayerbotLoginRefusal::None;
     bool CoordinatorLogoutRequested = false;
     bool CoordinatorLogoutKickSent = false;
     bool EnumQueued = false;
@@ -160,6 +174,7 @@ private:
     void BeginCoordinatorLogout();
     bool UpdateCoordinatorLogout(PlayerbotRecord& bot);
     void ResetBotSession(PlayerbotRecord& bot);
+    bool UpdateSessionPresence(PlayerbotRecord& bot, uint32 diff);
     bool TryLogin(PlayerbotRecord& bot);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);

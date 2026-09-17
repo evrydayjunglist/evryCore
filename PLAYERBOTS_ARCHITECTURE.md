@@ -165,6 +165,13 @@ The implemented `Playerbots.LoginMode` currently has these meanings:
   `playerbots.exe` sends the idempotent `ensureBotsOnline` request. Loss of the owning
   connection starts the current grace period and then logs the managed bots out.
 
+In both modes, a bot session that something other than the module ends, such as a GM or
+AntiDOS kick, is logged in `Playerbots.log`. The bot logs in again after a 30-second
+reconnect wait whenever its mode keeps the roster online: always under `Automatic`, and
+only while a connected `playerbots.exe` owns the roster under `Coordinator`. A bot does not
+log in when worldserver would refuse a player's login: the world is closed, the account or
+character is banned, or the realm only admits accounts above player security.
+
 The selected future design adds an independent strategic-autonomy axis with these
 semantics:
 

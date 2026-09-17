@@ -157,7 +157,8 @@ public:
     void OnBotLogin(Player* player);
     void OnPlayerLogout(Player* player);
     void OnPlayerMapChanged(Player* player);
-    // Any thread: keeps the movement orders a bot's client must answer until OnUpdate answers them.
+    // Any thread: keeps the movement orders and time sync requests a bot's client must answer, until OnUpdate
+    // answers them.
     void OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet);
 
 private:
@@ -192,7 +193,6 @@ private:
     bool TryLogin(PlayerbotRecord& bot);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
-    void ReplyTimeSync(WorldSession* session);
     void AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff);
     void AnswerServerOrder(PlayerbotRecord& bot, Player* player, PlayerbotServerOrder const& order);
     void RetryServerReplies(PlayerbotRecord& bot, Player* player, uint32 diff);

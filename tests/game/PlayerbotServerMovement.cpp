@@ -14,6 +14,7 @@
 
 #include "tc_catch2.h"
 
+#include "MiscPackets.h"
 #include "MovementPackets.h"
 #include "MovementTypedefs.h"
 #include "../../modules/mod-playerbots/src/PlayerbotJump.h"
@@ -112,6 +113,31 @@ TEST_CASE("Playerbot reads the map change packets", "[playerbots][server-movemen
     REQUIRE(orders[0].Kind == PlayerbotServerOrderKind::NewWorld);
 }
 
+TEST_CASE("Playerbot reads one order per time sync request, even when a number repeats", "[playerbots][server-movement]")
+{
+    WorldPackets::Misc::TimeSyncRequest request;
+    request.SequenceIndex = 15;
+    std::vector<PlayerbotServerOrder> const orders = Read(request.Write());
+    REQUIRE(orders.size() == 1);
+    REQUIRE(orders[0].Kind == PlayerbotServerOrderKind::TimeSync);
+    REQUIRE(orders[0].SequenceIndex == 15);
+    REQUIRE(orders[0].Mover.IsEmpty());
+
+    // The server counts from 0 again after a map change that is not seamless, so a request can repeat an earlier number.
+    // It is still a new request and still gets its own reply.
+    std::vector<PlayerbotServerOrder> answered;
+    for (std::uint32_t sequenceIndex : { 0u, 1u, 0u })
+    {
+        WorldPackets::Misc::TimeSyncRequest next;
+        next.SequenceIndex = sequenceIndex;
+        ReadPlayerbotServerOrders(*next.Write(), answered);
+    }
+    REQUIRE(answered.size() == 3);
+    REQUIRE(answered[0].SequenceIndex == 0);
+    REQUIRE(answered[1].SequenceIndex == 1);
+    REQUIRE(answered[2].SequenceIndex == 0);
+}
+
 TEST_CASE("Playerbot finds a root inside the combined movement state packet", "[playerbots][server-movement]")
 {
     WorldPackets::Movement::MoveSetCompoundState state;
@@ -141,6 +167,9 @@ TEST_CASE("Playerbot ignores other packets and packets it cannot read", "[player
     WorldPacket truncated(SMSG_MOVE_KNOCK_BACK);
     truncated << PlayerGuid(1);
     REQUIRE(Read(&truncated).empty());
+
+    WorldPacket emptyTimeSync(SMSG_TIME_SYNC_REQUEST);
+    REQUIRE(Read(&emptyTimeSync).empty());
 }
 
 TEST_CASE("Playerbot sends a server reply once and again only while the server still waits", "[playerbots][server-movement]")

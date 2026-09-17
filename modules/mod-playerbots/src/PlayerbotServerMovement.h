@@ -25,7 +25,7 @@
 #include <cstdint>
 #include <vector>
 
-// A movement order the server sent her client, which a real client answers.
+// Something the server sent her client that a real client answers: a movement order, or a time sync request.
 enum class PlayerbotServerOrderKind : std::uint8_t
 {
     Root,
@@ -33,7 +33,8 @@ enum class PlayerbotServerOrderKind : std::uint8_t
     KnockBack,
     Teleport,
     SuspendToken,
-    NewWorld
+    NewWorld,
+    TimeSync
 };
 
 inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
@@ -52,6 +53,8 @@ inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
             return "suspend token";
         case PlayerbotServerOrderKind::NewWorld:
             return "new world";
+        case PlayerbotServerOrderKind::TimeSync:
+            return "time sync request";
     }
 
     return "unknown";
@@ -60,7 +63,7 @@ inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
 struct PlayerbotServerOrder
 {
     PlayerbotServerOrderKind Kind = PlayerbotServerOrderKind::Root;
-    // The unit whose movement the order is for. Empty for the map change packets, which name no unit.
+    // The unit whose movement the order is for. Empty for the map change and time sync packets, which name no unit.
     ObjectGuid Mover;
     // The number her reply must echo.
     std::uint32_t SequenceIndex = 0;
@@ -151,8 +154,9 @@ namespace PlayerbotServerMovementDetail
     }
 }
 
-// Reads the movement orders a client has to answer from one packet the server sent. Any other packet adds nothing, and so
-// does a packet that cannot be read. Only a handful of opcodes are copied; every other packet returns at the switch.
+// Reads what a client has to answer from one packet the server sent: movement orders and time sync requests. Any
+// other packet adds nothing, and so does a packet that cannot be read. Only a handful of opcodes are copied; every
+// other packet returns at the switch.
 inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<PlayerbotServerOrder>& out)
 {
     switch (packet.GetOpcode())
@@ -164,6 +168,7 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
         case SMSG_SUSPEND_TOKEN:
         case SMSG_NEW_WORLD:
         case SMSG_MOVE_SET_COMPOUND_STATE:
+        case SMSG_TIME_SYNC_REQUEST:
             break;
         default:
             return;
@@ -219,6 +224,14 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
                 break;
             case SMSG_MOVE_SET_COMPOUND_STATE:
                 PlayerbotServerMovementDetail::ReadCompoundState(data, out);
+                break;
+            case SMSG_TIME_SYNC_REQUEST:
+                // Each request packet is its own order, so she answers each one once. The server counts these from 0
+                // again when she changes maps (unless the move is seamless), so the number alone cannot tell two
+                // requests apart.
+                order.Kind = PlayerbotServerOrderKind::TimeSync;
+                order.SequenceIndex = data.read<std::uint32_t>();
+                out.push_back(order);
                 break;
             default:
                 break;

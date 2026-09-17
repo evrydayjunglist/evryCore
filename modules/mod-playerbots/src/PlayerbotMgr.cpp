@@ -1526,7 +1526,6 @@ void PlayerbotMgr::UpdateCommanded(PlayerbotRecord& runtime, Player* player, uin
         AnswerServerMovement(runtime, player, diff);
         if (!player->IsInWorld())
             return;
-        ReplyTimeSync(session);
 
         if (!runtime.CinematicSkipped)
         {
@@ -1768,19 +1767,8 @@ void PlayerbotMgr::UpdateLogin(PlayerbotRecord& bot)
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} called HandleContinuePlayerLogin.", bot.Account.AccountId);
 }
 
-void PlayerbotMgr::ReplyTimeSync(WorldSession* session)
-{
-    uint32 sequenceIndex = 0;
-    if (!session->GetOldestPendingTimeSyncCounter(sequenceIndex))
-        return;
-
-    uint32 const clientTime = GameTime::GetGameTimeMS();
-    PlayerbotClient::QueueTimeSyncResponse(session, sequenceIndex, clientTime);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} queued CMSG_TIME_SYNC_RESPONSE for sequence {}.",
-        session->GetAccountId(), sequenceIndex);
-}
-
-// Answers what the server told her client about its movement, in the order it was sent, the way a client does.
+// Answers what the server told her client, movement orders and time sync requests, in the order it was sent, the way a
+// client does.
 void PlayerbotMgr::AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff)
 {
     if (!player || !player->GetSession())
@@ -1896,6 +1884,13 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             bot.UnansweredTeleportMs = 0;
             PlayerbotClient::QueueWorldPortResponse(session);
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_WORLD_PORT_RESPONSE.", player->GetName());
+            break;
+        case PlayerbotServerOrderKind::TimeSync:
+            // One reply per request, sent when the request arrives. A client never sends it again, and nothing on the
+            // server waits for it.
+            PlayerbotClient::QueueTimeSyncResponse(session, order.SequenceIndex, GameTime::GetGameTimeMS());
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} queued CMSG_TIME_SYNC_RESPONSE for sequence {}.",
+                session->GetAccountId(), order.SequenceIndex);
             break;
     }
 }
@@ -2032,8 +2027,6 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (!player->IsInWorld())
         return;
-
-    ReplyTimeSync(session);
 
     if (!bot.CinematicSkipped)
     {

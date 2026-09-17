@@ -56,9 +56,8 @@ namespace
     constexpr uint32 REFUSED_PATH_TYPES = PATHFIND_NOPATH | PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH;
     constexpr float SPELL_FOCUS_AVOID_RADIUS = 2.5f;
     constexpr float VIA_EXTRA_CLEARANCE = 1.0f;
-    constexpr float MAX_WALKABLE_SLOPE_DEGREES = 35.0f;
-    // One heartbeat. A curb, stair, or house slab. Longer than this is a cliff.
-    constexpr float MAX_DOWN_STEP_YARDS = 2.0f;
+    constexpr float MAX_WALKABLE_SLOPE_DEGREES = PlayerbotWalker::MaxWalkableSlopeDegrees;
+    constexpr float MAX_DOWN_STEP_YARDS = PlayerbotWalker::MaxDownStepYards;
     // Small patch around her feet. Living tiles mark 55° as ordinary ground; mmap walks her into a face a player would step around.
     constexpr float LIP_LOOK_RADIUS = 4.0f;
     constexpr float LIP_LOOK_CELL = 1.0f;
@@ -702,6 +701,10 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     if (_state == State::Jumping)
         return true;
 
+    _lastWalkDestination = destination;
+    _lastWalkDestinationMapId = player->GetMapId();
+    _hasLastWalkDestination = true;
+
     bool const sameDest = _destination.GetExactDist(destination) < 1.0f;
     bool const sameGoal = !goal.Empty() && !_recoveryGoal.Empty() && goal == _recoveryGoal;
     bool const sameWalk = sameDest && (goal.Empty() ? _recoveryGoal.Empty() : sameGoal);
@@ -1164,7 +1167,7 @@ PlayerbotWalker::GroundedStepFailure PlayerbotWalker::PeekGroundedStepFailure(Pl
 }
 
 PlayerbotWalker::GroundedStepFailure PlayerbotWalker::ClassifyGroundedStep(Player* player, Position const& from,
-    float x, float y, float orientation, Position& out) const
+    float x, float y, float orientation, Position& out)
 {
     out.Relocate(x, y, from.GetPositionZ(), orientation);
     if (!Trinity::IsValidMapCoord(x, y, from.GetPositionZ()))
@@ -1191,6 +1194,21 @@ PlayerbotWalker::GroundedStepFailure PlayerbotWalker::ClassifyGroundedStep(Playe
     }
 
     return GroundedStepFailure::InvalidPosition;
+}
+
+float PlayerbotWalker::HeartbeatStepLength(Player const* player)
+{
+    return HeartbeatStepLen(player);
+}
+
+bool PlayerbotWalker::LastWalkDestination(Position& out, uint32& mapId) const
+{
+    if (!_hasLastWalkDestination)
+        return false;
+
+    out = _lastWalkDestination;
+    mapId = _lastWalkDestinationMapId;
+    return true;
 }
 
 bool PlayerbotWalker::FirstGroundedStepIsLegal(Player* player)

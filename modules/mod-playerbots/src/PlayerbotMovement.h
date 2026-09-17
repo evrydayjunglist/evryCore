@@ -32,6 +32,23 @@ enum OpcodeClient : uint32;
 class PlayerbotWalker
 {
 public:
+    // Steeper than this uphill in one step is refused.
+    static constexpr float MaxWalkableSlopeDegrees = 35.0f;
+    // One heartbeat. A curb, stair, or house slab. Longer than this is a cliff.
+    static constexpr float MaxDownStepYards = 2.0f;
+
+    enum class GroundedStepFailure
+    {
+        None,
+        NoPath,
+        NoFloor,
+        SteepUp,
+        TooFarDown,
+        StaticCollision,
+        DynamicCollision,
+        InvalidPosition
+    };
+
     bool Start(Player* player, Position const& destination, float stopDistance, PlayerbotRecoveryGoal const& goal = {});
     void Update(Player* player, uint32 diff);
     void Stop(Player* player);
@@ -55,6 +72,17 @@ public:
     // Stand next to the target. Max interact range can land in a campfire on the way.
     static bool PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out);
 
+    // One grounded step from these feet toward (x, y), planted and judged exactly as a walk heartbeat is: the floor
+    // search from her feet plus her climb, the slope and drop limits, and the chest-height ray. out holds the planted
+    // feet whenever a floor was found.
+    static GroundedStepFailure ClassifyGroundedStep(Player* player, Position const& from, float x, float y, float orientation,
+        Position& out);
+    // How far she moves in one walk heartbeat at her current run speed.
+    static float HeartbeatStepLength(Player const* player);
+    // The destination of the last walk she started, and its map. It is kept after that walk ends so a diagnostic can
+    // still show where she was going.
+    bool LastWalkDestination(Position& out, uint32& mapId) const;
+
     bool IsIdle() const { return _state == State::Idle; }
     bool IsMoving() const
     {
@@ -66,18 +94,6 @@ public:
     bool StartedOnAFace() const { return _startedOnAFace; }
 
 private:
-    enum class GroundedStepFailure
-    {
-        None,
-        NoPath,
-        NoFloor,
-        SteepUp,
-        TooFarDown,
-        StaticCollision,
-        DynamicCollision,
-        InvalidPosition
-    };
-
     enum class State
     {
         Idle,
@@ -125,8 +141,6 @@ private:
     Position Advance(float distance);
     bool PeekGroundedStep(Player* player, float distance, Position& out);
     GroundedStepFailure PeekGroundedStepFailure(Player* player, float distance, Position& out);
-    GroundedStepFailure ClassifyGroundedStep(Player* player, Position const& from, float x, float y, float orientation,
-        Position& out) const;
     bool FirstGroundedStepIsLegal(Player* player);
     bool MmapLookIsLegal(Player* player);
     bool StepTowardDestIsLegal(Player* player) const;
@@ -200,6 +214,9 @@ private:
     // The arc started during this tick, so this tick's time was spent before it existed.
     bool _skipNextJumpDiff = false;
     bool _mirrorOwningClientMovement = false;
+    Position _lastWalkDestination;
+    uint32 _lastWalkDestinationMapId = 0;
+    bool _hasLastWalkDestination = false;
 };
 
 #endif

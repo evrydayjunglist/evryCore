@@ -26,6 +26,7 @@
 #include "PlayerbotMovement.h"
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotSessionPresence.h"
+#include "PlayerbotWalkMapper.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
 #include "Position.h"
@@ -160,6 +161,9 @@ public:
     // Any thread: keeps the movement orders and time sync requests a bot's client must answer, until OnUpdate
     // answers them.
     void OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet);
+    // Maps the ground this player can walk from where her client last put her, by a bot's walk rules, and writes a
+    // picture next to the server logs. False, with the reason in message, when she cannot be mapped now.
+    bool StartWalkMap(Player* subject, float radius, ObjectGuid requester, std::string& message);
 
 private:
     friend class CommandablePlayerService;
@@ -240,6 +244,7 @@ private:
     // Filled from whichever thread sends a bot a packet; answered on the world thread.
     std::mutex _serverOrdersLock;
     std::unordered_map<uint32, std::vector<PlayerbotServerOrder>> _serverOrders;
+    PlayerbotWalkMapper _walkMapper;
 };
 
 #define sPlayerbotMgr PlayerbotMgr::instance()

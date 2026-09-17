@@ -614,6 +614,7 @@ void PlayerbotMgr::Update(uint32 diff)
     }
 
     UpdateRts(diff);
+    _walkMapper.Update(diff);
 }
 
 void PlayerbotMgr::UpdateBridge(uint32 diff)
@@ -950,6 +951,24 @@ void PlayerbotMgr::ClearServerOrders(uint32 accountId)
 {
     std::lock_guard<std::mutex> lock(_serverOrdersLock);
     _serverOrders.erase(accountId);
+}
+
+bool PlayerbotMgr::StartWalkMap(Player* subject, float radius, ObjectGuid requester, std::string& message)
+{
+    if (!subject)
+    {
+        message = "That player is not online.";
+        return false;
+    }
+
+    // A bot's walk plants each step from the feet she last sent, which can be a heartbeat ahead of the server.
+    PlayerbotRecord const* runtime = FindCommandRuntime(subject->GetGUID());
+    Position const feet = runtime ? runtime->Walker.ClientFeet(subject) : subject->GetPosition();
+    Position destination;
+    uint32 destinationMapId = 0;
+    bool const hasDestination = runtime && runtime->Walker.LastWalkDestination(destination, destinationMapId)
+        && destinationMapId == subject->GetMapId();
+    return _walkMapper.Start(subject, feet, hasDestination ? &destination : nullptr, radius, requester, message);
 }
 
 PlayerbotRecord* PlayerbotMgr::FindManagedBot(ObjectGuid subject)

@@ -21,6 +21,7 @@
 #include "Opcodes.h"
 #include "Position.h"
 #include "WorldPacket.h"
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -241,6 +242,29 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
     {
         out.resize(firstNew);
     }
+}
+
+// Her reply to a time sync request. The server takes the moment it registered the request away from this packet's receive
+// time. A real client's socket stamps that time when it reads the reply, which is always after the registration. The
+// world tick's cached time can be earlier than the registration, and then that subtraction wraps to about 49 days, so the
+// stamp is the live clock when she queues the reply.
+inline WorldPacket PlayerbotTimeSyncResponse(std::uint32_t sequenceIndex, std::uint32_t clientTime)
+{
+    WorldPacket packet(CMSG_TIME_SYNC_RESPONSE);
+    packet << std::uint32_t(sequenceIndex);
+    packet << std::uint32_t(clientTime);
+    packet.SetReceiveTime(std::chrono::steady_clock::now());
+    return packet;
+}
+
+// Her answer to the create packet that tells her client which unit is hers. The server times it the same way as a time
+// sync reply, so it is stamped the same way.
+inline WorldPacket PlayerbotMoveInitActiveMoverComplete(std::uint32_t ticks)
+{
+    WorldPacket packet(CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE);
+    packet << std::uint32_t(ticks);
+    packet.SetReceiveTime(std::chrono::steady_clock::now());
+    return packet;
 }
 
 // One reply the server waits for. She sends it when the order arrives. If the server is somehow still waiting after

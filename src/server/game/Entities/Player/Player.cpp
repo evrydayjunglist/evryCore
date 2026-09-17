@@ -4336,6 +4336,16 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             stmt->setUInt64(0, guid);
             trans->Append(stmt);
 
+            // A new character can get this guid after a restart. Give back a level boost that was
+            // assigned but never applied, and unlink a used one so it does not follow the guid.
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN_BY_TARGET);
+            stmt->setUInt64(0, guid);
+            trans->Append(stmt);
+
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_CLEAR_APPLIED_TARGET);
+            stmt->setUInt64(0, guid);
+            trans->Append(stmt);
+
             sCharacterCache->DeleteCharacterCacheEntry(playerguid, name);
             break;
         }

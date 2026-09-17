@@ -267,6 +267,7 @@ void BattlePayMgr::LoadFromDatabase()
     if (!result)
         return;
 
+    std::vector<ObjectGuid::LowType> missingTargets;
     do
     {
         Field* fields = result->Fetch();
@@ -275,10 +276,26 @@ void BattlePayMgr::LoadFromDatabase()
         distribution.PurchaseID = fields[1].GetUInt64();
         distribution.ProductID = fields[2].GetUInt32();
         distribution.Status = fields[3].GetUInt32();
-        uint8 const consumed = fields[4].GetUInt8();
+        uint8 consumed = fields[4].GetUInt8();
         uint8 const applied = fields[5].GetUInt8();
-        uint64 const target = fields[6].GetUInt64();
+        uint64 target = fields[6].GetUInt64();
         distribution.SpecId = fields[7].GetUInt32();
+
+        // No character row has this guid any more, so a new character can get it after a restart.
+        // Character deletion releases the boost; rows left over from before that are released here.
+        if (consumed && target && fields[8].IsNull())
+        {
+            TC_LOG_INFO("network", "BattlePay: distribution {} targets deleted character {}; releasing it (account {})",
+                distribution.DistributionID, target, _session->GetAccountId());
+            missingTargets.push_back(target);
+            if (!applied)
+            {
+                consumed = 0;
+                distribution.SpecId = 0;
+            }
+            target = 0;
+        }
+
         if (target)
             distribution.TargetCharacter = ObjectGuid::Create<HighGuid::Player>(target);
 
@@ -307,6 +324,22 @@ void BattlePayMgr::LoadFromDatabase()
         else if (applied && target)
             _boostedCharacters.insert(target);
     } while (result->NextRow());
+
+    if (missingTargets.empty())
+        return;
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    for (ObjectGuid::LowType const target : missingTargets)
+    {
+        CharacterDatabasePreparedStatement* releaseStmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN_BY_TARGET);
+        releaseStmt->setUInt64(0, target);
+        trans->Append(releaseStmt);
+
+        releaseStmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_CLEAR_APPLIED_TARGET);
+        releaseStmt->setUInt64(0, target);
+        trans->Append(releaseStmt);
+    }
+    CharacterDatabase.DirectCommitTransaction(trans);
 }
 
 void BattlePayMgr::PersistAvailableDistribution(BattlePay::PendingDistribution const& distribution)
@@ -878,4 +911,27 @@ bool BattlePayMgr::ApplyPendingBoostOnLogin(Player* player)
         player->GetGUID().ToString(), pending.SpecId, relocated);
     // Skip Catch Up even if relocate failed, so it cannot move a granted L80 to Arathi.
     return true;
+}
+
+// Player::DeleteFromDB already released the rows. This keeps the open session in step, so an
+// unused boost is offered again without logging out.
+void BattlePayMgr::OnCharacterDeleted(ObjectGuid character)
+{
+    _boostedCharacters.erase(character.GetCounter());
+
+    auto itr = _pendingApply.find(character.GetCounter());
+    if (itr == _pendingApply.end())
+        return;
+
+    BattlePay::PendingDistribution distribution = itr->second;
+    _pendingApply.erase(itr);
+
+    distribution.Status = BattlePay::DIST_STATUS_AVAILABLE;
+    distribution.TargetCharacter.Clear();
+    distribution.SpecId = 0;
+    _distributions[distribution.DistributionID] = distribution;
+    SendAvailableL80Distributions();
+
+    TC_LOG_INFO("network", "BattlePay: returned distribution {} after {} was deleted (account {})",
+        distribution.DistributionID, character.ToString(), _session->GetAccountId());
 }

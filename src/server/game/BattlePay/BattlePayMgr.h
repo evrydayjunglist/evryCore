@@ -94,6 +94,7 @@ public:
 
     void OverlayEnumExperienceLevel(ObjectGuid character, uint8& experienceLevel) const;
     bool ApplyPendingBoostOnLogin(Player* player);
+    void OnCharacterDeleted(ObjectGuid character);
 
 private:
     uint32 ResolveFreeBuyProductId(uint32 shopProductId) const;

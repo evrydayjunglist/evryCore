@@ -1204,6 +1204,10 @@ void WorldSession::HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& c
     sCalendarMgr->RemoveAllPlayerEventsAndInvites(charDelete.Guid);
     Player::DeleteFromDB(charDelete.Guid, accountId);
 
+    // A full delete drops the cache entry. A delete that can be undone keeps it, and keeps the boost.
+    if (!sCharacterCache->GetCharacterCacheByGuid(charDelete.Guid))
+        GetBattlePayMgr()->OnCharacterDeleted(charDelete.Guid);
+
     _warbandGroupMgr->RemoveMember(charDelete.Guid);
 
     SendCharDelete(CHAR_DELETE_SUCCESS);

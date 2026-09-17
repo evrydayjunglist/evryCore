@@ -90,6 +90,13 @@ std::string MakeMetaJson(int64 serverTimeMs)
         serverTimeMs);
 }
 
+// Request bodies come from whoever connects. Iterative parsing keeps a deeply nested body
+// from overflowing the network thread's stack.
+void ParseRequestBody(rapidjson::Document& doc, std::string const& body)
+{
+    doc.Parse<rapidjson::kParseIterativeFlag>(body.data(), body.size());
+}
+
 std::string SerializeJson(rapidjson::Document const& doc)
 {
     rapidjson::StringBuffer buffer;
@@ -498,7 +505,7 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleCurre
     std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
-    req.Parse(context.request.body().c_str());
+    ParseRequestBody(req, context.request.body());
 
     std::vector<std::string> placementIds;
     if (req.IsObject() && req.HasMember("placementIds") && req["placementIds"].IsArray())
@@ -528,7 +535,7 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleProdu
     std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
-    req.Parse(context.request.body().c_str());
+    ParseRequestBody(req, context.request.body());
 
     bool empty = false;
     if (req.IsObject() && req.HasMember("modifiedSinceFilterMs") && !req["modifiedSinceFilterMs"].IsNull())
@@ -561,7 +568,7 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleVcBal
     std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
-    req.Parse(context.request.body().c_str());
+    ParseRequestBody(req, context.request.body());
     std::string code = "XVV";
     std::string title = "T2_WOW_US";
     if (req.IsObject())
@@ -591,7 +598,7 @@ CatalogShopHttpService::RequestHandlerResult CatalogShopHttpService::HandleQuote
     std::shared_ptr<CatalogShopHttpSession> session, HttpRequestContext& context)
 {
     rapidjson::Document req;
-    req.Parse(context.request.body().c_str());
+    ParseRequestBody(req, context.request.body());
     uint64 productId = 0;
     std::string currency = "USD";
     if (req.IsObject())

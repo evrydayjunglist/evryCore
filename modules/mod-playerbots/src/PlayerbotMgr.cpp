@@ -589,6 +589,7 @@ void PlayerbotMgr::Stop()
 
 void PlayerbotMgr::Update(uint32 diff)
 {
+    PlayerbotWalker::BeginWorldTick();
     UpdateBridge(diff);
     ValidateRtsSessions();
 

@@ -33,6 +33,8 @@
 #include "Player.h"
 #include "PlayerbotClient.h"
 #include "PlayerbotServerMovement.h"
+#include "PlayerbotWalkMapEscape.h"
+#include "PlayerbotWalkMapServerWorld.h"
 #include "Playerbots.h"
 #include "SharedDefines.h"
 #include "Unit.h"
@@ -41,8 +43,11 @@
 #include "VMapManager.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -82,6 +87,26 @@ namespace
     constexpr float RECOVERY_CONNECTIVITY_PROBE_YARDS[] = { 60.0f, 120.0f };
     constexpr int32 RECOVERY_CONNECTIVITY_DIRECTIONS = 8;
     constexpr float RECOVERY_PROBE_ENDPOINT_YARDS = 8.0f;
+    // How far around her feet she maps the ground when a walk is refused and the local look cannot get her round.
+    constexpr float WAY_ROUND_YARDS = 60.0f;
+    // A spot is only worth walking to when it is at least this much closer to where she is going.
+    constexpr float WAY_ROUND_MIN_GAIN_YARDS = 5.0f;
+    // Ways round to try, best first, in case her first step refuses one of them.
+    constexpr size_t WAY_ROUND_WAYS = 3;
+    constexpr float WAY_ROUND_LAYER_YARDS = 1.0f;
+    constexpr size_t WAY_ROUND_MAX_SPOTS = 400000;
+    // Her heartbeat step is the distance between neighbouring spots, kept inside these bounds whatever her speed is.
+    constexpr float WAY_ROUND_MIN_SPACING = 0.5f;
+    constexpr float WAY_ROUND_MAX_SPACING = 2.0f;
+    // World-thread time one tick may spend mapping the ground for one bot.
+    constexpr std::chrono::milliseconds WAY_ROUND_SLICE{ 5 };
+    constexpr size_t WAY_ROUND_SPOTS_PER_CLOCK_CHECK = 8;
+    // The map has to finish inside this, or she gives the walk up instead of standing there.
+    constexpr uint32 WAY_ROUND_TIMEOUT_MS = 20000;
+    // However many bots are looking at once, this is all the world-thread time one tick spends mapping ground for them.
+    // The rest of them wait for a later tick.
+    constexpr std::chrono::milliseconds WAY_ROUND_TICK_BUDGET{ 10 };
+    std::chrono::steady_clock::duration WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
     // Stopping short again near an earlier short stop on the same approach, and not a yard closer, means mmap does not lead closer.
     constexpr float SHORT_STOP_REPEAT_YARDS = 5.0f;
     constexpr float SHORT_STOP_PROGRESS_YARDS = 1.0f;
@@ -442,6 +467,13 @@ namespace
 
 void PlayerbotWalker::Stop(Player* player)
 {
+    // She is already standing while she looks around; there is nothing to stop.
+    if (_state == State::LookingForAWayRound)
+    {
+        ResetNow();
+        return;
+    }
+
     if (_state == State::Jumping)
     {
         if (player && player->IsAlive() && player->IsInWorld() && !player->IsBeingTeleported())
@@ -618,6 +650,22 @@ void PlayerbotWalker::ResetNow()
     _jumpMapId = 0;
     _stopAfterJump = false;
     _skipNextJumpDiff = false;
+    ClearWayRound();
+    _walkingAWayRound = false;
+    _lookedForAWayRound = false;
+}
+
+void PlayerbotWalker::ClearWayRound()
+{
+    _wayRoundMap.reset();
+    _wayRoundMs = 0;
+    _wayRoundMapId = 0;
+}
+
+// One world tick's mapping time is shared by every bot looking for a way round.
+void PlayerbotWalker::BeginWorldTick()
+{
+    WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
 }
 
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out)
@@ -711,6 +759,9 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     // Already walking this dest. Do not rebuild mmap from the same feet.
     if (_state == State::Moving && sameWalk)
         return true;
+    // Standing still looking for a way round to this same dest. Let her finish looking.
+    if (_state == State::LookingForAWayRound && sameWalk)
+        return true;
 
     bool const preserveEpisode = _faceRecovery.Active() && (sameGoal || (goal.Empty() && sameDest));
     bool const preserveCourse = preserveEpisode && sameDest;
@@ -726,12 +777,14 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     Position const savedRefusedStep = preserveEpisode ? _lastRefusedStep : Position();
     // A new stand spot for the same goal is still the same approach, so it keeps the short stops.
     bool const sameApproach = sameGoal || (goal.Empty() && _recoveryGoal.Empty() && sameDest);
+    bool const savedLookedForAWayRound = sameApproach && _lookedForAWayRound;
     std::vector<Position> savedShortStops;
     if (sameApproach)
         savedShortStops.swap(_shortStops);
 
     Reset();
     _shortStops.swap(savedShortStops);
+    _lookedForAWayRound = savedLookedForAWayRound;
     _lipSteps = savedLipSteps;
     _lipDestDist = savedLipDestDist;
     _lipOrigin = savedLipOrigin;
@@ -778,6 +831,9 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
                 player->GetName());
             return true;
         }
+
+        if (BeginWayRound(player, "the navmesh had no route from her feet"))
+            return true;
 
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the destination. The bot is standing still.",
             player->GetName());
@@ -836,6 +892,8 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
         return true;
     if (TryStartJump(player))
         return true;
+    if (BeginWayRound(player, GroundedStepFailureName(firstFailure)))
+        return true;
 
     FailNoLegalRing(player);
     return false;
@@ -843,7 +901,8 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
 void PlayerbotWalker::Update(Player* player, uint32 diff)
 {
-    if ((_state != State::Moving && _state != State::Jumping && _state != State::AwaitingClientSync)
+    if ((_state != State::Moving && _state != State::Jumping && _state != State::AwaitingClientSync
+        && _state != State::LookingForAWayRound)
         || !player || !player->IsInWorld() || !player->GetSession())
         return;
 
@@ -856,6 +915,12 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
     if (_state == State::Jumping)
     {
         UpdateJump(player, diff);
+        return;
+    }
+
+    if (_state == State::LookingForAWayRound)
+    {
+        UpdateWayRound(player, diff);
         return;
     }
 
@@ -893,11 +958,39 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             _faceRecovery.Advance(previousGrounded.GetExactDist2d(_lastGrounded),
                 _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY());
 
+        // Every step legal and still covering ground she has already walked: the route she was given is going nowhere.
+        if (_faceRecovery.Rejoining() && _faceRecovery.Exhausted())
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG,
+                "mod-playerbots: {} walked {:.1f} yards of this route without reaching new ground, so that route is going nowhere.",
+                player->GetName(), _faceRecovery.StalledYards());
+            _faceRecovery.Refuse();
+            if (BeginWayRound(player, "the route she was walking went nowhere"))
+                return;
+            if (!TryLeaveFace(player, true))
+                FailNoLegalRing(player);
+            return;
+        }
+
         bool const atDest = grounded.GetExactDist(_destination) <= _stopDistance;
         bool const pathDone = _pointIndex + 1 >= _path.size();
         if (atDest)
         {
             FinishGroundedArrival(player, grounded);
+            return;
+        }
+
+        if (_walkingAWayRound && pathDone)
+        {
+            _walkingAWayRound = false;
+            TC_LOG_INFO(PLAYERBOTS_LOG,
+                "mod-playerbots: {} walked the way round and is asking the navmesh again from ({:.2f}, {:.2f}, {:.2f}).",
+                player->GetName(), _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ());
+            if (TryCommitMmap(player, _lastGrounded, true))
+                return;
+            if (TryLeaveFace(player, true))
+                return;
+            FailNoLegalRing(player);
             return;
         }
 
@@ -1026,16 +1119,20 @@ void PlayerbotWalker::FinishShortOfDestination(Player* player, Position const& p
 
     if (earlier != _shortStops.end())
     {
-        QueueMove(player, pos, false, false);
         _lastGrounded = pos;
         _contouring = false;
-        _state = State::Failed;
         TC_LOG_INFO(PLAYERBOTS_LOG,
             "mod-playerbots: {} stopped short of the walk destination again at ({:.2f}, {:.2f}, {:.2f}), {:.1f} yards from an earlier short stop on this approach and no closer: goal={} map={} key={:016X}:{:016X}, type=0x{:02X}, yardsShort={:.1f}, earlierYardsShort={:.1f}, shortStops={}. Mmap does not lead closer from here; this approach is exhausted.",
             player->GetName(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), earlier->GetExactDist(pos),
             PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _recoveryGoal.MapId, _recoveryGoal.Secondary, _recoveryGoal.Primary,
             _pathType, shortYards, earlier->GetExactDist2d(_destination), _shortStops.size());
         LogConnectivity(player, pos, "this stop");
+        // The stop packet goes out either way: the look sends it before she stands and maps the ground.
+        if (BeginWayRound(player, "this route keeps ending short in the same place"))
+            return;
+
+        QueueMove(player, pos, false, false);
+        _state = State::Failed;
         return;
     }
 
@@ -1577,6 +1674,7 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
     std::vector<G3D::Vector3> savedPath = _path;
     size_t const savedIndex = _pointIndex;
     float const savedProgress = _segmentProgress;
+    _walkingAWayRound = false;
     _path = std::move(path);
     _pointIndex = 0;
     _segmentProgress = 0.0f;
@@ -1749,6 +1847,7 @@ void PlayerbotWalker::ApplyContourPath(Player* player, Position const& side, boo
 {
     NoteLipOrigin();
 
+    _walkingAWayRound = false;
     _path.clear();
     _path.push_back(G3D::Vector3(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ()));
     _path.push_back(G3D::Vector3(side.GetPositionX(), side.GetPositionY(), side.GetPositionZ()));
@@ -1957,6 +2056,9 @@ void PlayerbotWalker::RefuseStep(Player* player, GroundedStepFailure failure, Po
         TC_LOG_INFO(PLAYERBOTS_LOG,
             "mod-playerbots: {} still meets the local obstruction after {:.1f} yards without reaching new ground ({:.1f} total recovery yards across {} local cells). The bot is standing still.",
             player->GetName(), _faceRecovery.StalledYards(), _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells());
+        if (BeginWayRound(player, "the local look ran out of new ground"))
+            return;
+
         FailNoLegalRing(player);
         return;
     }
@@ -1969,7 +2071,169 @@ void PlayerbotWalker::RefuseStep(Player* player, GroundedStepFailure failure, Po
     if (!triedJump && TryStartJump(player))
         return;
 
+    // The four-yard look found nothing. Map the ground around her and look for a way round out there.
+    if (BeginWayRound(player, GroundedStepFailureName(failure)))
+        return;
+
     FailNoLegalRing(player);
+}
+
+bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
+{
+    // One look per approach. A second map of the same ground would only find the same ways round.
+    if (_lookedForAWayRound || !player || !player->IsInWorld() || !player->GetSession() || !player->IsAlive())
+        return false;
+    if (player->IsBeingTeleported() || !player->movespline->Finalized())
+        return false;
+
+    Map* map = player->FindMap();
+    if (!map)
+        return false;
+
+    Position const feet = _state == State::Moving ? _lastGrounded : player->GetPosition();
+    float x = feet.GetPositionX();
+    float y = feet.GetPositionY();
+    float z = feet.GetPositionZ();
+    if (!Trinity::IsValidMapCoord(x, y, z))
+        return false;
+
+    // A walk starts from her feet planted this way, and so does the map of the ground around them.
+    player->UpdateAllowedPositionZ(x, y, z);
+    if (!Trinity::IsValidMapCoord(x, y, z))
+        return false;
+
+    // Stop where her last step put her, then stand and look.
+    if (_state == State::Moving)
+        QueueMove(player, _lastGrounded, false, false);
+
+    PlayerbotWalkMapSettings settings;
+    settings.OriginX = x;
+    settings.OriginY = y;
+    settings.OriginZ = z;
+    settings.Spacing = std::clamp(HeartbeatStepLen(player), WAY_ROUND_MIN_SPACING, WAY_ROUND_MAX_SPACING);
+    settings.Radius = WAY_ROUND_YARDS;
+    settings.MaxClimbDegrees = MaxWalkableSlopeDegrees;
+    settings.MaxDropYards = MaxDownStepYards;
+    settings.LayerYards = WAY_ROUND_LAYER_YARDS;
+    settings.MaxSpots = WAY_ROUND_MAX_SPOTS;
+
+    _wayRoundMap = std::make_unique<PlayerbotWalkMap>(settings);
+    _wayRoundMs = 0;
+    _wayRoundMapId = player->GetMapId();
+    _walkingAWayRound = false;
+    _lookedForAWayRound = true;
+    _lastGrounded.Relocate(x, y, z, _lastGrounded.GetOrientation());
+    _state = State::LookingForAWayRound;
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} stopped to look for a way round ({}). Mapping the ground she can walk within {:.0f} yards of ({:.2f}, {:.2f}, {:.2f}).",
+        player->GetName(), reason, WAY_ROUND_YARDS, x, y, z);
+    return true;
+}
+
+void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
+{
+    _wayRoundMs += diff;
+    Map* map = player->FindMap();
+    if (!_wayRoundMap || !map || player->GetMapId() != _wayRoundMapId || !player->IsAlive() || player->IsBeingTeleported()
+        || !player->movespline->Finalized())
+    {
+        ClearWayRound();
+        Fail(player, "she could not finish looking for a way round");
+        return;
+    }
+
+    // Another bot may already have spent this tick's mapping time. Then she simply looks on a later tick.
+    if (WayRoundSpentThisTick >= WAY_ROUND_TICK_BUDGET)
+        return;
+
+    PlayerbotWalkMapServerWorld world(player, map);
+    std::chrono::steady_clock::time_point const sliceStart = std::chrono::steady_clock::now();
+    bool finished = false;
+    do
+        finished = _wayRoundMap->Advance(world, WAY_ROUND_SPOTS_PER_CLOCK_CHECK);
+    while (!finished && std::chrono::steady_clock::now() - sliceStart < WAY_ROUND_SLICE);
+    WayRoundSpentThisTick += std::chrono::steady_clock::now() - sliceStart;
+
+    if (!finished)
+    {
+        if (_wayRoundMs >= WAY_ROUND_TIMEOUT_MS)
+        {
+            ClearWayRound();
+            Fail(player, "mapping the ground around her took too long");
+        }
+        return;
+    }
+
+    if (StartWayRoundWalk(player))
+        return;
+
+    PlayerbotWalkMapSummary const summary = _wayRoundMap->Summarize();
+    ClearWayRound();
+    _state = State::Failed;
+    _contouring = false;
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} found no way round: none of the {} spots she can walk to within {:.0f} yards is {:.0f} yards closer to where she is going. Looking for other work.",
+        player->GetName(), summary.Reached, WAY_ROUND_YARDS, WAY_ROUND_MIN_GAIN_YARDS);
+}
+
+bool PlayerbotWalker::StartWayRoundWalk(Player* player)
+{
+    if (!_wayRoundMap || !player || !player->GetSession())
+        return false;
+
+    PlayerbotWalkMapWayRoundSettings settings;
+    settings.DestinationX = _destination.GetPositionX();
+    settings.DestinationY = _destination.GetPositionY();
+    settings.DestinationZ = _destination.GetPositionZ();
+    settings.MinimumGain = WAY_ROUND_MIN_GAIN_YARDS;
+    settings.Ways = WAY_ROUND_WAYS;
+
+    std::vector<std::array<float, 3>> points;
+    for (PlayerbotWalkMapWayRound const& way : FindPlayerbotWalkMapWaysRound(*_wayRoundMap, settings))
+    {
+        PlayerbotWalkMapWayRoundPoints(*_wayRoundMap, way, points);
+        if (points.size() < 2)
+            continue;
+
+        // Walk from her own feet, not from the nearest spot of the map's grid.
+        _path.clear();
+        _path.push_back(G3D::Vector3(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ()));
+        for (size_t point = 1; point < points.size(); ++point)
+            _path.push_back(G3D::Vector3(points[point][0], points[point][1], points[point][2]));
+
+        _pathType = 0;
+        _pointIndex = 0;
+        _segmentProgress = 0.0f;
+        _heartbeatMs = 0;
+        _stuckMs = 0;
+        _logMs = 0;
+        _lastProgressPos = _lastGrounded;
+        _contouring = false;
+        _startedOnAFace = false;
+        _state = State::Moving;
+        if (!FirstGroundedStepIsLegal(player))
+        {
+            _path.clear();
+            _state = State::LookingForAWayRound;
+            continue;
+        }
+
+        _walkingAWayRound = true;
+        // This walk is her own, not a rejoin of the route that refused her.
+        ClearFaceRecovery();
+        Position pose = _lastGrounded;
+        pose.SetOrientation(Position::NormalizeOrientation(std::atan2(_path[1].y - _path[0].y, _path[1].x - _path[0].x)));
+        _lastGrounded.SetOrientation(pose.GetOrientation());
+        QueueMove(player, pose, true, true);
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} found a way round: {:.1f} yards of walking to ({:.2f}, {:.2f}, {:.2f}), {:.1f} yards closer to where she is going{}.",
+            player->GetName(), way.Yards, points.back()[0], points.back()[1], points.back()[2], way.Gain,
+            way.CanWalkBack ? "" : ", on ground she cannot walk back from");
+        ClearWayRound();
+        return true;
+    }
+
+    return false;
 }
 
 bool PlayerbotWalker::JumpMovementIsAllowed(Player const* player, char const*& reason) const

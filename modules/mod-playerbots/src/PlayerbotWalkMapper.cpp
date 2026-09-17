@@ -27,6 +27,7 @@
 #include "PlayerbotMovement.h"
 #include "PlayerbotWalkMap.h"
 #include "PlayerbotWalkMapPage.h"
+#include "PlayerbotWalkMapServerWorld.h"
 #include "Playerbots.h"
 #include "StringFormat.h"
 #include "Util.h"
@@ -49,78 +50,6 @@ namespace
     // World-thread time one tick may spend on the map.
     constexpr std::chrono::milliseconds WALK_MAP_SLICE{ 10 };
     constexpr std::size_t WALK_MAP_SPOTS_PER_CLOCK_CHECK = 8;
-
-    // Answers the walk map with her own walk's step and plant, and never loads ground that is not loaded.
-    class ServerWalkMapWorld final : public PlayerbotWalkMapWorld
-    {
-    public:
-        ServerWalkMapWorld(Player* player, Map* map) : _player(player), _map(map) { }
-
-        bool IsLoaded(float x, float y) override
-        {
-            // Asking for the height of ground that is not loaded would load it.
-            return Trinity::IsValidMapCoord(x, y) && _map->IsGridLoaded(x, y);
-        }
-
-        PlayerbotWalkMapStepResult Step(float fromX, float fromY, float fromZ, float toX, float toY) override
-        {
-            float const orientation = Position::NormalizeOrientation(std::atan2(toY - fromY, toX - fromX));
-            Position from;
-            from.Relocate(fromX, fromY, fromZ, orientation);
-            Position planted;
-            PlayerbotWalker::GroundedStepFailure const failure = PlayerbotWalker::ClassifyGroundedStep(_player, from, toX, toY,
-                orientation, planted);
-
-            PlayerbotWalkMapStepResult result;
-            result.Z = planted.GetPositionZ();
-            switch (failure)
-            {
-                case PlayerbotWalker::GroundedStepFailure::None:
-                    result.Step = PlayerbotWalkMapStep::Legal;
-                    break;
-                case PlayerbotWalker::GroundedStepFailure::NoFloor:
-                    result.Step = PlayerbotWalkMapStep::NoFloor;
-                    break;
-                case PlayerbotWalker::GroundedStepFailure::SteepUp:
-                    result.Step = PlayerbotWalkMapStep::SteepUp;
-                    break;
-                case PlayerbotWalker::GroundedStepFailure::TooFarDown:
-                    result.Step = PlayerbotWalkMapStep::TooFarDown;
-                    break;
-                case PlayerbotWalker::GroundedStepFailure::StaticCollision:
-                    result.Step = PlayerbotWalkMapStep::StaticCollision;
-                    break;
-                case PlayerbotWalker::GroundedStepFailure::DynamicCollision:
-                    result.Step = PlayerbotWalkMapStep::DynamicCollision;
-                    break;
-                case PlayerbotWalker::GroundedStepFailure::NoPath:
-                case PlayerbotWalker::GroundedStepFailure::InvalidPosition:
-                    result.Step = PlayerbotWalkMapStep::InvalidPosition;
-                    break;
-            }
-
-            return result;
-        }
-
-        bool GroundBelow(float x, float y, float z, float& outZ) override
-        {
-            // The same plant a walk heartbeat uses: a floor must be found, then her body's allowed height there.
-            if (!Trinity::IsValidMapCoord(x, y, z) || _player->GetMapHeight(x, y, z) <= INVALID_HEIGHT)
-                return false;
-
-            float planted = z;
-            _player->UpdateAllowedPositionZ(x, y, planted);
-            if (planted <= INVALID_HEIGHT)
-                return false;
-
-            outZ = planted;
-            return true;
-        }
-
-    private:
-        Player* _player;
-        Map* _map;
-    };
 
     std::string PlaceName(Player* player, float x, float y, float z)
     {
@@ -270,7 +199,7 @@ void PlayerbotWalkMapper::Update(uint32 /*diff*/)
         return;
     }
 
-    ServerWalkMapWorld world(subject, subject->GetMap());
+    PlayerbotWalkMapServerWorld world(subject, subject->GetMap());
     std::chrono::steady_clock::time_point const sliceStart = std::chrono::steady_clock::now();
     bool finished = false;
     do

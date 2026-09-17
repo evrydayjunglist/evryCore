@@ -17,8 +17,10 @@
 #include "MiscPackets.h"
 #include "MovementPackets.h"
 #include "MovementTypedefs.h"
+#include "Timer.h"
 #include "../../modules/mod-playerbots/src/PlayerbotJump.h"
 #include "../../modules/mod-playerbots/src/PlayerbotServerMovement.h"
+#include <thread>
 
 namespace
 {
@@ -136,6 +138,30 @@ TEST_CASE("Playerbot reads one order per time sync request, even when a number r
     REQUIRE(answered[0].SequenceIndex == 0);
     REQUIRE(answered[1].SequenceIndex == 1);
     REQUIRE(answered[2].SequenceIndex == 0);
+}
+
+TEST_CASE("Playerbot stamps her time sync and init mover replies after the server registered the request", "[playerbots][server-movement]")
+{
+    // A world tick caches the clock when it starts. Later in that tick the server registers a request with its live clock,
+    // and when the reply arrives it takes the registration away from the reply's receive time.
+    TimePoint const tickStart = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(2ms);
+    uint32 const registered = getMSTime();
+
+    WorldPackets::Misc::TimeSyncResponse timeSync(PlayerbotTimeSyncResponse(15, 1234));
+    timeSync.Read();
+    REQUIRE(timeSync.SequenceIndex == 15);
+    REQUIRE(timeSync.ClientTime == 1234);
+    REQUIRE(getMSTimeDiff(registered, timeSync.GetReceivedTime()) < 1000);
+
+    WorldPackets::Movement::MoveInitActiveMoverComplete initMover(PlayerbotMoveInitActiveMoverComplete(5678));
+    initMover.Read();
+    REQUIRE(initMover.Ticks == 5678);
+    REQUIRE(getMSTimeDiff(registered, initMover.GetRawPacket()->GetReceivedTime()) < 1000);
+
+    // A reply stamped with the time cached when the tick started would be earlier than the registration, and the
+    // subtraction would wrap.
+    REQUIRE(getMSTimeDiff(registered, tickStart) > 0x7FFFFFFFu);
 }
 
 TEST_CASE("Playerbot finds a root inside the combined movement state packet", "[playerbots][server-movement]")

@@ -96,11 +96,7 @@ void PlayerbotClient::QueueTimeSyncResponse(WorldSession* session, uint32 sequen
     if (!session)
         return;
 
-    WorldPacket packet(CMSG_TIME_SYNC_RESPONSE);
-    packet << uint32(sequenceIndex);
-    packet << uint32(clientTime);
-    packet.SetReceiveTime(GameTime::Now());
-    session->QueuePacket(std::move(packet));
+    session->QueuePacket(PlayerbotTimeSyncResponse(sequenceIndex, clientTime));
 }
 
 void PlayerbotClient::QueueMoveInitActiveMoverComplete(WorldSession* session, uint32 ticks)
@@ -108,10 +104,7 @@ void PlayerbotClient::QueueMoveInitActiveMoverComplete(WorldSession* session, ui
     if (!session)
         return;
 
-    WorldPacket packet(CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE);
-    packet << uint32(ticks);
-    packet.SetReceiveTime(GameTime::Now());
-    session->QueuePacket(std::move(packet));
+    session->QueuePacket(PlayerbotMoveInitActiveMoverComplete(ticks));
 }
 
 // Echoes the SequenceIndex of the SMSG_MOVE_TELEPORT it answers.

@@ -92,8 +92,8 @@ public:
     void HandleConfirmPurchaseResponse(bool confirm, uint32 serverToken, uint64 clientCurrentPriceFixedPoint);
     bool HandleDistributionAssignToTarget(uint32 clientToken, uint64 distributionId, ObjectGuid targetCharacter, uint32 productChoice);
 
-    void OverlayEnumExperienceLevel(ObjectGuid character, uint8& experienceLevel) const;
-    bool ApplyPendingBoostOnLogin(Player* player);
+    void CompletePendingBoosts();
+    uint64 GetCharacterRevision() const { return _characterRevision; }
     void OnCharacterDeleted(ObjectGuid character);
 
 private:
@@ -101,8 +101,6 @@ private:
     bool PrepareAvailableL80Distribution(BattlePay::PendingDistribution& out);
     void LoadFromDatabase();
     void PersistAvailableDistribution(BattlePay::PendingDistribution const& distribution);
-    void PersistAssignedDistribution(BattlePay::PendingDistribution const& distribution);
-    void PersistAppliedDistribution(uint64 distributionId);
     uint64 GenerateDistributionId();
     uint64 GeneratePurchaseId();
     uint32 GenerateServerToken();
@@ -113,10 +111,11 @@ private:
     bool BeginFreePurchaseConfirm(uint32 productId, uint32 clientToken);
     void SendDistributionUpdate(BattlePay::PendingDistribution const& distribution);
     void ResurfaceRemainingAvailableL80Distributions();
-    bool CanAssignToCharacter(ObjectGuid targetCharacter, uint32 productChoice) const;
+    bool CanAssignToCharacter(ObjectGuid targetCharacter, uint32 productChoice, uint8& classId, uint8& raceId, uint8& backpackSlots) const;
     bool IsCharacterBoostedOrPending(ObjectGuid::LowType characterGuid) const;
-    bool RelocateToBoostStart(Player* player) const;
+    bool ApplyOfflineBoost(BattlePay::PendingDistribution const& distribution);
 
+    uint64 _characterRevision = 0;
     WorldSession* _session;
     std::unordered_map<uint64, BattlePay::PendingDistribution> _distributions;
     std::unordered_map<ObjectGuid::LowType, BattlePay::PendingDistribution> _pendingApply;

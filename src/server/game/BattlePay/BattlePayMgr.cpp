@@ -16,27 +16,28 @@
  */
 
 #include "BattlePayMgr.h"
+#include "BattlePayBoost.h"
 #include "BattlePayPackets.h"
-#include "Bag.h"
 #include "CharacterCache.h"
 #include "CharacterPackets.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "Field.h"
+#include "GameTime.h"
 #include "Item.h"
 #include "Log.h"
 #include "Mail.h"
-#include "Map.h"
-#include "MapManager.h"
 #include "MiscPackets.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "StringConvert.h"
 #include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -45,6 +46,7 @@ namespace
 constexpr uint32 BATTLE_PAY_L80_PRODUCT_ID = 1161;
 constexpr uint32 BATTLE_PAY_L80_SHOP_PRODUCT_INFO_ID = 1410;
 constexpr uint32 BATTLE_PAY_L80_STAGING_MAP = 2552;
+constexpr uint32 BATTLE_PAY_L80_STAGING_ZONE = 14771;
 constexpr float BATTLE_PAY_L80_STAGING_X = 2633.37f;
 constexpr float BATTLE_PAY_L80_STAGING_Y = -2591.66f;
 constexpr float BATTLE_PAY_L80_STAGING_Z = 219.659f;
@@ -131,89 +133,80 @@ CharacterLoadoutEntry const* SelectL80BoostLoadout(uint8 classId, uint8 raceId, 
     return nullptr;
 }
 
-void MailRecoveredBoostItems(Player* player, std::vector<Item*> const& items)
+void MailOfflineBoostItems(ObjectGuid character, std::span<BattlePay::BoostInventoryItem const> inventory,
+    std::unordered_set<uint64> const& recovered, CharacterDatabaseTransaction trans)
 {
-    if (items.empty())
-        return;
+    std::vector<uint64> items;
+    for (auto const& item : inventory)
+        if (recovered.contains(item.Guid))
+            items.push_back(item.Guid);
 
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     for (size_t offset = 0; offset < items.size();)
     {
-        size_t const batchEnd = std::min(offset + size_t(MAX_MAIL_ITEMS), items.size());
-        MailDraft draft("Level Boost - recovered items",
-            "Items removed from your character while applying a Level 80 Boost.");
-        for (; offset < batchEnd; ++offset)
-            draft.AddItem(items[offset]);
-        draft.SendMailTo(trans, player, MailSender(MAIL_NORMAL, 0), MAIL_CHECK_MASK_COPIED);
-    }
-    CharacterDatabase.CommitTransaction(trans);
-}
+        uint64 mailId = sObjectMgr->GenerateMailID();
+        time_t now = GameTime::GetGameTime();
+        auto* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_MAIL);
+        stmt->setUInt64(0, mailId);
+        stmt->setUInt8(1, MAIL_NORMAL);
+        stmt->setInt8(2, MAIL_STATIONERY_DEFAULT);
+        stmt->setUInt16(3, 0);
+        stmt->setUInt64(4, 0);
+        stmt->setUInt64(5, character.GetCounter());
+        stmt->setString(6, "Level Boost - recovered items"sv);
+        stmt->setString(7, "Items removed from your character while applying a Level 80 Boost."sv);
+        stmt->setBool(8, true);
+        stmt->setInt64(9, now + 30 * DAY);
+        stmt->setInt64(10, now);
+        stmt->setUInt64(11, 0);
+        stmt->setUInt64(12, 0);
+        stmt->setUInt8(13, MAIL_CHECK_MASK_COPIED);
+        trans->Append(stmt);
 
-void MailOldKitForL80Boost(Player* player)
-{
-    std::vector<Item*> toMail;
-    auto take = [&](uint8 bag, uint8 slot)
-    {
-        if (Item* item = player->GetItemByPos(bag, slot))
+        size_t end = std::min(offset + size_t(MAX_MAIL_ITEMS), items.size());
+        for (; offset < end; ++offset)
         {
-            player->MoveItemFromInventory(bag, slot, true);
-            toMail.push_back(item);
+            Item::DeleteFromInventoryDB(trans, items[offset]);
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_MAIL_ITEM);
+            stmt->setUInt64(0, mailId);
+            stmt->setUInt64(1, items[offset]);
+            stmt->setUInt64(2, character.GetCounter());
+            trans->Append(stmt);
         }
-    };
-
-    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
-        take(INVENTORY_SLOT_BAG_0, slot);
-
-    for (uint8 slot = CHILD_EQUIPMENT_SLOT_START; slot < CHILD_EQUIPMENT_SLOT_END; ++slot)
-        take(INVENTORY_SLOT_BAG_0, slot);
-
-    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
-    {
-        if (Bag* bag = player->GetBagByPos(bagSlot))
-            for (uint32 i = 0; i < bag->GetBagSize(); ++i)
-                take(bagSlot, uint8(i));
-        take(INVENTORY_SLOT_BAG_0, bagSlot);
     }
-
-    for (uint8 bagSlot = REAGENT_BAG_SLOT_START; bagSlot < REAGENT_BAG_SLOT_END; ++bagSlot)
-    {
-        if (Bag* bag = player->GetBagByPos(bagSlot))
-            for (uint32 i = 0; i < bag->GetBagSize(); ++i)
-                take(bagSlot, uint8(i));
-        take(INVENTORY_SLOT_BAG_0, bagSlot);
-    }
-
-    MailRecoveredBoostItems(player, toMail);
 }
 
-bool GrantL80BoostKit(Player* player, uint8 classId, uint8 raceId, uint32 specId)
+void WriteBoostEquipmentCache(ObjectGuid character, std::array<Item const*, EQUIPMENT_SLOT_END> const& equipped,
+    CharacterDatabaseTransaction trans)
 {
-    CharacterLoadoutEntry const* loadout = SelectL80BoostLoadout(classId, raceId, specId);
-    if (!loadout)
+    auto* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_SELECT_EQUIPMENT_CACHE_CUSTOMIZATIONS);
+    stmt->setUInt64(0, character.GetCounter());
+    trans->Append(stmt);
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_SELECT_EQUIPMENT_CACHE_CUSTOMIZATIONS);
+    stmt->setUInt64(0, character.GetCounter());
+    for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
     {
-        TC_LOG_ERROR("network", "BattlePay: no Purpose={} ItemContext={} loadout for class {} race {} spec {}",
-            BATTLE_PAY_L80_LOADOUT_PURPOSE, uint32(BATTLE_PAY_L80_ITEM_CONTEXT), classId, raceId, specId);
-        return false;
+        WorldPackets::Character::EnumCharactersResult::CharacterInfoBasic::VisualItemInfo visual;
+        if (Item const* item = equipped[slot])
+        {
+            visual.ItemID = item->GetEntry();
+            visual.TransmogrifiedItemID = item->GetEntry();
+            visual.Subclass = item->GetTemplate()->GetSubClass();
+            visual.InvType = item->GetTemplate()->GetInventoryType();
+            if (ItemModifiedAppearanceEntry const* modified = item->GetItemModifiedAppearance())
+                if (ItemAppearanceEntry const* appearance = sItemAppearanceStore.LookupEntry(modified->ItemAppearanceID))
+                    visual.DisplayID = appearance->ItemDisplayInfoID;
+        }
+        uint8 base = 1 + slot * 8;
+        stmt->setUInt32(base, visual.ItemID);
+        stmt->setUInt32(base + 1, visual.TransmogrifiedItemID);
+        stmt->setUInt8(base + 2, visual.Subclass);
+        stmt->setUInt8(base + 3, visual.InvType);
+        stmt->setUInt32(base + 4, visual.DisplayID);
+        stmt->setUInt32(base + 5, 0);
+        stmt->setInt32(base + 6, 0);
+        stmt->setUInt8(base + 7, 0);
     }
-
-    uint32 granted = 0;
-    for (CharacterLoadoutItemEntry const* row : sCharacterLoadoutItemStore)
-    {
-        if (row->CharacterLoadoutID != loadout->ID)
-            continue;
-        if (player->StoreNewItemInBestSlots(row->ItemID, 1, BATTLE_PAY_L80_ITEM_CONTEXT))
-            ++granted;
-    }
-
-    if (!granted)
-    {
-        TC_LOG_ERROR("network", "BattlePay: CharacterLoadout {} granted no items to {}", loadout->ID, player->GetGUID().ToString());
-        return false;
-    }
-
-    TC_LOG_INFO("network", "BattlePay: granted L80 kit loadout {} ({} items) to {} (spec {})",
-        loadout->ID, granted, player->GetGUID().ToString(), specId);
-    return true;
+    trans->Append(stmt);
 }
 }
 
@@ -355,29 +348,6 @@ void BattlePayMgr::PersistAvailableDistribution(BattlePay::PendingDistribution c
     stmt->setUInt8(6, 0);
     stmt->setUInt64(7, 0);
     stmt->setUInt32(8, 0);
-    trans->Append(stmt);
-    CharacterDatabase.DirectCommitTransaction(trans);
-}
-
-void BattlePayMgr::PersistAssignedDistribution(BattlePay::PendingDistribution const& distribution)
-{
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_ASSIGN);
-    stmt->setUInt8(0, uint8(BattlePay::DIST_STATUS_FINISHED));
-    stmt->setUInt64(1, distribution.TargetCharacter.GetCounter());
-    stmt->setUInt32(2, distribution.SpecId);
-    stmt->setUInt64(3, distribution.DistributionID);
-    stmt->setUInt32(4, _session->GetAccountId());
-    trans->Append(stmt);
-    CharacterDatabase.DirectCommitTransaction(trans);
-}
-
-void BattlePayMgr::PersistAppliedDistribution(uint64 distributionId)
-{
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_APPLIED);
-    stmt->setUInt64(0, distributionId);
-    stmt->setUInt32(1, _session->GetAccountId());
     trans->Append(stmt);
     CharacterDatabase.DirectCommitTransaction(trans);
 }
@@ -688,8 +658,11 @@ bool BattlePayMgr::IsCharacterBoostedOrPending(ObjectGuid::LowType characterGuid
     return _boostedCharacters.contains(characterGuid) || _pendingApply.contains(characterGuid);
 }
 
-bool BattlePayMgr::CanAssignToCharacter(ObjectGuid targetCharacter, uint32 productChoice) const
+bool BattlePayMgr::CanAssignToCharacter(ObjectGuid targetCharacter, uint32 productChoice, uint8& classId, uint8& raceId, uint8& backpackSlots) const
 {
+    if (!targetCharacter.IsPlayer())
+        return false;
+
     if (ObjectAccessor::FindConnectedPlayer(targetCharacter))
     {
         TC_LOG_INFO("network", "BattlePay: refusing assign while {} is online", targetCharacter.ToString());
@@ -714,12 +687,14 @@ bool BattlePayMgr::CanAssignToCharacter(ObjectGuid targetCharacter, uint32 produ
     CharacterDatabasePreparedStatement* onlineStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_ONLINE_BY_GUID);
     onlineStmt->setUInt64(0, targetCharacter.GetCounter());
     onlineStmt->setUInt32(1, _session->GetAccountId());
-    if (PreparedQueryResult onlineResult = CharacterDatabase.Query(onlineStmt))
-        if (onlineResult->Fetch()[0].GetUInt8() != 0)
-        {
-            TC_LOG_INFO("network", "BattlePay: refusing assign while {} is marked online", targetCharacter.ToString());
-            return false;
-        }
+    PreparedQueryResult onlineResult = CharacterDatabase.Query(onlineStmt);
+    if (!onlineResult)
+        return false;
+    if (onlineResult->Fetch()[0].GetUInt8() != 0)
+    {
+        TC_LOG_INFO("network", "BattlePay: refusing assign while {} is marked online", targetCharacter.ToString());
+        return false;
+    }
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_BATTLEPAY_CHARACTER);
     stmt->setUInt64(0, targetCharacter.GetCounter());
@@ -735,9 +710,10 @@ bool BattlePayMgr::CanAssignToCharacter(ObjectGuid targetCharacter, uint32 produ
     if (!character || character->TimerunningSeasonId)
         return false;
 
-    uint8 const classId = fields[1].GetUInt8();
+    classId = fields[1].GetUInt8();
     uint8 const level = fields[2].GetUInt8();
-    uint8 const raceId = fields[3].GetUInt8();
+    raceId = fields[3].GetUInt8();
+    backpackSlots = fields[4].GetUInt8();
     if (level >= BATTLE_PAY_L80_LEVEL)
     {
         TC_LOG_INFO("network", "BattlePay: character {} already at or above L80; refusing boost", targetCharacter.ToString());
@@ -788,12 +764,11 @@ bool BattlePayMgr::HandleDistributionAssignToTarget(uint32 clientToken, uint64 d
     if (IsCharacterBoostedOrPending(targetCharacter.GetCounter()))
         return fail(3);
 
-    if (!CanAssignToCharacter(targetCharacter, productChoice))
-        return fail(3);
-
-    BattlePay::PendingDistribution& distribution = itr->second;
+    BattlePay::PendingDistribution distribution = itr->second;
     distribution.TargetCharacter = targetCharacter;
     distribution.SpecId = productChoice;
+    if (!ApplyOfflineBoost(distribution))
+        return fail(3);
 
     WorldPackets::Character::CharacterUpgradeStarted upgradeStarted;
     upgradeStarted.CharacterGUID = targetCharacter;
@@ -817,8 +792,6 @@ bool BattlePayMgr::HandleDistributionAssignToTarget(uint32 clientToken, uint64 d
     distribution.Status = BattlePay::DIST_STATUS_FINISHED;
     SendDistributionUpdate(distribution);
 
-    PersistAssignedDistribution(distribution);
-    _pendingApply[targetCharacter.GetCounter()] = distribution;
     _distributions.erase(itr);
     ResurfaceRemainingAvailableL80Distributions();
 
@@ -827,90 +800,158 @@ bool BattlePayMgr::HandleDistributionAssignToTarget(uint32 clientToken, uint64 d
     return true;
 }
 
-void BattlePayMgr::OverlayEnumExperienceLevel(ObjectGuid character, uint8& experienceLevel) const
+bool BattlePayMgr::ApplyOfflineBoost(BattlePay::PendingDistribution const& distribution)
 {
-    if (_pendingApply.contains(character.GetCounter()))
-        experienceLevel = BATTLE_PAY_L80_LEVEL;
-}
-
-bool BattlePayMgr::RelocateToBoostStart(Player* player) const
-{
+    ObjectGuid character = distribution.TargetCharacter;
+    uint8 classId = 0, raceId = 0, backpackSlots = 0;
+    if (!CanAssignToCharacter(character, distribution.SpecId, classId, raceId, backpackSlots))
+        return false;
     if (!sMapStore.LookupEntry(BATTLE_PAY_L80_STAGING_MAP))
+        return false;
+
+    // Recheck the durable entitlement before modifying a character, including old deferred grants.
+    auto* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_BATTLEPAY_DISTRIBUTION);
+    stmt->setUInt64(0, distribution.DistributionID);
+    stmt->setUInt32(1, _session->GetAccountId());
+    PreparedQueryResult entitlement = CharacterDatabase.Query(stmt);
+    if (!entitlement)
+        return false;
+    Field* fields = entitlement->Fetch();
+    if (fields[0].GetUInt32() != GetL80ProductId() || fields[2].GetUInt8()
+        || (fields[1].GetUInt8() && (fields[3].GetUInt64() != character.GetCounter() || fields[4].GetUInt32() != distribution.SpecId)))
+        return false;
+
+    CharacterLoadoutEntry const* loadout = SelectL80BoostLoadout(classId, raceId, distribution.SpecId);
+    ChrSpecializationEntry const* spec = sChrSpecializationStore.LookupEntry(distribution.SpecId);
+    std::vector<BattlePay::BoostKitItem> kit;
+    for (CharacterLoadoutItemEntry const* row : sCharacterLoadoutItemStore)
     {
-        TC_LOG_ERROR("network", "BattlePay: map {} is missing from Map.db2; cannot relocate {}",
-            BATTLE_PAY_L80_STAGING_MAP, player->GetGUID().ToString());
+        if (row->CharacterLoadoutID != loadout->ID)
+            continue;
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(row->ItemID);
+        if (!proto || proto->GetArtifactID())
+            return false;
+        kit.push_back({ row->ItemID, uint8(proto->GetInventoryType()), uint8(proto->GetClass()),
+            uint8(proto->GetSubClass()), proto->GetMaxCount() });
+    }
+
+    // The character row makes an empty inventory distinguishable from a failed query.
+    QueryResult inventoryResult = CharacterDatabase.PQuery(
+        "SELECT i.item, i.bag, i.slot, t.itemEntry, t.count, t.owner_guid FROM characters c "
+        "LEFT JOIN character_inventory i ON i.guid = c.guid LEFT JOIN item_instance t ON t.guid = i.item "
+        "WHERE c.guid = {} AND c.account = {}", character.GetCounter(), _session->GetAccountId());
+    if (!inventoryResult)
+        return false;
+    std::vector<BattlePay::BoostInventoryItem> inventory;
+    do
+    {
+        Field* item = inventoryResult->Fetch();
+        if (item[0].IsNull())
+            continue;
+        if (item[3].IsNull() || !item[4].GetUInt32() || item[5].GetUInt64() != character.GetCounter())
+            return false;
+        inventory.push_back({ item[0].GetUInt64(), item[1].GetUInt64(), item[2].GetUInt8(), item[3].GetUInt32(), item[4].GetUInt32() });
+    } while (inventoryResult->NextRow());
+
+    auto plan = BattlePay::PlanBoostInventory(inventory, kit, backpackSlots,
+        spec->GetFlags().HasFlag(ChrSpecializationFlag::DualWieldTwoHanded));
+    if (!plan)
+    {
+        TC_LOG_ERROR("network", "BattlePay: cannot place the complete L80 kit for {}; no items or boost consumed", character.ToString());
         return false;
     }
 
-    if (player->IsInWorld())
-        return player->TeleportTo(BATTLE_PAY_L80_STAGING_MAP, BATTLE_PAY_L80_STAGING_X, BATTLE_PAY_L80_STAGING_Y,
-            BATTLE_PAY_L80_STAGING_Z, BATTLE_PAY_L80_STAGING_O);
-
-    uint32 const oldMapId = player->GetMapId();
-    Position const oldPos = player->GetPosition();
-    Map* const oldMap = player->GetMap();
-
-    player->ResetMap();
-    player->WorldRelocate(BATTLE_PAY_L80_STAGING_MAP, BATTLE_PAY_L80_STAGING_X, BATTLE_PAY_L80_STAGING_Y,
-        BATTLE_PAY_L80_STAGING_Z, BATTLE_PAY_L80_STAGING_O);
-    if (Map* boostMap = sMapMgr->CreateMap(BATTLE_PAY_L80_STAGING_MAP, player))
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    MailOfflineBoostItems(character, inventory, plan->RecoveredItems, trans);
+    std::vector<std::unique_ptr<Item>> created;
+    std::array<Item const*, EQUIPMENT_SLOT_END> equipped = { };
+    for (size_t i = 0; i < kit.size(); ++i)
     {
-        player->SetMap(boostMap);
-        player->UpdatePositionData();
-        player->SetFallInformation(0, BATTLE_PAY_L80_STAGING_Z);
-        return true;
+        if (!plan->KitSlots[i])
+            continue;
+        uint8 slot = *plan->KitSlots[i];
+        std::unique_ptr<Item> item(Item::CreateItem(kit[i].Entry, 1, BATTLE_PAY_L80_ITEM_CONTEXT));
+        if (!item || item->ToAzeriteItem() || item->ToAzeriteEmpoweredItem())
+            return false;
+        item->SetOwnerGUID(character);
+        if (item->GetBonding() == BIND_ON_ACQUIRE || item->GetBonding() == BIND_QUEST
+            || (item->GetBonding() == BIND_ON_EQUIP && slot < REAGENT_BAG_SLOT_END))
+            item->SetBinding(true);
+        item->SaveToDB(trans);
+        // INSERT must fail, rather than replacing someone else's item if a destination is occupied.
+        trans->PAppend("INSERT INTO character_inventory (guid, bag, slot, item) VALUES ({}, 0, {}, {})",
+            character.GetCounter(), uint32(slot), item->GetGUID().GetCounter());
+        if (slot < EQUIPMENT_SLOT_END)
+            equipped[slot] = item.get();
+        created.push_back(std::move(item));
+    }
+    WriteBoostEquipmentCache(character, equipped, trans);
+
+    trans->PAppend("UPDATE characters SET level = {}, xp = 0, money = GREATEST(money, {}), map = {}, zone = {}, "
+        "position_x = {}, position_y = {}, position_z = {}, orientation = {}, instance_id = 0, "
+        "trans_x = 0, trans_y = 0, trans_z = 0, trans_o = 0, transguid = 0, taxi_path = '', "
+        "primarySpecialization = {}, activeTalentGroup = {}, logout_time = {} WHERE guid = {} AND account = {}",
+        uint32(BATTLE_PAY_L80_LEVEL), BATTLE_PAY_L80_GOLD, BATTLE_PAY_L80_STAGING_MAP, BATTLE_PAY_L80_STAGING_ZONE,
+        BATTLE_PAY_L80_STAGING_X, BATTLE_PAY_L80_STAGING_Y, BATTLE_PAY_L80_STAGING_Z, BATTLE_PAY_L80_STAGING_O,
+        distribution.SpecId, uint32(spec->OrderIndex), GameTime::GetGameTime(), character.GetCounter(), _session->GetAccountId());
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_ASSIGN);
+    stmt->setUInt8(0, BattlePay::DIST_STATUS_FINISHED);
+    stmt->setUInt64(1, character.GetCounter());
+    stmt->setUInt32(2, distribution.SpecId);
+    stmt->setUInt64(3, distribution.DistributionID);
+    stmt->setUInt32(4, _session->GetAccountId());
+    trans->Append(stmt);
+    CharacterDatabase.DirectCommitTransaction(trans);
+
+    // DirectCommitTransaction has no result value. Read back the completion marker from the same transaction.
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_BATTLEPAY_DISTRIBUTION);
+    stmt->setUInt64(0, distribution.DistributionID);
+    stmt->setUInt32(1, _session->GetAccountId());
+    PreparedQueryResult saved = CharacterDatabase.Query(stmt);
+    if (!saved || !(*saved)[1].GetUInt8() || !(*saved)[2].GetUInt8()
+        || (*saved)[3].GetUInt64() != character.GetCounter() || (*saved)[4].GetUInt32() != distribution.SpecId)
+    {
+        TC_LOG_ERROR("network", "BattlePay: offline L80 save not confirmed for {}; completion withheld", character.ToString());
+        return false;
     }
 
-    player->WorldRelocate(oldMapId, oldPos);
-    player->SetMap(oldMap);
-    TC_LOG_ERROR("network", "BattlePay: CreateMap({}) failed for {}", BATTLE_PAY_L80_STAGING_MAP, player->GetGUID().ToString());
-    return false;
+    _boostedCharacters.insert(character.GetCounter());
+    sCharacterCache->UpdateCharacterLevel(character, BATTLE_PAY_L80_LEVEL);
+    ++_characterRevision;
+    TC_LOG_INFO("network", "BattlePay: saved L80 kit {} ({} items), {} recovered items and boost {} for {} before login",
+        loadout->ID, created.size(), plan->RecoveredItems.size(), distribution.DistributionID, character.ToString());
+    return true;
 }
 
-bool BattlePayMgr::ApplyPendingBoostOnLogin(Player* player)
+// Boosts assigned before they were applied offline still wait for their character. One that cannot be
+// applied now goes back to the account, so its character can still log in and the boost is offered again.
+void BattlePayMgr::CompletePendingBoosts()
 {
-    if (!player || player->GetTimerunningSeasonId())
-        return false;
-
-    auto itr = _pendingApply.find(player->GetGUID().GetCounter());
-    if (itr == _pendingApply.end())
-        return false;
-
-    BattlePay::PendingDistribution pending = itr->second;
-    if (player->GetLevel() >= BATTLE_PAY_L80_LEVEL)
+    bool returned = false;
+    for (auto pending = _pendingApply.begin(); pending != _pendingApply.end(); pending = _pendingApply.erase(pending))
     {
-        TC_LOG_INFO("network", "BattlePay: {} already at or above L80 on login; marking boost applied without grant",
-            player->GetGUID().ToString());
-        PersistAppliedDistribution(pending.DistributionID);
-        _boostedCharacters.insert(player->GetGUID().GetCounter());
-        _pendingApply.erase(itr);
-        return false;
+        if (ApplyOfflineBoost(pending->second))
+            continue;
+
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN_BY_TARGET);
+        stmt->setUInt64(0, pending->first);
+        trans->Append(stmt);
+        CharacterDatabase.DirectCommitTransaction(trans);
+
+        BattlePay::PendingDistribution distribution = pending->second;
+        distribution.Status = BattlePay::DIST_STATUS_AVAILABLE;
+        distribution.TargetCharacter.Clear();
+        distribution.SpecId = 0;
+        _distributions[distribution.DistributionID] = distribution;
+        returned = true;
+
+        TC_LOG_INFO("network", "BattlePay: could not apply distribution {} to character {}; returned it (account {})",
+            distribution.DistributionID, pending->first, _session->GetAccountId());
     }
 
-    MailOldKitForL80Boost(player);
-
-    player->GiveLevel(BATTLE_PAY_L80_LEVEL);
-    player->SetXP(0);
-
-    if (!GrantL80BoostKit(player, player->GetClass(), player->GetRace(), pending.SpecId))
-        TC_LOG_ERROR("network", "BattlePay: L80 kit grant failed for {} after GiveLevel", player->GetGUID().ToString());
-
-    if (player->GetMoney() < BATTLE_PAY_L80_GOLD)
-        player->SetMoney(BATTLE_PAY_L80_GOLD);
-
-    if (ChrSpecializationEntry const* spec = sChrSpecializationStore.LookupEntry(pending.SpecId))
-        if (spec->ClassID == player->GetClass())
-            player->ActivateTalentGroup(spec);
-
-    bool const relocated = RelocateToBoostStart(player);
-    PersistAppliedDistribution(pending.DistributionID);
-    _boostedCharacters.insert(player->GetGUID().GetCounter());
-    _pendingApply.erase(itr);
-
-    TC_LOG_INFO("network", "BattlePay: applied L80 boost on login for {} (spec {}, relocated {})",
-        player->GetGUID().ToString(), pending.SpecId, relocated);
-    // Skip Catch Up even if relocate failed, so it cannot move a granted L80 to Arathi.
-    return true;
+    if (returned)
+        SendAvailableL80Distributions();
 }
 
 // Player::DeleteFromDB already released the rows. This keeps the open session in step, so an

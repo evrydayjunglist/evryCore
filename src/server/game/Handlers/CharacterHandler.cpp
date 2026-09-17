@@ -495,8 +495,6 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
             if (!charEnum.IsDeletedCharacters)
                 ApplyArathiRpeEnumEligibility(characterInfo);
 
-            GetBattlePayMgr()->OverlayEnumExperienceLevel(charInfo.Guid, charInfo.ExperienceLevel);
-
             TC_LOG_INFO("network", "Loading char guid {} from account {}.", charInfo.Guid.ToString(), GetAccountId());
 
             if (!charEnum.IsDeletedCharacters)
@@ -584,6 +582,8 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
 
 void WorldSession::HandleCharEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/)
 {
+    GetBattlePayMgr()->CompletePendingBoosts();
+    uint64 characterRevision = GetBattlePayMgr()->GetCharacterRevision();
     // remove expired bans
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_EXPIRED_BANS);
     CharacterDatabase.Execute(stmt);
@@ -596,8 +596,13 @@ void WorldSession::HandleCharEnumOpcode(WorldPackets::Character::EnumCharacters&
         return;
     }
 
-    AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(holder)).AfterComplete([this](SQLQueryHolderBase const& result)
+    AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(holder)).AfterComplete([this, characterRevision](SQLQueryHolderBase const& result)
     {
+        if (characterRevision != GetBattlePayMgr()->GetCharacterRevision())
+        {
+            RequestCharacterEnum();
+            return;
+        }
         HandleCharEnum(static_cast<EnumCharactersQueryHolder const&>(result));
     });
 }
@@ -1313,10 +1318,8 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         return;
     }
 
-    bool const appliedL80Boost = GetBattlePayMgr()->ApplyPendingBoostOnLogin(pCurrChar);
-
     // Catch Up Experience: honor CMSG_PLAYER_LOGIN.RPE. Re-check inactivity here; the journal path does not use this gate.
-    bool enterArathiRpe = m_playerLoginRPE && !appliedL80Boost;
+    bool enterArathiRpe = m_playerLoginRPE;
     m_playerLoginRPE = false;
     if (enterArathiRpe && !IsArathiRpeEligible(time_t(pCurrChar->m_playerData->LogoutTime)))
     {

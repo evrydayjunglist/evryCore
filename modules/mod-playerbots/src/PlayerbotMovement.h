@@ -20,7 +20,7 @@
 
 #include "PlayerbotJump.h"
 #include "PlayerbotMovementRecovery.h"
-#include "PlayerbotWalkMap.h"
+#include "PlayerbotWalkMapEscape.h"
 #include "Position.h"
 #include <G3D/Vector3.h>
 #include <limits>
@@ -183,8 +183,15 @@ private:
     // movement does not allow it; the caller then gives the walk up as before.
     bool BeginWayRound(Player* player, char const* reason);
     void UpdateWayRound(Player* player, uint32 diff);
-    // Walk the best way round the map found. False when none of them is worth walking or her first step refuses it.
+    // Walk the best way round the map found toward the destination. False when nothing she can reach is closer.
     bool StartWayRoundWalk(Player* player);
+    // Ask the navmesh for a route from the next way out of this ground. True once she starts walking to one.
+    bool ProbeOneWayOut(Player* player);
+    bool WalkTheWayRound(Player* player, PlayerbotWalkMapWayRound const& way, char const* what);
+    // A step of a way round was refused. Walk the rest of it from here, on the map she already has.
+    bool RepairWayRound(Player* player);
+    // Are the first yards of this route walkable from there by her step rules?
+    static bool RouteStartsWalkable(Player* player, Position const& from, std::vector<G3D::Vector3> const& path);
     void ClearWayRound();
     void ResetNow();
     static char const* GroundedStepFailureName(GroundedStepFailure failure);
@@ -231,8 +238,20 @@ private:
     Position _lastWalkDestination;
     uint32 _lastWalkDestinationMapId = 0;
     bool _hasLastWalkDestination = false;
-    // The ground she is mapping while she stands and looks for a way round.
+    // While she stands and looks, she maps the ground first and then asks the navmesh from the ways out of it.
+    enum class WayRoundPhase
+    {
+        Mapping,
+        Probing
+    };
+
+    // The ground she mapped. It is kept while she walks a way round, so a refused step can walk the rest from there.
     std::unique_ptr<PlayerbotWalkMap> _wayRoundMap;
+    std::vector<PlayerbotWalkMapWayRound> _wayRoundWaysOut;
+    size_t _wayRoundProbe = 0;
+    int32 _wayRoundTarget = -1;
+    uint32 _wayRoundRepairs = 0;
+    WayRoundPhase _wayRoundPhase = WayRoundPhase::Mapping;
     uint32 _wayRoundMs = 0;
     uint32 _wayRoundMapId = 0;
     // The path she is walking is a way round the map found, not a navmesh route.

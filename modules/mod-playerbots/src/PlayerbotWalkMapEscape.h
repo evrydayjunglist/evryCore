@@ -55,6 +55,74 @@ struct PlayerbotWalkMapWayRoundSettings
     std::size_t Ways = 3;
 };
 
+namespace PlayerbotWalkMapDetail
+{
+    // Walks out from one floor over legal steps only, keeping where each floor was reached from and the yards walked.
+    inline void WalkOut(PlayerbotWalkMap const& map, std::int32_t from, std::vector<std::int32_t>& cameFrom,
+        std::vector<float>& yards)
+    {
+        std::vector<PlayerbotWalkMapSpot> const& spots = map.Spots();
+        cameFrom.assign(spots.size(), -1);
+        yards.assign(spots.size(), -1.0f);
+        if (from < 0 || std::size_t(from) >= spots.size())
+            return;
+
+        std::deque<std::int32_t> queue;
+        yards[from] = 0.0f;
+        queue.push_back(from);
+        while (!queue.empty())
+        {
+            std::int32_t const here = queue.front();
+            queue.pop_front();
+            for (std::size_t d = 0; d < PLAYERBOT_WALK_MAP_DIRECTIONS.size(); ++d)
+            {
+                if (spots[here].Steps[d] != PlayerbotWalkMapStep::Legal)
+                    continue;
+
+                std::int32_t const to = spots[here].StepSpot[d];
+                if (to < 0 || yards[to] >= 0.0f)
+                    continue;
+
+                float const dx = map.WorldX(spots[to].I) - map.WorldX(spots[here].I);
+                float const dy = map.WorldY(spots[to].J) - map.WorldY(spots[here].J);
+                float const dz = spots[to].Z - spots[here].Z;
+                cameFrom[to] = here;
+                yards[to] = yards[here] + std::sqrt(dx * dx + dy * dy + dz * dz);
+                queue.push_back(to);
+            }
+        }
+    }
+
+    inline void FillFloors(std::vector<std::int32_t> const& cameFrom, std::int32_t target, PlayerbotWalkMapWayRound& way)
+    {
+        for (std::int32_t floor = target; floor >= 0; floor = cameFrom[floor])
+            way.Floors.push_back(floor);
+        std::reverse(way.Floors.begin(), way.Floors.end());
+    }
+}
+
+// The walk from one floor of the map to another over legal steps only. False when there is none.
+inline bool FindPlayerbotWalkMapRoute(PlayerbotWalkMap const& map, std::int32_t from, std::int32_t to,
+    PlayerbotWalkMapWayRound& out)
+{
+    out = {};
+    std::vector<PlayerbotWalkMapSpot> const& spots = map.Spots();
+    if (from < 0 || to < 0 || std::size_t(from) >= spots.size() || std::size_t(to) >= spots.size())
+        return false;
+
+    std::vector<std::int32_t> cameFrom;
+    std::vector<float> yards;
+    PlayerbotWalkMapDetail::WalkOut(map, from, cameFrom, yards);
+    if (yards[to] < 0.0f)
+        return false;
+
+    out.Target = to;
+    out.Yards = yards[to];
+    out.CanWalkBack = spots[to].Returns;
+    PlayerbotWalkMapDetail::FillFloors(cameFrom, to, out);
+    return out.Found();
+}
+
 // Every way round, best first. The best spot is the one closest to the destination once the walk to it is counted, and
 // ground she can walk back from wins over ground she cannot. Empty when nothing she can reach is closer.
 inline std::vector<PlayerbotWalkMapWayRound> FindPlayerbotWalkMapWaysRound(PlayerbotWalkMap const& map,
@@ -73,33 +141,9 @@ inline std::vector<PlayerbotWalkMapWayRound> FindPlayerbotWalkMapWaysRound(Playe
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     };
 
-    // Walk out from her feet over legal steps only, keeping where each floor was reached from and how far she walked.
-    std::vector<std::int32_t> cameFrom(spots.size(), -1);
-    std::vector<float> yards(spots.size(), -1.0f);
-    std::deque<std::int32_t> queue;
-    yards[0] = 0.0f;
-    queue.push_back(0);
-    while (!queue.empty())
-    {
-        std::int32_t const from = queue.front();
-        queue.pop_front();
-        for (std::size_t d = 0; d < PLAYERBOT_WALK_MAP_DIRECTIONS.size(); ++d)
-        {
-            if (spots[from].Steps[d] != PlayerbotWalkMapStep::Legal)
-                continue;
-
-            std::int32_t const to = spots[from].StepSpot[d];
-            if (to < 0 || yards[to] >= 0.0f)
-                continue;
-
-            float const dx = map.WorldX(spots[to].I) - map.WorldX(spots[from].I);
-            float const dy = map.WorldY(spots[to].J) - map.WorldY(spots[from].J);
-            float const dz = spots[to].Z - spots[from].Z;
-            cameFrom[to] = from;
-            yards[to] = yards[from] + std::sqrt(dx * dx + dy * dy + dz * dz);
-            queue.push_back(to);
-        }
-    }
+    std::vector<std::int32_t> cameFrom;
+    std::vector<float> yards;
+    PlayerbotWalkMapDetail::WalkOut(map, 0, cameFrom, yards);
 
     float const feetDistance = distanceToDestination(spots[0]);
     struct Candidate
@@ -158,9 +202,93 @@ inline std::vector<PlayerbotWalkMapWayRound> FindPlayerbotWalkMapWaysRound(Playe
         way.Gain = candidate.Gain;
         way.Yards = yards[candidate.Spot];
         way.CanWalkBack = spots[candidate.Spot].Returns;
-        for (std::int32_t floor = candidate.Spot; floor >= 0; floor = cameFrom[floor])
-            way.Floors.push_back(floor);
-        std::reverse(way.Floors.begin(), way.Floors.end());
+        PlayerbotWalkMapDetail::FillFloors(cameFrom, candidate.Spot, way);
+        if (way.Found())
+            ways.push_back(std::move(way));
+    }
+
+    return ways;
+}
+
+// The ways out of the ground she is standing on: the floors she can walk to and back from that are farthest from her
+// feet, the ones at the edge of the map first, spread apart. Nothing about them is closer to where she is going, so the
+// caller has to have another reason to walk one, such as a navmesh route that works from there.
+inline std::vector<PlayerbotWalkMapWayRound> FindPlayerbotWalkMapWaysOut(PlayerbotWalkMap const& map,
+    PlayerbotWalkMapWayRoundSettings const& settings)
+{
+    std::vector<PlayerbotWalkMapSpot> const& spots = map.Spots();
+    std::vector<PlayerbotWalkMapWayRound> ways;
+    if (spots.empty())
+        return ways;
+
+    std::vector<std::int32_t> cameFrom;
+    std::vector<float> yards;
+    PlayerbotWalkMapDetail::WalkOut(map, 0, cameFrom, yards);
+
+    struct Candidate
+    {
+        std::int32_t Spot;
+        bool AtEdge;
+        float Yards;
+    };
+    std::vector<Candidate> candidates;
+    for (std::size_t spot = 1; spot < spots.size(); ++spot)
+    {
+        if (yards[spot] < 0.0f || !spots[spot].Returns)
+            continue;
+
+        bool atEdge = false;
+        for (PlayerbotWalkMapStep step : spots[spot].Steps)
+            if (step == PlayerbotWalkMapStep::OutsideMap)
+                atEdge = true;
+        candidates.push_back({ std::int32_t(spot), atEdge, yards[spot] });
+    }
+
+    // The ground that carries on past the map is the best bet, and the farther she gets from here the better.
+    std::sort(candidates.begin(), candidates.end(), [](Candidate const& left, Candidate const& right)
+    {
+        if (left.AtEdge != right.AtEdge)
+            return left.AtEdge;
+        return left.Yards > right.Yards;
+    });
+
+    float const destinationX = settings.DestinationX;
+    float const destinationY = settings.DestinationY;
+    float const destinationZ = settings.DestinationZ;
+    float const feetDistance = std::sqrt(
+        (map.WorldX(spots[0].I) - destinationX) * (map.WorldX(spots[0].I) - destinationX)
+        + (map.WorldY(spots[0].J) - destinationY) * (map.WorldY(spots[0].J) - destinationY)
+        + (spots[0].Z - destinationZ) * (spots[0].Z - destinationZ));
+
+    for (Candidate const& candidate : candidates)
+    {
+        if (ways.size() >= settings.Ways)
+            break;
+
+        bool tooClose = false;
+        for (PlayerbotWalkMapWayRound const& taken : ways)
+        {
+            float const dx = map.WorldX(spots[candidate.Spot].I) - map.WorldX(spots[taken.Target].I);
+            float const dy = map.WorldY(spots[candidate.Spot].J) - map.WorldY(spots[taken.Target].J);
+            float const dz = spots[candidate.Spot].Z - spots[taken.Target].Z;
+            if (std::sqrt(dx * dx + dy * dy + dz * dz) < settings.SpreadYards)
+            {
+                tooClose = true;
+                break;
+            }
+        }
+        if (tooClose)
+            continue;
+
+        PlayerbotWalkMapWayRound way;
+        way.Target = candidate.Spot;
+        way.Yards = candidate.Yards;
+        way.CanWalkBack = true;
+        float const dx = map.WorldX(spots[candidate.Spot].I) - destinationX;
+        float const dy = map.WorldY(spots[candidate.Spot].J) - destinationY;
+        float const dz = spots[candidate.Spot].Z - destinationZ;
+        way.Gain = feetDistance - std::sqrt(dx * dx + dy * dy + dz * dz);
+        PlayerbotWalkMapDetail::FillFloors(cameFrom, candidate.Spot, way);
         if (way.Found())
             ways.push_back(std::move(way));
     }

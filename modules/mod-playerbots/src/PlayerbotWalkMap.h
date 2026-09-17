@@ -259,6 +259,13 @@ public:
         return x * x + y * y <= _settings.Radius * _settings.Radius;
     }
 
+    // The floor nearest these world coordinates, or -1 when the map has no floor there at that height.
+    std::int32_t FindSpotAt(float x, float y, float z) const
+    {
+        return FindSpot(std::int32_t(std::lround((x - _settings.OriginX) / _settings.Spacing)),
+            std::int32_t(std::lround((y - _settings.OriginY) / _settings.Spacing)), z);
+    }
+
     // The floor at this spot within LayerYards of z, or -1.
     std::int32_t FindSpot(std::int32_t i, std::int32_t j, float z) const
     {

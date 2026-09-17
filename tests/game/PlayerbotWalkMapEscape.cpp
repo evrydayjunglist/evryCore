@@ -214,6 +214,68 @@ TEST_CASE("Playerbot ways round are spread apart and start at her feet", "[playe
         }
 }
 
+TEST_CASE("Playerbot ways out lead to the edge of the ground she mapped", "[playerbots][walk-map]")
+{
+    // A bowl she can walk out of only to the north, through a gap in the cliff around her.
+    TestWorld world;
+    world.Floors = [](float x, float y)
+    {
+        bool const northGap = x > 8.0f && std::fabs(y) <= 2.0f;
+        float const r = std::sqrt(x * x + y * y);
+        return std::vector<float>{ r < 9.0f || northGap ? 0.0f : 9.0f };
+    };
+    PlayerbotWalkMap const map = Mapped(world, 25.0f);
+
+    PlayerbotWalkMapWayRoundSettings settings = Toward(0.0f, 0.0f, 0.0f);
+    settings.Ways = 4;
+    settings.SpreadYards = 15.0f;
+    std::vector<PlayerbotWalkMapWayRound> const waysOut = FindPlayerbotWalkMapWaysOut(map, settings);
+    REQUIRE_FALSE(waysOut.empty());
+
+    // The only ground that carries on past the map is up the gap to the north.
+    PlayerbotWalkMapSpot const& first = map.Spots()[waysOut.front().Target];
+    CHECK(map.WorldX(first.I) > 8.0f);
+    CHECK(std::fabs(map.WorldY(first.J)) <= 2.0f);
+    for (PlayerbotWalkMapWayRound const& way : waysOut)
+    {
+        CHECK(way.CanWalkBack);
+        CHECK(way.Floors.front() == 0);
+        CHECK(StepsJoinUp(map, way));
+    }
+}
+
+TEST_CASE("Playerbot route joins two floors of a map she already has", "[playerbots][walk-map]")
+{
+    // A wall along x = 5 that nothing crosses.
+    TestWorld world;
+    world.Wall = [](float fromX, float, float toX, float) { return (fromX < 5.0f) != (toX < 5.0f); };
+    PlayerbotWalkMap const map = Mapped(world, 20.0f);
+
+    std::int32_t const near = map.FindSpotAt(-6.3f, 4.2f, 0.0f);
+    // The first floor past the wall: her step onto it was refused, so it was seen but never reached.
+    std::int32_t const beyond = map.FindSpotAt(5.6f, 0.0f, 0.0f);
+    REQUIRE(near >= 0);
+    REQUIRE(beyond >= 0);
+
+    PlayerbotWalkMapWayRound way;
+    REQUIRE(FindPlayerbotWalkMapRoute(map, 0, near, way));
+    CHECK(way.Target == near);
+    CHECK(way.Floors.front() == 0);
+    CHECK(way.Floors.back() == near);
+    CHECK(way.Yards > 7.0f);
+    CHECK(StepsJoinUp(map, way));
+
+    // Walking on from where she is, rather than from her feet.
+    PlayerbotWalkMapWayRound onward;
+    REQUIRE(FindPlayerbotWalkMapRoute(map, near, 0, onward));
+    CHECK(onward.Floors.front() == near);
+    CHECK(onward.Floors.back() == 0);
+    CHECK(StepsJoinUp(map, onward));
+
+    // Past the wall there is a floor, but no legal steps lead to it.
+    CHECK_FALSE(FindPlayerbotWalkMapRoute(map, 0, beyond, way));
+}
+
 TEST_CASE("Playerbot way round collapses its straight runs into points", "[playerbots][walk-map]")
 {
     // One spot wide, so the only way to the destination is straight north.

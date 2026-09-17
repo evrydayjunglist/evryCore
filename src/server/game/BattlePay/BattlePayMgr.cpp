@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -314,6 +315,7 @@ void BattlePayMgr::LoadFromDatabase()
     if (!result)
         return;
 
+    std::vector<ObjectGuid::LowType> missingTargets;
     do
     {
         Field* fields = result->Fetch();
@@ -322,10 +324,26 @@ void BattlePayMgr::LoadFromDatabase()
         distribution.PurchaseID = fields[1].GetUInt64();
         distribution.ProductID = fields[2].GetUInt32();
         distribution.Status = fields[3].GetUInt32();
-        uint8 const consumed = fields[4].GetUInt8();
+        uint8 consumed = fields[4].GetUInt8();
         uint8 const applied = fields[5].GetUInt8();
-        uint64 const target = fields[6].GetUInt64();
+        uint64 target = fields[6].GetUInt64();
         distribution.SpecId = fields[7].GetUInt32();
+
+        // No character row has this guid any more, so a new character can get it after a restart.
+        // Character deletion releases the boost; rows left over from before that are released here.
+        if (consumed && target && fields[8].IsNull())
+        {
+            TC_LOG_INFO("network", "BattlePay: distribution {} targets deleted character {}; releasing it (account {})",
+                distribution.DistributionID, target, _session->GetAccountId());
+            missingTargets.push_back(target);
+            if (!applied)
+            {
+                consumed = 0;
+                distribution.SpecId = 0;
+            }
+            target = 0;
+        }
+
         if (target)
             distribution.TargetCharacter = ObjectGuid::Create<HighGuid::Player>(target);
 
@@ -359,6 +377,22 @@ void BattlePayMgr::LoadFromDatabase()
     if (available)
         TC_LOG_INFO("server.worldserver", "BattlePay: loaded {} AVAILABLE distribution(s) for account {}",
             available, _session->GetAccountId());
+
+    if (missingTargets.empty())
+        return;
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    for (ObjectGuid::LowType const target : missingTargets)
+    {
+        CharacterDatabasePreparedStatement* releaseStmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN_BY_TARGET);
+        releaseStmt->setUInt64(0, target);
+        trans->Append(releaseStmt);
+
+        releaseStmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_CLEAR_APPLIED_TARGET);
+        releaseStmt->setUInt64(0, target);
+        trans->Append(releaseStmt);
+    }
+    CharacterDatabase.DirectCommitTransaction(trans);
 }
 
 void BattlePayMgr::PersistAvailableDistribution(BattlePay::PendingDistribution const& distribution)
@@ -1105,26 +1139,58 @@ bool BattlePayMgr::ApplyOfflineBoost(BattlePay::PendingDistribution const& distr
     return true;
 }
 
-bool BattlePayMgr::CompletePendingBoost(ObjectGuid character)
-{
-    auto pending = _pendingApply.find(character.GetCounter());
-    if (pending == _pendingApply.end())
-        return true;
-    if (!ApplyOfflineBoost(pending->second))
-        return false;
-    _pendingApply.erase(pending);
-    return true;
-}
-
+// Boosts assigned before they were applied offline still wait for their character. One that cannot be
+// applied now goes back to the account, so its character can still log in and the boost is offered again.
 void BattlePayMgr::CompletePendingBoosts()
 {
-    for (auto pending = _pendingApply.begin(); pending != _pendingApply.end();)
+    bool returned = false;
+    for (auto pending = _pendingApply.begin(); pending != _pendingApply.end(); pending = _pendingApply.erase(pending))
     {
         if (ApplyOfflineBoost(pending->second))
-            pending = _pendingApply.erase(pending);
-        else
-            ++pending;
+            continue;
+
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN_BY_TARGET);
+        stmt->setUInt64(0, pending->first);
+        trans->Append(stmt);
+        CharacterDatabase.DirectCommitTransaction(trans);
+
+        BattlePay::PendingDistribution distribution = pending->second;
+        distribution.Status = BattlePay::DIST_STATUS_AVAILABLE;
+        distribution.TargetCharacter.Clear();
+        distribution.SpecId = 0;
+        _distributions[distribution.DistributionID] = distribution;
+        returned = true;
+
+        TC_LOG_INFO("network", "BattlePay: could not apply distribution {} to character {}; returned it (account {})",
+            distribution.DistributionID, pending->first, _session->GetAccountId());
     }
+
+    if (returned)
+        SendAvailableL80Distributions();
+}
+
+// Player::DeleteFromDB already released the rows. This keeps the open session in step, so an
+// unused boost is offered again without logging out.
+void BattlePayMgr::OnCharacterDeleted(ObjectGuid character)
+{
+    _boostedCharacters.erase(character.GetCounter());
+
+    auto itr = _pendingApply.find(character.GetCounter());
+    if (itr == _pendingApply.end())
+        return;
+
+    BattlePay::PendingDistribution distribution = itr->second;
+    _pendingApply.erase(itr);
+
+    distribution.Status = BattlePay::DIST_STATUS_AVAILABLE;
+    distribution.TargetCharacter.Clear();
+    distribution.SpecId = 0;
+    _distributions[distribution.DistributionID] = distribution;
+    SendAvailableL80Distributions();
+
+    TC_LOG_INFO("network", "BattlePay: returned distribution {} after {} was deleted (account {})",
+        distribution.DistributionID, character.ToString(), _session->GetAccountId());
 }
 
 void BattlePayMgr::HandleCharacterUpgradeStart(ObjectGuid targetCharacter, uint32 productChoice)

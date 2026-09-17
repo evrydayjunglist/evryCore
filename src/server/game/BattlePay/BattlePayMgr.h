@@ -105,8 +105,8 @@ public:
     void TryConsumeCatalogShopFreeBuySignal(uint32 diff = 0);
 
     void CompletePendingBoosts();
-    bool CompletePendingBoost(ObjectGuid character);
     uint64 GetCharacterRevision() const { return _characterRevision; }
+    void OnCharacterDeleted(ObjectGuid character);
 
 private:
     uint32 ResolveFreeBuyProductId(uint32 shopProductId) const;

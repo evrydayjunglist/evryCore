@@ -262,6 +262,14 @@ void WorldSession::SendPacket(WorldPacket const* packet, bool forced /*= false*/
 
     if (!m_Socket[conIdx])
     {
+        // A session created without a socket, such as a playerbot session, never has anyone to write to. Scripts may
+        // read what it is sent; logging an error for every one of those packets would say nothing.
+        if (_createdWithoutRealmSocket)
+        {
+            sScriptMgr->OnSocketlessSessionPacketSend(this, *packet);
+            return;
+        }
+
         TC_LOG_ERROR("network.opcode", "Prevented sending of {} to non existent socket {} to {}", GetOpcodeNameForLogging(static_cast<OpcodeServer>(packet->GetOpcode())), uint32(conIdx), GetPlayerInfo());
         return;
     }

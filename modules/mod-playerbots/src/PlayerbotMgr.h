@@ -24,15 +24,19 @@
 #include "PlayerbotCoordinatorLease.h"
 #include "PlayerbotCoordinatorPresence.h"
 #include "PlayerbotMovement.h"
+#include "PlayerbotServerMovement.h"
 #include "PlayerbotSessionPresence.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
 #include "Position.h"
+#include <mutex>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
 class Player;
+class WorldPacket;
+class WorldSession;
 
 enum class PlayerbotDeathWork
 {
@@ -114,6 +118,14 @@ struct PlayerbotRecord
     ObjectGuid StillShortGuid;
     std::vector<Position> StillShortFeet;
     bool LookedForOtherYellowOnFace = false;
+    // Her client's view of the root: the server's root packet sets it and its unroot packet clears it.
+    bool ServerRooted = false;
+    bool HeldInPlaceLogged = false;
+    // Replies the server is waiting for while it moves her to another place or map.
+    PlayerbotServerReply TeleportReply;
+    PlayerbotServerReply SuspendTokenReply;
+    PlayerbotServerReply WorldPortReply;
+    uint32 UnansweredTeleportMs = 0;
     CommandablePlayerState Command;
     Position CommandDestination;
     bool CommandMovePending = false;
@@ -145,6 +157,8 @@ public:
     void OnBotLogin(Player* player);
     void OnPlayerLogout(Player* player);
     void OnPlayerMapChanged(Player* player);
+    // Any thread: keeps the movement orders a bot's client must answer until OnUpdate answers them.
+    void OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet);
 
 private:
     friend class CommandablePlayerService;
@@ -179,7 +193,12 @@ private:
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
     void ReplyTimeSync(WorldSession* session);
-    void ReplyTeleportAcks(Player* player);
+    void AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff);
+    void AnswerServerOrder(PlayerbotRecord& bot, Player* player, PlayerbotServerOrder const& order);
+    void RetryServerReplies(PlayerbotRecord& bot, Player* player, uint32 diff);
+    void ForgetPositionAfterTeleport(PlayerbotRecord& bot, Player* player);
+    void ClearServerOrders(uint32 accountId);
+    bool HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff);
     void BeginDeath(PlayerbotRecord& bot, Player* player);
     void ClearDeath(PlayerbotRecord& bot);
@@ -194,14 +213,14 @@ private:
     bool TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, int32 questId, uint32 entry, Position const& skipPos, ObjectGuid extraSkipGuid);
     bool TryLeaveFaceForOtherYellow(PlayerbotRecord& bot, Player* player);
     void ClearCombat(PlayerbotRecord& bot, Player* player);
-    bool UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff);
+    bool UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff, bool heldInPlace = false);
     void ClearItemLoot(PlayerbotRecord& bot);
     bool UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);
     bool BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::GameObjectTarget const& target);
     bool BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::UseItemOnUnitTarget const& target);
     bool UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 diff);
-    bool BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target);
+    bool BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target, bool mayWalk = true);
     bool BeginItemLootTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);
     bool BeginItemWork(PlayerbotRecord& bot, Player* player, PlayerbotClient::ItemLootTarget const& target);
     void ClearVendor(PlayerbotRecord& bot);
@@ -218,6 +237,9 @@ private:
     bool _bridgeStarted = false;
     std::unordered_map<ObjectGuid, PlayerbotRecord> _originalCommandRuntimes;
     std::unordered_map<ObjectGuid, CommandableRtsSession> _rtsSessions;
+    // Filled from whichever thread sends a bot a packet; answered on the world thread.
+    std::mutex _serverOrdersLock;
+    std::unordered_map<uint32, std::vector<PlayerbotServerOrder>> _serverOrders;
 };
 
 #define sPlayerbotMgr PlayerbotMgr::instance()

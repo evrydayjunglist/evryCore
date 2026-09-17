@@ -1579,6 +1579,13 @@ void ScriptMgr::OnWorldUpdate(uint32 diff)
     FOREACH_SCRIPT(WorldScript)->OnUpdate(diff);
 }
 
+void ScriptMgr::OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet)
+{
+    ASSERT(session);
+
+    FOREACH_SCRIPT(WorldScript)->OnSocketlessSessionPacketSend(session, packet);
+}
+
 void ScriptMgr::OnHonorCalculation(float& honor, uint8 level, float multiplier)
 {
     FOREACH_SCRIPT(FormulaScript)->OnHonorCalculation(honor, level, multiplier);
@@ -2523,6 +2530,10 @@ void WorldScript::OnStartup()
 }
 
 void WorldScript::OnShutdown()
+{
+}
+
+void WorldScript::OnSocketlessSessionPacketSend(WorldSession* /*session*/, WorldPacket const& /*packet*/)
 {
 }
 

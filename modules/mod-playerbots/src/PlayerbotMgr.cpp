@@ -377,6 +377,41 @@ namespace
         return creature && player->IsWithinMeleeRange(creature);
     }
 
+    // A fear, a confuse, or another server spline moves her itself. Her own movement packets would be ignored.
+    bool ServerMovesHer(Player const* player)
+    {
+        return !player->movespline->Finalized() || player->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED);
+    }
+
+    // The server holds her where she is: a root or stun, or it moves her itself.
+    bool ServerHoldsInPlace(PlayerbotRecord const& bot, Player const* player)
+    {
+        return bot.ServerRooted || player->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED) || ServerMovesHer(player);
+    }
+
+    char const* ServerHoldReason(PlayerbotRecord const& bot, Player const* player)
+    {
+        if (player->HasUnitState(UNIT_STATE_STUNNED))
+            return "stunned";
+        if (player->HasUnitState(UNIT_STATE_FLEEING))
+            return "feared";
+        if (player->HasUnitState(UNIT_STATE_CONFUSED))
+            return "confused";
+        if (bot.ServerRooted || player->HasUnitState(UNIT_STATE_ROOT))
+            return "rooted";
+        return "moved by a server spline";
+    }
+
+    // Where her client stands. Once she has answered a teleport, her client is at its destination even before the server
+    // handles the reply.
+    Position ClientFeetFor(PlayerbotRecord const& bot, Player* player)
+    {
+        if (player->GetTeleportState() == TeleportState::WaitingForTeleportAck)
+            return player->GetTeleportDest().Location;
+
+        return bot.Walker.ClientFeet(player);
+    }
+
     void LogStayOnCombatWalkFail(Player const* player, ObjectGuid creatureGuid)
     {
         if (!player)
@@ -833,6 +868,9 @@ bool PlayerbotMgr::UpdateCoordinatorLogout(PlayerbotRecord& bot)
 
 void PlayerbotMgr::ResetBotSession(PlayerbotRecord& bot)
 {
+    // Orders from the session that ended do not belong to the next one.
+    ClearServerOrders(bot.Account.AccountId);
+
     PlayerbotAccount account = std::move(bot.Account);
     CommandablePlayerState command = bot.Command;
     bot = PlayerbotRecord();
@@ -889,6 +927,29 @@ void PlayerbotMgr::OnBotLogin(Player* player)
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is in the world. Cinematic skip, time sync, and walking run from WorldScript::OnUpdate.",
         player->GetName());
+}
+
+// This runs on whichever thread sends the packet, often a map update thread. It only copies the order; the world thread
+// answers it. The bot account list is filled once at startup and never changes afterwards, so reading it here is safe.
+void PlayerbotMgr::OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet)
+{
+    if (!session || !IsBotAccount(session->GetAccountId()))
+        return;
+
+    std::vector<PlayerbotServerOrder> orders;
+    ReadPlayerbotServerOrders(packet, orders);
+    if (orders.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(_serverOrdersLock);
+    std::vector<PlayerbotServerOrder>& pending = _serverOrders[session->GetAccountId()];
+    pending.insert(pending.end(), orders.begin(), orders.end());
+}
+
+void PlayerbotMgr::ClearServerOrders(uint32 accountId)
+{
+    std::lock_guard<std::mutex> lock(_serverOrdersLock);
+    _serverOrders.erase(accountId);
 }
 
 PlayerbotRecord* PlayerbotMgr::FindManagedBot(ObjectGuid subject)
@@ -1115,7 +1176,8 @@ CommandablePlayerResult PlayerbotMgr::SubmitCommand(CommandablePlayerRequest con
 
     if (player->IsBeingTeleported() && runtime->Command.SuspendForTeleport())
     {
-        runtime->Walker.Stop(player);
+        // The teleport reply moves her. A stop built from her old feet would put her back there.
+        runtime->Walker.Abandon();
         runtime->CommandMovePending = false;
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} RTS movement suspended for teleport at generation {}.",
             player->GetName(), runtime->Command.Generation());
@@ -1162,7 +1224,8 @@ CommandablePlayerResult PlayerbotMgr::SubmitCommand(CommandablePlayerRequest con
     if (runtime->Walker.IsMoving())
         runtime->Walker.Stop(player);
 
-    if (!runtime->Walker.IsJumping())
+    // Rooted, stunned, or moved by the server: the move stays pending until the server lets her go.
+    if (!runtime->Walker.IsJumping() && !ServerHoldsInPlace(*runtime, player))
     {
         runtime->CommandMovePending = false;
         if (!runtime->Walker.Start(player, runtime->CommandDestination, 0.25f))
@@ -1460,7 +1523,7 @@ void PlayerbotMgr::UpdateCommanded(PlayerbotRecord& runtime, Player* player, uin
 
     if (managedBot)
     {
-        ReplyTeleportAcks(player);
+        AnswerServerMovement(runtime, player, diff);
         if (!player->IsInWorld())
             return;
         ReplyTimeSync(session);
@@ -1483,7 +1546,9 @@ void PlayerbotMgr::UpdateCommanded(PlayerbotRecord& runtime, Player* player, uin
     {
         if (runtime.Command.SuspendForTeleport())
         {
-            runtime.Walker.Stop(player);
+            // Her teleport reply, or the real client's for the original character, moves her. A stop built from her old
+            // feet would put her back there.
+            runtime.Walker.Abandon();
             runtime.CommandMovePending = false;
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} RTS movement suspended for teleport at generation {}.",
                 player->GetName(), runtime.Command.Generation());
@@ -1521,6 +1586,40 @@ void PlayerbotMgr::UpdateCommanded(PlayerbotRecord& runtime, Player* player, uin
         runtime.Command.FinishDeathRecovery();
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} completed death recovery and returned alive in commanded hold at generation {}.",
             player->GetName(), runtime.Command.Generation());
+    }
+
+    if (ServerHoldsInPlace(runtime, player))
+    {
+        if (!runtime.HeldInPlaceLogged)
+        {
+            runtime.HeldInPlaceLogged = true;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is held in place by the server ({}); commanded movement waits until it lets her go.",
+                player->GetName(), ServerHoldReason(runtime, player));
+        }
+
+        if (runtime.Walker.IsJumping())
+        {
+            if (ServerMovesHer(player))
+                runtime.Walker.Abandon();
+            else
+                runtime.Walker.Update(player, diff);
+        }
+        else if (runtime.Walker.IsMoving())
+        {
+            if (runtime.Command.Directive() == CommandablePlayerDirective::Move)
+                runtime.CommandMovePending = true;
+            if (ServerMovesHer(player))
+                runtime.Walker.Abandon();
+            else
+                runtime.Walker.HoldForRoot(player);
+        }
+        return;
+    }
+
+    if (runtime.HeldInPlaceLogged)
+    {
+        runtime.HeldInPlaceLogged = false;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is free to move again.", player->GetName());
     }
 
     if (runtime.Command.Directive() == CommandablePlayerDirective::Hold)
@@ -1681,32 +1780,239 @@ void PlayerbotMgr::ReplyTimeSync(WorldSession* session)
         session->GetAccountId(), sequenceIndex);
 }
 
-void PlayerbotMgr::ReplyTeleportAcks(Player* player)
+// Answers what the server told her client about its movement, in the order it was sent, the way a client does.
+void PlayerbotMgr::AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff)
 {
     if (!player || !player->GetSession())
         return;
 
-    if (player->IsBeingTeleportedNear() && player->GetTeleportState() == TeleportState::WaitingForTeleportAck)
+    std::vector<PlayerbotServerOrder> orders;
     {
-        PlayerbotClient::QueueMoveTeleportAck(player);
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_TELEPORT_ACK.", player->GetName());
+        std::lock_guard<std::mutex> lock(_serverOrdersLock);
+        auto itr = _serverOrders.find(bot.Account.AccountId);
+        if (itr != _serverOrders.end())
+        {
+            orders.swap(itr->second);
+            _serverOrders.erase(itr);
+        }
+    }
+
+    for (PlayerbotServerOrder const& order : orders)
+        AnswerServerOrder(bot, player, order);
+
+    RetryServerReplies(bot, player, diff);
+}
+
+void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, PlayerbotServerOrder const& order)
+{
+    WorldSession* session = player->GetSession();
+    if (!order.Mover.IsEmpty() && order.Mover != player->GetGUID())
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} did not answer a server {} for another unit, {}.",
+            player->GetName(), PlayerbotServerOrderKindName(order.Kind), order.Mover.ToString());
         return;
     }
 
-    // A map or instance change sends SMSG_SUSPEND_TOKEN first. The server only sends SMSG_NEW_WORLD
-    // and starts waiting for CMSG_WORLD_PORT_RESPONSE after the client answers it.
-    if (player->GetTeleportState() == TeleportState::WaitingForSuspendTokenResponse)
+    char const* const compound = order.FromCompoundState ? " from the combined movement state" : "";
+    switch (order.Kind)
     {
-        PlayerbotClient::QueueSuspendTokenResponse(player);
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SUSPEND_TOKEN_RESPONSE.", player->GetName());
+        case PlayerbotServerOrderKind::Root:
+        {
+            Position const feet = ClientFeetFor(bot, player);
+            bot.ServerRooted = true;
+            if (bot.Command.Active() && bot.Command.Directive() == CommandablePlayerDirective::Move && bot.Walker.IsMoving())
+                bot.CommandMovePending = true;
+
+            // One stop where her last step put her, then the reply. An arc in the air keeps falling instead.
+            bot.Walker.HoldForRoot(player);
+            MovementInfo status;
+            PlayerbotClient::FillClientMovementInfo(player, feet, status);
+            status.AddMovementFlag(MOVEMENTFLAG_ROOT);
+            PlayerbotClient::QueueMovementAck(session, CMSG_MOVE_FORCE_ROOT_ACK, status, order.SequenceIndex);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was rooted{} and queued CMSG_MOVE_FORCE_ROOT_ACK for sequence {} at ({:.2f}, {:.2f}, {:.2f}).",
+                player->GetName(), compound, order.SequenceIndex, feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ());
+            break;
+        }
+        case PlayerbotServerOrderKind::Unroot:
+        {
+            Position const feet = ClientFeetFor(bot, player);
+            bot.ServerRooted = false;
+            MovementInfo status;
+            PlayerbotClient::FillClientMovementInfo(player, feet, status);
+            PlayerbotClient::QueueMovementAck(session, CMSG_MOVE_FORCE_UNROOT_ACK, status, order.SequenceIndex);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was unrooted{} and queued CMSG_MOVE_FORCE_UNROOT_ACK for sequence {}.",
+                player->GetName(), compound, order.SequenceIndex);
+            break;
+        }
+        case PlayerbotServerOrderKind::KnockBack:
+        {
+            Position const feet = ClientFeetFor(bot, player);
+            MovementInfo status;
+            PlayerbotClient::FillClientMovementInfo(player, feet, status);
+            status.AddMovementFlag(MOVEMENTFLAG_FALLING);
+            status.jump.fallTime = 0;
+            status.jump.zspeed = order.VerticalSpeed;
+            status.jump.sinAngle = order.DirectionY;
+            status.jump.cosAngle = order.DirectionX;
+            status.jump.xyspeed = order.HorizontalSpeed;
+            PlayerbotClient::QueueMoveKnockBackAck(session, status, order.SequenceIndex);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_KNOCK_BACK_ACK for sequence {}.",
+                player->GetName(), order.SequenceIndex);
+
+            if (bot.Command.Active() && bot.Command.Directive() == CommandablePlayerDirective::Move)
+                bot.CommandMovePending = true;
+
+            char const* reason = "the arc could not be followed";
+            if (!bot.Walker.StartKnockback(player, feet, order.DirectionX, order.DirectionY, order.HorizontalSpeed,
+                order.VerticalSpeed, reason))
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} answered the knockback but is not flying it: {}.",
+                    player->GetName(), reason);
+            break;
+        }
+        case PlayerbotServerOrderKind::Teleport:
+            bot.Walker.Abandon();
+            bot.TeleportReply.Arm(order.SequenceIndex, order.Mover);
+            bot.UnansweredTeleportMs = 0;
+            PlayerbotClient::QueueMoveTeleportAck(session, order.Mover, order.SequenceIndex);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_TELEPORT_ACK for sequence {}; the server is moving her to ({:.2f}, {:.2f}, {:.2f}).",
+                player->GetName(), order.SequenceIndex, order.Destination.GetPositionX(), order.Destination.GetPositionY(),
+                order.Destination.GetPositionZ());
+            ForgetPositionAfterTeleport(bot, player);
+            break;
+        case PlayerbotServerOrderKind::SuspendToken:
+            bot.Walker.Abandon();
+            bot.SuspendTokenReply.Arm(order.SequenceIndex);
+            bot.UnansweredTeleportMs = 0;
+            PlayerbotClient::QueueSuspendTokenResponse(session, order.SequenceIndex);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SUSPEND_TOKEN_RESPONSE for sequence {}.",
+                player->GetName(), order.SequenceIndex);
+            ForgetPositionAfterTeleport(bot, player);
+            break;
+        case PlayerbotServerOrderKind::NewWorld:
+            // A new map starts her client's movement over. The server sends any root she still has with the map's
+            // movement state.
+            bot.ServerRooted = false;
+            bot.WorldPortReply.Arm(0);
+            bot.UnansweredTeleportMs = 0;
+            PlayerbotClient::QueueWorldPortResponse(session);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_WORLD_PORT_RESPONSE.", player->GetName());
+            break;
+    }
+}
+
+void PlayerbotMgr::RetryServerReplies(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    WorldSession* session = player->GetSession();
+    TeleportState const state = player->GetTeleportState();
+
+    if (bot.TeleportReply.ResendDue(state == TeleportState::WaitingForTeleportAck, diff))
+    {
+        PlayerbotClient::QueueMoveTeleportAck(session, bot.TeleportReply.Mover(), bot.TeleportReply.SequenceIndex());
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still waiting for the server to handle her teleport reply; queued CMSG_MOVE_TELEPORT_ACK for sequence {} again.",
+            player->GetName(), bot.TeleportReply.SequenceIndex());
+    }
+
+    if (bot.SuspendTokenReply.ResendDue(state == TeleportState::WaitingForSuspendTokenResponse, diff))
+    {
+        PlayerbotClient::QueueSuspendTokenResponse(session, bot.SuspendTokenReply.SequenceIndex());
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still waiting for the server to handle her suspend token reply; queued CMSG_SUSPEND_TOKEN_RESPONSE for sequence {} again.",
+            player->GetName(), bot.SuspendTokenReply.SequenceIndex());
+    }
+
+    if (bot.WorldPortReply.ResendDue(state == TeleportState::WaitingForWorldPortAck, diff))
+    {
+        PlayerbotClient::QueueWorldPortResponse(session);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still waiting for the server to handle her world port reply; queued CMSG_WORLD_PORT_RESPONSE again.",
+            player->GetName());
+    }
+
+    // Every packet the server sends her reaches the order list, so a wait with no order to answer means that list missed
+    // one. Say so once instead of guessing a sequence number.
+    bool const waitingForReply = state == TeleportState::WaitingForTeleportAck
+        || state == TeleportState::WaitingForSuspendTokenResponse || state == TeleportState::WaitingForWorldPortAck;
+    bool const replyArmed = bot.TeleportReply.Armed() || bot.SuspendTokenReply.Armed() || bot.WorldPortReply.Armed();
+    if (!waitingForReply || replyArmed)
+    {
+        bot.UnansweredTeleportMs = 0;
         return;
     }
 
-    if (player->GetTeleportState() == TeleportState::WaitingForWorldPortAck)
+    uint32 const before = bot.UnansweredTeleportMs;
+    bot.UnansweredTeleportMs += diff;
+    if (before < PACKET_RETRY_MS && bot.UnansweredTeleportMs >= PACKET_RETRY_MS)
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} has been waiting {} ms for a teleport reply, but no teleport packet reached her. She is not answering it.",
+            player->GetName(), bot.UnansweredTeleportMs);
+}
+
+// Stand spots and targets picked from her old feet mean nothing after the server moved her. She keeps her fight and picks
+// everything else again from where she lands.
+void PlayerbotMgr::ForgetPositionAfterTeleport(PlayerbotRecord& bot, Player* player)
+{
+    bot.CommandMovePending = false;
+    if (bot.Command.Active() || !player->IsAlive() || bot.Death != PlayerbotDeathWork::None)
+        return;
+
+    ClearItemLoot(bot);
+    ClearVendor(bot);
+    bot.QuestInteractQueued = false;
+    bot.QuestInteractWaitMs = 0;
+    bot.QuestArriveWaitMs = 0;
+    bot.QuestTarget = {};
+    bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = {};
+    ClearUseItemCast(bot);
+    bot.CombatTarget.Pos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    bot.StillShortGuid.Clear();
+    bot.StillShortFeet.clear();
+    bot.LookedForOtherYellowOnFace = false;
+}
+
+// The server holds her in place. No walk, no jump, and no turn until it lets her go. An arc already in the air still comes
+// down, and while nothing but a root or stun holds her she keeps fighting from where she stands. Her targets stay; when
+// she is free the brain carries on from where the server says she is.
+bool PlayerbotMgr::HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    bool const serverMovesHer = ServerMovesHer(player);
+    if (!bot.HeldInPlaceLogged)
     {
-        PlayerbotClient::QueueWorldPortResponse(player->GetSession());
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_WORLD_PORT_RESPONSE.", player->GetName());
+        bot.HeldInPlaceLogged = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is held in place by the server ({}); no walk, jump, or turn until it lets her go.",
+            player->GetName(), ServerHoldReason(bot, player));
     }
+
+    if (bot.Walker.IsJumping())
+    {
+        if (serverMovesHer)
+            bot.Walker.Abandon();
+        else
+        {
+            bot.Walker.Update(player, diff);
+            if (bot.Walker.IsJumping())
+                return true;
+        }
+    }
+    else if (bot.Walker.IsMoving())
+    {
+        // A root or stun packet already stopped a walk. A fear or confuse moves her with a server spline, which ignores
+        // her packets, so she sends none.
+        if (serverMovesHer)
+            bot.Walker.Abandon();
+        else
+            bot.Walker.HoldForRoot(player);
+    }
+
+    if (serverMovesHer)
+        return true;
+
+    if (bot.CombatTarget.CreatureGuid.IsEmpty())
+    {
+        if (Optional<PlayerbotClient::CombatTarget> attacker = PlayerbotClient::FindAttackerTarget(player))
+            BeginCombatTarget(bot, player, *attacker, false);
+        return true;
+    }
+
+    UpdateCombat(bot, player, diff, true);
+    return true;
 }
 
 void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
@@ -1722,10 +2028,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (!player)
         return;
 
-    if (bot.Walker.IsJumping() && player->IsBeingTeleported())
-        bot.Walker.Stop(player);
-
-    ReplyTeleportAcks(player);
+    AnswerServerMovement(bot, player, diff);
 
     if (!player->IsInWorld())
         return;
@@ -1746,6 +2049,21 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE.", player->GetName());
     }
 
+    // Nothing she does may move her until the server has handled her teleport reply.
+    if (player->IsBeingTeleported())
+        return;
+
+    // The launch, airborne heartbeats, and landing are one client movement action. Nothing else starts before she lands,
+    // not even sitting down to recover. A server spline that takes her in the air ends the arc in HoldInPlace.
+    bool walkerUpdated = false;
+    if (bot.Walker.IsJumping() && !ServerMovesHer(player))
+    {
+        bot.Walker.Update(player, diff);
+        walkerUpdated = true;
+        if (bot.Walker.IsJumping())
+            return;
+    }
+
     if (UpdateDeath(bot, player, diff))
         return;
 
@@ -1755,6 +2073,19 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             bot.VendorRetryMs -= diff;
         else
             bot.VendorRetryMs = 0;
+    }
+
+    if (ServerHoldsInPlace(bot, player))
+    {
+        HoldInPlace(bot, player, diff);
+        return;
+    }
+
+    if (bot.HeldInPlaceLogged)
+    {
+        bot.HeldInPlaceLogged = false;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is free to move again and picks her next step from ({:.2f}, {:.2f}, {:.2f}).",
+            player->GetName(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
     }
 
     if (bot.QuestInteractQueued)
@@ -1794,7 +2125,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             return;
     }
 
-    if (bot.Walker.IsMoving())
+    if (bot.Walker.IsMoving() && !walkerUpdated)
         bot.Walker.Update(player, diff);
 
     // The launch, airborne heartbeats, and landing are one client movement action.
@@ -3059,7 +3390,7 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
     bot.CombatFacingWait = false;
 }
 
-bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff)
+bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff, bool heldInPlace)
 {
     Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
     if (!creature)
@@ -3195,6 +3526,20 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
     }
 
     PlayerbotClient::CombatSpellPick const pick = PlayerbotClient::PickCombatDamageSpell(player, creature);
+
+    if (heldInPlace)
+    {
+        // Rooted or stunned: press and swing from here. Walking closer and turning wait until the server lets her go.
+        if (pick.Press && PlayerbotClient::TryCombatCast(player, bot.CombatTarget.CreatureGuid, pick.Press->Id))
+        {
+            bot.CombatCastSpellId = pick.Press->Id;
+            bot.CombatCastPending = true;
+            bot.CombatCastWaitMs = 0;
+        }
+
+        swingIfMelee();
+        return true;
+    }
 
     if (pick.Press)
     {
@@ -3543,7 +3888,7 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
     return true;
 }
 
-bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target)
+bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::CombatTarget const& target, bool mayWalk)
 {
     if (bot.Walker.IsMoving())
         bot.Walker.Stop(player);
@@ -3573,7 +3918,14 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
             bot.CombatSwingSent = true;
             return true;
         }
+    }
 
+    // Held in place: take the fight, but walk to it only once the server lets her go.
+    if (!mayWalk)
+        return true;
+
+    if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+    {
         if (bot.CombatTarget.QuestId)
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} ({}).",
                 player->GetName(), bot.CombatTarget.CreatureGuid.ToString(), bot.CombatTarget.QuestId,

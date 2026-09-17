@@ -22,6 +22,7 @@
 #include "PlayerbotMovementRecovery.h"
 #include "Position.h"
 #include <G3D/Vector3.h>
+#include <limits>
 #include <vector>
 
 class Player;
@@ -35,6 +36,18 @@ public:
     void Update(Player* player, uint32 diff);
     void Stop(Player* player);
     void Reset();
+    // Forget the walk, and any arc in the air, without sending a packet: the server moved her or took over her movement.
+    void Abandon();
+    // The server rooted or stunned her. A walk on the ground stops once where her last step put her. An arc in the air
+    // cannot stop, so it loses its sideways speed and falls from where it is.
+    void HoldForRoot(Player* player);
+    // The server knocked her back. Fly that arc from her client's feet as client falling movement and land where it meets
+    // the floor. False, with the old walk dropped, when her movement is not ordinary falling movement.
+    bool StartKnockback(Player* player, Position const& feet, float directionX, float directionY, float horizontalSpeed,
+        float verticalSpeed, char const*& reason);
+    // Where her client last put her: the last step or arc point she sent while walking or in the air, otherwise the
+    // server's position.
+    Position ClientFeet(Player const* player) const;
     void SetOwningClientMovementMirror(bool enabled) { _mirrorOwningClientMovement = enabled; }
 
     static void StopAtFeet(Player* player);
@@ -83,6 +96,16 @@ private:
         float DirectionX = 0.0f;
         float DirectionY = 0.0f;
         uint32 DurationMs = 0;
+        // From here she moves straight down: the arc met a wall, or a root took her sideways speed.
+        uint32 SidewaysStopMs = std::numeric_limits<uint32>::max();
+        // From here she falls from rest: her head met something above her on the way up.
+        uint32 CeilingMs = std::numeric_limits<uint32>::max();
+        // The server threw her. No key is held, and she replans after landing.
+        bool Knockback = false;
+        // The arc ends where she touches water deep enough to swim in, with the swim-start packet instead of a landing.
+        bool EndsInWater = false;
+        // No floor caught her before the bottom of the world.
+        bool EndsBelowWorld = false;
     };
 
     struct MmapPathEvidence
@@ -130,6 +153,9 @@ private:
     bool TryStartJump(Player* player);
     bool BuildJumpPlan(Player* player, JumpPlan& out, char const*& reason);
     bool JumpMovementIsAllowed(Player const* player, char const*& reason) const;
+    bool FlightMovementIsAllowed(Player const* player, char const*& reason) const;
+    static Position ArcPosition(JumpPlan const& plan, uint32 timeMs);
+    bool SampleFlight(Player* player, JumpPlan& plan, uint32 fromMs, char const*& reason);
     void UpdateJump(Player* player, uint32 diff);
     void FinishJump(Player* player);
     void ResetNow();
@@ -171,6 +197,8 @@ private:
     uint32 _jumpHeartbeatMs = 0;
     uint32 _jumpMapId = 0;
     bool _stopAfterJump = false;
+    // The arc started during this tick, so this tick's time was spent before it existed.
+    bool _skipNextJumpDiff = false;
     bool _mirrorOwningClientMovement = false;
 };
 

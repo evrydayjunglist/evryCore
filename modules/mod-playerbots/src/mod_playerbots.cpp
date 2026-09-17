@@ -40,6 +40,12 @@ public:
     {
         sPlayerbotMgr->Stop();
     }
+
+    // Any thread. Bots read what the server sends them here; they still act only by queueing client packets.
+    void OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet) override
+    {
+        sPlayerbotMgr->OnSocketlessSessionPacketSend(session, packet);
+    }
 };
 
 class PlayerbotsPlayerScript : public PlayerScript

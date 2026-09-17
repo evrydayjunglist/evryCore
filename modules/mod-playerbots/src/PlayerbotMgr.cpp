@@ -20,6 +20,7 @@
 #include "Config.h"
 #include "Corpse.h"
 #include "Creature.h"
+#include "DatabaseEnv.h"
 #include "GameObject.h"
 #include "GameTime.h"
 #include "GridDefines.h"
@@ -99,6 +100,67 @@ namespace
     char const* LoginModeName(PlayerbotLoginMode mode)
     {
         return mode == PlayerbotLoginMode::Coordinator ? "Coordinator" : "Automatic";
+    }
+
+    // Her character name while she has no Player object to ask.
+    std::string BotCharacterName(PlayerbotAccount const& account)
+    {
+        CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(account.CharacterGuid);
+        return cache ? cache->Name : std::string("<unknown>");
+    }
+
+    // A ban row still counts while it is permanent or its unban time has not come, the way worldserver reads it when a
+    // player logs in.
+    bool BanIsInForce(PreparedQueryResult const& result)
+    {
+        if (!result)
+            return false;
+
+        Field* fields = result->Fetch();
+        bool const permanent = fields[1].GetUInt64() != 0;
+        return permanent || int64(fields[0].GetUInt32()) > int64(GameTime::GetGameTime());
+    }
+
+    // Worldserver turns a player's login away while the world is closed, when the account is banned, or while the realm
+    // only admits accounts above player security. A banned character is locked on the character list, so it cannot
+    // enter the world either. A bot session is a player account, so the same checks apply to her.
+    PlayerbotLoginRefusal CheckLoginRefusal(PlayerbotAccount const& account)
+    {
+        if (sWorld->IsClosed())
+            return PlayerbotLoginRefusal::WorldClosed;
+
+        LoginDatabasePreparedStatement* accountBan = LoginDatabase.GetPreparedStatement(LOGIN_SEL_PINFO_BANS);
+        accountBan->setUInt32(0, account.AccountId);
+        if (BanIsInForce(LoginDatabase.Query(accountBan)))
+            return PlayerbotLoginRefusal::AccountBanned;
+
+        if (sWorld->GetPlayerSecurityLimit() > SEC_PLAYER)
+            return PlayerbotLoginRefusal::SecurityLimit;
+
+        CharacterDatabasePreparedStatement* characterBan = CharacterDatabase.GetPreparedStatement(CHAR_SEL_PINFO_BANS);
+        characterBan->setUInt64(0, account.CharacterGuid.GetCounter());
+        if (BanIsInForce(CharacterDatabase.Query(characterBan)))
+            return PlayerbotLoginRefusal::CharacterBanned;
+
+        return PlayerbotLoginRefusal::None;
+    }
+
+    char const* LoginRefusalText(PlayerbotLoginRefusal refusal)
+    {
+        switch (refusal)
+        {
+            case PlayerbotLoginRefusal::WorldClosed:
+                return "the world is closed to new logins";
+            case PlayerbotLoginRefusal::AccountBanned:
+                return "the account is banned";
+            case PlayerbotLoginRefusal::SecurityLimit:
+                return "the realm only admits accounts above player security";
+            case PlayerbotLoginRefusal::CharacterBanned:
+                return "the character is banned";
+            case PlayerbotLoginRefusal::None:
+                break;
+        }
+        return "";
     }
 
     void AddJsonString(rapidjson::Value& object, char const* name, std::string_view value,
@@ -497,6 +559,9 @@ void PlayerbotMgr::Update(uint32 diff)
 
     for (PlayerbotRecord& bot : _bots)
     {
+        if (UpdateSessionPresence(bot, diff))
+            continue;
+
         if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
         {
             UpdateLogin(bot);
@@ -773,6 +838,43 @@ void PlayerbotMgr::ResetBotSession(PlayerbotRecord& bot)
     bot = PlayerbotRecord();
     bot.Account = std::move(account);
     bot.Command = std::move(command);
+}
+
+// Something other than this module can end her session, such as a GM kick, an AntiDOS kick, or a ban, and her login
+// steps still read as done afterwards. Notice that, start her record over, and log her in again once the wait is over
+// and presence keeps her online. Returns true while she has no session, because there is no login step or world work
+// to run.
+bool PlayerbotMgr::UpdateSessionPresence(PlayerbotRecord& bot, uint32 diff)
+{
+    bool const sessionExists = sWorld->FindSession(bot.Account.AccountId) != nullptr;
+    if (PlayerbotSessionWasLost(bot.SessionQueued, bot.SessionSeen, sessionExists, bot.CoordinatorLogoutRequested))
+    {
+        std::string const name = BotCharacterName(bot.Account);
+        ResetBotSession(bot);
+        bot.LoginWaitMs = PLAYERBOT_RELOG_WAIT_MS;
+        if (_loginMode == PlayerbotLoginMode::Automatic)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} (account {}) lost its session, and this module did not log it out. Logging in again in {} seconds.",
+                name, bot.Account.AccountId, PLAYERBOT_RELOG_WAIT_MS / IN_MILLISECONDS);
+        }
+        else
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} (account {}) lost its session, and this module did not log it out. It logs in again after {} seconds while playerbots.exe owns the roster.",
+                name, bot.Account.AccountId, PLAYERBOT_RELOG_WAIT_MS / IN_MILLISECONDS);
+        }
+        return true;
+    }
+
+    if (bot.SessionQueued)
+        return false;
+
+    if (bot.LoginWaitMs)
+        bot.LoginWaitMs = bot.LoginWaitMs > diff ? bot.LoginWaitMs - diff : 0;
+
+    if (!bot.LoginWaitMs && PlayerbotPresenceKeepsOnline(_loginMode, _coordinatorLease.ConnectionId() != 0))
+        TryLogin(bot);
+
+    return true;
 }
 
 bool PlayerbotMgr::IsBotAccount(uint32 accountId) const
@@ -1497,6 +1599,25 @@ bool PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
         return false;
     }
 
+    if (bot.LoginWaitMs)
+        return false;
+
+    // A GM ban, the AntiDOS ban policy, and .server plimit all kick her. Without these checks she would log straight back
+    // in, or sit on the character list behind a banned character.
+    PlayerbotLoginRefusal const refusal = CheckLoginRefusal(bot.Account);
+    if (refusal != PlayerbotLoginRefusal::None)
+    {
+        bot.LoginWaitMs = PLAYERBOT_RELOG_WAIT_MS;
+        if (refusal != bot.LoggedLoginRefusal)
+        {
+            bot.LoggedLoginRefusal = refusal;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} (account {}) will not log in because {}. Checking again every {} seconds.",
+                BotCharacterName(bot.Account), bot.Account.AccountId, LoginRefusalText(refusal), PLAYERBOT_RELOG_WAIT_MS / IN_MILLISECONDS);
+        }
+        return false;
+    }
+
+    bot.LoggedLoginRefusal = PlayerbotLoginRefusal::None;
     std::unique_ptr<WorldSession> session = PlayerbotFactory::MakeSession(bot.Account);
     bot.SessionQueued = true;
     TC_LOG_INFO(PLAYERBOTS_LOG,

@@ -30,6 +30,15 @@ Playerbots.Enable = 0
 #                                   If that owning connection remains gone for five
 #                                   seconds, save and log out the bots in place.
 #
+#                     If something else ends a bot session, such as a GM kick
+#                     or an AntiDOS kick, Playerbots.log says so and the bot
+#                     logs in again after 30 seconds. In Coordinator mode that
+#                     happens only while playerbots.exe owns the roster.
+#                     Like a player, a bot does not log in while its account
+#                     or character is banned, while the world is closed, or
+#                     while the realm only admits accounts above player
+#                     security.
+#
 
 Playerbots.LoginMode = Automatic
 

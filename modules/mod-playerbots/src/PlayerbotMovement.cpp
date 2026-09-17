@@ -721,7 +721,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         if (IsInsideAvoid(x, y, avoids))
             continue;
 
-        PathGenerator generator(player);
+        PathGenerator generator(player, NavMeshChoice::PlayerBody);
         if (!generator.CalculatePath(x, y, z, false) || !PathIsWalkable(generator))
             continue;
 
@@ -1443,7 +1443,9 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
     std::vector<AvoidCircle> avoids;
     CollectSpellFocusAvoids(player, 50.0f, avoids);
 
-    PathGenerator generator(player);
+    // Every route she walks is asked of the set of movement maps built for a player's body. Where that set has not
+    // been generated the engine answers from the creature one instead, exactly as it always did.
+    PathGenerator generator(player, NavMeshChoice::PlayerBody);
     bool const calculated = generator.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
         destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
     if (evidence)
@@ -1488,14 +1490,14 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
                 if (IsInsideAvoid(via.GetPositionX(), via.GetPositionY(), avoids))
                     continue;
 
-                PathGenerator toVia(player);
+                PathGenerator toVia(player, NavMeshChoice::PlayerBody);
                 if (!toVia.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
                     via.GetPositionX(), via.GetPositionY(), via.GetPositionZ(), false) || !PathIsWalkable(toVia))
                     continue;
                 if (PathHitsAvoid(toVia.GetPath(), avoids))
                     continue;
 
-                PathGenerator toDest(player);
+                PathGenerator toDest(player, NavMeshChoice::PlayerBody);
                 if (!toDest.CalculatePath(via.GetPositionX(), via.GetPositionY(), via.GetPositionZ(),
                     destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false)
                     || !PathIsWalkable(toDest))
@@ -1630,7 +1632,7 @@ void PlayerbotWalker::LogConnectivity(Player* player, Position const& from, char
             if (!Trinity::IsValidMapCoord(x, y, z) || z <= INVALID_HEIGHT)
                 continue;
 
-            PathGenerator probe(player);
+            PathGenerator probe(player, NavMeshChoice::PlayerBody);
             if (!probe.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(), x, y, z, false))
                 continue;
 

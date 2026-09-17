@@ -1369,6 +1369,10 @@ bool World::SetInitialWorldSettings()
     MMAP::MMapManager* mmmgr = MMAP::MMapManager::instance();
     mmmgr->InitializeThreadUnsafe(mapData);
 
+    // The second set of movement maps, the one built for a player's body. It is loaded from the same grids as the set
+    // above and stays empty on every map that has no player set on disk.
+    MMAP::MMapManager::playerInstance()->InitializeThreadUnsafe(mapData);
+
     ///- Initialize static helper structures
     AIRegistry::Initialize();
 

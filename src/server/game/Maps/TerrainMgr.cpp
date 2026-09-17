@@ -31,7 +31,8 @@
 #include "World.h"
 #include <G3D/g3dmath.h>
 
-TerrainInfo::TerrainInfo(uint32 mapId) : _mapId(mapId), _parentTerrain(nullptr), _loadedGrids(), _cleanupTimer(randtime(CleanupInterval / 2, CleanupInterval))
+TerrainInfo::TerrainInfo(uint32 mapId) : _mapId(mapId), _parentTerrain(nullptr), _loadedGrids(),
+    _playerMMapPresence(PlayerMMapPresence::NotLookedAt), _cleanupTimer(randtime(CleanupInterval / 2, CleanupInterval))
 {
 }
 
@@ -39,6 +40,7 @@ TerrainInfo::~TerrainInfo()
 {
     VMAP::VMapFactory::createOrGetVMapManager()->unloadMap(GetId());
     MMAP::MMapManager::instance()->unloadMap(GetId());
+    MMAP::MMapManager::playerInstance()->unloadMap(GetId());
 }
 
 char const* TerrainInfo::GetMapName() const
@@ -165,17 +167,25 @@ void TerrainInfo::LoadMapAndVMap(int32 gx, int32 gy)
 void TerrainInfo::LoadMMapInstance(uint32 mapId, uint32 instanceId)
 {
     LoadMMapInstanceImpl(mapId, instanceId);
+    LoadPlayerMMapInstanceImpl(mapId, instanceId);
 
     for (std::shared_ptr<TerrainInfo> const& childTerrain : _childTerrain)
+    {
         childTerrain->LoadMMapInstanceImpl(mapId, instanceId);
+        childTerrain->LoadPlayerMMapInstanceImpl(mapId, instanceId);
+    }
 }
 
 void TerrainInfo::LoadMMap(uint32 instanceId, int32 gx, int32 gy)
 {
     LoadMMapImpl(instanceId, gx, gy);
+    LoadPlayerMMapImpl(instanceId, gx, gy);
 
     for (std::shared_ptr<TerrainInfo> const& childTerrain : _childTerrain)
+    {
         childTerrain->LoadMMapImpl(instanceId, gx, gy);
+        childTerrain->LoadPlayerMMapImpl(instanceId, gx, gy);
+    }
 }
 
 void TerrainInfo::LoadMapAndVMapImpl(int32 gx, int32 gy)
@@ -261,6 +271,54 @@ void TerrainInfo::LoadMMapImpl(uint32 instanceId, int32 gx, int32 gy)
     }
 }
 
+bool TerrainInfo::HasPlayerMMap()
+{
+    PlayerMMapPresence presence = _playerMMapPresence.load(std::memory_order_relaxed);
+    if (presence != PlayerMMapPresence::NotLookedAt)
+        return presence == PlayerMMapPresence::Present;
+
+    // Read the set's own header rather than waiting on a tile, so a map with no player set at all is told apart from
+    // one that is merely missing a tile. Two threads arriving at once read the same file and agree; only the first one
+    // to store the answer says anything.
+    dtNavMeshParams params;
+    bool const present = MMAP::MMapManager::parseNavMeshParamsFile(MMAP::MMapManager::PlayerBasePath(sWorld->GetDataPath()),
+        GetId(), &params) == MMAP::LoadResult::Success;
+    presence = present ? PlayerMMapPresence::Present : PlayerMMapPresence::Absent;
+
+    PlayerMMapPresence expected = PlayerMMapPresence::NotLookedAt;
+    if (!_playerMMapPresence.compare_exchange_strong(expected, presence))
+        return expected == PlayerMMapPresence::Present;
+
+    // A map with no player set is the ordinary case until one has been generated for it. Say so once, so it is clear
+    // which maps playerbots are still walking on the creature mesh, and then stay quiet.
+    if (!present && !_parentTerrain)
+        TC_LOG_INFO("mmaps.tiles", "No movement map built for a player's body on {} (id {}). Playerbots walk the creature mesh here.",
+            GetMapName(), GetId());
+
+    return present;
+}
+
+void TerrainInfo::LoadPlayerMMapInstanceImpl(uint32 mapId, uint32 instanceId)
+{
+    if (!HasPlayerMMap())
+        return;
+
+    MMAP::MMapManager::playerInstance()->loadMapInstance(MMAP::MMapManager::PlayerBasePath(sWorld->GetDataPath()), _mapId, mapId, instanceId);
+}
+
+void TerrainInfo::LoadPlayerMMapImpl(uint32 instanceId, int32 gx, int32 gy)
+{
+    if (!DisableMgr::IsPathfindingEnabled(GetId()))
+        return;
+
+    if (!HasPlayerMMap())
+        return;
+
+    // A tile this set does not have is not worth a line of its own: a bot's path query falls back to the creature mesh
+    // whenever the ground under her feet or her destination is missing from here.
+    MMAP::MMapManager::playerInstance()->loadMap(MMAP::MMapManager::PlayerBasePath(sWorld->GetDataPath()), GetId(), instanceId, gx, gy);
+}
+
 void TerrainInfo::UnloadMap(int32 gx, int32 gy)
 {
     --_referenceCountFromMap[gx][gy];
@@ -280,6 +338,7 @@ void TerrainInfo::UnloadMapImpl(int32 gx, int32 gy)
     _gridMap[gx][gy] = nullptr;
     VMAP::VMapFactory::createOrGetVMapManager()->unloadMap(GetId(), gx, gy);
     MMAP::MMapManager::instance()->unloadMap(GetId(), gx, gy);
+    MMAP::MMapManager::playerInstance()->unloadMap(GetId(), gx, gy);
 
     for (std::shared_ptr<TerrainInfo> const& childTerrain : _childTerrain)
         childTerrain->UnloadMapImpl(gx, gy);
@@ -290,6 +349,7 @@ void TerrainInfo::UnloadMapImpl(int32 gx, int32 gy)
 void TerrainInfo::UnloadMMapInstanceImpl(uint32 mapId, uint32 instanceId)
 {
     MMAP::MMapManager::instance()->unloadMapInstance(_mapId, mapId, instanceId);
+    MMAP::MMapManager::playerInstance()->unloadMapInstance(_mapId, mapId, instanceId);
 }
 
 GridMap* TerrainInfo::GetGrid(uint32 mapId, float x, float y, bool loadIfMissing /*= true*/)

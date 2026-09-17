@@ -38,6 +38,7 @@ public:
         boost::filesystem::path const& outputDirectory,
         Optional<float> maxWalkableAngle,
         Optional<float> maxWalkableAngleNotSteep,
+        Optional<float> maxWalkableClimbYards,
         bool skipLiquid,
         bool bigBaseUnit,
         bool debugOutput,
@@ -87,6 +88,9 @@ protected:
     boost::filesystem::path m_outputDirectory;
     Optional<float> m_maxWalkableAngle;
     Optional<float> m_maxWalkableAngleNotSteep;
+    // How far the body this mesh is built for may step up or drop down between two neighbouring cells, in yards.
+    // Empty means the built-in value, which is there so creatures can walk over fences.
+    Optional<float> m_maxWalkableClimbYards;
     bool m_bigBaseUnit;
     bool m_debugOutput;
 

@@ -22,6 +22,7 @@
 #include "MMapDefines.h"
 #include <DetourNavMeshQuery.h>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -56,6 +57,13 @@ namespace MMAP
             ~MMapManager();
 
             static MMapManager* instance();
+
+            // A second set of movement maps, built for what a player's body can walk rather than what a creature's can.
+            // It is optional: a map with no player set on disk simply has nothing loaded here, and callers fall back to
+            // the set above. Only playerbots read it; everything else in the server keeps the mesh it has always used.
+            static MMapManager* playerInstance();
+            // Where that set is read from, beside the usual one, under the server's data path.
+            static std::string PlayerBasePath(std::string_view dataPath);
 
             void InitializeThreadUnsafe(std::unordered_map<uint32, std::vector<uint32>> const& mapData);
             static LoadResult parseNavMeshParamsFile(std::string_view basePath, uint32 mapId, dtNavMeshParams* params, std::vector<OffMeshData>* offmeshConnections = nullptr);

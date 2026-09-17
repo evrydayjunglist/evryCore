@@ -143,6 +143,7 @@ bool handleArgs(int argc, char** argv,
                int& tileY,
                Optional<float>& maxAngle,
                Optional<float>& maxAngleNotSteep,
+               Optional<float>& maxClimb,
                bool& skipLiquid,
                bool& skipContinents,
                bool& skipJunkMaps,
@@ -183,6 +184,20 @@ bool handleArgs(int argc, char** argv,
                 maxAngleNotSteep = maxangle;
             else
                 TC_LOG_ERROR("tool.mmapgen.commandline", "invalid option for '--maxAngleNotSteep', using default");
+        }
+        else if (strcmp(argv[i], "--maxClimb") == 0)
+        {
+            param = argv[++i];
+            if (!param)
+                return false;
+
+            float climb = atof(param);
+            // Recast needs this to stay under the height of the body, which is 1.6 yards. The builder rounds it to
+            // whole cells and clamps it to at least one; anything outside that range is refused here.
+            if (climb > 0.f && climb < 1.6f)
+                maxClimb = climb;
+            else
+                TC_LOG_ERROR("tool.mmapgen.commandline", "invalid option for '--maxClimb', using default");
         }
         else if (strcmp(argv[i], "--threads") == 0)
         {
@@ -446,7 +461,7 @@ int main(int argc, char** argv)
     unsigned int threads = std::thread::hardware_concurrency();
     int mapnum = -1;
     int tileX = -1, tileY = -1;
-    Optional<float> maxAngle, maxAngleNotSteep;
+    Optional<float> maxAngle, maxAngleNotSteep, maxClimb;
     bool skipLiquid = false,
          skipContinents = false,
          skipJunkMaps = true,
@@ -460,7 +475,7 @@ int main(int argc, char** argv)
     boost::filesystem::path outputDirectory = boost::filesystem::current_path();
 
     bool validParam = handleArgs(argc, argv, mapnum,
-                                 tileX, tileY, maxAngle, maxAngleNotSteep,
+                                 tileX, tileY, maxAngle, maxAngleNotSteep, maxClimb,
                                  skipLiquid, skipContinents, skipJunkMaps, skipBattlegrounds,
                                  debugOutput, silent, bigBaseUnit, offMeshInputPath, file, threads,
                                  inputDirectory, outputDirectory);
@@ -490,7 +505,7 @@ int main(int argc, char** argv)
 
     MMAP::CreateVMapManager = &MMAP::VMapFactory::CreateVMapManager;
 
-    MMAP::MapBuilder builder(inputDirectory, outputDirectory, maxAngle, maxAngleNotSteep, skipLiquid, skipContinents, skipJunkMaps,
+    MMAP::MapBuilder builder(inputDirectory, outputDirectory, maxAngle, maxAngleNotSteep, maxClimb, skipLiquid, skipContinents, skipJunkMaps,
                        skipBattlegrounds, debugOutput, bigBaseUnit, mapnum, offMeshInputPath, threads);
 
     uint32 start = getMSTime();

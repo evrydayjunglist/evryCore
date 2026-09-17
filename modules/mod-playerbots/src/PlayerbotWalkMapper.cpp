@@ -163,8 +163,8 @@ bool PlayerbotWalkMapper::Start(Player* subject, Position const& feet, Position 
     {
         job->Report.HasDestination = true;
         job->Report.Destination = { walkDestination->GetPositionX(), walkDestination->GetPositionY(), walkDestination->GetPositionZ() };
-        // The same navmesh query her walks start from.
-        PathGenerator path(subject);
+        // The same navmesh query her walks start from, including the set built for a player's body.
+        PathGenerator path(subject, NavMeshChoice::PlayerBody);
         path.CalculatePath(x, y, z, walkDestination->GetPositionX(), walkDestination->GetPositionY(),
             walkDestination->GetPositionZ(), false);
         job->Report.RouteType = uint32(path.GetPathType());

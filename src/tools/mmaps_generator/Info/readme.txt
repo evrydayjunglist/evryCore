@@ -24,7 +24,18 @@ R"(Generator command line args
 
 --maxAngle          [#]             Max walkable inclination angle
 
-                                    float between 45 and 90 degrees (default 55)
+                                    float between 0 and 90 degrees (default 55)
+
+--maxClimb          [#]             How far the ground may step up or drop away between two
+                                    neighbouring cells and still be walked. Recast uses the
+                                    same number both ways, so a small value also removes the
+                                    tops of ledges.
+
+                                    float in yards. Rounded to whole cells of 0.2666 yards and
+                                    kept below the height of the body, so the largest that
+                                    takes effect is 5 cells, about 1.33 yards.
+                                    Default: 6 cells, about 1.6 yards, which is there so
+                                    creatures can walk over fences.
 
 --skipLiquid        [true|false]    extract liquid data for maps
 

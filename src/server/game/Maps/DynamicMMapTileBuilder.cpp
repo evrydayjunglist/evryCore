@@ -243,7 +243,7 @@ static constexpr auto SetAsyncCallbackReady = [](DynamicTileBuilder::AsyncTileRe
     result->IsReady.store(true, std::memory_order::release);
 };
 
-DynamicTileBuilder::DynamicTileBuilder(Map* map, dtNavMesh* navMesh) : TileBuilder(sWorld->GetDataPath(), sWorld->GetDataPath(), {}, {}, false, false, false, nullptr),
+DynamicTileBuilder::DynamicTileBuilder(Map* map, dtNavMesh* navMesh) : TileBuilder(sWorld->GetDataPath(), sWorld->GetDataPath(), {}, {}, {}, false, false, false, nullptr),
     m_map(map), m_navMesh(navMesh), m_rebuildCheckTimer(1s)
 {
 }

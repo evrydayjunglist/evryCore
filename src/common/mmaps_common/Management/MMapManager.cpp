@@ -93,6 +93,19 @@ namespace MMAP
         return &instance;
     }
 
+    MMapManager* MMapManager::playerInstance()
+    {
+        static MMapManager instance;
+        return &instance;
+    }
+
+    std::string MMapManager::PlayerBasePath(std::string_view dataPath)
+    {
+        // The generator writes its files into an "mmaps" folder under whatever output folder it is given, and the
+        // loader appends that folder name itself, so this is the folder the player set was generated into.
+        return Trinity::StringFormat("{}playermmaps/", dataPath);
+    }
+
     void MMapManager::InitializeThreadUnsafe(std::unordered_map<uint32, std::vector<uint32>> const& mapData)
     {
         // the caller must pass the list of all mapIds that will be used in the MMapManager lifetime

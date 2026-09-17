@@ -36,8 +36,8 @@ static boost::filesystem::path vmtile = ".vmtile";
 namespace MMAP
 {
     MapTileBuilder::MapTileBuilder(MapBuilder* mapBuilder, Optional<float> maxWalkableAngle, Optional<float> maxWalkableAngleNotSteep,
-        bool skipLiquid, bool bigBaseUnit, bool debugOutput, std::vector<OffMeshData> const* offMeshConnections) :
-        TileBuilder(mapBuilder->m_inputDirectory, mapBuilder->m_outputDirectory, maxWalkableAngle, maxWalkableAngleNotSteep, skipLiquid, bigBaseUnit, debugOutput, offMeshConnections),
+        Optional<float> maxWalkableClimbYards, bool skipLiquid, bool bigBaseUnit, bool debugOutput, std::vector<OffMeshData> const* offMeshConnections) :
+        TileBuilder(mapBuilder->m_inputDirectory, mapBuilder->m_outputDirectory, maxWalkableAngle, maxWalkableAngleNotSteep, maxWalkableClimbYards, skipLiquid, bigBaseUnit, debugOutput, offMeshConnections),
         m_mapBuilder(mapBuilder),
         m_workerThread(&MapTileBuilder::WorkerThread, this)
     {
@@ -60,8 +60,8 @@ namespace MMAP
     }
 
     MapBuilder::MapBuilder(boost::filesystem::path const& inputDirectory, boost::filesystem::path const& outputDirectory,
-        Optional<float> maxWalkableAngle, Optional<float> maxWalkableAngleNotSteep, bool skipLiquid,
-        bool skipContinents, bool skipJunkMaps, bool skipBattlegrounds,
+        Optional<float> maxWalkableAngle, Optional<float> maxWalkableAngleNotSteep, Optional<float> maxWalkableClimbYards,
+        bool skipLiquid, bool skipContinents, bool skipJunkMaps, bool skipBattlegrounds,
         bool debugOutput, bool bigBaseUnit, int mapid, char const* offMeshFilePath, unsigned int threads) :
         m_inputDirectory     (inputDirectory),
         m_outputDirectory    (outputDirectory),
@@ -73,6 +73,7 @@ namespace MMAP
         m_skipLiquid         (skipLiquid),
         m_maxWalkableAngle   (maxWalkableAngle),
         m_maxWalkableAngleNotSteep (maxWalkableAngleNotSteep),
+        m_maxWalkableClimbYards (maxWalkableClimbYards),
         m_bigBaseUnit        (bigBaseUnit),
         m_mapid              (mapid),
         m_totalTiles         (0u),
@@ -255,7 +256,7 @@ namespace MMAP
         m_tileBuilders.resize(m_threads);
         for (unsigned int i = 0; i < m_threads; ++i)
             m_tileBuilders[i].reset(new MapTileBuilder(this, m_maxWalkableAngle, m_maxWalkableAngleNotSteep,
-                m_skipLiquid, m_bigBaseUnit, m_debugOutput, &m_offMeshConnections));
+                m_maxWalkableClimbYards, m_skipLiquid, m_bigBaseUnit, m_debugOutput, &m_offMeshConnections));
 
         if (mapID)
         {
@@ -330,7 +331,7 @@ namespace MMAP
 
         // build navmesh tile
         MapTileBuilder tileBuilder(this, m_maxWalkableAngle, m_maxWalkableAngleNotSteep,
-            m_skipLiquid, m_bigBaseUnit, m_debugOutput, &m_offMeshConnections);
+            m_maxWalkableClimbYards, m_skipLiquid, m_bigBaseUnit, m_debugOutput, &m_offMeshConnections);
         TileBuilder::TileResult tileResult = tileBuilder.buildMoveMapTile(mapId, tileX, tileY, data, bmin, bmax, navMesh->getParams());
         if (tileResult.data)
             tileBuilder.saveMoveMapTileToFile(mapId, tileX, tileY, navMesh, tileResult);
@@ -350,7 +351,7 @@ namespace MMAP
         // ToDo: delete the old tile as the user clearly wants to rebuild it
 
         MapTileBuilder tileBuilder(this, m_maxWalkableAngle, m_maxWalkableAngleNotSteep,
-            m_skipLiquid, m_bigBaseUnit, m_debugOutput, &m_offMeshConnections);
+            m_maxWalkableClimbYards, m_skipLiquid, m_bigBaseUnit, m_debugOutput, &m_offMeshConnections);
         tileBuilder.buildTile(mapID, tileX, tileY, navMesh);
         dtFreeNavMesh(navMesh);
 

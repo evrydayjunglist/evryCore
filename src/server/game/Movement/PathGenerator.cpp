@@ -27,23 +27,39 @@
 #include "Metric.h"
 #include "PhasingHandler.h"
 
+namespace
+{
+    // How far a point may be from the nearest ground on the mesh before the path is treated as starting or ending off it.
+    constexpr float FAR_FROM_POLY_DISTANCE = 7.0f;
+}
+
 ////////////////// PathGenerator //////////////////
-PathGenerator::PathGenerator(WorldObject const* owner) :
+PathGenerator::PathGenerator(WorldObject const* owner, NavMeshChoice navMeshChoice) :
     _polyLength(0), _type(PATHFIND_BLANK), _useStraightPath(false),
     _forceDestination(false), _pointPathLimit(MAX_POINT_PATH_LENGTH), _useRaycast(false),
     _startPosition(PositionToVector3(owner->GetPosition())), _endPosition(G3D::Vector3::zero()), _source(owner), _navMesh(nullptr),
-    _navMeshQuery(nullptr)
+    _navMeshQuery(nullptr), _meshMapId(0), _usingPlayerNavMesh(false)
 {
     memset(_pathPolyRefs, 0, sizeof(_pathPolyRefs));
 
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::PathGenerator for {}", _source->GetGUID().ToString());
 
-    uint32 mapId = PhasingHandler::GetTerrainMapId(_source->GetPhaseShift(), _source->GetMapId(), _source->GetMap()->GetTerrain(), _startPosition.x, _startPosition.y);
+    _meshMapId = PhasingHandler::GetTerrainMapId(_source->GetPhaseShift(), _source->GetMapId(), _source->GetMap()->GetTerrain(), _startPosition.x, _startPosition.y);
     if (DisableMgr::IsPathfindingEnabled(_source->GetMapId()))
     {
-        MMAP::MMapManager* mmap = MMAP::MMapManager::instance();
-        _navMeshQuery = mmap->GetNavMeshQuery(mapId, _source->GetMapId(), _source->GetInstanceId());
-        _navMesh = _navMeshQuery ? _navMeshQuery->getAttachedNavMesh() : mmap->GetNavMesh(mapId, _source->GetInstanceId());
+        if (navMeshChoice == NavMeshChoice::PlayerBody)
+        {
+            // Only maps that have had a set generated for a player's body have anything here.
+            if (dtNavMeshQuery const* query = MMAP::MMapManager::playerInstance()->GetNavMeshQuery(_meshMapId, _source->GetMapId(), _source->GetInstanceId()))
+            {
+                _navMeshQuery = query;
+                _navMesh = query->getAttachedNavMesh();
+                _usingPlayerNavMesh = _navMesh != nullptr;
+            }
+        }
+
+        if (!_usingPlayerNavMesh)
+            UseCreatureNavMesh();
     }
 
     CreateFilter();
@@ -52,6 +68,36 @@ PathGenerator::PathGenerator(WorldObject const* owner) :
 PathGenerator::~PathGenerator()
 {
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::~PathGenerator() for {}", _source->GetGUID().ToString());
+}
+
+void PathGenerator::UseCreatureNavMesh()
+{
+    MMAP::MMapManager* mmap = MMAP::MMapManager::instance();
+    _navMeshQuery = mmap->GetNavMeshQuery(_meshMapId, _source->GetMapId(), _source->GetInstanceId());
+    _navMesh = _navMeshQuery ? _navMeshQuery->getAttachedNavMesh() : mmap->GetNavMesh(_meshMapId, _source->GetInstanceId());
+    _usingPlayerNavMesh = false;
+}
+
+bool PathGenerator::PlayerNavMeshCarries(G3D::Vector3 const& start, G3D::Vector3 const& dest) const
+{
+    if (!_navMesh || !_navMeshQuery)
+        return false;
+
+    if (!HaveTile(start) || !HaveTile(dest))
+        return false;
+
+    // The set built for a player's body has holes the creature one does not, because ground she could not step onto is
+    // cut out of it. Look for the same ground the path builder would, and call it missing at the same distance.
+    float startPoint[VERTEX_SIZE] = { start.y, start.z, start.x };
+    float endPoint[VERTEX_SIZE] = { dest.y, dest.z, dest.x };
+    float distToStartPoly = 0.0f;
+    float distToEndPoly = 0.0f;
+    if (GetPolyByLocation(startPoint, &distToStartPoly) == INVALID_POLYREF)
+        return false;
+    if (GetPolyByLocation(endPoint, &distToEndPoly) == INVALID_POLYREF)
+        return false;
+
+    return distToStartPoly <= FAR_FROM_POLY_DISTANCE && distToEndPoly <= FAR_FROM_POLY_DISTANCE;
 }
 
 bool PathGenerator::CalculatePath(float srcX, float srcY, float srcZ, float destX, float destY, float destZ, bool forceDest)
@@ -70,6 +116,16 @@ bool PathGenerator::CalculatePath(float srcX, float srcY, float srcZ, float dest
     _forceDestination = forceDest;
 
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::CalculatePath() for {}", _source->GetGUID().ToString());
+
+    // The set built for a player's body only exists where one has been generated, and it leaves out ground a player
+    // cannot step onto. When it is missing the tile under either end of this path, or has no ground under them, answer
+    // from the set everything else in the server uses, exactly as before.
+    if (_usingPlayerNavMesh)
+    {
+        UpdateFilter();
+        if (!PlayerNavMeshCarries(start, dest))
+            UseCreatureNavMesh();
+    }
 
     // make sure navMesh works - we can run on map w/o mmap
     // check if the start and end point have a .mmtile loaded (can we pass via not loaded tile on the way?)
@@ -214,15 +270,15 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     }
 
     // we may need a better number here
-    bool startFarFromPoly = distToStartPoly > 7.0f;
-    bool endFarFromPoly = distToEndPoly > 7.0f;
+    bool startFarFromPoly = distToStartPoly > FAR_FROM_POLY_DISTANCE;
+    bool endFarFromPoly = distToEndPoly > FAR_FROM_POLY_DISTANCE;
     if (startFarFromPoly || endFarFromPoly)
     {
         TC_LOG_DEBUG("maps.mmaps", "++ BuildPolyPath :: farFromPoly distToStartPoly={:.3f} distToEndPoly={:.3f}", distToStartPoly, distToEndPoly);
 
         bool buildShotrcut = false;
 
-        G3D::Vector3 const& p = (distToStartPoly > 7.0f) ? startPos : endPos;
+        G3D::Vector3 const& p = (distToStartPoly > FAR_FROM_POLY_DISTANCE) ? startPos : endPos;
         if (_source->GetMap()->IsUnderWater(_source->GetPhaseShift(), p.x, p.y, p.z))
         {
             TC_LOG_DEBUG("maps.mmaps", "++ BuildPolyPath :: underWater case");

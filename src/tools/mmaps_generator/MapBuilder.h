@@ -53,6 +53,7 @@ namespace MMAP
             MapTileBuilder(MapBuilder* mapBuilder,
                 Optional<float> maxWalkableAngle,
                 Optional<float> maxWalkableAngleNotSteep,
+                Optional<float> maxWalkableClimbYards,
                 bool skipLiquid,
                 bool bigBaseUnit,
                 bool debugOutput,
@@ -83,6 +84,7 @@ namespace MMAP
                 boost::filesystem::path const& outputDirectory,
                 Optional<float> maxWalkableAngle,
                 Optional<float> maxWalkableAngleNotSteep,
+                Optional<float> maxWalkableClimbYards,
                 bool skipLiquid,
                 bool skipContinents,
                 bool skipJunkMaps,
@@ -138,6 +140,7 @@ namespace MMAP
 
             Optional<float> m_maxWalkableAngle;
             Optional<float> m_maxWalkableAngleNotSteep;
+            Optional<float> m_maxWalkableClimbYards;
             bool m_bigBaseUnit;
 
             int32 m_mapid;

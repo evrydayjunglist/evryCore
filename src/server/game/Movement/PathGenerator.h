@@ -52,10 +52,17 @@ enum PathType
     PATHFIND_FARFROMPOLY       = PATHFIND_FARFROMPOLY_START | PATHFIND_FARFROMPOLY_END, // start or end positions are far from the mmap poligon
 };
 
+// Which set of movement maps a path is built from.
+enum class NavMeshChoice : uint8
+{
+    Creature,       // the set the whole server has always used: ground up to 55 degrees, and a step tall enough to clear a fence
+    PlayerBody      // the set built for what a player's body can walk, where one exists; the set above everywhere else
+};
+
 class TC_GAME_API PathGenerator
 {
     public:
-        explicit PathGenerator(WorldObject const* owner);
+        explicit PathGenerator(WorldObject const* owner, NavMeshChoice navMeshChoice = NavMeshChoice::Creature);
         ~PathGenerator();
 
         PathGenerator(PathGenerator const& right) = delete;
@@ -107,6 +114,8 @@ class TC_GAME_API PathGenerator
         WorldObject const* const _source;       // the object that is moving
         dtNavMesh const* _navMesh;              // the nav mesh
         dtNavMeshQuery const* _navMeshQuery;    // the nav mesh query used to find the path
+        uint32 _meshMapId;                      // the terrain map the meshes above were taken from
+        bool _usingPlayerNavMesh;               // the path is being built from the set made for a player's body
 
         dtQueryFilter _filter;  // use single filter for all movements, update it when needed
 
@@ -128,6 +137,9 @@ class TC_GAME_API PathGenerator
         dtPolyRef GetPathPolyByPosition(dtPolyRef const* polyPath, uint32 polyPathSize, float const* Point, float* Distance = nullptr) const;
         dtPolyRef GetPolyByLocation(float const* Point, float* Distance) const;
         bool HaveTile(G3D::Vector3 const& p) const;
+
+        void UseCreatureNavMesh();
+        bool PlayerNavMeshCarries(G3D::Vector3 const& start, G3D::Vector3 const& dest) const;
 
         void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos);
         void BuildPointPath(float const* startPoint, float const* endPoint);

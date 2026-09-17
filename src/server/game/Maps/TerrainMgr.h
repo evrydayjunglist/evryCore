@@ -66,6 +66,9 @@ private:
     void LoadMap(int32 gx, int32 gy);
     void LoadVMap(int32 gx, int32 gy);
     void LoadMMapImpl(uint32 instanceId, int32 gx, int32 gy);
+    void LoadPlayerMMapInstanceImpl(uint32 mapId, uint32 instanceId);
+    void LoadPlayerMMapImpl(uint32 instanceId, int32 gx, int32 gy);
+    bool HasPlayerMMap();
 
 public:
     void UnloadMap(int32 gx, int32 gy);
@@ -115,6 +118,11 @@ private:
     std::atomic<uint16> _referenceCountFromMap[MAX_NUMBER_OF_GRIDS][MAX_NUMBER_OF_GRIDS];
     std::array<uint64, MAX_NUMBER_OF_GRIDS> _loadedGrids;
     std::bitset<MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS> _gridFileExists; // cache what grids are available for this map (not including parent/child maps)
+
+    // Whether this map has a second set of movement maps built for a player's body. Not looked at yet, present, or
+    // absent. Most maps will be absent for a long time, so it is checked once and then left alone.
+    enum class PlayerMMapPresence : uint8 { NotLookedAt, Present, Absent };
+    std::atomic<PlayerMMapPresence> _playerMMapPresence;
 
     static constexpr Milliseconds CleanupInterval = 1min;
 

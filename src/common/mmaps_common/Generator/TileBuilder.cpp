@@ -23,6 +23,8 @@
 #include "StringFormat.h"
 #include "VMapManager.h"
 #include <DetourNavMeshBuilder.h>
+#include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -69,11 +71,12 @@ namespace MMAP
     };
 
     TileBuilder::TileBuilder(boost::filesystem::path const& inputDirectory, boost::filesystem::path const& outputDirectory,
-        Optional<float> maxWalkableAngle, Optional<float> maxWalkableAngleNotSteep,
+        Optional<float> maxWalkableAngle, Optional<float> maxWalkableAngleNotSteep, Optional<float> maxWalkableClimbYards,
         bool skipLiquid, bool bigBaseUnit, bool debugOutput, std::vector<OffMeshData> const* offMeshConnections) :
         m_outputDirectory(outputDirectory),
         m_maxWalkableAngle(maxWalkableAngle),
         m_maxWalkableAngleNotSteep(maxWalkableAngleNotSteep),
+        m_maxWalkableClimbYards(maxWalkableClimbYards),
         m_bigBaseUnit(bigBaseUnit),
         m_debugOutput(debugOutput),
         m_terrainBuilder(inputDirectory, skipLiquid),
@@ -536,6 +539,14 @@ namespace MMAP
         // a value >= 3|6 allows npcs to walk over some fences
         // a value >= 4|8 allows npcs to walk over all fences
         config.walkableClimb = m_bigBaseUnit ? 3 : 6;
+        if (m_maxWalkableClimbYards)
+        {
+            // Recast counts this in cells and uses the same number both ways: a cell is dropped from the mesh when the
+            // ground under a neighbouring cell is further than this above or below it. It must be at least one cell,
+            // and it has to stay under the height of the body or the mesh can climb through itself.
+            int const asked = int(std::lround(*m_maxWalkableClimbYards / config.ch));
+            config.walkableClimb = std::clamp(asked, 1, config.walkableHeight - 1);
+        }
         config.minRegionArea = rcSqr(60);
         config.mergeRegionArea = rcSqr(50);
         config.maxSimplificationError = 1.8f;           // eliminates most jagged edges (tiny polygons)

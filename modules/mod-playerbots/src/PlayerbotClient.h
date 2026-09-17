@@ -143,10 +143,17 @@ namespace PlayerbotClient
     void QueueCompleteCinematic(WorldSession* session);
     void QueueTimeSyncResponse(WorldSession* session, uint32 sequenceIndex, uint32 clientTime);
     void QueueMoveInitActiveMoverComplete(WorldSession* session, uint32 ticks);
-    void QueueMoveTeleportAck(Player* player);
-    void QueueSuspendTokenResponse(Player* player);
+    void QueueMoveTeleportAck(WorldSession* session, ObjectGuid mover, uint32 ackIndex);
+    void QueueSuspendTokenResponse(WorldSession* session, uint32 sequenceIndex);
     void QueueWorldPortResponse(WorldSession* session);
-    void QueueMovement(WorldSession* session, OpcodeClient opcode, MovementInfo const& movementInfo);
+    // Her client's movement status at pos. It keeps only the modes the server granted her from its record of her movement;
+    // the caller adds what she is doing.
+    void FillClientMovementInfo(Player const* player, Position const& pos, MovementInfo& out);
+    // False, and nothing queued, while a teleport waits for its reply: a packet built from her old position would put her
+    // back there once the reply is handled.
+    bool QueueMovement(WorldSession* session, OpcodeClient opcode, MovementInfo const& movementInfo);
+    void QueueMovementAck(WorldSession* session, OpcodeClient opcode, MovementInfo const& status, uint32 ackIndex);
+    void QueueMoveKnockBackAck(WorldSession* session, MovementInfo const& status, uint32 ackIndex);
     void SendMovementUpdate(WorldSession* session, MovementInfo const& movementInfo);
     void QueueQuestGiverAcceptQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);
     void QueueQuestGiverCompleteQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);

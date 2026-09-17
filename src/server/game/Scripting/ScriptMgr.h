@@ -281,6 +281,11 @@ class TC_GAME_API WorldScript : public ScriptObject
 
         // Called when the world is actually shut down.
         virtual void OnShutdown();
+
+        // Called when the server sends a packet to a session that was created without a socket, such as a playerbot
+        // session. Nothing else sees these packets. The packet is not copied, and this runs on whichever thread sends
+        // it (often a map update thread), so copy what you need and act on it from OnUpdate.
+        virtual void OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet);
 };
 
 class TC_GAME_API FormulaScript : public ScriptObject
@@ -1268,6 +1273,7 @@ class TC_GAME_API ScriptMgr
         void OnWorldUpdate(uint32 diff);
         void OnStartup();
         void OnShutdown();
+        void OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet);
 
     public: /* FormulaScript */
 

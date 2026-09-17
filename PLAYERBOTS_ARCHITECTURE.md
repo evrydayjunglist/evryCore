@@ -101,6 +101,8 @@ Worldserver owns the live `Player` and is the final authority for every action:
 - combat timing, known spells, resources, cooldowns, and failure handling;
 - interaction, quest-step execution, loot, vendor, travel, and other embodied skills;
 - death, teleport, time-sync, and session protocol mechanisms;
+- the movement orders the server sends a bot's client (roots, stuns, knockbacks, teleports),
+  read through the socketless-session packet hook and answered as a client would;
 - phase, visibility, range, line of sight, cost, permission, and prerequisite checks;
 - queueing the same client packets a real player would send.
 

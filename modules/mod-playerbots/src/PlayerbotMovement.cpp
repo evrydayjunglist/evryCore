@@ -32,6 +32,7 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "PlayerbotClient.h"
+#include "PlayerbotServerMovement.h"
 #include "Playerbots.h"
 #include "SharedDefines.h"
 #include "Unit.h"
@@ -73,6 +74,12 @@ namespace
     constexpr float JUMP_MAX_LANDING_RISE = 1.25f;
     constexpr float JUMP_MAX_LANDING_DROP = 2.0f;
     constexpr float JUMP_MIN_CLEARANCE_PAST_FACE = 0.5f;
+    constexpr uint32 FLIGHT_SAMPLE_MS = 25;
+    // The longest fall followed before giving up on finding a floor under her.
+    constexpr uint32 FLIGHT_MAX_MS = 20000;
+    // How far the server's copy of her may trail the arc point she last sent before the arc is treated as lost.
+    constexpr float FLIGHT_MIN_ALLOWED_DRIFT = 10.0f;
+    constexpr float FLIGHT_DRIFT_SECONDS = 0.3f;
     constexpr float RECOVERY_CONNECTIVITY_PROBE_YARDS[] = { 60.0f, 120.0f };
     constexpr int32 RECOVERY_CONNECTIVITY_DIRECTIONS = 8;
     constexpr float RECOVERY_PROBE_ENDPOINT_YARDS = 8.0f;
@@ -123,7 +130,9 @@ namespace
         InvalidPosition
     };
 
-    StepWorldCollision GetSegmentWorldCollision(Player const* player, Position const& from, Position const& to, float heightOffset)
+    // A segment with no sideways length is no wall for a step. Pass alongOnly false to ray straight up or down as well.
+    StepWorldCollision GetSegmentWorldCollision(Player const* player, Position const& from, Position const& to, float heightOffset,
+        bool alongOnly = true)
     {
         if (!player || !player->IsInWorld())
             return StepWorldCollision::None;
@@ -143,7 +152,8 @@ namespace
 
         float const dx = destX - fromX;
         float const dy = destY - fromY;
-        if ((dx * dx + dy * dy) < 0.0001f)
+        float const dz = alongOnly ? 0.0f : destZ - fromZ;
+        if ((dx * dx + dy * dy + dz * dz) < 0.0001f)
             return StepWorldCollision::None;
 
         float hitX = destX;
@@ -212,6 +222,16 @@ namespace
         }
 
         return true;
+    }
+
+    // The top of her body, from one arc point to the next, meets something above her.
+    bool FlightHeadHits(Player const* player, Position const& from, Position const& to)
+    {
+        if (!player)
+            return false;
+
+        float const headHeight = std::max(0.1f, player->GetCollisionHeight());
+        return GetSegmentWorldCollision(player, from, to, headHeight, false) != StepWorldCollision::None;
     }
 
     bool GroundedStepIsWalkable(Player const* player, Position const& from, Position const& to)
@@ -436,8 +456,9 @@ void PlayerbotWalker::Stop(Player* player)
         return;
     }
 
+    // Stop where her last step put her. The server's position can still be a heartbeat behind that step.
     if (_state == State::Moving && player && player->GetSession())
-        QueueMove(player, player->GetPosition(), false, false);
+        QueueMove(player, _lastGrounded, false, false);
 
     ResetNow();
 }
@@ -447,16 +468,8 @@ void PlayerbotWalker::StopAtFeet(Player* player)
     if (!player || !player->GetSession())
         return;
 
-    MovementInfo info = player->m_movementInfo;
-    info.guid = player->GetGUID();
-    info.time = GameTime::GetGameTimeMS();
-    info.pos = player->GetPosition();
-    info.RemoveMovementFlag(MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_BACKWARD
-        | MOVEMENTFLAG_STRAFE_LEFT | MOVEMENTFLAG_STRAFE_RIGHT
-        | MOVEMENTFLAG_LEFT | MOVEMENTFLAG_RIGHT | MOVEMENTFLAG_PITCH_UP | MOVEMENTFLAG_PITCH_DOWN
-        | MOVEMENTFLAG_ASCENDING | MOVEMENTFLAG_DESCENDING
-        | MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
-    info.jump.Reset();
+    MovementInfo info;
+    PlayerbotClient::FillClientMovementInfo(player, player->GetPosition(), info);
     PlayerbotClient::QueueMovement(player->GetSession(), CMSG_MOVE_STOP, info);
 }
 
@@ -469,6 +482,105 @@ void PlayerbotWalker::Reset()
     }
 
     ResetNow();
+}
+
+void PlayerbotWalker::Abandon()
+{
+    ResetNow();
+}
+
+void PlayerbotWalker::HoldForRoot(Player* player)
+{
+    if (_state == State::Jumping)
+    {
+        if (!player || !player->IsAlive() || !player->IsInWorld() || player->IsBeingTeleported())
+        {
+            ResetNow();
+            return;
+        }
+
+        // Nobody stops in mid-air. She lands, then stays put.
+        _stopAfterJump = true;
+        uint32 const nowMs = std::min(_jumpElapsedMs, _jump.DurationMs);
+        if (_jump.SidewaysStopMs <= nowMs || _jump.CeilingMs <= nowMs)
+            return;
+
+        JumpPlan held = _jump;
+        held.SidewaysStopMs = nowMs;
+        char const* reason = "the arc could not be followed";
+        if (!SampleFlight(player, held, nowMs, reason))
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was rooted in the air and keeps the arc she had: {}.",
+                player->GetName(), reason);
+            return;
+        }
+
+        _jump = held;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was rooted in the air; falling straight down to ({:.2f}, {:.2f}, {:.2f}).",
+            player->GetName(), _jump.Landing.GetPositionX(), _jump.Landing.GetPositionY(), _jump.Landing.GetPositionZ());
+        return;
+    }
+
+    if (_state == State::Moving && player && player->IsAlive() && player->GetSession())
+        QueueMove(player, _lastGrounded, false, false);
+
+    ResetNow();
+}
+
+Position PlayerbotWalker::ClientFeet(Player const* player) const
+{
+    if (_state == State::Moving || _state == State::Jumping || _state == State::AwaitingClientSync)
+        return _lastGrounded;
+
+    return player ? player->GetPosition() : Position();
+}
+
+bool PlayerbotWalker::StartKnockback(Player* player, Position const& feet, float directionX, float directionY,
+    float horizontalSpeed, float verticalSpeed, char const*& reason)
+{
+    if (!FlightMovementIsAllowed(player, reason))
+    {
+        ResetNow();
+        return false;
+    }
+
+    JumpPlan plan;
+    plan.Launch = feet;
+    float const length = std::sqrt(directionX * directionX + directionY * directionY);
+    if (length > 0.0001f && horizontalSpeed > 0.0f)
+    {
+        plan.DirectionX = directionX / length;
+        plan.DirectionY = directionY / length;
+        plan.Trajectory.HorizontalSpeed = horizontalSpeed;
+    }
+    // The packet's vertical speed is negative going up.
+    plan.Trajectory.VerticalSpeed = -verticalSpeed;
+    plan.Trajectory.Gravity = Movement::gravity;
+    plan.Trajectory.TerminalVelocity = player->m_movementInfo.HasMovementFlag(MOVEMENTFLAG_FALLING_SLOW)
+        ? PLAYERBOT_FEATHER_FALL_TERMINAL_SPEED
+        : PLAYERBOT_TERMINAL_FALL_SPEED;
+    plan.Knockback = true;
+
+    if (!SampleFlight(player, plan, 0, reason))
+    {
+        ResetNow();
+        return false;
+    }
+
+    ResetNow();
+    _jump = plan;
+    _lastGrounded = feet;
+    _jumpMapId = player->GetMapId();
+    _skipNextJumpDiff = true;
+    _state = State::Jumping;
+
+    char const* ending = plan.EndsInWater ? "touches deep water" : plan.EndsBelowWorld ? "leaves the world" : "lands";
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} was knocked back from ({:.2f}, {:.2f}, {:.2f}) at {:.1f} yards per second sideways and {:.1f} up; she {} at ({:.2f}, {:.2f}, {:.2f}) after {} ms.",
+        player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ(), plan.Trajectory.HorizontalSpeed,
+        plan.Trajectory.VerticalSpeed, ending, plan.Landing.GetPositionX(), plan.Landing.GetPositionY(), plan.Landing.GetPositionZ(),
+        plan.DurationMs);
+    return true;
 }
 
 void PlayerbotWalker::ResetNow()
@@ -506,6 +618,7 @@ void PlayerbotWalker::ResetNow()
     _jumpHeartbeatMs = 0;
     _jumpMapId = 0;
     _stopAfterJump = false;
+    _skipNextJumpDiff = false;
 }
 
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out)
@@ -828,17 +941,10 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
 void PlayerbotWalker::QueueMove(Player* player, Position const& pos, bool moving, bool start)
 {
-    MovementInfo info = player->m_movementInfo;
-    info.guid = player->GetGUID();
-    info.time = GameTime::GetGameTimeMS();
-    info.pos = pos;
-    info.RemoveMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
-    info.jump.Reset();
-
+    MovementInfo info;
+    PlayerbotClient::FillClientMovementInfo(player, pos, info);
     if (moving)
         info.AddMovementFlag(MOVEMENTFLAG_FORWARD);
-    else
-        info.RemoveMovementFlag(MOVEMENTFLAG_FORWARD);
 
     OpcodeClient opcode = CMSG_MOVE_HEARTBEAT;
     if (start)
@@ -846,7 +952,9 @@ void PlayerbotWalker::QueueMove(Player* player, Position const& pos, bool moving
     else if (!moving)
         opcode = CMSG_MOVE_STOP;
 
-    PlayerbotClient::QueueMovement(player->GetSession(), opcode, info);
+    if (!PlayerbotClient::QueueMovement(player->GetSession(), opcode, info))
+        return;
+
     if (_mirrorOwningClientMovement)
         // Trinity omits the apparent sender from the normal movement broadcast. The
         // connected original did not originate this queued packet, so show it the same
@@ -859,22 +967,25 @@ void PlayerbotWalker::QueueJumpMove(Player* player, OpcodeClient opcode, Positio
     if (!player || !player->GetSession())
         return;
 
-    MovementInfo info = player->m_movementInfo;
-    info.guid = player->GetGUID();
-    info.time = GameTime::GetGameTimeMS();
-    info.pos = pos;
-    info.AddMovementFlag(MOVEMENTFLAG_FORWARD);
-    if (opcode == CMSG_MOVE_FALL_LAND)
-        info.RemoveMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
-    else
+    MovementInfo info;
+    PlayerbotClient::FillClientMovementInfo(player, pos, info);
+    // A jump keeps the forward key it launched with. A player the server threw is not holding one.
+    if (!_jump.Knockback)
+        info.AddMovementFlag(MOVEMENTFLAG_FORWARD);
+    if (opcode == CMSG_MOVE_START_SWIM)
+        info.AddMovementFlag(MOVEMENTFLAG_SWIMMING);
+    else if (opcode != CMSG_MOVE_FALL_LAND)
         info.AddMovementFlag(MOVEMENTFLAG_FALLING);
 
+    bool const movingSideways = fallTime < std::min(_jump.SidewaysStopMs, _jump.CeilingMs);
     info.jump.fallTime = fallTime;
     info.jump.zspeed = -_jump.Trajectory.VerticalSpeed;
     info.jump.sinAngle = _jump.DirectionY;
     info.jump.cosAngle = _jump.DirectionX;
-    info.jump.xyspeed = _jump.Trajectory.HorizontalSpeed;
-    PlayerbotClient::QueueMovement(player->GetSession(), opcode, info);
+    info.jump.xyspeed = movingSideways ? _jump.Trajectory.HorizontalSpeed : 0.0f;
+    if (!PlayerbotClient::QueueMovement(player->GetSession(), opcode, info))
+        return;
+
     if (_mirrorOwningClientMovement)
         PlayerbotClient::SendMovementUpdate(player->GetSession(), info);
 }
@@ -2107,17 +2218,174 @@ bool PlayerbotWalker::TryStartJump(Player* player)
     return true;
 }
 
+bool PlayerbotWalker::FlightMovementIsAllowed(Player const* player, char const*& reason) const
+{
+    if (!player || !player->GetSession() || !player->IsInWorld() || !player->IsAlive())
+    {
+        reason = "the player is not alive in the world";
+        return false;
+    }
+    if (player->IsBeingTeleported())
+    {
+        reason = "a teleport is waiting for its reply";
+        return false;
+    }
+    if (!player->movespline->Finalized())
+    {
+        reason = "a server spline is moving the player";
+        return false;
+    }
+    if (player->IsInFlight() || player->GetTransport() || player->GetVehicle())
+    {
+        reason = "the player is not using ordinary movement";
+        return false;
+    }
+
+    static constexpr MovementFlags refusedFlags = MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_FLYING
+        | MOVEMENTFLAG_DISABLE_GRAVITY | MOVEMENTFLAG_HOVER;
+    if (player->m_movementInfo.HasMovementFlag(refusedFlags))
+    {
+        reason = "swimming, flying, and hovering arcs are not validated";
+        return false;
+    }
+    if (std::fabs(player->m_movementInfo.gravityModifier - 1.0f) > 0.001f)
+    {
+        reason = "modified gravity is not validated";
+        return false;
+    }
+
+    return true;
+}
+
+Position PlayerbotWalker::ArcPosition(JumpPlan const& plan, uint32 timeMs)
+{
+    uint32 const sidewaysMs = std::min({ timeMs, plan.SidewaysStopMs, plan.CeilingMs });
+    float const horizontal = plan.Trajectory.HorizontalDistance(float(sidewaysMs) / 1000.0f);
+
+    float height = 0.0f;
+    if (timeMs <= plan.CeilingMs)
+        height = plan.Trajectory.HeightOffset(float(timeMs) / 1000.0f);
+    else
+    {
+        PlayerbotJumpTrajectory fromRest;
+        fromRest.Gravity = plan.Trajectory.Gravity;
+        fromRest.TerminalVelocity = plan.Trajectory.TerminalVelocity;
+        height = plan.Trajectory.HeightOffset(float(plan.CeilingMs) / 1000.0f)
+            + fromRest.HeightOffset(float(timeMs - plan.CeilingMs) / 1000.0f);
+    }
+
+    Position pos;
+    pos.Relocate(plan.Launch.GetPositionX() + plan.DirectionX * horizontal,
+        plan.Launch.GetPositionY() + plan.DirectionY * horizontal,
+        plan.Launch.GetPositionZ() + height, plan.Launch.GetOrientation());
+    return pos;
+}
+
+// Follows the arc from fromMs until she lands on a floor, touches water deep enough to swim in, or falls out of the world.
+// A wall stops her sideways movement and she keeps falling beside it. A ceiling stops her rise and she falls from there.
+bool PlayerbotWalker::SampleFlight(Player* player, JumpPlan& plan, uint32 fromMs, char const*& reason)
+{
+    Map* map = player ? player->FindMap() : nullptr;
+    if (!map)
+    {
+        reason = "the player is not on a map";
+        return false;
+    }
+
+    Position previous = ArcPosition(plan, fromMs);
+    if (!Trinity::IsValidMapCoord(previous.GetPositionX(), previous.GetPositionY(), previous.GetPositionZ()))
+    {
+        reason = "the arc does not start at a valid position";
+        return false;
+    }
+
+    float const collisionHeight = player->GetCollisionHeight();
+    plan.EndsInWater = false;
+    plan.EndsBelowWorld = false;
+
+    uint32 timeMs = fromMs + FLIGHT_SAMPLE_MS;
+    for (; timeMs <= FLIGHT_MAX_MS; timeMs += FLIGHT_SAMPLE_MS)
+    {
+        uint32 const previousMs = timeMs - FLIGHT_SAMPLE_MS;
+        Position arc = ArcPosition(plan, timeMs);
+
+        bool const rising = timeMs <= plan.CeilingMs
+            && plan.Trajectory.VerticalVelocity(float(previousMs) / 1000.0f) > 0.0f;
+        if (rising && FlightHeadHits(player, previous, arc))
+        {
+            plan.CeilingMs = previousMs;
+            arc = ArcPosition(plan, timeMs);
+        }
+
+        bool const sideways = timeMs <= std::min(plan.SidewaysStopMs, plan.CeilingMs)
+            && plan.Trajectory.HorizontalDistance(float(FLIGHT_SAMPLE_MS) / 1000.0f) > 0.001f;
+        if (sideways && (!Trinity::IsValidMapCoord(arc.GetPositionX(), arc.GetPositionY(), arc.GetPositionZ())
+            || !JumpSegmentIsClear(player, previous, arc)))
+        {
+            plan.SidewaysStopMs = previousMs;
+            arc = ArcPosition(plan, timeMs);
+        }
+
+        if (!Trinity::IsValidMapCoord(arc.GetPositionX(), arc.GetPositionY(), arc.GetPositionZ()))
+            break;
+
+        LiquidData liquid;
+        ZLiquidStatus const liquidStatus = map->GetLiquidStatus(player->GetPhaseShift(),
+            arc.GetPositionX(), arc.GetPositionY(), arc.GetPositionZ(), {}, &liquid, collisionHeight);
+        if ((liquidStatus & MAP_LIQUID_STATUS_IN_CONTACT) && PlayerbotWaterIsSwimDepth(liquid.level, liquid.depth_level, collisionHeight))
+        {
+            plan.Landing.Relocate(arc.GetPositionX(), arc.GetPositionY(), liquid.level, arc.GetOrientation());
+            plan.DurationMs = timeMs;
+            plan.EndsInWater = true;
+            return true;
+        }
+
+        float const floorZ = player->GetMapHeight(arc.GetPositionX(), arc.GetPositionY(),
+            arc.GetPositionZ() + JUMP_FLOOR_SEARCH_ABOVE_FEET);
+        bool const descending = timeMs > plan.CeilingMs
+            || plan.Trajectory.VerticalVelocity(float(timeMs) / 1000.0f) <= 0.0f;
+        if (floorZ > INVALID_HEIGHT
+            && (arc.GetPositionZ() < floorZ || (descending && arc.GetPositionZ() <= floorZ + JUMP_FOOT_CLEARANCE)))
+        {
+            plan.Landing.Relocate(arc.GetPositionX(), arc.GetPositionY(), floorZ, arc.GetOrientation());
+            plan.DurationMs = timeMs;
+            return true;
+        }
+
+        previous = arc;
+        if (arc.GetPositionZ() < map->GetMinHeight(player->GetPhaseShift(), arc.GetPositionX(), arc.GetPositionY()))
+        {
+            timeMs += FLIGHT_SAMPLE_MS;
+            break;
+        }
+    }
+
+    // No floor caught her. Her last arc point is below the world or the fall ran past the longest one followed; the
+    // server ends a fall below the world the way it does for any player.
+    plan.Landing = previous;
+    plan.DurationMs = std::max(fromMs, timeMs - FLIGHT_SAMPLE_MS);
+    plan.EndsBelowWorld = true;
+    return true;
+}
+
 void PlayerbotWalker::UpdateJump(Player* player, uint32 diff)
 {
+    float const allowedDrift = std::max(FLIGHT_MIN_ALLOWED_DRIFT, _jump.Trajectory.HorizontalSpeed * FLIGHT_DRIFT_SECONDS);
     if (!player || !player->GetSession() || !player->IsAlive() || !player->IsInWorld()
         || player->IsBeingTeleported() || player->GetMapId() != _jumpMapId
-        || !player->movespline->Finalized() || player->GetExactDist2d(_lastGrounded) > 10.0f)
+        || !player->movespline->Finalized() || player->GetExactDist2d(_lastGrounded) > allowedDrift)
     {
         ResetNow();
         return;
     }
 
-    uint32 const remainingMs = _jump.DurationMs - _jumpElapsedMs;
+    if (_skipNextJumpDiff)
+    {
+        _skipNextJumpDiff = false;
+        return;
+    }
+
+    uint32 const remainingMs = _jump.DurationMs > _jumpElapsedMs ? _jump.DurationMs - _jumpElapsedMs : 0;
     uint32 const advanceMs = std::min(diff, remainingMs);
     _jumpElapsedMs += advanceMs;
     _jumpHeartbeatMs += advanceMs;
@@ -2129,14 +2397,7 @@ void PlayerbotWalker::UpdateJump(Player* player, uint32 diff)
         if (heartbeatTimeMs >= _jump.DurationMs)
             break;
 
-        float const time = float(heartbeatTimeMs) / 1000.0f;
-        float const horizontal = _jump.Trajectory.HorizontalDistance(time);
-        Position airborne;
-        airborne.Relocate(
-            _jump.Launch.GetPositionX() + _jump.DirectionX * horizontal,
-            _jump.Launch.GetPositionY() + _jump.DirectionY * horizontal,
-            _jump.Launch.GetPositionZ() + _jump.Trajectory.HeightOffset(time),
-            _jump.Launch.GetOrientation());
+        Position const airborne = ArcPosition(_jump, heartbeatTimeMs);
         QueueJumpMove(player, CMSG_MOVE_HEARTBEAT, airborne, heartbeatTimeMs);
         _lastGrounded = airborne;
     }
@@ -2150,6 +2411,30 @@ void PlayerbotWalker::FinishJump(Player* player)
     Position const landing = _jump.Landing;
     uint32 const durationMs = _jump.DurationMs;
     bool const stopAfterLanding = _stopAfterJump;
+
+    if (_jump.EndsBelowWorld)
+    {
+        QueueJumpMove(player, CMSG_MOVE_HEARTBEAT, landing, durationMs);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} found no floor under her fall and sent her last falling heartbeat at ({:.2f}, {:.2f}, {:.2f}).",
+            player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ());
+        ResetNow();
+        return;
+    }
+
+    if (_jump.Knockback || _jump.EndsInWater)
+    {
+        bool const water = _jump.EndsInWater;
+        QueueJumpMove(player, water ? CMSG_MOVE_START_SWIM : CMSG_MOVE_FALL_LAND, landing, durationMs);
+        if (water)
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} touched deep water at ({:.2f}, {:.2f}, {:.2f}) after {} ms and queued CMSG_MOVE_START_SWIM.",
+                player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ(), durationMs);
+        else
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} landed the knockback at ({:.2f}, {:.2f}, {:.2f}) after {} ms and queued CMSG_MOVE_FALL_LAND.",
+                player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ(), durationMs);
+        ResetNow();
+        return;
+    }
+
     QueueJumpMove(player, CMSG_MOVE_FALL_LAND, landing, durationMs);
     _lastGrounded = landing;
     _jumpElapsedMs = 0;
@@ -2205,7 +2490,7 @@ void PlayerbotWalker::FailNoLegalRing(Player* player)
 void PlayerbotWalker::Fail(Player* player, char const* reason)
 {
     if (_state == State::Moving && player && player->GetSession())
-        QueueMove(player, player->GetPosition(), false, false);
+        QueueMove(player, _lastGrounded, false, false);
 
     _state = State::Failed;
     _contouring = false;

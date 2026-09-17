@@ -20,9 +20,11 @@
 
 #include "PlayerbotJump.h"
 #include "PlayerbotMovementRecovery.h"
+#include "PlayerbotWalkMap.h"
 #include "Position.h"
 #include <G3D/Vector3.h>
 #include <limits>
+#include <memory>
 #include <vector>
 
 class Player;
@@ -79,6 +81,8 @@ public:
         Position& out);
     // How far she moves in one walk heartbeat at her current run speed.
     static float HeartbeatStepLength(Player const* player);
+    // Starts this world tick's shared budget for mapping the ground around bots that are looking for a way round.
+    static void BeginWorldTick();
     // The destination of the last walk she started, and its map. It is kept after that walk ends so a diagnostic can
     // still show where she was going.
     bool LastWalkDestination(Position& out, uint32& mapId) const;
@@ -86,7 +90,8 @@ public:
     bool IsIdle() const { return _state == State::Idle; }
     bool IsMoving() const
     {
-        return _state == State::Moving || _state == State::Jumping || _state == State::AwaitingClientSync;
+        return _state == State::Moving || _state == State::Jumping || _state == State::AwaitingClientSync
+            || _state == State::LookingForAWayRound;
     }
     bool IsJumping() const { return _state == State::Jumping; }
     bool HasArrived() const { return _state == State::Arrived; }
@@ -100,6 +105,8 @@ private:
         Moving,
         Jumping,
         AwaitingClientSync,
+        // Standing still, mapping the ground around her feet to find a way round what refused her.
+        LookingForAWayRound,
         Arrived,
         Failed
     };
@@ -172,6 +179,13 @@ private:
     bool SampleFlight(Player* player, JumpPlan& plan, uint32 fromMs, char const*& reason);
     void UpdateJump(Player* player, uint32 diff);
     void FinishJump(Player* player);
+    // Stop and start mapping the ground around her feet. False when she has already looked on this approach or her
+    // movement does not allow it; the caller then gives the walk up as before.
+    bool BeginWayRound(Player* player, char const* reason);
+    void UpdateWayRound(Player* player, uint32 diff);
+    // Walk the best way round the map found. False when none of them is worth walking or her first step refuses it.
+    bool StartWayRoundWalk(Player* player);
+    void ClearWayRound();
     void ResetNow();
     static char const* GroundedStepFailureName(GroundedStepFailure failure);
     void Fail(Player* player, char const* reason);
@@ -217,6 +231,14 @@ private:
     Position _lastWalkDestination;
     uint32 _lastWalkDestinationMapId = 0;
     bool _hasLastWalkDestination = false;
+    // The ground she is mapping while she stands and looks for a way round.
+    std::unique_ptr<PlayerbotWalkMap> _wayRoundMap;
+    uint32 _wayRoundMs = 0;
+    uint32 _wayRoundMapId = 0;
+    // The path she is walking is a way round the map found, not a navmesh route.
+    bool _walkingAWayRound = false;
+    // One look per approach. A second one would only find the same ground.
+    bool _lookedForAWayRound = false;
 };
 
 #endif

@@ -151,6 +151,18 @@ void PlayerbotClient::QueueMoveTeleportAck(Player* player)
     player->GetSession()->QueuePacket(std::move(packet));
 }
 
+void PlayerbotClient::QueueSuspendTokenResponse(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    // Echo SequenceIndex. TeleportTo writes the movement counter into SMSG_SUSPEND_TOKEN without incrementing it.
+    WorldPacket packet(CMSG_SUSPEND_TOKEN_RESPONSE);
+    packet << uint32(UnitMovementCounter(player));
+    packet.SetReceiveTime(GameTime::Now());
+    player->GetSession()->QueuePacket(std::move(packet));
+}
+
 void PlayerbotClient::QueueWorldPortResponse(WorldSession* session)
 {
     if (!session)
@@ -265,56 +277,68 @@ void PlayerbotClient::QueueGameObjUse(WorldSession* session, ObjectGuid guid)
     session->QueuePacket(std::move(packet));
 }
 
+namespace
+{
+    // CMSG_CAST_SPELL and CMSG_USE_ITEM carry the same cast request. Write it in the order
+    // operator>>(ByteBuffer&, SpellCastRequest&) reads it: since 12.1.0 the target comes right
+    // after the spell visual, before the missile trajectory.
+    void WriteUnitSpellCastRequest(WorldPacket& packet, Player* player, ObjectGuid unitTarget, uint32 spellId)
+    {
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+        int32 visualId = 0;
+        if (spellInfo)
+            visualId = int32(player->GetCastSpellXSpellVisualId(spellInfo));
+
+        ObjectGuid const castId = ObjectGuid::Create<HighGuid::Cast>(SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), spellId,
+            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
+
+        packet << castId;
+        packet << uint8(0);          // SendCastFlags
+        packet << int32(0);          // Misc[0]
+        packet << int32(0);          // Misc[1]
+        packet << int32(0);          // Misc[2]
+        packet << int32(spellId);
+        packet << int32(visualId);   // SpellXSpellVisualID
+        packet << int32(0);          // ScriptVisualID
+
+        packet << uint32(TARGET_FLAG_UNIT);
+        packet << unitTarget;
+        packet << ObjectGuid();      // Item
+        packet << ObjectGuid();      // HousingGUID
+        packet.WriteBit(false);      // HousingIsResident
+        packet.WriteBit(false);      // SrcLocation
+        packet.WriteBit(false);      // DstLocation
+        packet.WriteBit(false);      // Orientation
+        packet.WriteBit(false);      // MapID
+        packet.WriteBits(0, 7);      // Name length
+        packet.FlushBits();
+
+        packet << float(0.0f);       // MissileTrajectory.Pitch
+        packet << float(0.0f);       // MissileTrajectory.Speed
+        packet << ObjectGuid();      // CraftingNPC
+        packet << uint32(0);         // ExtraCurrencyCosts size
+        packet << uint32(0);         // CraftingReagents size
+        packet << uint32(0);         // RemovedReagents size
+        packet << uint8(0);          // CraftingCastFlags
+
+        packet.WriteBit(false);      // ReceiveTime
+        packet.WriteBit(false);      // MoveUpdate
+        packet.WriteBits(0, 2);      // Weight size
+        packet.WriteBit(false);      // CraftingOrderID
+        packet.FlushBits();
+    }
+}
+
 void PlayerbotClient::QueueUseItem(Player* player, Item* item, ObjectGuid unitTarget, uint32 spellId)
 {
     if (!player || !player->GetSession() || !player->GetMap() || !item || unitTarget.IsEmpty() || !spellId)
         return;
 
-    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
-    int32 visualId = 0;
-    if (spellInfo)
-        visualId = int32(player->GetCastSpellXSpellVisualId(spellInfo));
-
-    ObjectGuid const castId = ObjectGuid::Create<HighGuid::Cast>(SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), spellId,
-        player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
     WorldPacket packet(CMSG_USE_ITEM);
     packet << uint8(item->GetBagSlot());
     packet << uint8(item->GetSlot());
     packet << item->GetGUID();
-
-    packet << castId;
-    packet << uint8(0);          // SendCastFlags
-    packet << int32(0);          // Misc[0]
-    packet << int32(0);          // Misc[1]
-    packet << int32(0);          // Misc[2]
-    packet << int32(spellId);
-    packet << int32(visualId);   // SpellXSpellVisualID
-    packet << int32(0);          // ScriptVisualID
-    packet << float(0.0f);       // MissileTrajectory.Pitch
-    packet << float(0.0f);       // MissileTrajectory.Speed
-    packet << ObjectGuid();      // CraftingNPC
-    packet << uint32(0);         // ExtraCurrencyCosts size
-    packet << uint32(0);         // CraftingReagents size
-    packet << uint32(0);         // RemovedReagents size
-    packet << uint8(0);          // CraftingCastFlags
-
-    packet.WriteBit(false);      // ReceiveTime
-    packet.WriteBit(false);      // MoveUpdate
-    packet.WriteBits(0, 2);      // Weight size
-    packet.WriteBit(false);      // CraftingOrderID
-
-    packet << uint32(TARGET_FLAG_UNIT);
-    packet << unitTarget;
-    packet << ObjectGuid();      // Item
-    packet << ObjectGuid();      // HousingGUID
-    packet.WriteBit(false);      // HousingIsResident
-    packet.WriteBit(false);      // SrcLocation
-    packet.WriteBit(false);      // DstLocation
-    packet.WriteBit(false);      // Orientation
-    packet.WriteBit(false);      // MapID
-    packet.WriteBits(0, 7);      // Name length
-    packet.FlushBits();
+    WriteUnitSpellCastRequest(packet, player, unitTarget, spellId);
     player->GetSession()->QueuePacket(std::move(packet));
 }
 
@@ -323,47 +347,8 @@ void PlayerbotClient::QueueCastSpell(Player* player, ObjectGuid unitTarget, uint
     if (!player || !player->GetSession() || !player->GetMap() || unitTarget.IsEmpty() || !spellId)
         return;
 
-    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
-    int32 visualId = 0;
-    if (spellInfo)
-        visualId = int32(player->GetCastSpellXSpellVisualId(spellInfo));
-
-    ObjectGuid const castId = ObjectGuid::Create<HighGuid::Cast>(SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), spellId,
-        player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
     WorldPacket packet(CMSG_CAST_SPELL);
-    packet << castId;
-    packet << uint8(0);          // SendCastFlags
-    packet << int32(0);          // Misc[0]
-    packet << int32(0);          // Misc[1]
-    packet << int32(0);          // Misc[2]
-    packet << int32(spellId);
-    packet << int32(visualId);   // SpellXSpellVisualID
-    packet << int32(0);          // ScriptVisualID
-    packet << float(0.0f);       // MissileTrajectory.Pitch
-    packet << float(0.0f);       // MissileTrajectory.Speed
-    packet << ObjectGuid();      // CraftingNPC
-    packet << uint32(0);         // ExtraCurrencyCosts size
-    packet << uint32(0);         // CraftingReagents size
-    packet << uint32(0);         // RemovedReagents size
-    packet << uint8(0);          // CraftingCastFlags
-
-    packet.WriteBit(false);      // ReceiveTime
-    packet.WriteBit(false);      // MoveUpdate
-    packet.WriteBits(0, 2);      // Weight size
-    packet.WriteBit(false);      // CraftingOrderID
-
-    packet << uint32(TARGET_FLAG_UNIT);
-    packet << unitTarget;
-    packet << ObjectGuid();      // Item
-    packet << ObjectGuid();      // HousingGUID
-    packet.WriteBit(false);      // HousingIsResident
-    packet.WriteBit(false);      // SrcLocation
-    packet.WriteBit(false);      // DstLocation
-    packet.WriteBit(false);      // Orientation
-    packet.WriteBit(false);      // MapID
-    packet.WriteBits(0, 7);      // Name length
-    packet.FlushBits();
+    WriteUnitSpellCastRequest(packet, player, unitTarget, spellId);
     player->GetSession()->QueuePacket(std::move(packet));
 }
 

@@ -514,8 +514,9 @@ void PlayerbotMgr::UpdateBridge(uint32 diff)
 
 std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string const& payload)
 {
+    // Iterative parsing keeps a deeply nested frame from overflowing the world thread's stack.
     rapidjson::Document request;
-    request.Parse(payload.data(), payload.size());
+    request.Parse<rapidjson::kParseIterativeFlag>(payload.data(), payload.size());
     if (request.HasParseError() || !request.IsObject())
         return MakeBridgeError({}, "invalidJson", "The request must be one JSON object.");
 
@@ -1540,6 +1541,15 @@ void PlayerbotMgr::ReplyTeleportAcks(Player* player)
     {
         PlayerbotClient::QueueMoveTeleportAck(player);
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_TELEPORT_ACK.", player->GetName());
+        return;
+    }
+
+    // A map or instance change sends SMSG_SUSPEND_TOKEN first. The server only sends SMSG_NEW_WORLD
+    // and starts waiting for CMSG_WORLD_PORT_RESPONSE after the client answers it.
+    if (player->GetTeleportState() == TeleportState::WaitingForSuspendTokenResponse)
+    {
+        PlayerbotClient::QueueSuspendTokenResponse(player);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SUSPEND_TOKEN_RESPONSE.", player->GetName());
         return;
     }
 

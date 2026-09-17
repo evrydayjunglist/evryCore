@@ -289,9 +289,12 @@ bool TerrainInfo::HasPlayerMMap()
     if (!_playerMMapPresence.compare_exchange_strong(expected, presence))
         return expected == PlayerMMapPresence::Present;
 
-    // A map with no player set is the ordinary case until one has been generated for it. Say so once, so it is clear
-    // which maps playerbots are still walking on the creature mesh, and then stay quiet.
-    if (!present && !_parentTerrain)
+    // Say which mesh playerbots get on this map, once, and then stay quiet. A map with no set built for a player's
+    // body is the ordinary case until one has been generated for it.
+    if (present)
+        TC_LOG_INFO("mmaps.tiles", "Movement maps built for a player's body found for {} (id {}). Playerbots walk those here.",
+            GetMapName(), GetId());
+    else if (!_parentTerrain)
         TC_LOG_INFO("mmaps.tiles", "No movement map built for a player's body on {} (id {}). Playerbots walk the creature mesh here.",
             GetMapName(), GetId());
 

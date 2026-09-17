@@ -96,6 +96,9 @@ struct PlayerbotRecord
     uint32 VendorRetryMs = 0;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     std::vector<Position> UnreachablePositions;
+    // Where she already started walking the rest of the way to this target.
+    ObjectGuid StillShortGuid;
+    std::vector<Position> StillShortFeet;
     bool LookedForOtherYellowOnFace = false;
     CommandablePlayerState Command;
     Position CommandDestination;

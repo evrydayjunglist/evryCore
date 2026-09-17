@@ -97,6 +97,7 @@ private:
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
     void QueueJumpMove(Player* player, OpcodeClient opcode, Position const& pos, uint32 fallTime);
     void FinishGroundedArrival(Player* player, Position const& pos);
+    void FinishShortOfDestination(Player* player, Position const& pos);
     void UpdateOwningClientSync(Player* player, uint32 diff);
     Position Advance(float distance);
     bool PeekGroundedStep(Player* player, float distance, Position& out);
@@ -117,6 +118,7 @@ private:
     bool RejoinPathReachesNewGround(Position const& from, std::vector<G3D::Vector3> const& path) const;
     void LogRecoveryMmap(Player* player, char const* decision, MmapPathEvidence const& evidence) const;
     void LogStartConnectivity(Player* player, Position const& from);
+    void LogConnectivity(Player* player, Position const& from, char const* place) const;
     bool FindLipSidestep(Player* player, Position& out) const;
     bool ContinueContour(Player* player, bool alreadyMoving);
     bool WalkLegalDestStep(Player* player, bool alreadyMoving);
@@ -137,6 +139,9 @@ private:
 
     State _state = State::Idle;
     std::vector<G3D::Vector3> _path;
+    uint32 _pathType = 0;
+    // Where walks of this approach already stopped short of the destination.
+    std::vector<Position> _shortStops;
     size_t _pointIndex = 0;
     float _segmentProgress = 0.0f;
     Position _destination;

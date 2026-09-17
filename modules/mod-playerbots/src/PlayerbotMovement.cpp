@@ -76,6 +76,10 @@ namespace
     constexpr float RECOVERY_CONNECTIVITY_PROBE_YARDS[] = { 60.0f, 120.0f };
     constexpr int32 RECOVERY_CONNECTIVITY_DIRECTIONS = 8;
     constexpr float RECOVERY_PROBE_ENDPOINT_YARDS = 8.0f;
+    // Stopping short again near an earlier short stop on the same approach, and not a yard closer, means mmap does not lead closer.
+    constexpr float SHORT_STOP_REPEAT_YARDS = 5.0f;
+    constexpr float SHORT_STOP_PROGRESS_YARDS = 1.0f;
+    constexpr size_t SHORT_STOP_MEMORY = 8;
 
     float HeartbeatStepLen(Player const* player)
     {
@@ -471,6 +475,8 @@ void PlayerbotWalker::ResetNow()
 {
     _state = State::Idle;
     _path.clear();
+    _pathType = 0;
+    _shortStops.clear();
     _pointIndex = 0;
     _segmentProgress = 0.0f;
     _destination.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
@@ -602,8 +608,14 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     PlayerbotFaceRecovery const savedFaceRecovery = preserveEpisode ? _faceRecovery : PlayerbotFaceRecovery();
     GroundedStepFailure const savedStepFailure = preserveEpisode ? _lastGroundedStepFailure : GroundedStepFailure::None;
     Position const savedRefusedStep = preserveEpisode ? _lastRefusedStep : Position();
+    // A new stand spot for the same goal is still the same approach, so it keeps the short stops.
+    bool const sameApproach = sameGoal || (goal.Empty() && _recoveryGoal.Empty() && sameDest);
+    std::vector<Position> savedShortStops;
+    if (sameApproach)
+        savedShortStops.swap(_shortStops);
 
     Reset();
+    _shortStops.swap(savedShortStops);
     _lipSteps = savedLipSteps;
     _lipDestDist = savedLipDestDist;
     _lipOrigin = savedLipOrigin;
@@ -658,6 +670,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     }
 
     _path = std::move(path);
+    _pathType = mmapEvidence.Type;
     _pointIndex = 0;
     _segmentProgress = 0.0f;
     _heartbeatMs = 0;
@@ -785,7 +798,11 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
         if (pathDone)
         {
-            FinishGroundedArrival(player, grounded);
+            // Mmap can end short of the destination: a partial route, or a destination off the mesh.
+            if (grounded.GetExactDist2d(_destination) > _stopDistance)
+                FinishShortOfDestination(player, grounded);
+            else
+                FinishGroundedArrival(player, grounded);
             return;
         }
 
@@ -879,6 +896,42 @@ void PlayerbotWalker::FinishGroundedArrival(Player* player, Position const& pos)
     _state = State::Arrived;
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
         player->GetName(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ());
+}
+
+// The first stop short of the destination is still an arrival: the caller may click from here or walk on.
+// Stopping short again beside an earlier short stop of this approach, and no closer, is not progress. Recovery and
+// the next mmap path would only bring her back to the same end, and every stop there would start a fresh episode.
+void PlayerbotWalker::FinishShortOfDestination(Player* player, Position const& pos)
+{
+    float const shortYards = pos.GetExactDist2d(_destination);
+    auto const earlier = std::find_if(_shortStops.begin(), _shortStops.end(), [&](Position const& stop)
+    {
+        return stop.GetExactDist(pos) <= SHORT_STOP_REPEAT_YARDS
+            && shortYards + SHORT_STOP_PROGRESS_YARDS > stop.GetExactDist2d(_destination);
+    });
+
+    if (earlier != _shortStops.end())
+    {
+        QueueMove(player, pos, false, false);
+        _lastGrounded = pos;
+        _contouring = false;
+        _state = State::Failed;
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} stopped short of the walk destination again at ({:.2f}, {:.2f}, {:.2f}), {:.1f} yards from an earlier short stop on this approach and no closer: goal={} map={} key={:016X}:{:016X}, type=0x{:02X}, yardsShort={:.1f}, earlierYardsShort={:.1f}, shortStops={}. Mmap does not lead closer from here; this approach is exhausted.",
+            player->GetName(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), earlier->GetExactDist(pos),
+            PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _recoveryGoal.MapId, _recoveryGoal.Secondary, _recoveryGoal.Primary,
+            _pathType, shortYards, earlier->GetExactDist2d(_destination), _shortStops.size());
+        LogConnectivity(player, pos, "this stop");
+        return;
+    }
+
+    if (_shortStops.size() >= SHORT_STOP_MEMORY)
+        _shortStops.erase(_shortStops.begin());
+    _shortStops.push_back(pos);
+
+    FinishGroundedArrival(player, pos);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is {:.1f} yards short of the walk destination where this mmap path ends (type=0x{:02X}).",
+        player->GetName(), shortYards, _pathType);
 }
 
 void PlayerbotWalker::UpdateOwningClientSync(Player* player, uint32 diff)
@@ -1308,6 +1361,14 @@ void PlayerbotWalker::LogStartConnectivity(Player* player, Position const& from)
         return;
 
     _faceRecovery.MarkConnectivityChecked();
+    LogConnectivity(player, from, "the start");
+}
+
+void PlayerbotWalker::LogConnectivity(Player* player, Position const& from, char const* place) const
+{
+    if (!player)
+        return;
+
     bool connected = false;
     float connectedRadius = 0.0f;
     int32 connectedDirection = -1;
@@ -1352,12 +1413,12 @@ void PlayerbotWalker::LogStartConnectivity(Player* player, Position const& from)
 
     if (connected)
         TC_LOG_INFO(PLAYERBOTS_LOG,
-            "mod-playerbots: {} recovery diagnosis: the start has an honest mmap route to the {:.0f}-yard probe at direction {} (endpoint gap {:.1f}); this is a bad destination or route leg, not an isolated start.",
-            player->GetName(), connectedRadius, connectedDirection, connectedEndpointGap);
+            "mod-playerbots: {} recovery diagnosis: {} has an honest mmap route to the {:.0f}-yard probe at direction {} (endpoint gap {:.1f}); this is a bad destination or route leg, not an isolated pocket.",
+            player->GetName(), place, connectedRadius, connectedDirection, connectedEndpointGap);
     else
         TC_LOG_INFO(PLAYERBOTS_LOG,
-            "mod-playerbots: {} recovery diagnosis: no honest mmap route reached any of 16 probes at 60/120 yards. The bot may be standing in a disconnected or local navmesh pocket; this is diagnostic only and does not permit a teleport.",
-            player->GetName());
+            "mod-playerbots: {} recovery diagnosis: no honest mmap route from {} reached any of 16 probes at 60/120 yards. The bot may be standing in a disconnected or local navmesh pocket; this is diagnostic only and does not permit a teleport.",
+            player->GetName(), place);
 }
 
 bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool alreadyMoving)
@@ -1401,6 +1462,7 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
         return false;
     }
 
+    _pathType = mmapEvidence.Type;
     _contouring = false;
     _startedOnAFace = false;
     if (testingFaceRejoin)
@@ -1561,6 +1623,7 @@ void PlayerbotWalker::ApplyContourPath(Player* player, Position const& side, boo
     _path.clear();
     _path.push_back(G3D::Vector3(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ()));
     _path.push_back(G3D::Vector3(side.GetPositionX(), side.GetPositionY(), side.GetPositionZ()));
+    _pathType = 0;
     _pointIndex = 0;
     _segmentProgress = 0.0f;
     _heartbeatMs = 0;

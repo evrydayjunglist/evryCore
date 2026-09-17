@@ -144,6 +144,7 @@ namespace PlayerbotClient
     void QueueTimeSyncResponse(WorldSession* session, uint32 sequenceIndex, uint32 clientTime);
     void QueueMoveInitActiveMoverComplete(WorldSession* session, uint32 ticks);
     void QueueMoveTeleportAck(Player* player);
+    void QueueSuspendTokenResponse(Player* player);
     void QueueWorldPortResponse(WorldSession* session);
     void QueueMovement(WorldSession* session, OpcodeClient opcode, MovementInfo const& movementInfo);
     void SendMovementUpdate(WorldSession* session, MovementInfo const& movementInfo);

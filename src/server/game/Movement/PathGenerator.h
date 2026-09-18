@@ -91,6 +91,9 @@ class TC_GAME_API PathGenerator
 
         PathType GetPathType() const { return _type; }
 
+        // Whether this path came from the set built for a player's body, or fell back to the creature one.
+        bool UsedPlayerNavMesh() const { return _usingPlayerNavMesh; }
+
         // shortens the path until the destination is the specified distance from the target point
         void ShortenPathUntilDist(G3D::Vector3 const& target, float dist);
 

@@ -138,6 +138,8 @@ private:
         float Length = 0.0f;
         G3D::Vector3 ActualEnd = G3D::Vector3(0.0f, 0.0f, 0.0f);
         std::vector<G3D::Vector3> Prefix;
+        // Which set of movement maps answered: the one built for a player's body, or the creature one.
+        bool PlayerNavMesh = false;
     };
 
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);

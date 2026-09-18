@@ -59,6 +59,37 @@ enum class NavMeshChoice : uint8
     PlayerBody      // the set built for what a player's body can walk, where one exists; the set above everywhere else
 };
 
+// How turning the polygon corridor into path points ended.
+enum class PathSmoothingEnd : uint8
+{
+    NotRun,         // no corridor was turned into points
+    ReachedEnd,     // it followed the corridor to its end
+    NoSteerTarget,  // it found no corner far enough ahead to steer toward
+    CorridorEmpty,  // the corridor ran out under it
+    OutOfPoints,    // it filled every point a path can hold before the end
+    QueryFailed     // a navmesh query it needed failed
+};
+
+// What the navmesh search and the smoothing did on the last CalculatePath. It is there so a caller can say why a route
+// came back the way it did; nothing in the path builder reads it.
+struct PathSearchReport
+{
+    // A corridor search ran and gave a corridor. None runs when both ends are on one polygon or when there is no navmesh
+    // answer at all.
+    bool Searched = false;
+    // The search got to the destination's polygon, or both ends are on one polygon.
+    bool ReachedDestination = false;
+    // The search ran out of search nodes, so its corridor heads for the closest point it had seen when it stopped.
+    bool RanOutOfNodes = false;
+    // The corridor was longer than the MAX_PATH_LENGTH polygons a path can hold, and only its start was kept.
+    bool CorridorCut = false;
+    uint32 NodesUsed = 0;
+    uint32 NodeLimit = 0;
+    uint32 CorridorPolygons = 0;
+    PathSmoothingEnd SmoothingEnd = PathSmoothingEnd::NotRun;
+    uint32 SmoothedPoints = 0;
+};
+
 class TC_GAME_API PathGenerator
 {
     public:
@@ -94,6 +125,8 @@ class TC_GAME_API PathGenerator
         // Whether this path came from the set built for a player's body, or fell back to the creature one.
         bool UsedPlayerNavMesh() const { return _usingPlayerNavMesh; }
 
+        PathSearchReport const& GetSearchReport() const { return _searchReport; }
+
         // shortens the path until the destination is the specified distance from the target point
         void ShortenPathUntilDist(G3D::Vector3 const& target, float dist);
 
@@ -119,6 +152,7 @@ class TC_GAME_API PathGenerator
         dtNavMeshQuery const* _navMeshQuery;    // the nav mesh query used to find the path
         uint32 _meshMapId;                      // the terrain map the meshes above were taken from
         bool _usingPlayerNavMesh;               // the path is being built from the set made for a player's body
+        PathSearchReport _searchReport;         // what the search and the smoothing did on the last CalculatePath
 
         dtQueryFilter _filter;  // use single filter for all movements, update it when needed
 
@@ -144,6 +178,7 @@ class TC_GAME_API PathGenerator
         void UseCreatureNavMesh();
         bool PlayerNavMeshCarries(G3D::Vector3 const& start, G3D::Vector3 const& dest) const;
 
+        void NoteCorridorSearch(dtStatus status);
         void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos);
         void BuildPointPath(float const* startPoint, float const* endPoint);
         void BuildShortcut();

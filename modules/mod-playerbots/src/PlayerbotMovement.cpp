@@ -32,6 +32,7 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "PlayerbotClient.h"
+#include "PlayerbotPathSearch.h"
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotWalkMapEscape.h"
 #include "PlayerbotWalkMapServerWorld.h"
@@ -890,8 +891,9 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
         else
             ClearFaceRecovery();
         _state = State::Moving;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards.",
-            player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(destination));
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {}",
+            player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(destination),
+            DescribePathSearch(mmapEvidence.Search));
         QueueMove(player, from, true, true);
         return true;
     }
@@ -1452,6 +1454,7 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
     {
         evidence->Calculated = calculated;
         evidence->PlayerNavMesh = generator.UsedPlayerNavMesh();
+        evidence->Search = generator.GetSearchReport();
         evidence->Type = uint32(generator.GetPathType());
         evidence->Length = generator.GetPathLength();
         evidence->ActualEnd = generator.GetActualEndPosition();
@@ -1593,12 +1596,12 @@ void PlayerbotWalker::LogRecoveryMmap(Player* player, char const* decision, Mmap
         prefix = "none";
 
     TC_LOG_INFO(PLAYERBOTS_LOG,
-        "mod-playerbots: {} recovery mmap {}: goal={} map={} key={:016X}:{:016X}, mesh={}, calculated={}, type=0x{:02X}, actualEnd=({:.2f}, {:.2f}, {:.2f}), pathLength={:.1f}, firstPoints=[{}], episodeYards={:.1f}, visitedCells={}.",
+        "mod-playerbots: {} recovery mmap {}: goal={} map={} key={:016X}:{:016X}, mesh={}, calculated={}, type=0x{:02X}, actualEnd=({:.2f}, {:.2f}, {:.2f}), pathLength={:.1f}, firstPoints=[{}], episodeYards={:.1f}, visitedCells={}. {}",
         player->GetName(), decision, PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _recoveryGoal.MapId,
         _recoveryGoal.Secondary, _recoveryGoal.Primary, evidence.PlayerNavMesh ? "player" : "creature",
         evidence.Calculated, evidence.Type,
         evidence.ActualEnd.x, evidence.ActualEnd.y, evidence.ActualEnd.z, evidence.Length, prefix,
-        _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells());
+        _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells(), DescribePathSearch(evidence.Search));
 }
 
 void PlayerbotWalker::LogStartConnectivity(Player* player, Position const& from)
@@ -1736,8 +1739,9 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
             player->GetName(), uint32(_path.size()), from.GetExactDist(_destination));
     }
     else
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards.",
-            player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(_destination));
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {}",
+            player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(_destination),
+            DescribePathSearch(mmapEvidence.Search));
 
     Position pose = from;
     if (_path.size() >= 2)

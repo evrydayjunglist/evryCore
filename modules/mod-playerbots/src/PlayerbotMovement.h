@@ -18,6 +18,7 @@
 #ifndef EVRY_MOD_PLAYERBOT_MOVEMENT_H
 #define EVRY_MOD_PLAYERBOT_MOVEMENT_H
 
+#include "PathGenerator.h"
 #include "PlayerbotJump.h"
 #include "PlayerbotMovementRecovery.h"
 #include "PlayerbotWalkMapEscape.h"
@@ -140,6 +141,8 @@ private:
         std::vector<G3D::Vector3> Prefix;
         // Which set of movement maps answered: the one built for a player's body, or the creature one.
         bool PlayerNavMesh = false;
+        // What the navmesh search and the smoothing did for this route.
+        PathSearchReport Search;
     };
 
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);

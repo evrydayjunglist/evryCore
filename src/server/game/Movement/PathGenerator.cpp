@@ -19,6 +19,7 @@
 #include "Creature.h"
 #include "DetourCommon.h"
 #include "DetourNavMeshQuery.h"
+#include "DetourNode.h"
 #include "DisableMgr.h"
 #include "G3DPosition.hpp"
 #include "Log.h"
@@ -102,6 +103,8 @@ bool PathGenerator::PlayerNavMeshCarries(G3D::Vector3 const& start, G3D::Vector3
 
 bool PathGenerator::CalculatePath(float srcX, float srcY, float srcZ, float destX, float destY, float destZ, bool forceDest)
 {
+    _searchReport = {};
+
     if (!Trinity::IsValidMapCoord(destX, destY, destZ) || !Trinity::IsValidMapCoord(srcX, srcY, srcZ))
         return false;
 
@@ -215,6 +218,21 @@ dtPolyRef PathGenerator::GetPolyByLocation(float const* point, float* distance) 
 
     *distance = FLT_MAX;
     return INVALID_POLYREF;
+}
+
+void PathGenerator::NoteCorridorSearch(dtStatus status)
+{
+    // A search that failed outright gave no corridor at all. One that reached the destination may still have had its
+    // corridor cut, so whether it got there comes from the search and not from the last polygon kept.
+    _searchReport.Searched = dtStatusSucceed(status);
+    _searchReport.ReachedDestination = _searchReport.Searched && !dtStatusDetail(status, DT_PARTIAL_RESULT);
+    _searchReport.RanOutOfNodes = dtStatusDetail(status, DT_OUT_OF_NODES);
+    _searchReport.CorridorCut = dtStatusDetail(status, DT_BUFFER_TOO_SMALL);
+    if (dtNodePool const* nodes = _navMeshQuery->getNodePool())
+    {
+        _searchReport.NodesUsed = nodes->getNodeCount();
+        _searchReport.NodeLimit = nodes->getMaxNodes();
+    }
 }
 
 void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos)
@@ -334,6 +352,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
 
         _pathPolyRefs[0] = startPoly;
         _polyLength = 1;
+        _searchReport.CorridorPolygons = 1;
+        _searchReport.ReachedDestination = true;
 
         if (startFarFromPoly || endFarFromPoly)
         {
@@ -456,6 +476,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                             _pathPolyRefs + prefixPolyLength - 1,    // [out] path
                             (int*)&suffixPolyLength,
                             MAX_PATH_LENGTH - prefixPolyLength);   // max number of polygons in output path
+            NoteCorridorSearch(dtResult);
         }
 
         if (!suffixPolyLength || dtStatusFailed(dtResult))
@@ -563,6 +584,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                             _pathPolyRefs,     // [out] path
                             (int*)&_polyLength,
                             MAX_PATH_LENGTH);   // max number of polygons in output path
+            NoteCorridorSearch(dtResult);
         }
 
         if (!_polyLength || dtStatusFailed(dtResult))
@@ -574,6 +596,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
             return;
         }
     }
+
+    _searchReport.CorridorPolygons = _polyLength;
 
     // by now we know what type of path we can get
     if (_pathPolyRefs[_polyLength - 1] == endPoly && !(_type & PATHFIND_INCOMPLETE))
@@ -884,6 +908,9 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
 
     float iterPos[VERTEX_SIZE], targetPos[VERTEX_SIZE];
 
+    // A return before the loop below finishes is a navmesh query that failed.
+    _searchReport.SmoothingEnd = PathSmoothingEnd::QueryFailed;
+
     if (polyPathSize > 1)
     {
         // Pick the closest points on poly border
@@ -913,7 +940,10 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
         dtPolyRef steerPosRef = INVALID_POLYREF;
 
         if (!GetSteerTarget(iterPos, targetPos, SMOOTH_PATH_SLOP, polys, npolys, steerPos, steerPosFlag, steerPosRef))
+        {
+            _searchReport.SmoothingEnd = PathSmoothingEnd::NoSteerTarget;
             break;
+        }
 
         bool endOfPath = (steerPosFlag & DT_STRAIGHTPATH_END) != 0;
         bool offMeshConnection = (steerPosFlag & DT_STRAIGHTPATH_OFFMESH_CONNECTION) != 0;
@@ -956,6 +986,7 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
                 dtVcopy(&smoothPath[nsmoothPath*VERTEX_SIZE], iterPos);
                 nsmoothPath++;
             }
+            _searchReport.SmoothingEnd = PathSmoothingEnd::ReachedEnd;
             break;
         }
         else if (offMeshConnection && InRangeYZX(iterPos, steerPos, SMOOTH_PATH_SLOP, 1.0f))
@@ -1002,6 +1033,11 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
     }
 
     *smoothPathSize = nsmoothPath;
+
+    // The loop also ends on its own, when the corridor or the room for points runs out.
+    _searchReport.SmoothedPoints = nsmoothPath;
+    if (_searchReport.SmoothingEnd == PathSmoothingEnd::QueryFailed)
+        _searchReport.SmoothingEnd = npolys ? PathSmoothingEnd::OutOfPoints : PathSmoothingEnd::CorridorEmpty;
 
     // this is most likely a loop
     return nsmoothPath < MAX_POINT_PATH_LENGTH ? DT_SUCCESS : DT_FAILURE;

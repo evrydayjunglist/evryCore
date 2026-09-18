@@ -44,6 +44,11 @@ namespace MMAP
         LibraryError
     };
 
+    // Search nodes in a query with room for a long route. Every query the server has always used has 1,024, which is
+    // plenty for a creature's chase; a road out of a cave and round a range of hills to somewhere 500 yards away can
+    // need seven or eight thousand.
+    inline constexpr int32 LONG_ROUTE_SEARCH_NODES = 16384;
+
     // singleton class
     // holds all all access to mmap loading unloading and meshes
     class TC_MMAPS_COMMON_API MMapManager
@@ -75,6 +80,10 @@ namespace MMAP
 
             // the returned [dtNavMeshQuery const*] is NOT threadsafe
             dtNavMeshQuery const* GetNavMeshQuery(uint32 meshMapId, uint32 instanceMapId, uint32 instanceId);
+            // A second query on the same mesh as the one above, with LONG_ROUTE_SEARCH_NODES search nodes, made the first
+            // time one is asked for on a map instance and dropped with it. Only playerbots ask for these, from the world
+            // update after the maps have updated, so no creature ever shares one. Not threadsafe either.
+            dtNavMeshQuery const* GetLongRouteNavMeshQuery(uint32 meshMapId, uint32 instanceMapId, uint32 instanceId);
             dtNavMesh* GetNavMesh(uint32 mapId, uint32 instanceId);
 
             uint32 getLoadedTilesCount() const { return loadedTiles; }

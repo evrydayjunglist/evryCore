@@ -40,8 +40,8 @@ inline std::string DescribePathSearch(PathSearchReport const& search)
     if (search.Searched)
     {
         if (search.CorridorCut)
-            text += Trinity::StringFormat(" The corridor was longer than the {} polygons a path can hold, so only its first {} were kept.",
-                MAX_PATH_LENGTH, search.CorridorPolygons);
+            text += Trinity::StringFormat(" The corridor was longer than the {} polygons this path can hold, so only its first {} were kept.",
+                search.CorridorLimit, search.CorridorPolygons);
         else if (!search.ReachedDestination && search.CorridorPolygons == 1)
             text += " The corridor is only the polygon under her start, so the path ends in a straight line to the destination.";
         else
@@ -56,7 +56,7 @@ inline std::string DescribePathSearch(PathSearchReport const& search)
             text += Trinity::StringFormat(" Smoothing followed it to the end in {} points.", search.SmoothedPoints);
             break;
         case PathSmoothingEnd::OutOfPoints:
-            text += Trinity::StringFormat(" Smoothing filled all {} points a path can hold before the end, so the engine replaced the route "
+            text += Trinity::StringFormat(" Smoothing filled all {} points this path can hold before the end, so the engine replaced the route "
                 "with a straight line.", search.SmoothedPoints);
             break;
         case PathSmoothingEnd::NoSteerTarget:
@@ -71,6 +71,13 @@ inline std::string DescribePathSearch(PathSearchReport const& search)
     }
 
     return text;
+}
+
+// The search got to the destination, but the route was longer than the path could hold, so the engine replaced it with
+// a straight line. The destination can be reached; only this path could not carry the way there.
+inline bool PathSearchFoundTooLongARoute(PathSearchReport const& search)
+{
+    return search.Searched && search.ReachedDestination && search.SmoothingEnd == PathSmoothingEnd::OutOfPoints;
 }
 
 #endif

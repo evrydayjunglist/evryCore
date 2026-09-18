@@ -15,6 +15,7 @@
 #include "tc_catch2.h"
 
 #include "../../modules/mod-playerbots/src/PlayerbotPathSearch.h"
+#include "MMapManager.h"
 #include <string>
 
 namespace
@@ -69,13 +70,59 @@ TEST_CASE("Playerbot path search says when a route it found was too long to keep
     search.NodesUsed = 986;
     search.NodeLimit = 1024;
     search.CorridorPolygons = MAX_PATH_LENGTH;
+    search.CorridorLimit = MAX_PATH_LENGTH;
     search.SmoothingEnd = PathSmoothingEnd::OutOfPoints;
     search.SmoothedPoints = MAX_POINT_PATH_LENGTH;
 
     std::string const text = DescribePathSearch(search);
     REQUIRE(Says(text, "reached the destination's polygon using 986 of its 1024 search nodes"));
-    REQUIRE(Says(text, "longer than the 74 polygons a path can hold, so only its first 74 were kept"));
-    REQUIRE(Says(text, "filled all 74 points a path can hold before the end, so the engine replaced the route with a straight line"));
+    REQUIRE(Says(text, "longer than the 74 polygons this path can hold, so only its first 74 were kept"));
+    REQUIRE(Says(text, "filled all 74 points this path can hold before the end, so the engine replaced the route with a straight line"));
+}
+
+// The road out of the pocket on the creature set, searched with room for a long route.
+TEST_CASE("Playerbot path search reads out a long route in full", "[playerbots][path-search]")
+{
+    PathSearchReport search;
+    search.Searched = true;
+    search.ReachedDestination = true;
+    search.NodesUsed = 5114;
+    search.NodeLimit = uint32(MMAP::LONG_ROUTE_SEARCH_NODES);
+    search.CorridorPolygons = 232;
+    search.CorridorLimit = LONG_PATH_LENGTH;
+    search.SmoothingEnd = PathSmoothingEnd::ReachedEnd;
+    search.SmoothedPoints = 418;
+
+    std::string const text = DescribePathSearch(search);
+    REQUIRE(Says(text, "reached the destination's polygon using 5114 of its 16384 search nodes"));
+    REQUIRE(Says(text, "The corridor is 232 polygons."));
+    REQUIRE(Says(text, "followed it to the end in 418 points"));
+}
+
+TEST_CASE("Playerbot path search tells a route too long to hold from one it could not find", "[playerbots][path-search]")
+{
+    PathSearchReport tooLong;
+    tooLong.Searched = true;
+    tooLong.ReachedDestination = true;
+    tooLong.CorridorCut = true;
+    tooLong.SmoothingEnd = PathSmoothingEnd::OutOfPoints;
+    REQUIRE(PathSearchFoundTooLongARoute(tooLong));
+
+    // Joined to nothing: the search never got there, however the smoothing ended.
+    PathSearchReport island = tooLong;
+    island.ReachedDestination = false;
+    REQUIRE_FALSE(PathSearchFoundTooLongARoute(island));
+
+    // Got there and the path held all of it: nothing was cut.
+    PathSearchReport held = tooLong;
+    held.CorridorCut = false;
+    held.SmoothingEnd = PathSmoothingEnd::ReachedEnd;
+    REQUIRE_FALSE(PathSearchFoundTooLongARoute(held));
+
+    // A failed query is not a long route.
+    PathSearchReport failed = tooLong;
+    failed.SmoothingEnd = PathSmoothingEnd::QueryFailed;
+    REQUIRE_FALSE(PathSearchFoundTooLongARoute(failed));
 }
 
 TEST_CASE("Playerbot path search says when both ends are on one polygon", "[playerbots][path-search]")

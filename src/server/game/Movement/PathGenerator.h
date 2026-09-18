@@ -23,14 +23,24 @@
 #include "MMapDefines.h"
 #include "MoveSplineInitArgs.h"
 #include <G3D/Vector3.h>
+#include <boost/container/small_vector.hpp>
 
 class WorldObject;
+
+namespace MMAP
+{
+    class MMapManager;
+}
 
 // 74*4.0f=296y number_of_points*interval = max_path_len
 // this is way more than actual evade range
 // I think we can safely cut those down even more
 #define MAX_PATH_LENGTH         74
 #define MAX_POINT_PATH_LENGTH   74
+
+// Room for a long reach: 1024 points 4 yards apart hold about 4,000 yards of road.
+#define LONG_PATH_LENGTH        1024
+#define LONG_POINT_PATH_LENGTH  1024
 
 #define SMOOTH_PATH_STEP_SIZE   4.0f
 #define SMOOTH_PATH_SLOP        0.3f
@@ -59,6 +69,14 @@ enum class NavMeshChoice : uint8
     PlayerBody      // the set built for what a player's body can walk, where one exists; the set above everywhere else
 };
 
+// How long a route a path may be.
+enum class PathReach : uint8
+{
+    Short,  // what the server has always used: 1024 search nodes, MAX_PATH_LENGTH polygons and MAX_POINT_PATH_LENGTH points
+    Long    // room to walk across a zone: MMAP::LONG_ROUTE_SEARCH_NODES search nodes, LONG_PATH_LENGTH polygons and
+            // LONG_POINT_PATH_LENGTH points, in a query of its own so no creature ever shares it
+};
+
 // How turning the polygon corridor into path points ended.
 enum class PathSmoothingEnd : uint8
 {
@@ -81,11 +99,12 @@ struct PathSearchReport
     bool ReachedDestination = false;
     // The search ran out of search nodes, so its corridor heads for the closest point it had seen when it stopped.
     bool RanOutOfNodes = false;
-    // The corridor was longer than the MAX_PATH_LENGTH polygons a path can hold, and only its start was kept.
+    // The corridor was longer than the CorridorLimit polygons this path can hold, and only its start was kept.
     bool CorridorCut = false;
     uint32 NodesUsed = 0;
     uint32 NodeLimit = 0;
     uint32 CorridorPolygons = 0;
+    uint32 CorridorLimit = 0;
     PathSmoothingEnd SmoothingEnd = PathSmoothingEnd::NotRun;
     uint32 SmoothedPoints = 0;
 };
@@ -93,7 +112,7 @@ struct PathSearchReport
 class TC_GAME_API PathGenerator
 {
     public:
-        explicit PathGenerator(WorldObject const* owner, NavMeshChoice navMeshChoice = NavMeshChoice::Creature);
+        explicit PathGenerator(WorldObject const* owner, NavMeshChoice navMeshChoice = NavMeshChoice::Creature, PathReach reach = PathReach::Short);
         ~PathGenerator();
 
         PathGenerator(PathGenerator const& right) = delete;
@@ -109,7 +128,7 @@ class TC_GAME_API PathGenerator
 
         // option setters - use optional
         void SetUseStraightPath(bool useStraightPath) { _useStraightPath = useStraightPath; }
-        void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), MAX_POINT_PATH_LENGTH); }
+        void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), _maxPointPath); }
         void SetUseRaycast(bool useRaycast) { _useRaycast = useRaycast; }
 
         // result getters
@@ -132,15 +151,18 @@ class TC_GAME_API PathGenerator
 
     private:
 
-        dtPolyRef _pathPolyRefs[MAX_PATH_LENGTH];   // array of detour polygon references
+        // detour polygon references; a short reach keeps them inside the object, a long one needs more than fits there
+        boost::container::small_vector<dtPolyRef, MAX_PATH_LENGTH> _pathPolyRefs;
         uint32 _polyLength;                         // number of polygons in the path
+        uint32 const _maxPathPolys;                 // how many polygons the corridor may hold
 
         Movement::PointsArray _pathPoints;  // our actual (x,y,z) path to the target
         PathType _type;                     // tells what kind of path this is
 
         bool _useStraightPath;  // type of path will be generated
         bool _forceDestination; // when set, we will always arrive at given point
-        uint32 _pointPathLimit; // limit point path size; min(this, MAX_POINT_PATH_LENGTH)
+        uint32 const _maxPointPath; // how many points the path may hold
+        uint32 _pointPathLimit; // limit point path size; min(this, _maxPointPath)
         bool _useRaycast;       // use raycast if true for a straight line path
 
         G3D::Vector3 _startPosition;        // {x, y, z} of current location
@@ -148,6 +170,7 @@ class TC_GAME_API PathGenerator
         G3D::Vector3 _actualEndPosition;    // {x, y, z} of the closest possible point to given destination
 
         WorldObject const* const _source;       // the object that is moving
+        PathReach const _reach;                 // how long a route this path may be
         dtNavMesh const* _navMesh;              // the nav mesh
         dtNavMeshQuery const* _navMeshQuery;    // the nav mesh query used to find the path
         uint32 _meshMapId;                      // the terrain map the meshes above were taken from
@@ -175,6 +198,7 @@ class TC_GAME_API PathGenerator
         dtPolyRef GetPolyByLocation(float const* Point, float* Distance) const;
         bool HaveTile(G3D::Vector3 const& p) const;
 
+        dtNavMeshQuery const* QueryFrom(MMAP::MMapManager* meshes) const;
         void UseCreatureNavMesh();
         bool PlayerNavMeshCarries(G3D::Vector3 const& start, G3D::Vector3 const& dest) const;
 

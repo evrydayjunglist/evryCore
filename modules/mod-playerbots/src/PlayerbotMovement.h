@@ -135,6 +135,8 @@ private:
     struct MmapPathEvidence
     {
         bool Calculated = false;
+        // How long the navmesh took to build the route, in milliseconds.
+        float BuildMs = 0.0f;
         uint32 Type = 0;
         float Length = 0.0f;
         G3D::Vector3 ActualEnd = G3D::Vector3(0.0f, 0.0f, 0.0f);

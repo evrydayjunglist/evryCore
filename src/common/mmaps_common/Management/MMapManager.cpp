@@ -47,6 +47,8 @@ namespace MMAP
 
         // we have to use single dtNavMeshQuery for every instance, since those are not thread safe
         NavMeshQuerySet navMeshQueries;     // instanceId to query
+        // The same, with room for a long route, for the instances a playerbot has asked one of.
+        NavMeshQuerySet longRouteQueries;
 
         static uint32 GetInstanceIdForMeshLookup(uint32 mapId, uint32 instanceId)
         {
@@ -434,6 +436,7 @@ namespace MMAP
         std::size_t erased = mmap->navMeshQueries.erase({ instanceMapId, instanceId });
         if (!erased)
             TC_LOG_DEBUG("maps", "MMAP:unloadMapInstance: Asked to unload not loaded dtNavMeshQuery mapId {:04} instanceId {}", instanceMapId, instanceId);
+        mmap->longRouteQueries.erase({ instanceMapId, instanceId });
 
         if (isRebuildingTilesEnabledOnMap(meshMapId))
         {
@@ -482,5 +485,28 @@ namespace MMAP
             return nullptr;
 
         return &queryItr->second;
+    }
+
+    dtNavMeshQuery const* MMapManager::GetLongRouteNavMeshQuery(uint32 meshMapId, uint32 instanceMapId, uint32 instanceId)
+    {
+        MMapDataSet::const_iterator itr = GetMMapData(meshMapId);
+        if (itr == loadedMMaps.end())
+            return nullptr;
+
+        // Only an instance whose mesh is loaded has the usual query, and the long one searches that same mesh.
+        MMapData* mmap = itr->second.get();
+        auto queryItr = mmap->navMeshQueries.find({ instanceMapId, instanceId });
+        if (queryItr == mmap->navMeshQueries.end())
+            return nullptr;
+
+        auto [longItr, inserted] = mmap->longRouteQueries.try_emplace({ instanceMapId, instanceId });
+        if (inserted && dtStatusFailed(longItr->second.init(queryItr->second.getAttachedNavMesh(), LONG_ROUTE_SEARCH_NODES)))
+        {
+            mmap->longRouteQueries.erase(longItr);
+            TC_LOG_ERROR("maps", "MMAP:GetLongRouteNavMeshQuery: Failed to initialize dtNavMeshQuery for mapId {:04} instanceId {}", instanceMapId, instanceId);
+            return nullptr;
+        }
+
+        return &longItr->second;
     }
 }

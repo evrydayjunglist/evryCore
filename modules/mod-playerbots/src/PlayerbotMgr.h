@@ -115,6 +115,10 @@ struct PlayerbotRecord
     uint32 VendorRetryMs = 0;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     std::vector<Position> UnreachablePositions;
+    // She could not step anywhere from where she stood. She starts no new work until this has run out.
+    uint32 StuckFeetWaitMs = 0;
+    // How long she has stood with nothing to do while targets were on her skip list.
+    uint32 IdleWithSkipsMs = 0;
     // Where she already started walking the rest of the way to this target.
     ObjectGuid StillShortGuid;
     std::vector<Position> StillShortFeet;

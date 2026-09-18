@@ -22,6 +22,7 @@
 #include "Optional.h"
 #include "Position.h"
 #include "UnitDefines.h"
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -179,6 +180,9 @@ namespace PlayerbotClient
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind, std::unordered_set<ObjectGuid> const& skip);
     Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
+    // One sentence for each finished quest in her log whose turn-in FindLogCompleteTurnIn would not give her, naming the
+    // step that dropped it and the facts that step used.
+    std::vector<std::string> ExplainUnpickedTurnIns(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<QuestTarget> FindTakeableQuestInZone(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<CombatTarget> FindAttackerTarget(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);

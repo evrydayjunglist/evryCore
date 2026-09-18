@@ -21,6 +21,7 @@
 #include "PathGenerator.h"
 #include "PlayerbotJump.h"
 #include "PlayerbotMovementRecovery.h"
+#include "PlayerbotPathSearch.h"
 #include "PlayerbotWalkMapEscape.h"
 #include "Position.h"
 #include <G3D/Vector3.h>
@@ -72,8 +73,10 @@ public:
 
     static void StopAtFeet(Player* player);
 
-    // Stand next to the target. Max interact range can land in a campfire on the way.
-    static bool PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out);
+    // Stand next to the target. Max interact range can land in a campfire on the way. With look, also say how each place
+    // it asked about came out, so a log line can say why none would do.
+    static bool PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out,
+        std::vector<StandSpotLook>* look = nullptr);
 
     // One grounded step from these feet toward (x, y), planted and judged exactly as a walk heartbeat is: the floor
     // search from her feet plus her climb, the slope and drop limits, and the chest-height ray. out holds the planted
@@ -97,6 +100,9 @@ public:
     bool IsJumping() const { return _state == State::Jumping; }
     bool HasArrived() const { return _state == State::Arrived; }
     bool HasFailed() const { return _state == State::Failed; }
+    // The walk failed because the ground she mapped around her feet has no spot she can step to, whatever she was
+    // walking to. The place she stands is the problem, not the target.
+    bool FailedAtHerFeet() const { return _state == State::Failed && _failedAtHerFeet; }
     bool StartedOnAFace() const { return _startedOnAFace; }
 
 private:
@@ -265,6 +271,7 @@ private:
     bool _walkingAWayRound = false;
     // One look per approach. A second one would only find the same ground.
     bool _lookedForAWayRound = false;
+    bool _failedAtHerFeet = false;
 };
 
 #endif

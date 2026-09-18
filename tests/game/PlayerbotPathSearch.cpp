@@ -17,6 +17,7 @@
 #include "../../modules/mod-playerbots/src/PlayerbotPathSearch.h"
 #include "MMapManager.h"
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -125,6 +126,37 @@ TEST_CASE("Playerbot path search tells a route too long to hold from one it coul
     REQUIRE_FALSE(PathSearchFoundTooLongARoute(failed));
 }
 
+// The Valley of Trials to Master Gadrin: the short search runs out before the 760-yard road, and the long one finds it.
+TEST_CASE("Playerbot path search tells a search that ran out of room from ground joined to nothing", "[playerbots][path-search]")
+{
+    PathSearchReport outOfRoom;
+    outOfRoom.Searched = true;
+    outOfRoom.RanOutOfNodes = true;
+    outOfRoom.CorridorCut = true;
+    outOfRoom.NodesUsed = 1024;
+    outOfRoom.NodeLimit = 1024;
+    outOfRoom.SmoothingEnd = PathSmoothingEnd::OutOfPoints;
+    REQUIRE(PathSearchRanOutOfRoom(outOfRoom));
+    REQUIRE_FALSE(PathSearchFoundTooLongARoute(outOfRoom));
+
+    // The cave shelf: the search went through all 6 polygons joined to her start and stopped with nodes to spare.
+    PathSearchReport island;
+    island.Searched = true;
+    island.NodesUsed = 6;
+    island.NodeLimit = 1024;
+    island.CorridorPolygons = 4;
+    island.SmoothingEnd = PathSmoothingEnd::ReachedEnd;
+    REQUIRE_FALSE(PathSearchRanOutOfRoom(island));
+
+    // A search that got there did not run out of room, however full it was.
+    PathSearchReport reached = outOfRoom;
+    reached.ReachedDestination = true;
+    REQUIRE_FALSE(PathSearchRanOutOfRoom(reached));
+
+    // No search ran at all.
+    REQUIRE_FALSE(PathSearchRanOutOfRoom(PathSearchReport()));
+}
+
 TEST_CASE("Playerbot path search says when both ends are on one polygon", "[playerbots][path-search]")
 {
     PathSearchReport search;
@@ -141,4 +173,69 @@ TEST_CASE("Playerbot path search says when both ends are on one polygon", "[play
 TEST_CASE("Playerbot path search says when no corridor came back", "[playerbots][path-search]")
 {
     REQUIRE(DescribePathSearch(PathSearchReport()) == "No navmesh search gave a corridor.");
+}
+
+namespace
+{
+    // What the short search did from the Valley of Trials at (-560.89, -4269.03) toward each side of Master Gadrin, 700
+    // yards away in Sen'jin Village, on the player maps (the offline probe, 17 September 2026).
+    StandSpotLook ValleyToGadrinSide()
+    {
+        StandSpotLook spot;
+        spot.What = StandSpotLook::Outcome::Refused;
+        spot.PathType = PATHFIND_NOPATH | PATHFIND_SHORTCUT;
+        spot.Points = 2;
+        spot.PlayerNavMesh = true;
+        spot.Search.Searched = true;
+        spot.Search.RanOutOfNodes = true;
+        spot.Search.CorridorCut = true;
+        spot.Search.NodesUsed = 1024;
+        spot.Search.NodeLimit = 1024;
+        spot.Search.CorridorPolygons = MAX_PATH_LENGTH;
+        spot.Search.CorridorLimit = MAX_PATH_LENGTH;
+        spot.Search.SmoothingEnd = PathSmoothingEnd::OutOfPoints;
+        spot.Search.SmoothedPoints = MAX_POINT_PATH_LENGTH;
+        return spot;
+    }
+}
+
+TEST_CASE("Playerbot stand spots say once when every side came back the same way", "[playerbots][path-search]")
+{
+    std::vector<StandSpotLook> const spots(8, ValleyToGadrinSide());
+
+    std::string const text = DescribeStandSpots(spots);
+    REQUIRE(Says(text, "All 8 came back from the player movement maps as a straight line with no route (type 0x0A)."));
+    REQUIRE(Says(text, "used all 1024 of its search nodes before it reached the destination"));
+    REQUIRE(Says(text, "filled all 74 points this path can hold"));
+    // One sentence for the eight sides, not eight.
+    REQUIRE(text.find("came back") == text.rfind("came back"));
+}
+
+TEST_CASE("Playerbot stand spots count each way a side came out", "[playerbots][path-search]")
+{
+    std::vector<StandSpotLook> spots(5, ValleyToGadrinSide());
+
+    StandSpotLook fire;
+    fire.What = StandSpotLook::Outcome::InSpellFocus;
+    fire.SpellFocus = "Campfire";
+    spots.push_back(fire);
+    spots.push_back(fire);
+
+    StandSpotLook unloaded;
+    unloaded.What = StandSpotLook::Outcome::Refused;
+    unloaded.PathType = PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH;
+    unloaded.Points = 2;
+    spots.push_back(unloaded);
+
+    std::string const text = DescribeStandSpots(spots);
+    REQUIRE(Says(text, "5 came back from the player movement maps as a straight line with no route (type 0x0A)."));
+    REQUIRE(Says(text, "2 are inside the space kept clear around Campfire."));
+    REQUIRE(Says(text, "1 came back from the creature movement maps as a straight line built without the movement maps"));
+    REQUIRE(Says(text, "(type 0x11)"));
+    REQUIRE_FALSE(Says(text, "All "));
+}
+
+TEST_CASE("Playerbot stand spots say when there was nothing to ask about", "[playerbots][path-search]")
+{
+    REQUIRE(DescribeStandSpots({}) == "There was no place to stand to ask about.");
 }

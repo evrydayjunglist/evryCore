@@ -664,6 +664,7 @@ void PlayerbotWalker::ResetNow()
     ClearWayRound();
     _walkingAWayRound = false;
     _lookedForAWayRound = false;
+    _failedAtHerFeet = false;
 }
 
 void PlayerbotWalker::ClearWayRound()
@@ -684,7 +685,8 @@ void PlayerbotWalker::BeginWorldTick()
     WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
 }
 
-bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out)
+bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out,
+    std::vector<StandSpotLook>* look)
 {
     if (!player || !target)
         return false;
@@ -719,16 +721,42 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         float z = target->GetPositionZ();
         player->UpdateAllowedPositionZ(x, y, z);
 
-        if (IsInsideAvoid(x, y, avoids))
+        auto const avoid = std::find_if(avoids.begin(), avoids.end(), [x, y](AvoidCircle const& circle) { return CircleContains(circle, x, y); });
+        if (avoid != avoids.end())
+        {
+            if (look)
+            {
+                StandSpotLook& spot = look->emplace_back();
+                spot.What = StandSpotLook::Outcome::InSpellFocus;
+                spot.SpellFocus = avoid->name;
+            }
             continue;
+        }
 
         // Asking about eight sides of the target keeps the short search, so a far target stays cheap to look at: the work
-        // finders ask this of many targets in one pick. A side whose route was found but is longer than a short path can
-        // hold is still a side she can reach, and the walk itself asks the long search for that route.
+        // finders ask this of many targets in one pick. A side the short search could not settle is still a side she may
+        // reach: it found the route and a short path could not hold it, or it ran out of search nodes on the way. The walk
+        // itself asks the long search for that route, and a target no route reaches fails that walk the usual way.
         PathGenerator generator(player, NavMeshChoice::PlayerBody);
         if (!generator.CalculatePath(x, y, z, false))
+        {
+            if (look)
+                look->emplace_back().What = StandSpotLook::Outcome::NotOnMap;
             continue;
-        if (!PathIsWalkable(generator) && !PathSearchFoundTooLongARoute(generator.GetSearchReport()))
+        }
+
+        PathSearchReport const& search = generator.GetSearchReport();
+        bool const usable = PathIsWalkable(generator) || PathSearchFoundTooLongARoute(search) || PathSearchRanOutOfRoom(search);
+        if (look)
+        {
+            StandSpotLook& spot = look->emplace_back();
+            spot.What = usable ? StandSpotLook::Outcome::Usable : StandSpotLook::Outcome::Refused;
+            spot.PathType = uint32(generator.GetPathType());
+            spot.Points = uint32(generator.GetPath().size());
+            spot.PlayerNavMesh = generator.UsedPlayerNavMesh();
+            spot.Search = search;
+        }
+        if (!usable)
             continue;
 
         bool const hits = PathHitsAvoid(generator.GetPath(), avoids);
@@ -2247,9 +2275,12 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
     ClearWayRound();
     _state = State::Failed;
     _contouring = false;
+    // The only spot she can walk to is the one she stands on, so no destination could have been reached from here.
+    _failedAtHerFeet = summary.Reached <= 1;
     TC_LOG_INFO(PLAYERBOTS_LOG,
-        "mod-playerbots: {} found no way round: none of the {} spots she can walk to within {:.0f} yards is {:.0f} yards closer to where she is going, and the navmesh had no route she can start from any of the {} way(s) out. Looking for other work.",
-        player->GetName(), summary.Reached, WAY_ROUND_YARDS, WAY_ROUND_MIN_GAIN_YARDS, uint32(waysOut));
+        "mod-playerbots: {} found no way round: none of the {} spots she can walk to within {:.0f} yards is {:.0f} yards closer to where she is going, and the navmesh had no route she can start from any of the {} way(s) out. {}",
+        player->GetName(), summary.Reached, WAY_ROUND_YARDS, WAY_ROUND_MIN_GAIN_YARDS, uint32(waysOut),
+        _failedAtHerFeet ? "She cannot step anywhere from where she stands." : "Looking for other work.");
 }
 
 bool PlayerbotWalker::StartWayRoundWalk(Player* player)

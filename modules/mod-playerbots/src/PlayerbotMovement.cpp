@@ -722,8 +722,13 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         if (IsInsideAvoid(x, y, avoids))
             continue;
 
+        // Asking about eight sides of the target keeps the short search, so a far target stays cheap to look at: the work
+        // finders ask this of many targets in one pick. A side whose route was found but is longer than a short path can
+        // hold is still a side she can reach, and the walk itself asks the long search for that route.
         PathGenerator generator(player, NavMeshChoice::PlayerBody);
-        if (!generator.CalculatePath(x, y, z, false) || !PathIsWalkable(generator))
+        if (!generator.CalculatePath(x, y, z, false))
+            continue;
+        if (!PathIsWalkable(generator) && !PathSearchFoundTooLongARoute(generator.GetSearchReport()))
             continue;
 
         bool const hits = PathHitsAvoid(generator.GetPath(), avoids);
@@ -891,9 +896,9 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
         else
             ClearFaceRecovery();
         _state = State::Moving;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {}",
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {} The route took {:.2f} ms to build.",
             player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(destination),
-            DescribePathSearch(mmapEvidence.Search));
+            DescribePathSearch(mmapEvidence.Search), mmapEvidence.BuildMs);
         QueueMove(player, from, true, true);
         return true;
     }
@@ -1446,13 +1451,17 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
     CollectSpellFocusAvoids(player, 50.0f, avoids);
 
     // Every route she walks is asked of the set of movement maps built for a player's body. Where that set has not
-    // been generated the engine answers from the creature one instead, exactly as it always did.
-    PathGenerator generator(player, NavMeshChoice::PlayerBody);
+    // been generated the engine answers from the creature one instead, exactly as it always did. Either way she searches
+    // with room for a long route: a road out of a cave and round the hills can be three times the straight line.
+    PathGenerator generator(player, NavMeshChoice::PlayerBody, PathReach::Long);
+    std::chrono::steady_clock::time_point const started = std::chrono::steady_clock::now();
     bool const calculated = generator.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
         destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+    std::chrono::duration<float, std::milli> const took = std::chrono::steady_clock::now() - started;
     if (evidence)
     {
         evidence->Calculated = calculated;
+        evidence->BuildMs = took.count();
         evidence->PlayerNavMesh = generator.UsedPlayerNavMesh();
         evidence->Search = generator.GetSearchReport();
         evidence->Type = uint32(generator.GetPathType());
@@ -1494,14 +1503,14 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
                 if (IsInsideAvoid(via.GetPositionX(), via.GetPositionY(), avoids))
                     continue;
 
-                PathGenerator toVia(player, NavMeshChoice::PlayerBody);
+                PathGenerator toVia(player, NavMeshChoice::PlayerBody, PathReach::Long);
                 if (!toVia.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
                     via.GetPositionX(), via.GetPositionY(), via.GetPositionZ(), false) || !PathIsWalkable(toVia))
                     continue;
                 if (PathHitsAvoid(toVia.GetPath(), avoids))
                     continue;
 
-                PathGenerator toDest(player, NavMeshChoice::PlayerBody);
+                PathGenerator toDest(player, NavMeshChoice::PlayerBody, PathReach::Long);
                 if (!toDest.CalculatePath(via.GetPositionX(), via.GetPositionY(), via.GetPositionZ(),
                     destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false)
                     || !PathIsWalkable(toDest))
@@ -1596,12 +1605,12 @@ void PlayerbotWalker::LogRecoveryMmap(Player* player, char const* decision, Mmap
         prefix = "none";
 
     TC_LOG_INFO(PLAYERBOTS_LOG,
-        "mod-playerbots: {} recovery mmap {}: goal={} map={} key={:016X}:{:016X}, mesh={}, calculated={}, type=0x{:02X}, actualEnd=({:.2f}, {:.2f}, {:.2f}), pathLength={:.1f}, firstPoints=[{}], episodeYards={:.1f}, visitedCells={}. {}",
+        "mod-playerbots: {} recovery mmap {}: goal={} map={} key={:016X}:{:016X}, mesh={}, calculated={}, type=0x{:02X}, actualEnd=({:.2f}, {:.2f}, {:.2f}), pathLength={:.1f}, firstPoints=[{}], episodeYards={:.1f}, visitedCells={}. {} The route took {:.2f} ms to build.",
         player->GetName(), decision, PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _recoveryGoal.MapId,
         _recoveryGoal.Secondary, _recoveryGoal.Primary, evidence.PlayerNavMesh ? "player" : "creature",
         evidence.Calculated, evidence.Type,
         evidence.ActualEnd.x, evidence.ActualEnd.y, evidence.ActualEnd.z, evidence.Length, prefix,
-        _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells(), DescribePathSearch(evidence.Search));
+        _faceRecovery.EpisodeYards(), _faceRecovery.VisitedGroundCells(), DescribePathSearch(evidence.Search), evidence.BuildMs);
 }
 
 void PlayerbotWalker::LogStartConnectivity(Player* player, Position const& from)
@@ -1637,6 +1646,7 @@ void PlayerbotWalker::LogConnectivity(Player* player, Position const& from, char
             if (!Trinity::IsValidMapCoord(x, y, z) || z <= INVALID_HEIGHT)
                 continue;
 
+            // These probes are 60 and 120 yards out and there can be 32 of them in a row, so they keep the short search.
             PathGenerator probe(player, NavMeshChoice::PlayerBody);
             if (!probe.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(), x, y, z, false))
                 continue;
@@ -1739,9 +1749,9 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
             player->GetName(), uint32(_path.size()), from.GetExactDist(_destination));
     }
     else
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {}",
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {} The route took {:.2f} ms to build.",
             player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(_destination),
-            DescribePathSearch(mmapEvidence.Search));
+            DescribePathSearch(mmapEvidence.Search), mmapEvidence.BuildMs);
 
     Position pose = from;
     if (_path.size() >= 2)

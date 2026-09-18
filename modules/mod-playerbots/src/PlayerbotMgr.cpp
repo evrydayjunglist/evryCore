@@ -57,6 +57,10 @@ namespace
     constexpr uint32 USE_ITEM_CAST_START_MS = 400;
     constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
+    // She could not step anywhere from where she stood: she looks again after this long.
+    constexpr uint32 STUCK_FEET_WAIT_MS = 5000;
+    // Standing with nothing to do this long while targets are on her skip list, she forgets the list.
+    constexpr uint32 IDLE_FORGET_SKIPS_MS = 120000;
     constexpr uint32 LOOT_WINDOW_MS = 1000;
     constexpr uint32 VENDOR_RETRY_MS = 60000;
     constexpr uint32 RELEASE_WAIT_MS = 3000;
@@ -1980,6 +1984,8 @@ void PlayerbotMgr::ForgetPositionAfterTeleport(PlayerbotRecord& bot, Player* pla
     bot.StillShortGuid.Clear();
     bot.StillShortFeet.clear();
     bot.LookedForOtherYellowOnFace = false;
+    // The place where she could not step is behind her.
+    bot.StuckFeetWaitMs = 0;
 }
 
 // The server holds her in place. No walk, no jump, and no turn until it lets her go. An arc already in the air still comes
@@ -2111,6 +2117,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.QuestInteractWaitMs = 0;
         bot.QuestArriveWaitMs = 0;
         bot.QuestSearchEmptyMs = 0;
+        bot.IdleWithSkipsMs = 0;
         bot.QuestTarget = {};
         bot.GameObjectTarget = {};
         bot.UseItemOnUnitTarget = {};
@@ -2492,6 +2499,13 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
     }
 
+    // She could not step anywhere from where she stood. Any walk would fail the same way until she has waited.
+    if (bot.StuckFeetWaitMs)
+    {
+        bot.StuckFeetWaitMs = bot.StuckFeetWaitMs > diff ? bot.StuckFeetWaitMs - diff : 0;
+        return;
+    }
+
     if (retrySameObjective
         && TrySameObjectiveYellow(bot, player, sameObjectiveQuestId, sameObjectiveEntry, sameObjectiveSkipPos, ObjectGuid::Empty))
         return;
@@ -2505,11 +2519,30 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (TryMapYellow(bot, player, skipFailedQuestId, skipFailedEntry))
         return;
 
+    // Nothing to do while targets are on her skip list. The skip is short: after standing a while, she forgets it and
+    // looks again, so one bad moment cannot leave her idle for good.
+    if (!bot.UnreachableGuids.empty() || !bot.UnreachablePositions.empty())
+    {
+        bot.IdleWithSkipsMs += diff;
+        if (bot.IdleWithSkipsMs >= IDLE_FORGET_SKIPS_MS)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has had nothing to do for {} seconds while {} target(s) and {} map place(s) were on her skip list. She forgets them and looks again.",
+                player->GetName(), IDLE_FORGET_SKIPS_MS / IN_MILLISECONDS, bot.UnreachableGuids.size(), bot.UnreachablePositions.size());
+            ClearUnreachable(bot);
+            bot.IdleWithSkipsMs = 0;
+            return;
+        }
+    }
+    else
+        bot.IdleWithSkipsMs = 0;
+
     bot.QuestSearchEmptyMs += diff;
     if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
     {
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no immediate work and no map yellow yet. Still looking (talk {:.0f} yards, kill {:.0f} yards).",
             player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
+        for (std::string const& line : PlayerbotClient::ExplainUnpickedTurnIns(player, bot.UnreachableGuids, skipFailedQuestId))
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} {}", player->GetName(), line);
         bot.QuestSearchEmptyMs = 0;
     }
 }
@@ -2552,6 +2585,8 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
     bot.QuestArriveWaitMs = 0;
     bot.QuestInteractWaitMs = 0;
     bot.QuestSearchEmptyMs = 0;
+    bot.IdleWithSkipsMs = 0;
+    bot.StuckFeetWaitMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = {};
@@ -2987,18 +3022,34 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
 
 void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
 {
+    // Her walk map found no spot she can step to from where she stands. Every target would fail the same way from here,
+    // so this one stays off her skip list, and she starts nothing new until she has waited and can look again.
+    bool const blameTarget = !bot.Walker.FailedAtHerFeet();
+    if (!blameTarget)
+    {
+        bot.StuckFeetWaitMs = STUCK_FEET_WAIT_MS;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot step anywhere from where she stands, so the target of this walk stays off her skip list. She waits {} seconds and looks again.",
+            player->GetName(), STUCK_FEET_WAIT_MS / IN_MILLISECONDS);
+    }
+
     if (bot.GameObjectTarget.QuestId)
     {
-        RememberFailedYellow(bot, bot.GameObjectTarget.Pos);
-        if (!bot.GameObjectTarget.GoGuid.IsEmpty())
-            bot.UnreachableGuids.insert(bot.GameObjectTarget.GoGuid);
+        if (blameTarget)
+        {
+            RememberFailedYellow(bot, bot.GameObjectTarget.Pos);
+            if (!bot.GameObjectTarget.GoGuid.IsEmpty())
+                bot.UnreachableGuids.insert(bot.GameObjectTarget.GoGuid);
+        }
         bot.GameObjectTarget = {};
     }
     else if (bot.UseItemOnUnitTarget.QuestId)
     {
-        RememberFailedYellow(bot, bot.UseItemOnUnitTarget.Pos);
-        if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
-            bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
+        if (blameTarget)
+        {
+            RememberFailedYellow(bot, bot.UseItemOnUnitTarget.Pos);
+            if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
+                bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
+        }
         bot.UseItemOnUnitTarget = {};
         ClearUseItemCast(bot);
     }
@@ -3008,27 +3059,34 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
             LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
         else
         {
-            RememberFailedYellow(bot, bot.CombatTarget.Pos);
-            if (!bot.CombatTarget.CreatureGuid.IsEmpty())
-                bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            if (blameTarget)
+            {
+                RememberFailedYellow(bot, bot.CombatTarget.Pos);
+                if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+                    bot.UnreachableGuids.insert(bot.CombatTarget.CreatureGuid);
+            }
             ClearCombat(bot, player);
         }
     }
     else if (bot.ItemLootTarget.QuestId || bot.ItemLootTarget.LootCorpse)
     {
-        RememberFailedYellow(bot, bot.ItemLootTarget.Pos);
-        if (!bot.ItemLootTarget.GoGuid.IsEmpty())
-            bot.UnreachableGuids.insert(bot.ItemLootTarget.GoGuid);
-        else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
-            bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+        if (blameTarget)
+        {
+            RememberFailedYellow(bot, bot.ItemLootTarget.Pos);
+            if (!bot.ItemLootTarget.GoGuid.IsEmpty())
+                bot.UnreachableGuids.insert(bot.ItemLootTarget.GoGuid);
+            else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
+                bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
+        }
         ClearItemLoot(bot);
     }
     else if (!bot.VendorTarget.NpcGuid.IsEmpty())
     {
-        bot.UnreachableGuids.insert(bot.VendorTarget.NpcGuid);
+        if (blameTarget)
+            bot.UnreachableGuids.insert(bot.VendorTarget.NpcGuid);
         ClearVendor(bot);
     }
-    else if (!bot.QuestTarget.NpcGuid.IsEmpty())
+    else if (!bot.QuestTarget.NpcGuid.IsEmpty() && blameTarget)
         bot.UnreachableGuids.insert(bot.QuestTarget.NpcGuid);
 
     bot.QuestTarget = {};
@@ -3645,6 +3703,7 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
     ClearItemLoot(bot);
     ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
+    bot.IdleWithSkipsMs = 0;
     bot.QuestTarget = target;
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = {};
@@ -3682,6 +3741,7 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
     ClearItemLoot(bot);
     ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
+    bot.IdleWithSkipsMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = target;
     bot.UseItemOnUnitTarget = {};
@@ -3864,6 +3924,7 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
     ClearItemLoot(bot);
     ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
+    bot.IdleWithSkipsMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = target;
@@ -3910,6 +3971,7 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
     ClearItemLoot(bot);
     ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
+    bot.IdleWithSkipsMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = {};
@@ -4220,6 +4282,7 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
     ClearCombat(bot, player);
     ClearVendor(bot);
     bot.QuestSearchEmptyMs = 0;
+    bot.IdleWithSkipsMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = {};
@@ -4315,6 +4378,7 @@ bool PlayerbotMgr::BeginVendorTarget(PlayerbotRecord& bot, Player* player, Playe
     ClearCombat(bot, player);
     ClearItemLoot(bot);
     bot.QuestSearchEmptyMs = 0;
+    bot.IdleWithSkipsMs = 0;
     bot.QuestTarget = {};
     bot.GameObjectTarget = {};
     bot.UseItemOnUnitTarget = {};

@@ -40,8 +40,10 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "PhaseShift.h"
 #include "Player.h"
 #include "PlayerbotMovement.h"
+#include "PlayerbotPathSearch.h"
 #include "PlayerbotServerMovement.h"
 #include "Playerbots.h"
 #include "QuestDef.h"
@@ -52,12 +54,14 @@
 #include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "StringFormat.h"
 #include "Unit.h"
 #include "UnitDefines.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <algorithm>
 #include <limits>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -1478,14 +1482,15 @@ namespace
     constexpr float TAKEABLE_SEARCH_NEAR = 80.0f;
     constexpr float TAKEABLE_SEARCH_FAR = 150.0f;
 
-    Optional<PlayerbotClient::QuestTarget> MakeQuestTarget(Player* player, Creature* creature, int32 questId, bool turnIn)
+    Optional<PlayerbotClient::QuestTarget> MakeQuestTarget(Player* player, Creature* creature, int32 questId, bool turnIn,
+        std::vector<StandSpotLook>* look = nullptr)
     {
         if (!player || !creature || !questId)
             return {};
 
         Position standPos;
         float const standDistance = creature->GetCombatReach() + 1.0f;
-        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
+        if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos, look))
             return {};
 
         PlayerbotClient::QuestTarget target;
@@ -1643,6 +1648,144 @@ namespace
 
         return best;
     }
+
+    std::string FormatPhaseIds(PhaseShift const& phaseShift)
+    {
+        std::string text;
+        for (PhaseShift::PhaseRef const& phase : phaseShift.GetPhases())
+        {
+            if (!text.empty())
+                text += ", ";
+            text += std::to_string(phase.Id);
+        }
+
+        return text.empty() ? std::string("none") : text;
+    }
+
+    std::string DescribeCreatureEntries(std::unordered_set<uint32> const& entries)
+    {
+        std::string text;
+        for (uint32 entry : entries)
+        {
+            if (!text.empty())
+                text += " or ";
+            CreatureTemplate const* info = sObjectMgr->GetCreatureTemplate(entry);
+            text += Trinity::StringFormat("{} ({})", info ? info->Name : std::string("creature"), entry);
+        }
+
+        return text;
+    }
+
+    std::string DescribeNoCreatureEnder(uint32 questId)
+    {
+        std::string objects;
+        for (auto const& rel : sObjectMgr->GetGOQuestInvolvedRelationReverseBounds(questId))
+        {
+            if (!objects.empty())
+                objects += " or ";
+            GameObjectTemplate const* info = sObjectMgr->GetGameObjectTemplate(rel.second);
+            objects += Trinity::StringFormat("{} ({})", info ? info->name : std::string("gameobject"), rel.second);
+        }
+
+        if (objects.empty())
+            return "nothing in the database takes it in; it has no creature or gameobject ender.";
+
+        return Trinity::StringFormat("no creature takes it in, only the gameobject {}, and this search walks to creatures only.", objects);
+    }
+
+    // The first check FindLivingEnderOnMap refuses this ender on, in the order it makes them. Empty when it would do.
+    std::string DescribeEnderRefusal(Player const* player, Creature const* creature, Optional<Position> const& marker,
+        std::unordered_set<ObjectGuid> const& skip)
+    {
+        if (skip.contains(creature->GetGUID()))
+            return "is on her skip list";
+        if (!creature->IsAlive())
+            return "is dead";
+        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))
+            return "is not a quest giver now";
+        if (!player->InSamePhase(creature))
+            return Trinity::StringFormat("is not in her phase (her phases: {}; its phases: {})", FormatPhaseIds(player->GetPhaseShift()),
+                FormatPhaseIds(creature->GetPhaseShift()));
+        if (creature->IsPrivateObject() && !creature->CheckPrivateObjectOwnerVisibility(player))
+            return "is there only for someone else";
+        if (marker && creature->GetExactDist(*marker) > 40.0f)
+            return Trinity::StringFormat("stands {:.0f} yards from the ? marker", creature->GetExactDist(*marker));
+        return {};
+    }
+
+    std::string DescribeNoUsableEnder(Player* player, std::unordered_set<uint32> const& enderEntries, Optional<Position> const& marker,
+        std::unordered_set<ObjectGuid> const& skip)
+    {
+        constexpr uint32 NAMED_ENDERS = 3;
+
+        Map* map = player->GetMap();
+        std::string text = Trinity::StringFormat("no {} on this map would do.", DescribeCreatureEntries(enderEntries));
+        if (marker)
+            text += Trinity::StringFormat(" Its ? marker is at ({:.0f}, {:.0f}), {:.0f} yards from her{}, and this search takes an ender within 40 yards of it.",
+                marker->GetPositionX(), marker->GetPositionY(), player->GetExactDist2d(*marker),
+                map->IsGridLoaded(*marker) ? "" : ", in a grid that is not loaded");
+        else
+            text += " It has no ? marker on this map, so this search takes the nearest usable ender anywhere on the map.";
+
+        uint32 loaded = 0;
+        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        {
+            Creature const* creature = pair.second;
+            if (!creature || !enderEntries.contains(creature->GetEntry()))
+                continue;
+            if (++loaded > NAMED_ENDERS)
+                continue;
+
+            std::string const refusal = DescribeEnderRefusal(player, creature, marker, skip);
+            text += Trinity::StringFormat(" {} at {:.0f} yards {}.", creature->GetGUID().ToString(), player->GetExactDist(creature),
+                refusal.empty() ? std::string("would do") : refusal);
+        }
+
+        if (!loaded)
+            text += " None of them is loaded on this map.";
+        else if (loaded > NAMED_ENDERS)
+            text += Trinity::StringFormat(" {} more of them are loaded.", loaded - NAMED_ENDERS);
+
+        return text;
+    }
+
+    // One finished quest's turn-in: the living ender she would walk to and where she would stand beside it. With why, a
+    // turn-in that is dropped says which step dropped it and the facts that step used.
+    Optional<PlayerbotClient::QuestTarget> LookForTurnIn(Player* player, uint32 questId, std::unordered_set<ObjectGuid> const& skip,
+        std::string* why)
+    {
+        Map* map = player->GetMap();
+
+        std::unordered_set<uint32> enderEntries;
+        CollectCreatureEnderEntries(questId, enderEntries);
+        if (enderEntries.empty())
+        {
+            if (why)
+                *why = DescribeNoCreatureEnder(questId);
+            return {};
+        }
+
+        Optional<Position> marker = GetFinishedQuestMapMarker(questId, map->GetId(), *player);
+        if (marker && !map->IsGridLoaded(*marker))
+            map->LoadGrid(marker->GetPositionX(), marker->GetPositionY());
+
+        Creature* creature = FindLivingEnderOnMap(player, enderEntries, marker, skip);
+        if (!creature)
+        {
+            if (why)
+                *why = DescribeNoUsableEnder(player, enderEntries, marker, skip);
+            return {};
+        }
+
+        std::vector<StandSpotLook> look;
+        Optional<PlayerbotClient::QuestTarget> target = MakeQuestTarget(player, creature, int32(questId), true, why ? &look : nullptr);
+        if (!target && why)
+            *why = Trinity::StringFormat("{} ({}) is {:.0f} yards away and none of the {} places to stand beside {} has a route she may walk. {}",
+                creature->GetName(), creature->GetGUID().ToString(), player->GetExactDist(creature), look.size(), creature->GetName(),
+                DescribeStandSpots(look));
+
+        return target;
+    }
 }
 
 Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind, std::unordered_set<ObjectGuid> const& skip)
@@ -1730,7 +1873,6 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
 
-    Map* map = player->GetMap();
     QuestTarget best;
     float bestDist = std::numeric_limits<float>::max();
 
@@ -1741,20 +1883,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         if (skipQuestId && int32(questId) == skipQuestId)
             continue;
 
-        std::unordered_set<uint32> enderEntries;
-        CollectCreatureEnderEntries(questId, enderEntries);
-        if (enderEntries.empty())
-            continue;
-
-        Optional<Position> marker = GetFinishedQuestMapMarker(questId, map->GetId(), *player);
-        if (marker && !map->IsGridLoaded(*marker))
-            map->LoadGrid(marker->GetPositionX(), marker->GetPositionY());
-
-        Creature* creature = FindLivingEnderOnMap(player, enderEntries, marker, skip);
-        if (!creature)
-            continue;
-
-        Optional<QuestTarget> target = MakeQuestTarget(player, creature, int32(questId), true);
+        Optional<QuestTarget> target = LookForTurnIn(player, questId, skip, nullptr);
         if (!target)
             continue;
 
@@ -1770,6 +1899,36 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         return {};
 
     return best;
+}
+
+std::vector<std::string> PlayerbotClient::ExplainUnpickedTurnIns(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId)
+{
+    std::vector<std::string> lines;
+    if (!player || !player->IsInWorld() || !player->GetMap())
+        return lines;
+
+    for (auto const& [questId, status] : player->getQuestStatusMap())
+    {
+        if (status.Status != QUEST_STATUS_COMPLETE)
+            continue;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        std::string const title = quest ? quest->GetLogTitle() : std::string("quest");
+
+        std::string why;
+        if (skipQuestId && int32(questId) == skipQuestId)
+            why = "her last walk for it failed, so this pick left it out.";
+        else if (Optional<QuestTarget> target = LookForTurnIn(player, questId, skip, &why))
+        {
+            lines.push_back(Trinity::StringFormat("finished {} ({}), and its turn-in at {} is there to pick, {:.0f} yards away.",
+                title, questId, target->NpcGuid.ToString(), player->GetExactDist(target->Pos)));
+            continue;
+        }
+
+        lines.push_back(Trinity::StringFormat("finished {} ({}), but its turn-in was not picked: {}", title, questId, why));
+    }
+
+    return lines;
 }
 
 // Map work. No line of sight. This zone only, not the continent.

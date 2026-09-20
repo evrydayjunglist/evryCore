@@ -17,16 +17,20 @@
 
 // Makes and removes a Reaper without the character creation screen.
 //
-// The retail client refuses to offer class 16 on that screen, so the only way
-// to find out what it does with a Reaper in the world is to put one there from
-// this side. `.coa reaper make` builds one on your own account through the same
-// Player::Create the real creation path uses, so the character is a normal
-// character in every way except that no client could have made it.
+// The stock retail client will not offer a Reaper on that screen, because a
+// compiled check in the client rejects the class id. Widening it is a memory
+// patch applied to the running game from evryLoader, so this command is the way
+// to put a Reaper in the world without one. `.coa reaper make` builds it on
+// your own account through the same Player::Create the real creation path uses,
+// so the character is a normal character in every way except that no unpatched
+// client could have made it.
 //
 // `.coa reaper unmake` removes it again, and runs from the server console as
-// well as in game. That matters: if a class 16 character stops the client from
-// drawing the character list, you cannot log in to undo it, and the console is
-// the way back.
+// well as in game. That matters: if a Reaper stops the client from drawing the
+// character list, you cannot log in to undo it, and the console is the way
+// back. It only removes a character whose stored class is the current Reaper
+// class, so a character left behind at an older class id has to be removed by
+// the server that still knows that id.
 
 #include "AccountMgr.h"
 #include "CharacterCache.h"
@@ -101,8 +105,8 @@ namespace
 
     // Picks the first appearance the server will accept for this race, sex and
     // class, the same way the bot factory does. Character creation refuses a
-    // character whose appearance does not validate, and nothing has ever picked
-    // one for class 16 before, so this is the step most likely to say no.
+    // character whose appearance does not validate, and nothing had ever picked
+    // one for Reaper before, so this is the step most likely to say no.
     bool FillDefaultCustomizations(WorldSession* session, WorldPackets::Character::CharacterCreateInfo& createInfo)
     {
         std::vector<ChrCustomizationOptionEntry const*> const* options =
@@ -218,14 +222,14 @@ public:
         // message. They are exactly the rows the world SQL for this class adds.
         if (!sObjectMgr->GetPlayerInfo(race, CLASS_REAPER))
         {
-            handler->PSendSysMessage("There is no playercreateinfo row for race %u and class 16, so a Reaper of that race has nowhere to start.", uint32(race));
+            handler->PSendSysMessage("There is no playercreateinfo row for race %u and class %u, so a Reaper of that race has nowhere to start.", uint32(race), uint32(CLASS_REAPER));
             handler->SetSentErrorMessage(true);
             return false;
         }
 
         if (!sObjectMgr->GetClassExpansionRequirement(race, CLASS_REAPER))
         {
-            handler->PSendSysMessage("There is no class_expansion_requirement row for race %u and class 16, so creation would be refused.", uint32(race));
+            handler->PSendSysMessage("There is no class_expansion_requirement row for race %u and class %u, so creation would be refused.", uint32(race), uint32(CLASS_REAPER));
             handler->SetSentErrorMessage(true);
             return false;
         }
@@ -239,7 +243,7 @@ public:
 
         if (!FillDefaultCustomizations(session, createInfo))
         {
-            handler->PSendSysMessage("No appearance the server accepts could be built for race %u as a Reaper. That is worth writing down: it means the customization data refuses class 16.", uint32(race));
+            handler->PSendSysMessage("No appearance the server accepts could be built for race %u as a Reaper. That is worth writing down: it means the customization data refuses class %u.", uint32(race), uint32(CLASS_REAPER));
             handler->SetSentErrorMessage(true);
             return false;
         }

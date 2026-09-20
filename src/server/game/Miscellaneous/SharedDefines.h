@@ -168,11 +168,13 @@ enum Classes : uint8
     CLASS_EVOKER        = 13, // TITLE Evoker
     CLASS_ADVENTURER    = 14, // TITLE Adventurer
     CLASS_TRAVELER      = 15, // TITLE Traveler
-    CLASS_REAPER        = 16  // TITLE Reaper
+    // 16 is deliberately free. It is reserved for Hero, which the owner wants
+    // ahead of every Conquest of Azeroth class, so Reaper moved out of it.
+    CLASS_REAPER        = 17  // TITLE Reaper
 };
 
 // max+1 for player class
-#define MAX_CLASSES       17
+#define MAX_CLASSES       18
 
 #define CLASSMASK_ALL_PLAYABLE     \
     ((1<<(CLASS_WARRIOR-1))      | \

@@ -2339,8 +2339,14 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType, bool extr
                     damageInfo.HitInfo |= HITINFO_FAKE_DAMAGE;
             }
 
-            // Rage reward
-            if (this != victim && damageInfo.HitOutCome != MELEE_HIT_MISS && GetPowerType() == POWER_RAGE)
+            // Rage reward. The displayed bar is the right test for every class
+            // the client ships: a Warrior always shows Rage, and a Druid holds
+            // Rage but must only build it in Bear Form. Our own classes hold
+            // Rage and can never show it, because a class displays one bar and
+            // a Hero displays Mana, so they are asked whether they hold it.
+            if (this != victim && damageInfo.HitOutCome != MELEE_HIT_MISS
+                && (GetPowerType() == POWER_RAGE
+                    || (GetClass() >= CLASS_HERO && GetPowerIndex(POWER_RAGE) < MAX_POWERS_PER_CLASS)))
             {
                 if (uint32 rageReward = CalcMeleeAttackRageGain(this, attType))
                 {

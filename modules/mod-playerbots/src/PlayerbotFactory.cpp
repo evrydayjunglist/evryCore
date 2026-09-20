@@ -197,6 +197,7 @@ bool IsFirstFactoryClass(uint8 playerClass)
         case CLASS_EVOKER:
         case CLASS_ADVENTURER:
         case CLASS_TRAVELER:
+        case CLASS_REAPER:
         case CLASS_NONE:
             return false;
         default:

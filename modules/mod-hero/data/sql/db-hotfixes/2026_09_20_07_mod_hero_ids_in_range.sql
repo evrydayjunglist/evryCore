@@ -209,11 +209,18 @@ DELETE FROM `skill_race_class_info`
 --
 -- The unique id is fixed rather than random so re-running this file cannot
 -- quietly change it. 1609394630 was checked against the live table and is free.
--- 1609394509, 1609394510, 1609394600, 1609394601, 1609394602, 1609394604,
--- 1609394610 and 1609394620 belong to the Hero and Reaper files already
--- applied, and reusing one would make the guard below skip this whole push in
--- silence. Without a new unique id a client that has already played a Hero
--- keeps every row it cached, including all of the old ids.
+-- 1609394509, 1609394510, 1609394601, 1609394602, 1609394604, 1609394610 and
+-- 1609394620 belong to the Hero and Reaper files already applied, and reusing
+-- one would make the guard below skip this whole push in silence.
+--
+-- 1609394600 and 1609394603 are burnt too, even though neither is in the live
+-- table. The Hero class file writes 1609394600, and the spell-family probe on
+-- 20 September moved that push to 1609394603 and then to 1609394604 by hand so
+-- the client would re-download it. A new file taking either would pass the
+-- guard here but collide on a database rebuilt from the files.
+--
+-- Without a new unique id a client that has already played a Hero keeps every
+-- row it cached, including all of the old ids.
 SET @HeroRangePush := (SELECT `Id` FROM `hotfix_data` WHERE `UniqueId`=1609394630 LIMIT 1);
 SET @HeroRangePush := COALESCE(@HeroRangePush, (SELECT COALESCE(MAX(`Id`),0)+1 FROM `hotfix_data`));
 INSERT INTO `hotfix_data` (`Id`,`UniqueId`,`TableHash`,`RecordId`,`Status`)

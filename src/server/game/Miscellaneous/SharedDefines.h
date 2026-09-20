@@ -167,11 +167,12 @@ enum Classes : uint8
     CLASS_DEMON_HUNTER  = 12, // TITLE Demon Hunter
     CLASS_EVOKER        = 13, // TITLE Evoker
     CLASS_ADVENTURER    = 14, // TITLE Adventurer
-    CLASS_TRAVELER      = 15  // TITLE Traveler
+    CLASS_TRAVELER      = 15, // TITLE Traveler
+    CLASS_REAPER        = 16  // TITLE Reaper
 };
 
 // max+1 for player class
-#define MAX_CLASSES       16
+#define MAX_CLASSES       17
 
 #define CLASSMASK_ALL_PLAYABLE     \
     ((1<<(CLASS_WARRIOR-1))      | \
@@ -186,7 +187,8 @@ enum Classes : uint8
      (1<<(CLASS_MONK-1))         | \
      (1<<(CLASS_DRUID-1))        | \
      (1<<(CLASS_DEMON_HUNTER-1)) | \
-     (1<<(CLASS_EVOKER-1)))
+     (1<<(CLASS_EVOKER-1))       | \
+     (1<<(CLASS_REAPER-1)))
 
 // valid classes for creature_template.unit_class
 enum UnitClass

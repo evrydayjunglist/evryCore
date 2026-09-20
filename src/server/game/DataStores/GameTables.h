@@ -246,6 +246,11 @@ inline float GetGameTableColumnForClass(T const* row, int32 class_)
             return row->Adventurer;
         case CLASS_TRAVELER:
             return row->Traveler;
+        case CLASS_REAPER:
+            // These tables are client files with one fixed column per class, so
+            // Reaper has no column of its own. It borrows Death Knight's, which
+            // is the closest existing class: melee, heavy armour, Runic Power.
+            return row->DeathKnight;
         default:
             break;
     }
@@ -287,6 +292,9 @@ inline float GetSpellScalingColumnForClass(GtSpellScalingEntry const* row, int32
             return row->Adventurer;
         case CLASS_TRAVELER:
             return row->Traveler;
+        case CLASS_REAPER:
+            // Reaper has no column here either, for the same reason.
+            return row->DeathKnight;
         case -1:
         case -7:
             return row->Item;

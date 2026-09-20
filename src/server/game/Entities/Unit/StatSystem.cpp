@@ -610,7 +610,7 @@ float const m_diminishing_k[MAX_CLASSES] =
     0.9880f,  // Evoker
     1.0f,     // Adventurer
     1.0f,     // Traveler
-    1.0f,     // class 16, free and reserved for Hero
+    0.9720f,  // Hero, the same as Druid
     0.9560f,  // Reaper, the same as Death Knight
 };
 
@@ -654,7 +654,7 @@ constexpr float parry_cap[MAX_CLASSES] =
     0.0f,           // Evoker
     0.0f,           // Adventurer
     0.0f,           // Traveler
-    0.0f,           // class 16, free and reserved for Hero
+    65.631440f,     // Hero, the same as Death Knight, so a parry ability can work
     65.631440f,     // Reaper, the same as Death Knight
 };
 
@@ -698,7 +698,7 @@ constexpr float dodge_cap[MAX_CLASSES] =
     145.560408f,    // Evoker
     0.0f,           // Adventurer
     0.0f,           // Traveler
-    0.0f,           // class 16, free and reserved for Hero
+    116.890707f,    // Hero, the same as Druid
     65.631440f,     // Reaper, the same as Death Knight
 };
 

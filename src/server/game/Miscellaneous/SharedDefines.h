@@ -168,8 +168,7 @@ enum Classes : uint8
     CLASS_EVOKER        = 13, // TITLE Evoker
     CLASS_ADVENTURER    = 14, // TITLE Adventurer
     CLASS_TRAVELER      = 15, // TITLE Traveler
-    // 16 is deliberately free. It is reserved for Hero, which the owner wants
-    // ahead of every Conquest of Azeroth class, so Reaper moved out of it.
+    CLASS_HERO          = 16, // TITLE Hero
     CLASS_REAPER        = 17  // TITLE Reaper
 };
 
@@ -190,6 +189,7 @@ enum Classes : uint8
      (1<<(CLASS_DRUID-1))        | \
      (1<<(CLASS_DEMON_HUNTER-1)) | \
      (1<<(CLASS_EVOKER-1))       | \
+     (1<<(CLASS_HERO-1))         | \
      (1<<(CLASS_REAPER-1)))
 
 // valid classes for creature_template.unit_class

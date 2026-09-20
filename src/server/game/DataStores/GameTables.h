@@ -246,6 +246,14 @@ inline float GetGameTableColumnForClass(T const* row, int32 class_)
             return row->Adventurer;
         case CLASS_TRAVELER:
             return row->Traveler;
+        case CLASS_HERO:
+            // Hero has no column of its own either, and it cannot borrow
+            // Reaper's: Death Knight's base mana column is zero at every level,
+            // which would give a Hero a mana bar that maxes at nothing. Every
+            // mana class's column holds the same numbers, so Druid is a pick
+            // about intent rather than values: it is the mana class that also
+            // fights in melee, which is the closest shape to a Hero.
+            return row->Druid;
         case CLASS_REAPER:
             // These tables are client files with one fixed column per class, so
             // Reaper has no column of its own. It borrows Death Knight's, which
@@ -292,6 +300,11 @@ inline float GetSpellScalingColumnForClass(GtSpellScalingEntry const* row, int32
             return row->Adventurer;
         case CLASS_TRAVELER:
             return row->Traveler;
+        case CLASS_HERO:
+            // Hero has no column here either. Every per-class column in this
+            // table is zero on 12.1, so the pick changes no number today; it is
+            // the same Druid column for the same reason as above.
+            return row->Druid;
         case CLASS_REAPER:
             // Reaper has no column here either, for the same reason.
             return row->DeathKnight;

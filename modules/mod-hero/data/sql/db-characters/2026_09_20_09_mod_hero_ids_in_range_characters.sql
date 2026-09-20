@@ -1,0 +1,18 @@
+-- Move the Heroes that already exist onto the new class skill line id.
+--
+-- This goes with 2026_09_20_07_mod_hero_ids_in_range.sql in db-hotfixes, which
+-- moves Hero's class skill line from 9101 to 1310 along with the rest of its
+-- out-of-range ids. A character stores every skill it has in
+-- characters.character_skills by skill id, so a Hero made before that change
+-- would log in holding a skill line that no longer exists.
+--
+-- Scoped by skill id rather than by class, because 9101 is Hero's own class
+-- skill line and nothing else uses it. Read out of the live database on
+-- 20 September: four rows hold it, all four on class 16 characters, and no
+-- character anywhere holds 1310. That last part matters because the primary key
+-- here is the guid and the skill together, so a character already holding both
+-- would make this fail rather than quietly do half the job.
+--
+-- Reaper's two rows on skill 9001 are untouched by this; they move in
+-- 2026_09_20_10_mod_reaper_ids_in_range_characters.sql in mod-coa.
+UPDATE `character_skills` SET `skill`=1310 WHERE `skill`=9101;

@@ -1,0 +1,15 @@
+-- Move the Reapers that already exist onto the new class skill line id.
+--
+-- This goes with 2026_09_20_08_mod_reaper_ids_in_range.sql in db-hotfixes,
+-- which moves Reaper's class skill line from 9001 to 1311 along with the rest
+-- of its out-of-range ids. A character stores every skill it has in
+-- characters.character_skills by skill id, so a Reaper made before that change
+-- would log in holding a skill line that no longer exists.
+--
+-- Scoped by skill id rather than by class, because 9001 is Reaper's own class
+-- skill line and nothing else uses it. Read out of the live database on
+-- 20 September: two rows hold it, both on class 17 characters, and no character
+-- anywhere holds 1311. That last part matters because the primary key here is
+-- the guid and the skill together, so a character already holding both would
+-- make this fail rather than quietly do half the job.
+UPDATE `character_skills` SET `skill`=1311 WHERE `skill`=9001;

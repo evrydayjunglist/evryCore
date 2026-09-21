@@ -105,7 +105,7 @@ namespace
 {
     // The world table that says which powers a class holds beside the ten the client knows about.
     // It is a world table and never a hotfix table, because the client must never see it.
-    constexpr char const* ExtraPowerQuery = "SELECT ClassID, PowerType FROM class_extra_power ORDER BY ClassID, PowerType";
+    constexpr char const* ExtraPowerQuery = "SELECT `ClassID`, `PowerType` FROM `class_extra_power` ORDER BY `ClassID`, `PowerType`";
 
     // The prefix a panel addon registers to hear the message described above.
     constexpr char const* PanelPrefix = "evryHeroPower";
@@ -264,7 +264,7 @@ namespace
         saved.fill(NoSavedValue);
 
         QueryResult result = CharacterDatabase.Query(Trinity::StringFormat(
-            "SELECT power, value FROM character_hero_power WHERE guid = {}", player->GetGUID().GetCounter()).c_str());
+            "SELECT `power`, `value` FROM `character_hero_power` WHERE `guid` = {}", player->GetGUID().GetCounter()).c_str());
         if (!result)
             return;
 
@@ -303,6 +303,10 @@ namespace
         });
     }
 
+    // Every table and column name in this file is written between backticks, and has to stay that
+    // way. `maxvalue` is a reserved word in MySQL, so without them this statement is a syntax error,
+    // and a statement the core cannot parse takes the whole server down rather than failing the one
+    // save. That happened once, on a Hero's first save on 20 September.
     void SaveExtraPowers(Player* player)
     {
         if (!ClassHasExtraPowers(player->GetClass()))
@@ -312,7 +316,7 @@ namespace
         ForEachExtraPower(player->GetClass(), [&](Powers power)
         {
             transaction->Append(Trinity::StringFormat(
-                "REPLACE INTO character_hero_power (guid, power, value, maxvalue) VALUES ({}, {}, {}, {})",
+                "REPLACE INTO `character_hero_power` (`guid`, `power`, `value`, `maxvalue`) VALUES ({}, {}, {}, {})",
                 player->GetGUID().GetCounter(), AsUnderlyingType(power), player->GetPower(power), player->GetMaxPower(power)).c_str());
         });
         CharacterDatabase.CommitTransaction(transaction);
@@ -480,7 +484,7 @@ public:
     void OnDelete(ObjectGuid guid, uint32 /*accountId*/) override
     {
         CharacterDatabase.Execute(Trinity::StringFormat(
-            "DELETE FROM character_hero_power WHERE guid = {}", guid.GetCounter()).c_str());
+            "DELETE FROM `character_hero_power` WHERE `guid` = {}", guid.GetCounter()).c_str());
     }
 };
 

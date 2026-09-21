@@ -1577,6 +1577,10 @@ class TC_GAME_API Unit : public WorldObject
         virtual void UpdateMaxPower(Powers power) = 0;
         virtual uint32 GetPowerIndex(Powers power) const = 0;
         virtual ClassPowerTypes GetPowerTypes() const = 0;
+        // True when this unit holds the power but there is no slot for it among the ten the client
+        // reads. Only a player can, and only for the powers a module registered for its class, so a
+        // creature never takes that path.
+        bool IsExtraPower(Powers power) const;
         virtual void UpdateAttackPowerAndDamage(bool ranged = false) = 0;
         void SetAttackPower(int32 attackPower) { SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::AttackPower), attackPower); }
         void SetAttackPowerModPos(int32 attackPowerMod) { SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::AttackPowerModPos), attackPowerMod); }

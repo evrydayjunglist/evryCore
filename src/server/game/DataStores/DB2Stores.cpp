@@ -479,6 +479,11 @@ namespace
 
         ClassPowerTypes TypeByIndex;
         std::array<uint8, MAX_POWERS> IndexByType;
+
+        // Powers this class holds that have no slot in the ten the client knows about. A module
+        // decides which those are and hands the mask over at startup; nothing here reads a table
+        // for it, because the client must never be told about them.
+        uint32 ExtraPowerMask = 0;
     };
 
     struct UiMapBounds
@@ -2176,6 +2181,35 @@ ClassPowerTypes DB2Manager::GetPowerTypesByClass(uint32 classId)
 uint32 DB2Manager::GetPowerIndexByClass(Powers power, uint32 classId)
 {
     return _powersByClass[classId].IndexByType[power];
+}
+
+void DB2Manager::SetExtraPowersForClass(uint32 classId, uint32 powerMask)
+{
+    if (classId >= MAX_CLASSES)
+        return;
+
+    // A power that already has one of the ten slots is never an extra. Keeping that out here means
+    // callers cannot accidentally send a held power down the extra path.
+    for (Powers power : _powersByClass[classId].TypeByIndex)
+        powerMask &= ~(1u << AsUnderlyingType(power));
+
+    _powersByClass[classId].ExtraPowerMask = powerMask;
+}
+
+uint32 DB2Manager::GetExtraPowersForClass(uint32 classId)
+{
+    if (classId >= MAX_CLASSES)
+        return 0;
+
+    return _powersByClass[classId].ExtraPowerMask;
+}
+
+bool DB2Manager::IsExtraPowerForClass(Powers power, uint32 classId)
+{
+    if (classId >= MAX_CLASSES || power < 0 || power >= MAX_POWERS)
+        return false;
+
+    return (_powersByClass[classId].ExtraPowerMask & (1u << AsUnderlyingType(power))) != 0;
 }
 
 std::vector<ChrCustomizationChoiceEntry const*> const* DB2Manager::GetCustomiztionChoices(uint32 chrCustomizationOptionId) const

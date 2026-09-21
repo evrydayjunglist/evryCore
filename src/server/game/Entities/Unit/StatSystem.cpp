@@ -923,8 +923,9 @@ void Player::UpdatePowerRegen(Powers power)
 
 float Player::GetPowerRegen(Powers power) const
 {
+    bool const extraPower = IsExtraPower(power);
     uint32 powerIndex = GetPowerIndex(power);
-    if (powerIndex >= MAX_POWERS_PER_CLASS)
+    if (!extraPower && powerIndex >= MAX_POWERS_PER_CLASS)
         return 0.f;
 
     PowerTypeEntry const* powerType = sDB2Manager.GetPowerTypeEntry(power);
@@ -937,6 +938,12 @@ float Player::GetPowerRegen(Powers power) const
     bool interrupted =  HasAuraType(SPELL_AURA_INTERRUPT_REGEN) ||
                         (powerType->GetFlags().HasFlag(PowerTypeFlags::UseRegenInterrupt) && m_regenInterruptTimestamp + Milliseconds(powerType->RegenInterruptTimeMS) >= GameTime::Now()) ||
                         IsInCombat();
+
+    // The two modifier fields are the ten slot arrays, and UpdatePowerRegen only ever writes a slot.
+    // A power held beside those slots regenerates at the rate its own PowerType row states, with no
+    // modifier on top.
+    if (extraPower)
+        return interrupted ? powerType->RegenCombat : powerType->RegenPeace;
 
     float regen = interrupted ? powerType->RegenCombat + m_unitData->PowerRegenInterruptedFlatModifier[powerIndex] : powerType->RegenPeace + m_unitData->PowerRegenFlatModifier[powerIndex];
 

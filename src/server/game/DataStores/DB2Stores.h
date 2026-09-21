@@ -498,6 +498,11 @@ public:
     static char const* GetChrClassName(uint8 class_, LocaleConstant locale = DEFAULT_LOCALE);
     static ClassPowerTypes GetPowerTypesByClass(uint32 classId);
     static uint32 GetPowerIndexByClass(Powers power, uint32 classId);
+    // Powers a class holds that have no slot among the ten the client knows about. A module decides
+    // which those are and sets the mask at startup; powers that already hold a slot are ignored.
+    static void SetExtraPowersForClass(uint32 classId, uint32 powerMask);
+    static uint32 GetExtraPowersForClass(uint32 classId);
+    static bool IsExtraPowerForClass(Powers power, uint32 classId);
     std::vector<ChrCustomizationChoiceEntry const*> const* GetCustomiztionChoices(uint32 chrCustomizationOptionId) const;
     std::vector<ChrCustomizationOptionEntry const*> const* GetCustomiztionOptions(uint8 race, uint8 gender) const;
     std::vector<std::pair<uint32, std::vector<uint32>>> const* GetRequiredCustomizationChoices(uint32 chrCustomizationReqId) const;

@@ -348,8 +348,10 @@ namespace
         player->SendDirectMessage(chat.Write());
     }
 
-    void SendPanel(Player* player, PanelState& state, bool fullRefresh)
+    uint32 SendPanel(Player* player, PanelState& state, bool fullRefresh)
     {
+        uint32 sent = 0;
+
         auto sendPower = [&](Powers power)
         {
             int32 type = AsUnderlyingType(power);
@@ -362,6 +364,7 @@ namespace
             state.LastValue[type] = value;
             state.LastMaxValue[type] = maxValue;
             SendPanelRecord(player, Trinity::StringFormat("P;{};{};{}", type, value, maxValue));
+            ++sent;
         };
 
         for (Powers power : player->GetPowerTypes())
@@ -370,7 +373,7 @@ namespace
         ForEachExtraPower(player->GetClass(), sendPower);
 
         if (!player->HasRunes())
-            return;
+            return sent;
 
         int32 totalRunes = std::min(player->GetMaxPower(POWER_RUNES), int32(MAX_RUNES));
         int32 readyRunes = 0;
@@ -379,11 +382,12 @@ namespace
                 ++readyRunes;
 
         if (!fullRefresh && state.LastReadyRunes == readyRunes && state.LastTotalRunes == totalRunes)
-            return;
+            return sent;
 
         state.LastReadyRunes = readyRunes;
         state.LastTotalRunes = totalRunes;
         SendPanelRecord(player, Trinity::StringFormat("R;{};{}", readyRunes, totalRunes));
+        return sent + 1;
     }
 
     void UpdatePanels(uint32 diff)
@@ -410,7 +414,13 @@ namespace
                 continue;
 
             stillHere.insert(player->GetGUID());
-            SendPanel(player, PanelStates[player->GetGUID()], fullRefresh);
+
+            // The first send to a character goes out in full. Saying so here is the only way to tell a
+            // panel that is not listening from one that was never sent anything.
+            bool firstSend = !PanelStates.contains(player->GetGUID());
+            uint32 sent = SendPanel(player, PanelStates[player->GetGUID()], fullRefresh);
+            if (firstSend)
+                TC_LOG_INFO("server.loading", "mod-hero: sent {} resources to {} on the {} addon channel", sent, player->GetName(), PanelPrefix);
         }
 
         std::erase_if(PanelStates, [&](auto const& entry) { return !stillHere.contains(entry.first); });

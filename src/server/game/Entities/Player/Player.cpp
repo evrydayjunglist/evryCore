@@ -1646,8 +1646,15 @@ void Player::RegenerateAll()
         if (power != POWER_RUNES)
             Regenerate(power);
 
+    // GetPowerTypes only yields the powers that have one of the client's ten slots, so the ones held
+    // beside them need their own pass.
+    if (uint32 extraPowers = DB2Manager::GetExtraPowersForClass(GetClass()))
+        for (uint32 power = 0; power < MAX_POWERS; ++power)
+            if ((extraPowers & (1u << power)) && power != POWER_RUNES)
+                Regenerate(Powers(power));
+
     // Runes act as cooldowns, and they don't need to send any data
-    if (GetClass() == CLASS_DEATH_KNIGHT)
+    if (HasRunes())
     {
         uint32 regeneratedRunes = 0;
         uint32 regenIndex = 0;
@@ -1682,9 +1689,14 @@ void Player::RegenerateAll()
 void Player::Regenerate(Powers power)
 {
     // Skip regeneration for power type we cannot have
+    bool const extraPower = IsExtraPower(power);
     uint32 powerIndex = GetPowerIndex(power);
-    if (powerIndex >= MAX_POWERS_PER_CLASS)
+    if (!extraPower && powerIndex >= MAX_POWERS_PER_CLASS)
         return;
+
+    // A power with no slot keeps its own fraction, because m_powerFraction is indexed by slot and
+    // writing into it here would spend a real resource instead.
+    float& fraction = extraPower ? m_extraPowerFraction[power] : m_powerFraction[powerIndex];
 
     PowerTypeEntry const* powerType = sDB2Manager.GetPowerTypeEntry(power);
     if (!powerType)
@@ -1712,7 +1724,7 @@ void Player::Regenerate(Powers power)
             return;
     }
 
-    addvalue += m_powerFraction[powerIndex];
+    addvalue += fraction;
     int32 integerValue = int32(std::fabs(addvalue));
 
     if (addvalue < 0.0f)
@@ -1734,12 +1746,12 @@ void Player::Regenerate(Powers power)
         if (curValue > minPower + integerValue)
         {
             curValue -= integerValue;
-            m_powerFraction[powerIndex] = addvalue + integerValue;
+            fraction = addvalue + integerValue;
         }
         else
         {
             curValue = minPower;
-            m_powerFraction[powerIndex] = 0;
+            fraction = 0;
             forcesSetPower = true;
         }
     }
@@ -1748,12 +1760,12 @@ void Player::Regenerate(Powers power)
         if (curValue + integerValue <= maxPower)
         {
             curValue += integerValue;
-            m_powerFraction[powerIndex] = addvalue - integerValue;
+            fraction = addvalue - integerValue;
         }
         else
         {
             curValue = maxPower;
-            m_powerFraction[powerIndex] = 0;
+            fraction = 0;
             forcesSetPower = true;
         }
     }
@@ -1761,7 +1773,9 @@ void Player::Regenerate(Powers power)
     if (GetCommandStatus(CHEAT_POWER))
         curValue = maxPower;
 
-    if (m_regenTimerCount >= 2000 || forcesSetPower)
+    // The throttle below exists to keep a packet off the wire between the two second marks. A power
+    // with no slot has no packet and no field to write, so it just takes the value.
+    if (extraPower || m_regenTimerCount >= 2000 || forcesSetPower)
         SetPower(power, curValue);
     else
     {
@@ -1776,6 +1790,14 @@ void Player::Regenerate(Powers power)
 
 void Player::InterruptPowerRegen(Powers power)
 {
+    if (IsExtraPower(power))
+    {
+        // No packet: it names a power type, and the client has no slot to map this one onto.
+        m_regenInterruptTimestamp = GameTime::Now();
+        m_extraPowerFraction[power] = 0.0f;
+        return;
+    }
+
     uint32 powerIndex = GetPowerIndex(power);
     if (powerIndex >= MAX_POWERS_PER_CLASS)
         return;
@@ -5516,7 +5538,7 @@ void Player::UpdateRating(CombatRating cr)
                     ApplyAttackTimePercentMod(OFF_ATTACK, oldVal, false);
                     ApplyAttackTimePercentMod(BASE_ATTACK, newVal, true);
                     ApplyAttackTimePercentMod(OFF_ATTACK, newVal, true);
-                    if (GetClass() == CLASS_DEATH_KNIGHT)
+                    if (HasRunes())
                         UpdatePowerRegen(POWER_RUNES);
                     break;
                 case CR_HASTE_RANGED:
@@ -28335,11 +28357,12 @@ void Player::ResyncRunes() const
 
 void Player::InitRunes()
 {
-    if (GetClass() != CLASS_DEATH_KNIGHT)
-        return;
-
+    // A character has runes when Runes is one of the powers it holds, whether that is in one of the
+    // client's ten slots, as it is for a Death Knight, or beside them. This is the only place the
+    // rune store is built, so everything else asks HasRunes rather than asking about the class.
+    bool const extraRunes = IsExtraPower(POWER_RUNES);
     uint32 runeIndex = GetPowerIndex(POWER_RUNES);
-    if (runeIndex >= MAX_POWERS_PER_CLASS)
+    if (!extraRunes && runeIndex >= MAX_POWERS_PER_CLASS)
         return;
 
     m_runes = std::make_unique<Runes>();
@@ -28347,6 +28370,11 @@ void Player::InitRunes()
 
     for (uint8 i = 0; i < MAX_RUNES; ++i)
         SetRuneCooldown(i, 0);                                          // reset cooldowns
+
+    // Both fields below live in the ten slot arrays. Runes held beside those slots have no index to
+    // write into, and there is no client bar reading them either.
+    if (extraRunes)
+        return;
 
     SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::PowerRegenFlatModifier, runeIndex), 0.0f);
     SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::PowerRegenInterruptedFlatModifier, runeIndex), 0.0f);

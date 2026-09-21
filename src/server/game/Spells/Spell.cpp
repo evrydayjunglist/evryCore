@@ -5551,7 +5551,9 @@ SpellCastResult Spell::CheckRuneCost() const
     if (!player)
         return SPELL_CAST_OK;
 
-    if (player->GetClass() != CLASS_DEATH_KNIGHT)
+    // Runes may be held beside the client's ten slots rather than in one of them, so this asks
+    // whether this character has runes at all rather than asking about the class.
+    if (!player->HasRunes())
         return SPELL_CAST_OK;
 
     int32 readyRunes = 0;
@@ -5567,7 +5569,7 @@ SpellCastResult Spell::CheckRuneCost() const
 
 void Spell::TakeRunePower(bool didHit)
 {
-    if (m_caster->GetTypeId() != TYPEID_PLAYER || m_caster->ToPlayer()->GetClass() != CLASS_DEATH_KNIGHT)
+    if (m_caster->GetTypeId() != TYPEID_PLAYER || !m_caster->ToPlayer()->HasRunes())
         return;
 
     Player* player = m_caster->ToPlayer();
@@ -5593,7 +5595,7 @@ void Spell::TakeRunePower(bool didHit)
 
 void Spell::RefundRunePower()
 {
-    if (m_caster->GetTypeId() != TYPEID_PLAYER || m_caster->ToPlayer()->GetClass() != CLASS_DEATH_KNIGHT)
+    if (m_caster->GetTypeId() != TYPEID_PLAYER || !m_caster->ToPlayer()->HasRunes())
         return;
 
     Player* player = m_caster->ToPlayer();

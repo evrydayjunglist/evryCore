@@ -10129,8 +10129,20 @@ void Unit::SetMaxHealth(uint64 val)
         SetHealth(val);
 }
 
+bool Unit::IsExtraPower(Powers power) const
+{
+    Player const* player = ToPlayer();
+    if (!player)
+        return false;
+
+    return DB2Manager::IsExtraPowerForClass(power, GetClass());
+}
+
 int32 Unit::GetPower(Powers power) const
 {
+    if (IsExtraPower(power))
+        return ToPlayer()->GetExtraPower(power);
+
     uint32 powerIndex = GetPowerIndex(power);
     if (powerIndex >= MAX_POWERS_PER_CLASS)
         return 0;
@@ -10140,6 +10152,9 @@ int32 Unit::GetPower(Powers power) const
 
 int32 Unit::GetMaxPower(Powers power) const
 {
+    if (IsExtraPower(power))
+        return ToPlayer()->GetExtraMaxPower(power);
+
     uint32 powerIndex = GetPowerIndex(power);
     if (powerIndex >= MAX_POWERS_PER_CLASS)
         return 0;
@@ -10149,6 +10164,28 @@ int32 Unit::GetMaxPower(Powers power) const
 
 void Unit::SetPower(Powers power, int32 val, bool withPowerUpdate /*= true*/)
 {
+    if (IsExtraPower(power))
+    {
+        Player* player = ToPlayer();
+
+        int32 extraMax = player->GetExtraMaxPower(power);
+        if (extraMax < val)
+            val = extraMax;
+
+        int32 oldExtraPower = player->GetExtraPower(power);
+        player->SetExtraPower(power, val);
+
+        // No PowerUpdate goes out. The packet names a power type, and the client has no slot to put
+        // this one in, so it would be naming something the client cannot map. A module sends what
+        // the player's own panel shows instead.
+        TriggerOnPowerChangeAuras(power, oldExtraPower, val);
+
+        if (player->GetGroup())
+            player->SetGroupUpdateFlag(GROUP_UPDATE_FLAG_CUR_POWER);
+
+        return;
+    }
+
     uint32 powerIndex = GetPowerIndex(power);
     if (powerIndex >= MAX_POWERS_PER_CLASS)
         return;
@@ -10186,6 +10223,22 @@ void Unit::SetPower(Powers power, int32 val, bool withPowerUpdate /*= true*/)
 
 void Unit::SetMaxPower(Powers power, int32 val)
 {
+    if (IsExtraPower(power))
+    {
+        Player* player = ToPlayer();
+
+        int32 extraCurrent = player->GetExtraPower(power);
+        player->SetExtraMaxPower(power, val);
+
+        if (player->GetGroup())
+            player->SetGroupUpdateFlag(GROUP_UPDATE_FLAG_MAX_POWER);
+
+        if (val < extraCurrent)
+            SetPower(power, val);
+
+        return;
+    }
+
     uint32 powerIndex = GetPowerIndex(power);
     if (powerIndex >= MAX_POWERS_PER_CLASS)
         return;

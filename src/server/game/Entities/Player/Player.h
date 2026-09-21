@@ -2226,6 +2226,13 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void UpdateMaxPower(Powers power) override;
         uint32 GetPowerIndex(Powers power) const override;
         ClassPowerTypes GetPowerTypes() const override;
+        // Where a power with no slot among the client's ten is kept. Unit::GetPower and its three
+        // companions read and write these for such a power; nothing else should touch them, and a
+        // module owns their maximums, when they are saved and what shows them on screen.
+        int32 GetExtraPower(Powers power) const { return m_extraPower[power]; }
+        void SetExtraPower(Powers power, int32 value) { m_extraPower[power] = value; }
+        int32 GetExtraMaxPower(Powers power) const { return m_extraMaxPower[power]; }
+        void SetExtraMaxPower(Powers power, int32 value) { m_extraMaxPower[power] = value; }
         void UpdateAttackPowerAndDamage(bool ranged = false) override;
         void ApplySpellPowerBonus(int32 amount, bool apply);
         void UpdateSpellDamageAndHealingBonus();
@@ -2864,6 +2871,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool isAllowedToLoot(Creature const* creature) const;
 
         UF::DeclinedNames const* GetDeclinedNames() const { return m_playerData->DeclinedNames.has_value() ? &*m_playerData->DeclinedNames : nullptr; }
+        // True once InitRunes has decided this character has runes and built them, whether they sit
+        // in one of the client's ten slots or beside them. Everything that reads a rune must ask
+        // this first, because the rune store is only built for a character that has them.
+        bool HasRunes() const { return m_runes != nullptr; }
         uint8 GetRunesState() const;
         uint32 GetRuneCooldown(uint8 index) const { return m_runes->Cooldown[index]; }
         uint32 GetRuneBaseCooldown() const;
@@ -3127,6 +3138,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_regenTimerCount;
         float m_healthFraction;
         std::array<float, MAX_POWERS_PER_CLASS> m_powerFraction;
+        // m_powerFraction is indexed by slot, so a power with no slot needs its own. This one is
+        // indexed by power type, like the two stores beside it.
+        std::array<float, MAX_POWERS> m_extraPowerFraction = { };
+        std::array<int32, MAX_POWERS> m_extraPower = { };
+        std::array<int32, MAX_POWERS> m_extraMaxPower = { };
         uint32 m_contestedPvPTimer;
 
         /*********************************************************/

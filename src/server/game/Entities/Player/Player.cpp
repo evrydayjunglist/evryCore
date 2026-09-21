@@ -9344,7 +9344,9 @@ void Player::ApplyItemLootedSpell(ItemTemplate const* itemTemplate)
 }
 
 // An item that takes effect the moment it is looted is never stored. Its spells are cast
-// once for each item looted.
+// once for each item looted. Quest item objectives still have to count: Cloak and Needle
+// (80380) is "collect a Thread of Power", and retail absorbs that thread instead of
+// leaving a copy in the bags.
 void Player::ApplyItemForcedLootedSpells(ItemTemplate const* itemTemplate, uint32 count)
 {
     if (!itemTemplate->IsAppliedWhenLooted())
@@ -9354,6 +9356,11 @@ void Player::ApplyItemForcedLootedSpells(ItemTemplate const* itemTemplate, uint3
         for (ItemEffectEntry const* effect : itemTemplate->Effects)
             if (effect->TriggerType == ITEM_SPELLTRIGGER_ON_LOOTED_FORCED && effect->SpellID > 0)
                 CastSpell(this, effect->SpellID, true);
+
+    // StoreNewItem is skipped, so ItemAddedQuestCheck never ran. Credit the looted
+    // item here (including QUEST_BOUND_ITEM). Do not pass boundItemFlagRequirement:
+    // threads also have a no-charge use effect, and that filter would return early.
+    ItemAddedQuestCheck(itemTemplate->GetId(), count);
 }
 
 void Player::_RemoveAllItemMods()

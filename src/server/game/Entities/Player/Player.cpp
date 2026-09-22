@@ -2393,7 +2393,8 @@ void Player::InitTalentForLevel()
 {
     uint8 level = GetLevel();
     // talents base at level diff (talents = level - 9 but some can be used already)
-    if (level < MIN_SPECIALIZATION_LEVEL)
+    // Hero's progression modes are available from character creation.
+    if (level < MIN_SPECIALIZATION_LEVEL && GetClass() != CLASS_HERO)
         ResetTalentSpecialization();
 
     int32 talentTiers = DB2Manager::GetNumTalentsAtLevel(level, Classes(GetClass()));
@@ -30133,6 +30134,11 @@ void Player::ActivateTalentGroup(ChrSpecializationEntry const* spec)
     {
         PvpTalentEntry const* talentInfo = sPvpTalentStore.LookupEntry(pvpTalentID);
         if (!talentInfo)
+            continue;
+
+        // Only the outgoing specialization owns these talent grants. Other
+        // classes' PvP spells can have been learned independently by a Hero.
+        if (ChrSpecialization(talentInfo->SpecID) != GetPrimarySpecialization())
             continue;
 
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(talentInfo->SpellID, DIFFICULTY_NONE);

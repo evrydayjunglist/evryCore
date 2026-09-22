@@ -22,6 +22,8 @@
 #include "ObjectGuid.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "StringFormat.h"
 #include "Util.h"
 #include "World.h"
@@ -103,6 +105,30 @@
 
 namespace
 {
+    // Retail's hidden specialization control spell. The accompanying hotfix
+    // makes its All Specializations skill association eligible for Hero.
+    // Both that association and a known spell are needed for the 69814 client
+    // to register the native setter's activation spell instead of using 0.
+    constexpr uint32 SpecializationActivationSpell = 200749;
+
+    void EnsureSpecializationActivation(Player* player)
+    {
+        if (player->GetClass() != CLASS_HERO || player->HasSpell(SpecializationActivationSpell))
+            return;
+
+        SpellInfo const* spell = sSpellMgr->GetSpellInfo(SpecializationActivationSpell, DIFFICULTY_NONE);
+        if (!spell || !spell->HasEffect(SPELL_EFFECT_TALENT_SPEC_SELECT))
+        {
+            TC_LOG_ERROR("server.loading", "mod-hero: specialization activation spell {} is missing or has no selection effect", SpecializationActivationSpell);
+            return;
+        }
+
+        // Reconstruct this module-owned control ability at creation/login. A
+        // dependent grant is not saved over the owner's manual learned spells.
+        // Already-known manual grants return above without changing ownership.
+        player->LearnSpell(SpecializationActivationSpell, true, 0, true);
+    }
+
     // The world table that says which powers a class holds beside the ten the client knows about.
     // It is a world table and never a hotfix table, because the client must never see it.
     constexpr char const* ExtraPowerQuery = "SELECT `ClassID`, `PowerType` FROM `class_extra_power` ORDER BY `ClassID`, `PowerType`";
@@ -451,6 +477,7 @@ public:
 
     void OnCreate(Player* player) override
     {
+        EnsureSpecializationActivation(player);
         // A new character has nothing saved, so this takes the starting value of each resource, and
         // then writes the rows a first login will read back.
         RestoreExtraPowers(player);
@@ -459,6 +486,7 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
+        EnsureSpecializationActivation(player);
         RestoreExtraPowers(player);
     }
 

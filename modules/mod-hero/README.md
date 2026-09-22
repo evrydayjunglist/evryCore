@@ -9,7 +9,7 @@ Hero has three modes on the normal specialisation page, playable from level one,
 | 603 | Wildcard | 2 | 2 |
 | 600 | Initial | 4 | 4 |
 
-Status on 22 September 2026: activating a mode and switching between modes work in game, and the names were checked there. Relogging on each mode, the six switches on a Hero with borrowed spells, and the spellbook on each mode are not checked yet. The modes grant nothing yet: no spells, talents, currency or acquisition, and a Hero's learned spells are shared by all three.
+Status on 22 September 2026, checked in game by the owner: activating a mode, all six directions between the modes, the spellbook in every mode on a Hero with borrowed spells, per-mode action bars, a cast, one log-out and log-in, and the names. A new Hero gets the activation spell without help. Still to check: the Activate buttons during a cast and in combat, a client and server restart, an ordinary class and Reaper's spec page, and a clean exit. The modes grant nothing yet: no spells, talents, currency or acquisition, and a Hero's learned spells are shared by all three.
 
 - `data/sql/db-hotfixes/2026_09_21_00_mod_hero_three_specializations.sql` writes Hero's four specialisation rows, points the class default at 600, and publishes one hotfix push that also retires Initial's old id, 1479.
 - `data/sql/db-hotfixes/2026_09_22_00_mod_hero_specialization_activation.sql` adds Hero's class bit to Blizzard's skill line ability row 35162, for the hidden activation spell 200749, and keeps every other field. The client only uses that spell for the Activate button once the row admits the player's class.

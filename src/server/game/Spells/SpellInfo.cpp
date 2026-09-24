@@ -1572,6 +1572,17 @@ bool SpellInfo::HasAura(AuraType aura) const
     return false;
 }
 
+bool SpellInfo::IsDashMovementBundle() const
+{
+    // Only the airborne Fel Rush bundles need their speed and gravity changes batched.
+    return Id == 197923 || Id == 389659;
+}
+
+bool SpellInfo::IsFelRushDash() const
+{
+    return Id == 197922 || IsDashMovementBundle();
+}
+
 bool SpellInfo::HasAreaAuraEffect() const
 {
     for (SpellEffectInfo const& effect : GetEffects())

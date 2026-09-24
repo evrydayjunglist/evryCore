@@ -552,14 +552,10 @@ bool SpellMgr::CanSpellTriggerProcOnEvent(SpellProcEntry const& procEntry, ProcE
     if (procEntry.SchoolMask && !(eventInfo.GetSchoolMask() & procEntry.SchoolMask))
         return false;
 
-    // Successful-cast procs live in PROC_FLAG_2_CAST_SUCCESSFUL, outside SPELL_PROC_FLAG_MASK.
-    // Family name/mask still has to apply to those events or a cast-successful aura matches every spell.
-    if ((eventInfo.GetTypeMask() & SPELL_PROC_FLAG_MASK) || (eventInfo.GetTypeMask() & PROC_FLAG_2_CAST_SUCCESSFUL))
-    {
-        if (SpellInfo const* eventSpellInfo = eventInfo.GetSpellInfo())
-            if (!eventSpellInfo->IsAffected(procEntry.SpellFamilyName, procEntry.SpellFamilyMask))
-                return false;
-    }
+    // Cast-start, cast-end, and hit events all respect the spell family filter.
+    if (SpellInfo const* eventSpellInfo = eventInfo.GetSpellInfo())
+        if (!eventSpellInfo->IsAffected(procEntry.SpellFamilyName, procEntry.SpellFamilyMask))
+            return false;
 
     // Spell type mask is only meaningful for SPELL_PROC_FLAG_MASK events.
     if (eventInfo.GetTypeMask() & SPELL_PROC_FLAG_MASK)
@@ -5321,6 +5317,17 @@ void SpellMgr::LoadSpellInfoCorrections()
         if (spellInfo->IsSingleTarget() && !spellInfo->MaxAffectedTargets)
             spellInfo->MaxAffectedTargets = 1;
     }
+
+    // These Fel Rush effects still reference a helper absent from the client data.
+    if (!GetSpellInfo(197707, DIFFICULTY_NONE))
+        ApplySpellFix({ 197923, 389659 }, [](SpellInfo* spellInfo)
+        {
+            ApplySpellEffectFix(spellInfo, EFFECT_6, [](SpellEffectInfo* effect)
+            {
+                if (effect->Effect == SPELL_EFFECT_TRIGGER_SPELL && effect->TriggerSpell == 197707)
+                    effect->TriggerSpell = 0;
+            });
+        });
 
     DB2HotfixGenerator summonProperties(sSummonPropertiesStore);
     summonProperties.ApplyHotfix(121, [](SummonPropertiesEntry* properties)

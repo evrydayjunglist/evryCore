@@ -1302,6 +1302,31 @@ class spell_q24626_bloodtalon_lasso : public SpellScript
     }
 };
 
+// 38002 - Swiftclaw (vehicle).
+// Remove an abandoned ride so it does not leave a raptor that cannot be lassoed again.
+// This cleanup approximates retail behavior: the capture only shows a completed ride,
+// with the vehicle removed about 12 seconds after arrival at area trigger 5675.
+// Leaving before the pens was not captured. The pens script handles completed rides.
+struct npc_swiftclaw_vehicle_young_and_vicious : public ScriptedAI
+{
+    using ScriptedAI::ScriptedAI;
+
+    void PassengerBoarded(Unit* passenger, int8 /*seatId*/, bool apply) override
+    {
+        if (apply)
+            return;
+
+        Player* player = passenger->ToPlayer();
+        if (!player)
+            return;
+
+        if (player->GetQuestStatus(QUEST_YOUNG_AND_VICIOUS) == QUEST_STATUS_COMPLETE)
+            return;
+
+        me->DespawnOrUnsummon();
+    }
+};
+
 // 5675 - Raptor pens (Darkspear Hold)
 class at_raptor_pens_young_and_vicious : public AreaTriggerScript
 {
@@ -1317,6 +1342,7 @@ public:
         if (!vehicle || vehicle->GetEntry() != NPC_SWIFTCLAW_VEHICLE)
             return false;
 
+        // Complete the objective before leaving the vehicle so the passenger callback skips cleanup.
         player->KilledMonsterCredit(NPC_SWIFTCLAW_VEHICLE);
         player->ExitVehicle();
         vehicle->DespawnOrUnsummon();
@@ -1441,6 +1467,7 @@ void AddSC_durotar()
     new quest_proving_pit<NPC_TRAINER_ZABRAX>("quest_proving_pit_monk");
     RegisterCreatureAI(npc_voljin_garrosh_vision);
     RegisterCreatureAI(npc_voljin_thrall_vision);
+    RegisterCreatureAI(npc_swiftclaw_vehicle_young_and_vicious);
 
     // AreaTriggers
     new at_raptor_pens_young_and_vicious();

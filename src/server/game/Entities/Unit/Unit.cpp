@@ -3593,11 +3593,38 @@ void Unit::_ApplyAuraEffect(Aura* aura, uint8 effIndex)
         aurApp->_HandleEffect(effIndex, true);
 }
 
+namespace
+{
+// Publish the complete air-dash speed change before changing gravity.
+struct DashSpeedUpdateDeferGuard
+{
+    Unit* UnitPtr;
+    bool Active;
+
+    DashSpeedUpdateDeferGuard(Unit* unit, bool active) : UnitPtr(unit), Active(active)
+    {
+        if (Active)
+            UnitPtr->BeginDeferDashMovementSpeedUpdates();
+    }
+
+    DashSpeedUpdateDeferGuard(DashSpeedUpdateDeferGuard const&) = delete;
+    DashSpeedUpdateDeferGuard& operator=(DashSpeedUpdateDeferGuard const&) = delete;
+
+    ~DashSpeedUpdateDeferGuard()
+    {
+        if (Active)
+            UnitPtr->EndDeferDashMovementSpeedUpdates();
+    }
+};
+}
+
 // handles effects of aura application
 // should be done after registering aura in lists
 void Unit::_ApplyAura(AuraApplication* aurApp, uint32 effMask)
 {
     Aura* aura = aurApp->GetBase();
+
+    DashSpeedUpdateDeferGuard deferGuard(this, GetTypeId() == TYPEID_PLAYER && aura->GetSpellInfo()->IsDashMovementBundle());
 
     _RemoveNoStackAurasDueToAura(aura, false);
 
@@ -3701,6 +3728,8 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
     aurApp->_Remove();
     aura->_UnapplyForTarget(this, caster, aurApp);
+
+    DashSpeedUpdateDeferGuard deferGuard(this, GetTypeId() == TYPEID_PLAYER && aura->GetSpellInfo()->IsDashMovementBundle());
 
     // remove effects of the spell - needs to be done after removing aura from lists
     for (AuraEffect const* aurEff : aura->GetAuraEffects())
@@ -8879,6 +8908,30 @@ void Unit::SetVisible(bool x)
 
 void Unit::UpdateSpeed(UnitMoveType mtype)
 {
+    float felRushSpeed = 0.0f;
+    if (IsPlayer())
+        for (AuraEffect const* effect : GetAuraEffectsByType(SPELL_AURA_USE_NORMAL_MOVEMENT_SPEED))
+            if (effect->GetSpellInfo()->IsFelRushDash())
+                felRushSpeed = std::max(felRushSpeed, float(effect->GetAmount()));
+
+    // Walk speed normally has no aura calculation. Restore the pre-dash value on removal.
+    if (mtype == MOVE_WALK)
+    {
+        if (felRushSpeed > 0.0f)
+        {
+            if (!_walkSpeedBeforeFelRush)
+                _walkSpeedBeforeFelRush = GetSpeedRate(MOVE_WALK);
+            SetSpeed(MOVE_WALK, felRushSpeed);
+        }
+        else if (_walkSpeedBeforeFelRush)
+        {
+            float speed = *_walkSpeedBeforeFelRush;
+            _walkSpeedBeforeFelRush.reset();
+            SetSpeedRate(MOVE_WALK, speed);
+        }
+        return;
+    }
+
     float main_speed_mod  = 0.0f;
     float stack_bonus     = 1.0f;
     float non_stack_bonus = 1.0f;
@@ -9027,6 +9080,10 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
         if (speed < min_speed)
             speed = min_speed;
     }
+
+    // Fel Rush's own normalization effect supplies its absolute dash speed.
+    if (felRushSpeed > 0.0f && (mtype == MOVE_RUN || mtype == MOVE_RUN_BACK))
+        speed = std::max(speed, felRushSpeed / playerBaseMoveSpeed[mtype]);
 
     SetSpeedRate(mtype, speed);
 }
@@ -13564,6 +13621,90 @@ bool Unit::SetDisableGravity(bool disable, bool updateAnimTier /*= true*/, bool 
     }
 
     return true;
+}
+
+void Unit::BeginDeferDashMovementSpeedUpdates()
+{
+    if (_deferDashMovementSpeedUpdates++ == 0)
+        _dashMovementSpeedUpdatesFinalized = false;
+}
+
+void Unit::EndDeferDashMovementSpeedUpdates()
+{
+    ASSERT(_deferDashMovementSpeedUpdates > 0);
+    --_deferDashMovementSpeedUpdates;
+
+    if (_deferDashMovementSpeedUpdates == 0)
+    {
+        UpdateSpeed(MOVE_RUN);
+        UpdateSpeed(MOVE_RUN_BACK);
+        UpdateSpeed(MOVE_WALK);
+        UpdateSpeed(MOVE_SWIM);
+        UpdateSpeed(MOVE_FLIGHT);
+
+        RestoreDeferredDashGravity();
+        _dashMovementSpeedUpdatesFinalized = false;
+    }
+}
+
+void Unit::PrepareDashMovementState()
+{
+    // The dash replaces horizontal falling momentum until gravity is restored.
+    m_movementInfo.jump.sinAngle = 0.0f;
+    m_movementInfo.jump.cosAngle = 0.0f;
+    m_movementInfo.jump.xyspeed = 0.0f;
+    RemoveUnitMovementFlag(MOVEMENTFLAG_BACKWARD | MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+    AddUnitMovementFlag(MOVEMENTFLAG_FORWARD);
+}
+
+void Unit::FinalizeDashMovementSpeedUpdates()
+{
+    if (_dashMovementSpeedUpdatesFinalized)
+        return;
+
+    _dashMovementSpeedUpdatesFinalized = true;
+
+    PrepareDashMovementState();
+
+    UpdateSpeed(MOVE_RUN);
+    UpdateSpeed(MOVE_RUN_BACK);
+    UpdateSpeed(MOVE_WALK);
+    UpdateSpeed(MOVE_SWIM);
+    UpdateSpeed(MOVE_FLIGHT);
+}
+
+void Unit::CleanupDashMovementAfterAuraEnd()
+{
+    m_movementInfo.jump.Reset();
+    RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+
+    if (Player* playerMover = GetPlayerMovingMe())
+    {
+        WorldPackets::Movement::MoveUpdate moveUpdate;
+        moveUpdate.Status = &m_movementInfo;
+        SendMessageToSet(moveUpdate.Write(), playerMover);
+    }
+}
+
+void Unit::DeferDashGravityRestore()
+{
+    _deferDashGravityRestore = true;
+}
+
+void Unit::RestoreDeferredDashGravity()
+{
+    if (!_deferDashGravityRestore)
+        return;
+
+    _deferDashGravityRestore = false;
+
+    if (HasAuraType(SPELL_AURA_MOD_ROOT_DISABLE_GRAVITY)
+        || HasAuraType(SPELL_AURA_MOD_STUN_DISABLE_GRAVITY)
+        || HasAuraType(SPELL_AURA_DISABLE_GRAVITY)
+        || (IsCreature() && ToCreature()->IsFloating()))
+        return;
+
+    SetDisableGravity(false);
 }
 
 bool Unit::SetFall(bool enable)

@@ -5318,6 +5318,17 @@ void SpellMgr::LoadSpellInfoCorrections()
             spellInfo->MaxAffectedTargets = 1;
     }
 
+    // These Fel Rush effects still reference a helper absent from the client data.
+    if (!GetSpellInfo(197707, DIFFICULTY_NONE))
+        ApplySpellFix({ 197923, 389659 }, [](SpellInfo* spellInfo)
+        {
+            ApplySpellEffectFix(spellInfo, EFFECT_6, [](SpellEffectInfo* effect)
+            {
+                if (effect->Effect == SPELL_EFFECT_TRIGGER_SPELL && effect->TriggerSpell == 197707)
+                    effect->TriggerSpell = 0;
+            });
+        });
+
     DB2HotfixGenerator summonProperties(sSummonPropertiesStore);
     summonProperties.ApplyHotfix(121, [](SummonPropertiesEntry* properties)
     {

@@ -25,6 +25,8 @@
 #include "CombatAI.h"
 #include "GridNotifiersImpl.h"
 #include "MotionMaster.h"
+#include "SpellAuras.h"
+#include "TemporarySummon.h"
 
 enum DeathKnightSpells
 {
@@ -32,8 +34,38 @@ enum DeathKnightSpells
     SPELL_DK_SUMMON_GARGOYLE_1      = 49206,
     SPELL_DK_SUMMON_GARGOYLE_2      = 50514,
     SPELL_DK_DISMISS_GARGOYLE       = 50515,
-    SPELL_DK_SANCTUARY              = 54661
+    SPELL_DK_SANCTUARY              = 54661,
+    SPELL_DK_LESSER_GHOUL_COUNT     = 1242998,
+    SPELL_DK_LESSER_GHOUL_LEAP      = 1270475
 };
+
+enum DeathKnightCreatures
+{
+    NPC_DK_LESSER_GHOUL             = 237409
+};
+
+// Outnumber counts living Lesser Ghouls, including those still awaiting despawn.
+static void UpdateLesserGhoulCount(Unit* owner)
+{
+    if (!owner)
+        return;
+
+    std::list<TempSummon*> ghouls;
+    owner->GetAllMinionsByEntry(ghouls, NPC_DK_LESSER_GHOUL);
+    ghouls.remove_if([](TempSummon const* ghoul) { return !ghoul->IsAlive(); });
+
+    if (ghouls.empty())
+    {
+        owner->RemoveAurasDueToSpell(SPELL_DK_LESSER_GHOUL_COUNT);
+        return;
+    }
+
+    uint8 stacks = uint8(std::min<size_t>(ghouls.size(), 20));
+    if (Aura* aura = owner->GetAura(SPELL_DK_LESSER_GHOUL_COUNT))
+        aura->SetStackAmount(stacks);
+    else if (Aura* newAura = owner->AddAura(SPELL_DK_LESSER_GHOUL_COUNT, owner))
+        newAura->SetStackAmount(stacks);
+}
 
 // 28017 - Bloodworm
 struct npc_pet_dk_bloodworm : public AggressorAI
@@ -134,9 +166,48 @@ struct npc_pet_dk_risen_ghoul : public AggressorAI
     }
 };
 
+// 237409 - Lesser Ghoul
+struct npc_pet_dk_lesser_ghoul : public AggressorAI
+{
+    npc_pet_dk_lesser_ghoul(Creature* creature) : AggressorAI(creature) { }
+
+    bool CanAIAttack(Unit const* target) const override
+    {
+        Unit* owner = me->GetOwner();
+        if (owner && !target->IsInCombatWith(owner))
+            return false;
+        return AggressorAI::CanAIAttack(target);
+    }
+
+    void IsSummonedBy(WorldObject* summoner) override
+    {
+        if (Unit* owner = summoner->ToUnit())
+            UpdateLesserGhoulCount(owner);
+    }
+
+    // Leap behind the owner's opponent when the summon appears.
+    void JustAppeared() override
+    {
+        if (Unit* owner = me->GetOwner())
+            if (Unit* victim = owner->GetVictim())
+                me->CastSpell(victim, SPELL_DK_LESSER_GHOUL_LEAP, TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR);
+    }
+
+    void OnDespawn() override
+    {
+        UpdateLesserGhoulCount(me->GetOwner());
+    }
+
+    void JustDied(Unit* /*killer*/) override
+    {
+        UpdateLesserGhoulCount(me->GetOwner());
+    }
+};
+
 void AddSC_deathknight_pet_scripts()
 {
     RegisterCreatureAI(npc_pet_dk_bloodworm);
     RegisterCreatureAI(npc_pet_dk_ebon_gargoyle);
     RegisterCreatureAI(npc_pet_dk_risen_ghoul);
+    RegisterCreatureAI(npc_pet_dk_lesser_ghoul);
 }

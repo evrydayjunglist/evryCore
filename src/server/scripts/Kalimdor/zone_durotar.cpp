@@ -28,6 +28,7 @@
 #include "ScriptedGossip.h"
 #include "PassiveAI.h"
 #include "ObjectAccessor.h"
+#include "TemporarySummon.h"
 
 namespace Scripts::Kalimdor::Durotar
 {
@@ -1225,6 +1226,130 @@ private:
     ObjectGuid _brazierGUID;
 };
 
+// Quest 24626 - Young and Vicious.
+// The retail capture uses vehicle 617, player seat 1, and capture credit 37989,
+// followed by return credit 38002 at area trigger 5675.
+
+enum YoungAndVicious
+{
+    QUEST_YOUNG_AND_VICIOUS          = 24626,
+    SPELL_BLOODTALON_LASSO           = 70927,
+    NPC_SWIFTCLAW_WILD               = 37989,
+    NPC_SWIFTCLAW_VEHICLE            = 38002,
+    VEHICLE_ID_SWIFTCLAW             = 617,   // Vehicle.db2 assigns player seat 7347 to this vehicle.
+    SEAT_SWIFTCLAW_PLAYER            = 1,
+    AT_RAPTOR_PENS                   = 5675
+};
+
+static constexpr float LASSO_RANGE = 15.0f; // SpellRadius entry 18 gives a 15-yard radius.
+
+// 70927 - Bloodtalon Lasso
+class spell_q24626_bloodtalon_lasso : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_BLOODTALON_LASSO });
+    }
+
+    SpellCastResult CheckRequirement()
+    {
+        Unit* caster = GetCaster();
+        Player* player = caster ? caster->ToPlayer() : nullptr;
+        if (!player)
+            return SPELL_FAILED_BAD_TARGETS;
+
+        if (player->GetQuestStatus(QUEST_YOUNG_AND_VICIOUS) != QUEST_STATUS_INCOMPLETE)
+            return SPELL_FAILED_BAD_TARGETS;
+
+        if (player->GetVehicleBase())
+            return SPELL_FAILED_BAD_TARGETS;
+
+        if (!player->FindNearestCreature(NPC_SWIFTCLAW_WILD, LASSO_RANGE, true))
+            return SPELL_FAILED_BAD_TARGETS;
+
+        return SPELL_CAST_OK;
+    }
+
+    void HandleDummy()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player || player->GetQuestStatus(QUEST_YOUNG_AND_VICIOUS) != QUEST_STATUS_INCOMPLETE)
+            return;
+
+        if (player->GetVehicleBase())
+            return;
+
+        Creature* wild = player->FindNearestCreature(NPC_SWIFTCLAW_WILD, LASSO_RANGE, true);
+        if (!wild)
+            return;
+
+        Position spawnPos = wild->GetPosition();
+        // Hide the wild raptor during the ride and respawn it for later attempts.
+        wild->DespawnOrUnsummon(0s, 60s);
+
+        if (TempSummon* vehicle = player->SummonCreature(NPC_SWIFTCLAW_VEHICLE, spawnPos,
+            TEMPSUMMON_MANUAL_DESPAWN, 0s, VEHICLE_ID_SWIFTCLAW))
+        {
+            player->EnterVehicle(vehicle, SEAT_SWIFTCLAW_PLAYER);
+            player->KilledMonsterCredit(NPC_SWIFTCLAW_WILD);
+        }
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_q24626_bloodtalon_lasso::CheckRequirement);
+        OnCast += SpellCastFn(spell_q24626_bloodtalon_lasso::HandleDummy);
+    }
+};
+
+// 38002 - Swiftclaw (vehicle).
+// Remove an abandoned ride so it does not leave a raptor that cannot be lassoed again.
+// This cleanup approximates retail behavior: the capture only shows a completed ride,
+// with the vehicle removed about 12 seconds after arrival at area trigger 5675.
+// Leaving before the pens was not captured. The pens script handles completed rides.
+struct npc_swiftclaw_vehicle_young_and_vicious : public ScriptedAI
+{
+    using ScriptedAI::ScriptedAI;
+
+    void PassengerBoarded(Unit* passenger, int8 /*seatId*/, bool apply) override
+    {
+        if (apply)
+            return;
+
+        Player* player = passenger->ToPlayer();
+        if (!player)
+            return;
+
+        if (player->GetQuestStatus(QUEST_YOUNG_AND_VICIOUS) == QUEST_STATUS_COMPLETE)
+            return;
+
+        me->DespawnOrUnsummon();
+    }
+};
+
+// 5675 - Raptor pens (Darkspear Hold)
+class at_raptor_pens_young_and_vicious : public AreaTriggerScript
+{
+public:
+    at_raptor_pens_young_and_vicious() : AreaTriggerScript("at_raptor_pens_young_and_vicious") { }
+
+    bool OnTrigger(Player* player, AreaTriggerEntry const* /*areaTrigger*/) override
+    {
+        if (player->GetQuestStatus(QUEST_YOUNG_AND_VICIOUS) != QUEST_STATUS_INCOMPLETE)
+            return false;
+
+        Creature* vehicle = player->GetVehicleCreatureBase();
+        if (!vehicle || vehicle->GetEntry() != NPC_SWIFTCLAW_VEHICLE)
+            return false;
+
+        // Complete the objective before leaving the vehicle so the passenger callback skips cleanup.
+        player->KilledMonsterCredit(NPC_SWIFTCLAW_VEHICLE);
+        player->ExitVehicle();
+        vehicle->DespawnOrUnsummon();
+        return true;
+    }
+};
+
 // 8595 - Hellscream's Fist Gunship
 class at_hellscreams_fist_gunship : public AreaTriggerScript
 {
@@ -1342,11 +1467,14 @@ void AddSC_durotar()
     new quest_proving_pit<NPC_TRAINER_ZABRAX>("quest_proving_pit_monk");
     RegisterCreatureAI(npc_voljin_garrosh_vision);
     RegisterCreatureAI(npc_voljin_thrall_vision);
+    RegisterCreatureAI(npc_swiftclaw_vehicle_young_and_vicious);
 
     // AreaTriggers
+    new at_raptor_pens_young_and_vicious();
     new at_hellscreams_fist_gunship();
 
     // Spells
+    RegisterSpellScript(spell_q24626_bloodtalon_lasso);
     RegisterSpellScript(spell_teleport_prep_horde);
     RegisterSpellScript(spell_teleport_timer_horde);
 }

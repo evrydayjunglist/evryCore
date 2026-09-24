@@ -21,6 +21,7 @@
 #include "Object.h"
 #include "CombatManager.h"
 #include "FlatSet.h"
+#include "LeechAccumulator.h"
 #include "SpellAuraDefines.h"
 #include "ThreatManager.h"
 #include "Timer.h"
@@ -38,6 +39,7 @@
 #define ARTIFACTS_ALL_WEAPONS_GENERAL_WEAPON_EQUIPPED_PASSIVE 197886
 #define SPELL_DH_DOUBLE_JUMP 196055
 #define DISPLAYID_HIDDEN_MOUNT 73200
+#define SPELL_LEECH 143924
 
 #define WARMODE_ENLISTED_SPELL_OUTSIDE 269083
 
@@ -947,6 +949,9 @@ class TC_GAME_API Unit : public WorldObject
         static void Kill(Unit* attacker, Unit* victim, bool durabilityLoss = true, bool skipSettingDeathState = false);
         void KillSelf(bool durabilityLoss = true, bool skipSettingDeathState = false) { Unit::Kill(this, this, durabilityLoss, skipSettingDeathState); }
         static void DealHeal(HealInfo& healInfo);
+        // Damage and healing contribute to the next timed leech payout.
+        void ContributeLeech(uint32 amount, SpellInfo const* spellInfo = nullptr);
+        void RewardLeech(uint32 amount);
 
         static void ProcSkillsAndAuras(Unit* actor, Unit* actionTarget, ProcFlagsInit const& typeMaskActor, ProcFlagsInit const& typeMaskActionTarget,
                                 ProcFlagsSpellType spellTypeMask, ProcFlagsSpellPhase spellPhaseMask, ProcFlagsHit hitMask, Spell* spell,
@@ -1682,6 +1687,8 @@ class TC_GAME_API Unit : public WorldObject
         bool IsMagnet() const;
         Unit* GetMeleeHitRedirectTarget(Unit* victim, SpellInfo const* spellInfo = nullptr);
 
+        // SPELL_AURA_MOD_ABILITY_SCHOOL_MASK (220): MiscValue = replacement school mask for spells matching EffectClassMask
+        SpellSchoolMask GetSchoolMaskForSpell(SpellInfo const* spellInfo) const;
         int32 SpellBaseDamageBonusDone(SpellSchoolMask schoolMask) const;
         int32 SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int32 pdamage, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, uint32 stack = 1, Spell* spell = nullptr, AuraEffect const* aurEff = nullptr) const;
         float SpellDamagePctDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo) const;
@@ -2015,6 +2022,7 @@ class TC_GAME_API Unit : public WorldObject
         void SetRooted(bool apply);
 
         uint32 m_movementCounter;       ///< Incrementing counter used in movement packets
+        LeechAccumulator m_leech;
 
     private:
 

@@ -490,11 +490,15 @@ m_spellValue(new SpellValue(m_spellInfo, caster)), _spellEvent(nullptr)
     // Get data for type of attack
     m_attackType = info->GetAttackType();
 
-    m_spellSchoolMask = info->GetSchoolMask();           // Can be override for some spell (wand shoot for example)
+    // Apply the caster's school conversion before calculating this spell's damage.
+    if (Unit const* unitCaster = m_caster->ToUnit())
+        m_spellSchoolMask = unitCaster->GetSchoolMaskForSpell(info);
+    else
+        m_spellSchoolMask = info->GetSchoolMask();
 
     if (Player const* playerCaster = m_caster->ToPlayer())
     {
-        // wand case
+        // A wand uses its weapon damage school.
         if (m_attackType == RANGED_ATTACK)
             if ((playerCaster->GetClassMask() & CLASSMASK_WAND_USERS) != 0)
                 if (Item* pItem = playerCaster->GetWeaponForAttack(RANGED_ATTACK))
@@ -2889,6 +2893,8 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
 
             healInfo = std::make_unique<HealInfo>(caster, spell->unitTarget, addhealth, spell->m_spellInfo, spell->m_spellInfo->GetSchoolMask());
             caster->HealBySpell(*healInfo, IsCrit);
+            if (caster != spell->unitTarget)
+                caster->ContributeLeech(healInfo->GetEffectiveHeal(), spell->m_spellInfo);
             spell->unitTarget->GetThreatManager().ForwardThreatForAssistingMe(caster, float(healInfo->GetEffectiveHeal()) * 0.5f, spell->m_spellInfo);
             spell->m_healing = healInfo->GetEffectiveHeal();
 
@@ -2931,6 +2937,7 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
                 spell->m_damage = damageInfo.damage;
 
                 caster->DealSpellDamage(&damageInfo, true);
+                caster->ContributeLeech(damageInfo.damage, spell->m_spellInfo);
 
                 // Send log damage message to client
                 caster->SendSpellNonMeleeDamageLog(&damageInfo);

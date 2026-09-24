@@ -1862,7 +1862,8 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
         if (spellInfo->HasAttribute(SPELL_ATTR7_NO_ATTACK_MISS))
             return 0.0f;
 
-        SpellSchoolMask schoolMask = spellInfo->GetSchoolMask();
+        Unit const* unitCaster = ToUnit();
+        SpellSchoolMask schoolMask = unitCaster ? unitCaster->GetSchoolMaskForSpell(spellInfo) : spellInfo->GetSchoolMask();
         // PvP - PvE spell misschances per leveldif > 2
         int32 lchance = victim->GetTypeId() == TYPEID_PLAYER ? 7 : 11;
         int32 thisLevel = GetLevelForTarget(victim);
@@ -1971,7 +1972,9 @@ SpellMissInfo WorldObject::SpellHitResult(Unit* victim, SpellInfo const* spellIn
     if (canReflect)
     {
         float reflectchance = victim->GetTotalAuraModifier(SPELL_AURA_REFLECT_SPELLS);
-        reflectchance += victim->GetTotalAuraModifierByMiscMask(SPELL_AURA_REFLECT_SPELLS_SCHOOL, spellInfo->GetSchoolMask());
+        Unit const* unitCaster = ToUnit();
+        SpellSchoolMask schoolMask = unitCaster ? unitCaster->GetSchoolMaskForSpell(spellInfo) : spellInfo->GetSchoolMask();
+        reflectchance += victim->GetTotalAuraModifierByMiscMask(SPELL_AURA_REFLECT_SPELLS_SCHOOL, schoolMask);
 
         if (reflectchance > 0 && roll_chance(reflectchance))
             return spellInfo->HasAttribute(SPELL_ATTR7_REFLECTION_ONLY_DEFENDS) ? SPELL_MISS_DEFLECT : SPELL_MISS_REFLECT;

@@ -26,6 +26,7 @@
 #include "StringConvert.h"
 #include "Timer.h"
 #include "Transaction.h"
+#include "TransactionExecution.h"
 #include "Util.h"
 #include <errmsg.h>
 #include "MySQLWorkaround.h"
@@ -201,7 +202,12 @@ bool MySQLConnection::Execute(char const* sql)
             TC_LOG_INFO("sql.sql", "SQL: {}", sql);
             TC_LOG_ERROR("sql.sql", "[{}] {}", lErrno, mysql_error(m_Mysql));
 
-            if (_HandleMySQLErrno(lErrno))  // If it returns true, an error was handled successfully (i.e. reconnection)
+            if (m_transactionActive)
+            {
+                m_transactionError = lErrno;
+                return false;
+            }
+            if (_HandleMySQLErrno(lErrno))  // Outside a transaction, reconnecting may retry this statement.
                 return Execute(sql);       // Try again
 
             return false;
@@ -232,10 +238,16 @@ bool MySQLConnection::Execute(PreparedStatementBase* stmt)
 
     if (mysql_stmt_bind_param(msql_STMT, msql_BIND))
     {
-        uint32 lErrno = mysql_errno(m_Mysql);
+        uint32 lErrno = mysql_stmt_errno(msql_STMT);
         TC_LOG_ERROR("sql.sql", "SQL(p): {}\n [ERROR]: [{}] {}", m_mStmt->getQueryString(), lErrno, mysql_stmt_error(msql_STMT));
 
-        if (_HandleMySQLErrno(lErrno))  // If it returns true, an error was handled successfully (i.e. reconnection)
+        if (m_transactionActive)
+        {
+            m_transactionError = lErrno;
+            m_mStmt->ClearParameters();
+            return false;
+        }
+        if (_HandleMySQLErrno(lErrno))  // Outside a transaction, reconnecting may retry this statement.
             return Execute(stmt);       // Try again
 
         m_mStmt->ClearParameters();
@@ -244,10 +256,16 @@ bool MySQLConnection::Execute(PreparedStatementBase* stmt)
 
     if (mysql_stmt_execute(msql_STMT))
     {
-        uint32 lErrno = mysql_errno(m_Mysql);
+        uint32 lErrno = mysql_stmt_errno(msql_STMT);
         TC_LOG_ERROR("sql.sql", "SQL(p): {}\n [ERROR]: [{}] {}", m_mStmt->getQueryString(), lErrno, mysql_stmt_error(msql_STMT));
 
-        if (_HandleMySQLErrno(lErrno))  // If it returns true, an error was handled successfully (i.e. reconnection)
+        if (m_transactionActive)
+        {
+            m_transactionError = lErrno;
+            m_mStmt->ClearParameters();
+            return false;
+        }
+        if (_HandleMySQLErrno(lErrno))  // Outside a transaction, reconnecting may retry this statement.
             return Execute(stmt);       // Try again
 
         m_mStmt->ClearParameters();
@@ -389,29 +407,27 @@ void MySQLConnection::CommitTransaction()
 int MySQLConnection::ExecuteTransaction(std::shared_ptr<TransactionBase> transaction)
 {
     std::vector<TransactionData> const& queries = transaction->m_queries;
-    if (queries.empty())
-        return -1;
-
-    BeginTransaction();
-
-    for (auto itr = queries.begin(); itr != queries.end(); ++itr)
-    {
-        if (!std::visit([this](auto&& data) { return this->Execute(TransactionData::ToExecutable(data)); }, itr->query))
+    ASSERT(!m_transactionActive);
+    m_transactionError = 0;
+    int result = Trinity::Database::ExecuteTransactionSequence(queries, m_transactionActive,
+        [this]() { return Execute("START TRANSACTION"); },
+        [this](TransactionData const& statement)
         {
-            TC_LOG_WARN("sql.sql", "Transaction aborted. {} queries not executed.", queries.size());
-            int errorCode = GetLastError();
-            RollbackTransaction();
-            return errorCode;
-        }
-    }
-
-    // we might encounter errors during certain queries, and depending on the kind of error
-    // we might want to restart the transaction. So to prevent data loss, we only clean up when it's all done.
-    // This is done in calling functions DatabaseWorkerPool<T>::DirectCommitTransaction and TransactionTask::Execute,
-    // and not while iterating over every element.
-
-    CommitTransaction();
-    return 0;
+            return std::visit([this](auto const& data)
+            {
+                return Execute(TransactionData::ToExecutable(data));
+            }, statement.query);
+        },
+        [this]() { return Execute("COMMIT"); },
+        [this]() { RollbackTransaction(); },
+        [this]() { return int(m_transactionError ? m_transactionError : GetLastError()); });
+    if (result)
+        TC_LOG_WARN("sql.sql", "Transaction failed or its commit outcome is unknown (error {}). No individual statement was replayed.", result);
+    // Preserve the existing fatal policy for broken schemas/SQL, after rollback
+    // and outside the no-reconnect section. Other failures remain failures.
+    if (result == ER_BAD_FIELD_ERROR || result == ER_NO_SUCH_TABLE || result == ER_PARSE_ERROR)
+        _HandleMySQLErrno(uint32(result));
+    return result;
 }
 
 size_t MySQLConnection::EscapeString(char* to, const char* from, size_t length)
@@ -426,7 +442,7 @@ void MySQLConnection::Ping()
 
 uint32 MySQLConnection::GetLastError()
 {
-    return mysql_errno(m_Mysql);
+    return m_Mysql ? mysql_errno(m_Mysql) : CR_SERVER_GONE_ERROR;
 }
 
 void MySQLConnection::StartWorkerThread(Trinity::Asio::IoContext* context)

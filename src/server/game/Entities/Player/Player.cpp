@@ -160,6 +160,7 @@
 #include <G3D/g3dmath.h>
 #include <cmath>
 #include <sstream>
+#include <atomic>
 
 // corpse reclaim times
 #define DEATH_EXPIRE_STEP (5*MINUTE)
@@ -2904,6 +2905,8 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
         return false;
     }
 
+    bool sourceHandled = learning && !loading && sScriptMgr->OnPlayerSpellLearn(this, spellId, dependent);
+
     PlayerSpellState state = learning ? PLAYERSPELL_NEW : PLAYERSPELL_UNCHANGED;
 
     bool dependent_set = false;
@@ -2942,8 +2945,8 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             return false;
         }
 
-        // dependent spell known as not dependent, overwrite state
-        if (itr->second.state != PLAYERSPELL_REMOVED && !itr->second.dependent && dependent)
+        // A separately acquired copy must become persistent even when a dependent copy already exists.
+        if (itr->second.state != PLAYERSPELL_REMOVED && itr->second.dependent != dependent && (dependent || sourceHandled))
         {
             itr->second.dependent = dependent;
             if (itr->second.state != PLAYERSPELL_NEW)
@@ -3334,6 +3337,10 @@ void Player::LearnSpell(uint32 spell_id, bool dependent, int32 fromSkill /*= 0*/
 
 void Player::RemoveSpell(uint32 spell_id, bool disabled /*= false*/, bool learn_low_rank /*= true*/, bool suppressMessaging /*= false*/)
 {
+    bool preserveAura = false;
+    if (!sScriptMgr->OnBeforePlayerSpellRemove(this, spell_id, preserveAura))
+        return;
+
     PlayerSpellMap::iterator itr = m_spells.find(spell_id);
     if (itr == m_spells.end())
         return;
@@ -3376,7 +3383,8 @@ void Player::RemoveSpell(uint32 spell_id, bool disabled /*= false*/, bool learn_
             itr->second.state = PLAYERSPELL_REMOVED;
     }
 
-    RemoveOwnedAura(spell_id, GetGUID());
+    if (!preserveAura)
+        RemoveOwnedAura(spell_id, GetGUID());
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spell_id, DIFFICULTY_NONE);
 
@@ -4390,6 +4398,8 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             return;
     }
 
+    if (charDeleteMethod == CHAR_DELETE_REMOVE)
+        sScriptMgr->OnPlayerDeleteTransaction(playerguid, accountId, trans);
     LoginDatabase.CommitTransaction(loginTransaction);
     CharacterDatabase.CommitTransaction(trans);
 
@@ -21037,6 +21047,8 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
     if (!create)
         sScriptMgr->OnPlayerSave(this);
 
+    sScriptMgr->OnPlayerSaveTransaction(this, trans, create);
+
     CharacterDatabasePreparedStatement* stmt = nullptr;
     uint8 index = 0;
 
@@ -26063,6 +26075,14 @@ void Player::LearnQuestRewardedSpells(Quest const* quest)
     bool found = false;
     for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
     {
+        if (spellEffectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && HasSpell(spellEffectInfo.TriggerSpell))
+        {
+            SpellInfo const* learned = sSpellMgr->GetSpellInfo(spellEffectInfo.TriggerSpell, DIFFICULTY_NONE);
+            bool dependent = false;
+            if (learned && SpellMgr::IsSpellValid(learned, this, false) &&
+                sScriptMgr->OnPlayerSpellLearn(this, learned->Id, dependent))
+                LearnSpell(learned->Id, dependent);
+        }
         if (spellEffectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && !HasSpell(spellEffectInfo.TriggerSpell))
         {
             found = true;
@@ -30166,6 +30186,7 @@ void Player::ActivateTalentGroup(ChrSpecializationEntry const* spec)
 
     SetActiveTalentGroup(spec->OrderIndex);
     SetPrimarySpecialization(spec->ID);
+    sScriptMgr->OnPlayerTalentGroupChanged(this);
     UF::TraitConfig const* specTraitConfig = m_activePlayerData->TraitConfigs.FindIf([spec](UF::TraitConfig const& traitConfig)
     {
         return static_cast<TraitConfigType>(*traitConfig.Type) == TraitConfigType::Combat
@@ -30292,6 +30313,9 @@ void Player::ActivateTalentGroup(ChrSpecializationEntry const* spec)
 
 void Player::StartLoadingActionButtons(std::function<void()>&& callback /*= nullptr*/)
 {
+    static std::atomic<uint64> nextLoadGeneration = 0;
+    m_actionButtonsLoadGeneration = ++nextLoadGeneration;
+    m_actionButtonsLoading = true;
     int32 traitConfigId = [&]() -> int32
     {
         UF::TraitConfig const* traitConfig = GetTraitConfig(m_activePlayerData->ActiveCombatTraitConfigID);
@@ -30320,11 +30344,13 @@ void Player::StartLoadingActionButtons(std::function<void()>&& callback /*= null
 
     WorldSession* mySess = GetSession();
     mySess->GetQueryProcessor().AddCallback(CharacterDatabase.AsyncQuery(stmt)
-        .WithPreparedCallback([mySess, myGuid = GetGUID(), callback = std::move(callback)](PreparedQueryResult result)
+        .WithPreparedCallback([mySess, myGuid = GetGUID(), generation = m_actionButtonsLoadGeneration,
+            callback = std::move(callback)](PreparedQueryResult result)
     {
         // safe callback, we can't pass this pointer directly
         // in case player logs out before db response (player would be deleted in that case)
-        if (Player* thisPlayer = mySess->GetPlayer(); thisPlayer && thisPlayer->GetGUID() == myGuid)
+        if (Player* thisPlayer = mySess->GetPlayer(); thisPlayer && thisPlayer->GetGUID() == myGuid &&
+            thisPlayer->m_actionButtonsLoadGeneration == generation)
         {
             thisPlayer->LoadActions(result);
 
@@ -30337,6 +30363,8 @@ void Player::StartLoadingActionButtons(std::function<void()>&& callback /*= null
 void Player::LoadActions(PreparedQueryResult result)
 {
     _LoadActions(result);
+    m_actionButtonsLoading = false;
+    sScriptMgr->OnPlayerTalentGroupChanged(this, true);
 
     SendActionButtons(1);
 }

@@ -526,8 +526,11 @@ public:
     }
 };
 
+void AddHeroFreePickScripts();
+
 void Addmod_heroScripts()
 {
     new HeroWorldScript();
     new HeroPlayerScript();
+    AddHeroFreePickScripts();
 }

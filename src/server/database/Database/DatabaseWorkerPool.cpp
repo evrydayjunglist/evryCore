@@ -32,6 +32,7 @@
 #include "QueryHolder.h"
 #include "QueryResult.h"
 #include "Transaction.h"
+#include "TransactionExecution.h"
 #include "MySQLWorkaround.h"
 #include <boost/asio/use_future.hpp>
 #include <mysqld_error.h>
@@ -398,12 +399,10 @@ void DatabaseWorkerPool<T>::DirectCommitTransaction(SQLTransaction<T>& transacti
     if (errorCode == ER_LOCK_DEADLOCK)
     {
         //todo: handle multiple sync threads deadlocking in a similar way as async threads
-        uint8 loopBreaker = 5;
-        for (uint8 i = 0; i < loopBreaker; ++i)
-        {
-            if (!connection->ExecuteTransaction(transaction))
-                break;
-        }
+        uint8 attempts = 0;
+        Trinity::Database::RetryDeadlockedTransaction(errorCode, ER_LOCK_DEADLOCK,
+            [&]() { return connection->ExecuteTransaction(transaction); },
+            [&]() { return attempts++ < 5; });
     }
 
     //! Clean up now.

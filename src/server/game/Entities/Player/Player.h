@@ -2062,6 +2062,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         std::vector<uint32> const& GetGlyphs(uint8 spec) const { return _specializationInfo.Glyphs[spec]; }
         std::vector<uint32>& GetGlyphs(uint8 spec) { return _specializationInfo.Glyphs[spec]; }
         ActionButtonList const& GetActionButtons() const { return m_actionButtons; }
+        bool IsLoadingActionButtons() const { return m_actionButtonsLoading; }
         void StartLoadingActionButtons(std::function<void()>&& callback = nullptr);
         void LoadActions(PreparedQueryResult result);
 
@@ -3331,6 +3332,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         std::unordered_map<int32, PlayerSpellState> m_traitConfigStates;
 
         ActionButtonList m_actionButtons;
+        uint64 m_actionButtonsLoadGeneration = 0;
+        bool m_actionButtonsLoading = false;
 
         std::array<float, BASEMOD_END> m_auraBaseFlatMod;
         std::array<float, BASEMOD_END> m_auraBasePctMod;

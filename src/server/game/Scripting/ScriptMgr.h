@@ -84,6 +84,7 @@ struct PlayerChoiceResponse;
 struct Position;
 struct QuestObjective;
 struct SceneTemplate;
+struct SpellPowerCost;
 struct WorldStateTemplate;
 
 namespace Trinity::ChatCommands { struct ChatCommandBuilder; }
@@ -782,6 +783,16 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player is about to be saved.
         virtual void OnSave(Player* player);
 
+        // Addon requests remain on the authenticated session's update thread.
+        virtual bool OnAddonMessage(Player* player, std::string_view prefix, std::string_view message);
+        virtual bool OnSpellLearn(Player* player, uint32 spell, bool& dependent);
+        virtual bool OnBeforeSpellRemove(Player* player, uint32 spell, bool& preserveAura);
+        virtual void OnTalentGroupChanged(Player* player, bool actionsLoaded = false);
+        virtual void OnSaveTransaction(Player* player, CharacterDatabaseTransaction transaction, bool create);
+        virtual void OnDeleteTransaction(ObjectGuid guid, uint32 accountId, CharacterDatabaseTransaction transaction);
+        virtual void OnSpellPowerCost(Player const* player, SpellInfo const* spellInfo, uint32 schoolMask,
+            Spell* spell, std::vector<SpellPowerCost>& costs);
+
         // Called when a player is bound to an instance
         virtual void OnBindToInstance(Player* player, Difficulty difficulty, uint32 mapId, bool permanent, uint8 extendState);
 
@@ -1409,6 +1420,14 @@ class TC_GAME_API ScriptMgr
         void OnPlayerDelete(ObjectGuid guid, uint32 accountId);
         void OnPlayerFailedDelete(ObjectGuid guid, uint32 accountId);
         void OnPlayerSave(Player* player);
+        bool OnPlayerAddonMessage(Player* player, std::string_view prefix, std::string_view message);
+        bool OnPlayerSpellLearn(Player* player, uint32 spell, bool& dependent);
+        bool OnBeforePlayerSpellRemove(Player* player, uint32 spell, bool& preserveAura);
+        void OnPlayerTalentGroupChanged(Player* player, bool actionsLoaded = false);
+        void OnPlayerSaveTransaction(Player* player, CharacterDatabaseTransaction transaction, bool create);
+        void OnPlayerDeleteTransaction(ObjectGuid guid, uint32 accountId, CharacterDatabaseTransaction transaction);
+        void OnPlayerSpellPowerCost(Player const* player, SpellInfo const* spellInfo, uint32 schoolMask,
+            Spell* spell, std::vector<SpellPowerCost>& costs);
         void OnPlayerBindToInstance(Player* player, Difficulty difficulty, uint32 mapid, bool permanent, uint8 extendState);
         void OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 newArea);
         void OnQuestStatusChange(Player* player, uint32 questId);

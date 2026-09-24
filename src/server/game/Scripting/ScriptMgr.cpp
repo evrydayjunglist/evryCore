@@ -2183,6 +2183,59 @@ void ScriptMgr::OnPlayerSave(Player* player)
     FOREACH_SCRIPT(PlayerScript)->OnSave(player);
 }
 
+bool ScriptMgr::OnPlayerAddonMessage(Player* player, std::string_view prefix, std::string_view message)
+{
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        if (itr->second->OnAddonMessage(player, prefix, message))
+            return true;
+    return false;
+}
+
+bool ScriptMgr::OnPlayerSpellLearn(Player* player, uint32 spell, bool& dependent)
+{
+    bool handled = false;
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        handled = itr->second->OnSpellLearn(player, spell, dependent) || handled;
+    return handled;
+}
+
+bool ScriptMgr::OnBeforePlayerSpellRemove(Player* player, uint32 spell, bool& preserveAura)
+{
+    bool allowed = true;
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        allowed = itr->second->OnBeforeSpellRemove(player, spell, preserveAura) && allowed;
+    return allowed;
+}
+
+void ScriptMgr::OnPlayerTalentGroupChanged(Player* player, bool actionsLoaded)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnTalentGroupChanged(player, actionsLoaded);
+}
+
+void ScriptMgr::OnPlayerSaveTransaction(Player* player, CharacterDatabaseTransaction transaction, bool create)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnSaveTransaction(player, transaction, create);
+}
+
+void ScriptMgr::OnPlayerDeleteTransaction(ObjectGuid guid, uint32 accountId, CharacterDatabaseTransaction transaction)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnDeleteTransaction(guid, accountId, transaction);
+}
+
+void ScriptMgr::OnPlayerSpellPowerCost(Player const* player, SpellInfo const* spellInfo, uint32 schoolMask,
+    Spell* spell, std::vector<SpellPowerCost>& costs)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnSpellPowerCost(player, spellInfo, schoolMask, spell, costs);
+}
+
+bool PlayerScript::OnAddonMessage(Player*, std::string_view, std::string_view) { return false; }
+bool PlayerScript::OnSpellLearn(Player*, uint32, bool&) { return false; }
+bool PlayerScript::OnBeforeSpellRemove(Player*, uint32, bool&) { return true; }
+void PlayerScript::OnTalentGroupChanged(Player*, bool) { }
+void PlayerScript::OnSaveTransaction(Player*, CharacterDatabaseTransaction, bool) { }
+void PlayerScript::OnDeleteTransaction(ObjectGuid, uint32, CharacterDatabaseTransaction) { }
+void PlayerScript::OnSpellPowerCost(Player const*, SpellInfo const*, uint32, Spell*, std::vector<SpellPowerCost>&) { }
+
 void ScriptMgr::OnPlayerBindToInstance(Player* player, Difficulty difficulty, uint32 mapid, bool permanent, uint8 extendState)
 {
     FOREACH_SCRIPT(PlayerScript)->OnBindToInstance(player, difficulty, mapid, permanent, extendState);

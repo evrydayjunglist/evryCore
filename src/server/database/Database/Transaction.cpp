@@ -16,6 +16,7 @@
  */
 
 #include "Transaction.h"
+#include "TransactionExecution.h"
 #include "Errors.h"
 #include "Log.h"
 #include "MySQLConnection.h"
@@ -75,15 +76,20 @@ bool TransactionTask::Execute(MySQLConnection* conn, std::shared_ptr<Transaction
         // Make sure only 1 async thread retries a transaction so they don't keep dead-locking each other
         std::scoped_lock lock(_deadlockLock);
 
-        for (uint32 loopDuration = 0, startMSTime = getMSTime(); loopDuration <= DEADLOCK_MAX_RETRY_TIME_MS; loopDuration = GetMSTimeDiffToNow(startMSTime))
-        {
-            if (!TryExecute(conn, trans))
-                return true;
+        uint32 startMSTime = getMSTime();
+        errorCode = Trinity::Database::RetryDeadlockedTransaction(errorCode, ER_LOCK_DEADLOCK,
+            [&]()
+            {
+                int nextError = TryExecute(conn, trans);
+                if (nextError == ER_LOCK_DEADLOCK)
+                    TC_LOG_WARN("sql.sql", "Deadlocked SQL Transaction, retrying. Loop timer: {} ms, Thread Id: {}", GetMSTimeDiffToNow(startMSTime), threadId);
+                return nextError;
+            },
+            [&]() { return GetMSTimeDiffToNow(startMSTime) <= DEADLOCK_MAX_RETRY_TIME_MS; });
+        if (!errorCode)
+            return true;
 
-            TC_LOG_WARN("sql.sql", "Deadlocked SQL Transaction, retrying. Loop timer: {} ms, Thread Id: {}", loopDuration, threadId);
-        }
-
-        TC_LOG_ERROR("sql.sql", "Fatal deadlocked SQL Transaction, it will not be retried anymore. Thread Id: {}", threadId);
+        TC_LOG_ERROR("sql.sql", "SQL Transaction stopped retrying after error {}. Thread Id: {}", errorCode, threadId);
     }
 
     // Clean up now.

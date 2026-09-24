@@ -110,6 +110,8 @@ class TC_DATABASE_API MySQLConnection
         MySQLConnectionInfo&  m_connectionInfo;             //!< Connection info (used for logging)
         ConnectionFlags       m_connectionFlags;            //!< Connection flags (for preparing relevant statements)
         std::mutex            m_Mutex;
+        bool                  m_transactionActive = false;
+        uint32                m_transactionError = 0;
 
         MySQLConnection(MySQLConnection const& right) = delete;
         MySQLConnection& operator=(MySQLConnection const& right) = delete;

@@ -517,6 +517,12 @@ void WorldSession::HandleChatAddonMessage(ChatMsg type, std::string prefix, std:
 
     sender->UpdateSpeakTime(Player::ChatFloodThrottle::ADDON);
 
+    if (text.length() > 255)
+        return;
+
+    if (sScriptMgr->OnPlayerAddonMessage(sender, prefix, text))
+        return;
+
     if (prefix == AddonChannelCommandHandler::PREFIX && AddonChannelCommandHandler(this).ParseCommands(text.c_str()))
         return;
 

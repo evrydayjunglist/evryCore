@@ -96,6 +96,13 @@ public:
 
         if (!allRanks && targetPlayer->HasSpell(spell->Id))
         {
+            bool dependent = false;
+            if (sScriptMgr->OnPlayerSpellLearn(targetPlayer, spell->Id, dependent))
+            {
+                targetPlayer->LearnSpell(spell->Id, dependent);
+                return true;
+            }
+
             if (targetPlayer == handler->GetPlayer())
                 handler->SendSysMessage(LANG_YOU_KNOWN_SPELL);
             else

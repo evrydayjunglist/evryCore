@@ -32,6 +32,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "Random.h"
+#include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
@@ -4284,6 +4285,8 @@ std::vector<SpellPowerCost> SpellInfo::CalcPowerCost(WorldObject const* caster, 
         }
     }
 
+    if (Player const* player = caster->ToPlayer())
+        sScriptMgr->OnPlayerSpellPowerCost(player, this, uint32(schoolMask), spell, costs);
     return costs;
 }
 

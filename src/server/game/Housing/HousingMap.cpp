@@ -866,7 +866,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 // Get the house GO position for the MeshObject
                 if (GameObject* houseGo = GetHouseGameObject(plotIdx))
                 {
-                    // NOTE: Do NOT call InitHousingFixtureData on the GO.
+                    // Fixture data lives only on the mesh object, never on the house game object.
                     // In retail, only MeshObjects carry FHousingFixture_C — attaching it to a GO
                     // causes a client crash at +0x64 (GO entity factory doesn't allocate a housing
                     // fixture component, so the GUID resolver returns null and dereferences it).

@@ -163,13 +163,6 @@ UF::UpdateFieldFlag HousingRoomEntity::GetUpdateFieldFlagsFor(Player const* /*ta
     return UF::UpdateFieldFlag::None;
 }
 
-void HousingRoomEntity::ClearValuesChangesMask()
-{
-    m_values.ClearChangesMask(&HousingRoomEntity::m_housingRoomData);
-    m_values.ClearChangesMask(&HousingRoomEntity::m_mirroredPositionData);
-    Object::ClearValuesChangesMask();
-}
-
 bool HousingRoomEntity::AddToObjectUpdate()
 {
     GetMap()->AddUpdateObject(this);
@@ -198,9 +191,10 @@ void HousingRoomEntity::SetFlags(int32 flags)
 
 void HousingRoomEntity::SetFloorIndex(int32 floorIndex)
 {
-    // Server-side only since 12.0.7 - the client no longer carries FloorIndex in
-    // the FHousingRoom_C fragment (see UF::HousingRoomData). Kept for the interior
-    // map's floor bookkeeping.
+    // The room fragment retail sends has no floor number: in the room create block of the
+    // hbcd3 capture (lines 515619-515668) WowPacketParser reads a nonsense floor number at
+    // line 515655 and then runs off the end of the packet. The floor is kept here for the
+    // interior map's own bookkeeping.
     _floorIndex = floorIndex;
 }
 

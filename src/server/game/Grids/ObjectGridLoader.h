@@ -56,16 +56,6 @@ class TC_GAME_API ObjectGridLoader : public ObjectGridLoaderBase
             : ObjectGridLoaderBase(grid, map)
             { }
 
-        void Visit(GameObjectMapType &m);
-        void Visit(CreatureMapType &m);
-        void Visit(AreaTriggerMapType &m);
-        void Visit(CorpseMapType &) const { }
-        void Visit(DynamicObjectMapType&) const { }
-        void Visit(SceneObjectMapType&) const { }
-        void Visit(ConversationMapType&) const { }
-        void Visit(MeshObjectMapType&) const { }
-        void Visit(HousingRoomEntityMapType&) const { }
-
         void LoadN();
 };
 
@@ -75,16 +65,6 @@ class TC_GAME_API PersonalPhaseGridLoader : public ObjectGridLoaderBase
         PersonalPhaseGridLoader(NGridType& grid, Map* map, ObjectGuid const& phaseOwner)
             : ObjectGridLoaderBase(grid, map), _phaseOwner(phaseOwner)
             { }
-
-        void Visit(GameObjectMapType &m);
-        void Visit(CreatureMapType &m);
-        void Visit(AreaTriggerMapType&) const { }
-        void Visit(CorpseMapType&) const { }
-        void Visit(DynamicObjectMapType&) const { }
-        void Visit(SceneObjectMapType&) const { }
-        void Visit(ConversationMapType&) const { }
-        void Visit(MeshObjectMapType&) const { }
-        void Visit(HousingRoomEntityMapType&) const { }
 
         void Load(uint32 phaseId);
 

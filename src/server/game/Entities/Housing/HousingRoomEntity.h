@@ -70,12 +70,11 @@ public:
 
 protected:
     UF::UpdateFieldFlag GetUpdateFieldFlagsFor(Player const* target) const override;
-    void ClearValuesChangesMask() override;
     bool AddToObjectUpdate() override;
     void RemoveFromObjectUpdate() override;
 
 private:
-    // Not a wire field since 12.0.7 - see UF::HousingRoomData.
+    // Kept on the server only; retail's room fragment has no floor number.
     int32 _floorIndex = 0;
 };
 

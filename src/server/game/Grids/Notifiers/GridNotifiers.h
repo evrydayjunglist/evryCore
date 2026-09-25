@@ -47,7 +47,7 @@ namespace Trinity
     template<> struct GridMapTypeMaskForType<SceneObject> : std::integral_constant<GridMapTypeMask, GRID_MAP_TYPE_MASK_SCENEOBJECT> { };
     template<> struct GridMapTypeMaskForType<Conversation> : std::integral_constant<GridMapTypeMask, GRID_MAP_TYPE_MASK_CONVERSATION> { };
     template<> struct GridMapTypeMaskForType<MeshObject> : std::integral_constant<GridMapTypeMask, GRID_MAP_TYPE_MASK_MESHOBJECT> { };
-    template<> struct GridMapTypeMaskForType<HousingRoomEntity> : std::integral_constant<GridMapTypeMask, GRID_MAP_TYPE_MASK_HOUSINGROMENTITY> { };
+    template<> struct GridMapTypeMaskForType<HousingRoomEntity> : std::integral_constant<GridMapTypeMask, GRID_MAP_TYPE_MASK_HOUSING_ROOM_ENTITY> { };
 
     struct TC_GAME_API VisibleNotifier
     {

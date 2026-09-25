@@ -134,13 +134,6 @@ UF::UpdateFieldFlag HousingDecorEntity::GetUpdateFieldFlagsFor(Player const* /*t
     return UF::UpdateFieldFlag::None;
 }
 
-void HousingDecorEntity::ClearValuesChangesMask()
-{
-    m_values.ClearChangesMask(&HousingDecorEntity::m_housingDecorData);
-    m_values.ClearChangesMask(&HousingDecorEntity::m_mirroredPositionData);
-    Object::ClearValuesChangesMask();
-}
-
 bool HousingDecorEntity::AddToObjectUpdate()
 {
     GetMap()->AddUpdateObject(this);

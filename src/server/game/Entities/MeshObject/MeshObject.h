@@ -117,12 +117,18 @@ public:
     UF::UpdateField<UF::MeshObjectData, int32(WowCS::EntityFragment::FMeshObjectData_C), TYPEID_MESH_OBJECT> m_meshObjectData;
     UF::UpdateField<UF::MirroredPositionData, int32(WowCS::EntityFragment::FMirroredPositionData_C), 0> m_mirroredPositionData;
 
+    // Housing fragments, each present only on the mesh objects that play that part of a house.
+    bool HasHousingDecorData() const { return m_housingDecorData.has_value(); }
+    UF::OptionalUpdateField<UF::HousingDecorData, int32(WowCS::EntityFragment::FHousingDecor_C), 0> m_housingDecorData;
+    UF::OptionalUpdateField<UF::HousingRoomData, int32(WowCS::EntityFragment::FHousingRoom_C), 0> m_housingRoomData;
+    UF::OptionalUpdateField<UF::HousingRoomComponentMeshData, int32(WowCS::EntityFragment::FHousingRoomComponentMesh_C), 0> m_housingRoomComponentMeshData;
+    UF::OptionalUpdateField<UF::HousingFixtureData, int32(WowCS::EntityFragment::FHousingFixture_C), 0> m_housingFixtureData;
+
     void BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) const override;
 
 protected:
     void BuildValuesCreate(UF::UpdateFieldFlag flags, ByteBuffer& data, Player const* target) const override;
     void BuildValuesUpdate(UF::UpdateFieldFlag flags, ByteBuffer& data, Player const* target) const override;
-    void ClearValuesChangesMask() override;
 
 private:
     bool Create(Map* map, Position const& pos, QuaternionData const& rotation,

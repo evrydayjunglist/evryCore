@@ -174,16 +174,16 @@ void MeshObject::InitHousingDecorData(ObjectGuid decorGuid, ObjectGuid houseGuid
     // Sniff-verified: FHousingDecor_C entity fragment on MeshObject decor entities.
     // TargetGameObjectGUID is EMPTY (0x0) in ALL retail sniffs.
     // AttachParentGUID points to the room entity (Housing/18 base room) the decor is placed in.
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingDecorData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingDecorData, 0)
         .ModifyValue(&UF::HousingDecorData::DecorGUID), decorGuid);
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingDecorData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingDecorData, 0)
         .ModifyValue(&UF::HousingDecorData::AttachParentGUID), roomEntityGuid);
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingDecorData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingDecorData, 0)
         .ModifyValue(&UF::HousingDecorData::Flags), flags);
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingDecorData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingDecorData, 0)
         .ModifyValue(&UF::HousingDecorData::TargetGameObjectGUID), ObjectGuid::Empty);
 
-    auto persistedRef = m_values.ModifyValue(&Object::m_housingDecorData, 0)
+    auto persistedRef = m_values.ModifyValue(&MeshObject::m_housingDecorData, 0)
         .ModifyValue(&UF::HousingDecorData::PersistedData, 0);
     SetUpdateFieldValue(persistedRef.ModifyValue(&UF::DecorStoragePersistedData::HouseGUID), houseGuid);
     SetUpdateFieldValue(persistedRef.ModifyValue(&UF::DecorStoragePersistedData::SourceType), sourceType);
@@ -227,22 +227,22 @@ void MeshObject::InitHousingFixtureData(ObjectGuid houseGuid, ObjectGuid fixture
     //   [7] ExteriorComponentType (uint8)
     //   [8] Field_59 (uint8)
     //   [9] Size (uint8)
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::ExteriorComponentID), exteriorComponentID);
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::HouseExteriorWmoDataID), houseExteriorWmoDataID);
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::ExteriorComponentHookID), exteriorComponentHookID);
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::HouseGUID), houseGuid);
     // AttachParentGUID: the parent fixture's unique GUID in the hierarchy.
     // Root pieces have empty parent. Child pieces point to their parent root's fixture GUID.
     // The client uses this to build the fixture tree and resolve hook point ownership.
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::AttachParentGUID), parentFixtureGuid);
     // Guid: unique per fixture — the client uses this to identify individual fixtures.
     // Must be a Housing-type GUID (client crashes with non-Housing GUIDs here).
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::Guid), fixtureGuid);
     // GameObjectGUID: retail sniff shows door components (Type=11) have the GO entry GUID here.
     // Other fixture types (base, roof, window, etc.) have empty GUID.
@@ -263,15 +263,15 @@ void MeshObject::InitHousingFixtureData(ObjectGuid houseGuid, ObjectGuid fixture
         }
         if (!goGuid.IsEmpty())
         {
-            SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+            SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
                 .ModifyValue(&UF::HousingFixtureData::GameObjectGUID), goGuid);
         }
     }
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::ExteriorComponentType), exteriorComponentType);
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::Field_59), uint8(1)); // sniff: always 1
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::Size), houseSize);
 
     m_entityFragments.Add(WowCS::EntityFragment::FHousingFixture_C, IsInWorld(),
@@ -310,7 +310,7 @@ void MeshObject::UpdateExteriorComponentID(int32 id)
     if (!m_housingFixtureData.has_value())
         return;
 
-    SetUpdateFieldValue(m_values.ModifyValue(&Object::m_housingFixtureData, 0)
+    SetUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingFixtureData, 0)
         .ModifyValue(&UF::HousingFixtureData::ExteriorComponentID), id);
     _exteriorComponentID = id;
 }
@@ -329,12 +329,11 @@ void MeshObject::InitHousingRoomData(ObjectGuid houseGuid, int32 houseRoomID,
     }
 
     // Populate HousingRoomData (FHousingRoom_C fragment data).
-    auto roomData = m_values.ModifyValue(&Object::m_housingRoomData, 0);
+    auto roomData = m_values.ModifyValue(&MeshObject::m_housingRoomData, 0);
     SetUpdateFieldValue(roomData.ModifyValue(&UF::HousingRoomData::HouseGUID), houseGuid);
     SetUpdateFieldValue(roomData.ModifyValue(&UF::HousingRoomData::HouseRoomID), houseRoomID);
     SetUpdateFieldValue(roomData.ModifyValue(&UF::HousingRoomData::Flags), flags);
-    // floorIndex is no longer part of the FHousingRoom_C wire layout in 12.0.7
-    // (see UF::HousingRoomData); it is only kept for the log line below.
+    // Retail's room fragment has no floor number, so floorIndex is only used in the log line below.
 
     // Register FHousingRoom_C entity fragment
     m_entityFragments.Add(WowCS::EntityFragment::FHousingRoom_C, IsInWorld(),
@@ -359,7 +358,7 @@ void MeshObject::AddRoomMeshObject(ObjectGuid meshObjectGuid)
     if (!m_housingRoomData.has_value())
         return;
 
-    AddDynamicUpdateFieldValue(m_values.ModifyValue(&Object::m_housingRoomData, 0)
+    AddDynamicUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingRoomData, 0)
         .ModifyValue(&UF::HousingRoomData::MeshObjects)) = meshObjectGuid;
 
     TC_LOG_DEBUG("housing", "MeshObject::AddRoomMeshObject: room={} added meshObject={}",
@@ -373,7 +372,7 @@ void MeshObject::AddRoomDoor(int32 roomComponentID, Position const& offset, uint
 
     // For a fresh dynamic array entry, populate fields via the mutable reference's ModifyValue
     // which returns a setter that marks the change mask and writes the underlying value.
-    auto&& doorRef = AddDynamicUpdateFieldValue(m_values.ModifyValue(&Object::m_housingRoomData, 0)
+    auto&& doorRef = AddDynamicUpdateFieldValue(m_values.ModifyValue(&MeshObject::m_housingRoomData, 0)
         .ModifyValue(&UF::HousingRoomData::Doors));
     doorRef.ModifyValue(&UF::HousingDoorData::RoomComponentID).SetValue(roomComponentID);
     doorRef.ModifyValue(&UF::HousingDoorData::RoomComponentOffset).SetValue(
@@ -414,7 +413,7 @@ void MeshObject::InitHousingRoomComponentData(ObjectGuid roomGuid,
     }
 
     // Populate HousingRoomComponentMeshData (FHousingRoomComponentMesh_C fragment data)
-    auto compData = m_values.ModifyValue(&Object::m_housingRoomComponentMeshData, 0);
+    auto compData = m_values.ModifyValue(&MeshObject::m_housingRoomComponentMeshData, 0);
     SetUpdateFieldValue(compData.ModifyValue(&UF::HousingRoomComponentMeshData::RoomGUID), roomGuid);
     SetUpdateFieldValue(compData.ModifyValue(&UF::HousingRoomComponentMeshData::RoomComponentOptionID), roomComponentOptionID);
     SetUpdateFieldValue(compData.ModifyValue(&UF::HousingRoomComponentMeshData::RoomComponentID), roomComponentID);
@@ -443,7 +442,7 @@ void MeshObject::UpdateRoomComponentVisuals(int32 roomComponentOptionID, int32 h
     if (!m_housingRoomComponentMeshData.has_value())
         return;
 
-    auto compData = m_values.ModifyValue(&Object::m_housingRoomComponentMeshData, 0);
+    auto compData = m_values.ModifyValue(&MeshObject::m_housingRoomComponentMeshData, 0);
     SetUpdateFieldValue(compData.ModifyValue(&UF::HousingRoomComponentMeshData::RoomComponentOptionID), roomComponentOptionID);
     SetUpdateFieldValue(compData.ModifyValue(&UF::HousingRoomComponentMeshData::HouseThemeID), houseThemeID);
     SetUpdateFieldValue(compData.ModifyValue(&UF::HousingRoomComponentMeshData::RoomComponentTextureID), roomComponentTextureID);
@@ -553,14 +552,4 @@ void MeshObject::BuildValuesUpdate(UF::UpdateFieldFlag flags, ByteBuffer& data, 
 
     if (m_values.HasChanged(TYPEID_OBJECT))
         m_objectData->WriteUpdate(flags, data, target, this);
-}
-
-void MeshObject::ClearValuesChangesMask()
-{
-    m_values.ClearChangesMask(&MeshObject::m_meshObjectData);
-    m_values.ClearChangesMask(&MeshObject::m_mirroredPositionData);
-    m_values.ClearChangesMask(&Object::m_housingRoomComponentMeshData);
-    m_values.ClearChangesMask(&Object::m_housingDecorData);
-    m_values.ClearChangesMask(&Object::m_housingFixtureData);
-    WorldObject::ClearValuesChangesMask();
 }

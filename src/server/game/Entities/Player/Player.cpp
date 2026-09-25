@@ -3978,8 +3978,6 @@ void Player::ClearValuesChangesMask()
 {
     m_values.ClearChangesMask(&Player::m_playerData);
     m_values.ClearChangesMask(&Player::m_activePlayerData);
-    m_values.ClearChangesMask(&Player::m_playerHouseInfoComponentData);
-    m_values.ClearChangesMask(&Player::m_playerInitiativeComponentData);
     Unit::ClearValuesChangesMask();
 }
 

@@ -56,10 +56,10 @@ enum TypeID : uint8
 
     NUM_CLIENT_OBJECT_TYPES,
 
-    // Housing entities use objectType=18 in retail but this MUST NOT increase
-    // NUM_CLIENT_OBJECT_TYPES because BaseEntity::m_objectTypeId defaults to
-    // NUM_CLIENT_OBJECT_TYPES as a sentinel. Changing the sentinel breaks all
-    // entity serialization.
+    // Retail sends object type 18 for the Battle.net account and for housing entities
+    // (houses, neighborhoods, room components, decor and their mirrors). It has the same
+    // value as NUM_CLIENT_OBJECT_TYPES but is kept out of that count, so the update masks sized
+    // by the count stay as they are.
     TYPEID_HOUSING_ENTITY         = 18
 };
 

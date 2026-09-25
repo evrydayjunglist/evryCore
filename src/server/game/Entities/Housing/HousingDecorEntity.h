@@ -68,7 +68,6 @@ public:
 
 protected:
     UF::UpdateFieldFlag GetUpdateFieldFlagsFor(Player const* target) const override;
-    void ClearValuesChangesMask() override;
     bool AddToObjectUpdate() override;
     void RemoveFromObjectUpdate() override;
 

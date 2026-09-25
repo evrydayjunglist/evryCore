@@ -38,12 +38,6 @@ HousingPlayerHouseEntity::HousingPlayerHouseEntity(WorldSession* session, Object
     m_entityFragments.Add(WowCS::EntityFragment::FHousingPlayerHouse_C, false, WowCS::GetRawFragmentData(m_housingPlayerHouseData));
 }
 
-void HousingPlayerHouseEntity::ClearUpdateMask(bool remove)
-{
-    m_values.ClearChangesMask(&HousingPlayerHouseEntity::m_housingPlayerHouseData);
-    BaseEntity::ClearUpdateMask(remove);
-}
-
 void HousingPlayerHouseEntity::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) const
 {
     // Diagnostic: dump the field values at CREATE time so post-deploy sniff

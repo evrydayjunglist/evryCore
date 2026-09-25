@@ -879,7 +879,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             // visibility, and retail never sends a second create for a GUID the client already holds.
 
             // Proactively populate FHousingStorage_C (decor list) and budget fields.
-            // At login, PopulateCatalogStorageEntries() is NOT called to avoid crashes when
+            // At login, PushHousingDecorStorage() is NOT called to avoid crashes when
             // storage data appears in the initial Account entity CREATE.
             //
             // CRITICAL: Must send Account as CREATE (not VALUES_UPDATE). The initial login
@@ -895,7 +895,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             // separate packets, the client may not retroactively associate them.
             if (Housing* housing = p->GetHousing())
             {
-                housing->PopulateCatalogStorageEntries();
+                p->PushHousingDecorStorage();
                 housing->SyncUpdateFields();
 
                 // 12.0.5: write the player's own HouseGuid to PlayerHouseInfoComponent.CurrentHouse
@@ -3016,7 +3016,7 @@ bool HousingMap::SpawnDecorItem(uint8 plotIndex, Housing::PlacedDecor const& dec
                 // Retail wire fragments: FHousingDecor_C + FMirroredPositionData_C.
                 // Order matches the sniff-verified fragment list.
                 go->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0,
-                    roomEntityGuid, decor.SourceType, decor.SourceValue);
+                    roomEntityGuid, DECOR_SOURCE_NONE, std::string());
                 go->InitHousingDecorMirroredPosition(localPos, rot, decorScale, roomEntityGuid, attachFlags);
                 // It rides the room it stands in, at its place and turn in that room (hbcd3 1411570-1411650).
                 if (!roomEntityGuid.IsEmpty())
@@ -3091,7 +3091,7 @@ bool HousingMap::SpawnDecorItem(uint8 plotIndex, Housing::PlacedDecor const& dec
     }
 
     PhasingHandler::InitDbPhaseShift(mesh->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-    mesh->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0, roomEntityGuid, decor.SourceType, decor.SourceValue);
+    mesh->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0, roomEntityGuid, DECOR_SOURCE_NONE, std::string());
 
     if (!AddToMap(mesh))
     {

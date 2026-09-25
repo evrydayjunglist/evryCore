@@ -245,10 +245,9 @@ namespace WorldPackets::Housing
         // Previous Read() misparsed the anchor PackedGUID as 3 separate fields
         // (Field_61 u8 + Field_62 u8 + Field_63 s32 + speculative tail) — bytes
         // happened to total correctly only for the empty-anchor case.
-        // 12.1.0.69587: the client writes ELEVEN floats after DecorGuid (Send_CMSG_HOUSING_DECOR_PLACE 0x7FF7CD4F56B0,
-        // Send_CMSG_HOUSING_DECOR_MOVE 0x7FF7CD4F5900): position, euler rotation, a rotation quaternion and scale. In
-        // housingfull12.1.0.69587 a yaw of 1.5708 travels with quaternion (0, 0, 0.7071, 0.7071). Reading seven took the
-        // quaternion's x as Scale and misread every guid behind it.
+        // The port read ELEVEN floats after DecorGuid from its reading of the 12.1.0.69587 client (position, euler
+        // rotation, a rotation quaternion and scale); the 12.0.7 captures have seven. Read accepts both (see
+        // ReadDecorTransform) and says in FloatCount which it found; Quaternion stays zero for seven.
         ObjectGuid DecorGuid;
         TaggedPosition<Position::XYZ> Position;
         TaggedPosition<Position::XYZ> Rotation;
@@ -258,6 +257,7 @@ namespace WorldPackets::Housing
         ObjectGuid RoomGuid;
         ObjectGuid AnchorMeshObjectGuid;
         uint32 AttachPoint = 0;
+        uint8 FloatCount = 0;
     };
 
     class HousingDecorMove final : public ClientPacket
@@ -267,10 +267,7 @@ namespace WorldPackets::Housing
 
         void Read() override;
 
-        // 12.1.0.69587: the client writes ELEVEN floats after DecorGuid (Send_CMSG_HOUSING_DECOR_PLACE 0x7FF7CD4F56B0,
-        // Send_CMSG_HOUSING_DECOR_MOVE 0x7FF7CD4F5900): position, euler rotation, a rotation quaternion and scale. In
-        // housingfull12.1.0.69587 a yaw of 1.5708 travels with quaternion (0, 0, 0.7071, 0.7071). Reading seven took the
-        // quaternion's x as Scale and misread every guid behind it.
+        // Seven or eleven floats after DecorGuid, as for CMSG_HOUSING_DECOR_PLACE; no capture has a decor move.
         ObjectGuid DecorGuid;
         TaggedPosition<Position::XYZ> Position;
         TaggedPosition<Position::XYZ> Rotation;
@@ -283,6 +280,7 @@ namespace WorldPackets::Housing
         uint8 Field_85 = 0;
         uint8 Field_86 = 0;
         bool IsBasicMove = false;
+        uint8 FloatCount = 0;
     };
 
     class HousingDecorRemove final : public ClientPacket

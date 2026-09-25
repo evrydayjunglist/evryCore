@@ -204,21 +204,15 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
         {
             Field* d = memberDecor->Fetch();
             //   0      1            2            3     4     5     6     7     8     9       10     11        12        13       14        15      16            17           18
-            // id, houseGuid, houseDecorId, posX, posY, posZ, rotX, rotY, rotZ, rotW, scale, dyeSlot0, dyeSlot1, dyeSlot2, roomGuid, locked, placementTime, sourceType, sourceValue
+            // guid, houseGuid, houseDecorId, posX, posY, posZ, rotX, rotY, rotZ, rotW, scale, dyeSlot0, dyeSlot1, dyeSlot2, roomGuid, locked, placementTime, sourceType, sourceValue
             PlotInfo* plot = findPlotByHouse(d[1].GetUInt64());
             if (!plot)
                 continue;
 
             Housing::PlacedDecor decor;
-            // Bug repro 2026-04-26: previously hardcoded realmId=0 here while
-            // Housing::LoadFromDB (the per-player path) used the running realmId.
-            // The spawn flow consumes Neighborhood plot decor (this list), so
-            // every spawned decor MeshObject ended up with arg1=0; the client
-            // cached that flavour and bounced every subsequent CMSG_HOUSING_DECOR_MOVE
-            // with HOUSING_RESULT_DECOR_NOT_FOUND because Housing::_placedDecor
-            // keyed those GUIDs with arg1=current_realmId. Use the realmId here
-            // so both load paths produce identical keys.
-            decor.Guid          = ObjectGuidFactory::CreateHousing(/*subType*/ 1, /*realmId*/ sRealmList->GetCurrentRealmId().Realm, d[2].GetUInt32(), d[0].GetUInt64());
+            // The piece's own saved GUID, built the same way as the house's own load builds it, so the pieces spawned
+            // from this list answer to the GUIDs the client moves and removes.
+            decor.Guid          = Housing::MakeDecorGuid(d[2].GetUInt32(), d[0].GetUInt64());
             decor.DecorEntryId  = d[2].GetUInt32();
             decor.PosX          = d[3].GetFloat();
             decor.PosY          = d[4].GetFloat();

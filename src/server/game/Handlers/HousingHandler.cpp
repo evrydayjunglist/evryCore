@@ -31,6 +31,7 @@
 #include "GuildMgr.h"
 #include "HouseInteriorMap.h"
 #include "Housing.h"
+#include "HousingDecorStore.h"
 #include "HousingDefines.h"
 #include "HousingMap.h"
 #include "HousingMgr.h"
@@ -60,6 +61,7 @@
 #include "UpdateData.h"
 #include "World.h"
 #include "WorldStatePackets.h"
+#include <unordered_set>
 
 namespace
 {
@@ -702,15 +704,10 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
         player->SetUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
         player->ReplaceAllSilencedSchoolMask(SPELL_SCHOOL_MASK_ALL);
 
-        // 4. Populate FHousingStorage_C on the Account entity.
-        // The client correlates MeshObject FHousingDecor_C.DecorGUID with entries in
-        // FHousingStorage_C to build its placed decor list for the targeting system.
-        // Without this, the client has no decor to target and selection is impossible.
-        // Reset the populated flag so storage entries are re-pushed on every edit mode
-        // entry — the client may clear its decor list when exiting editor mode, so we
-        // must ensure the Account VALUES_UPDATE always carries the full storage map.
-        housing->ResetStoragePopulated();
-        housing->PopulateCatalogStorageEntries();
+        // 4. The account's saved pieces on the Account entity (hbcd3 1431674-1431809: the edit-mode update carries the
+        // whole storage). The client matches each placed piece's FHousingDecor_C.DecorGUID against these entries to
+        // build its placed decor list for targeting.
+        player->PushHousingDecorStorage();
 
         // 4b. Refresh budget values on the HousingPlayerHouseEntity so the client
         // receives up-to-date max budgets alongside the storage data.
@@ -737,7 +734,7 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
 
             // Account entity: ALWAYS send CREATE (not VALUES_UPDATE) when entering edit mode.
             // The initial Account CREATE (during login's SendInitSelf) has NO FHousingStorage_C
-            // data. PopulateCatalogStorageEntries() added Decor map entries above, and sending
+            // data. PushHousingDecorStorage() added Decor map entries above, and sending
             // a VALUES_UPDATE for a MapUpdateField that was empty at CREATE time may not
             // properly convey the new entries to the client. CREATE includes all current values.
             // The client handles receiving a second CREATE for an existing entity gracefully.
@@ -871,9 +868,9 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
             }
 
             TC_LOG_DEBUG("housing", "  [DIAG] Summary: meshTracked={} meshInWorld={} meshHasFrag={} meshAtClient={} "
-                "housingPlaced={} matched={} storagePop={}",
+                "housingPlaced={} matched={} storageSent={}",
                 meshDecorCount, meshInWorld, meshHasFrag, meshAtClient,
-                totalPlaced, matchCount, housing->IsStoragePopulated());
+                totalPlaced, matchCount, GetBattlenetAccount().IsHousingDecorStorageSent());
         }
 
         // Play the plot boundary spell visual on the player's plot AT.
@@ -995,28 +992,8 @@ void WorldSession::HandleHousingDecorPlace(WorldPackets::Housing::HousingDecorPl
         return;
     }
 
-    // Look up the entry ID from pending placements (set during RedeemDeferredDecor/StartPlacingNewDecor).
-    // If the client already has the item in storage (e.g. pre-populated on login), it sends PLACE
-    // directly without REDEEM_DEFERRED first. In that case, extract decorEntryId from the Housing GUID.
-    // subType=1 Housing GUIDs encode arg2=decorEntryId in bits [31:0] of the high word.
-    uint32 decorEntryId = housing->GetPendingPlacementEntryId(housingDecorPlace.DecorGuid);
-    if (!decorEntryId)
-    {
-        decorEntryId = static_cast<uint32>(housingDecorPlace.DecorGuid.GetRawValue(1) & 0xFFFFFFFF);
-        if (!decorEntryId)
-        {
-            TC_LOG_ERROR("housing", "CMSG_HOUSING_DECOR_PLACE: No pending placement and could not extract EntryId from DecorGuid {}", housingDecorPlace.DecorGuid.ToString());
-            WorldPackets::Housing::HousingDecorPlaceResponse response;
-            response.PlayerGuid = player->GetGUID();
-            response.DecorGuid = housingDecorPlace.DecorGuid;
-            response.Result = static_cast<uint8>(HOUSING_RESULT_DECOR_NOT_FOUND);
-            SendPacket(response.Write());
-            return;
-        }
-
-        TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_PLACE: No pending placement for DecorGuid {}, extracted EntryId {} from GUID", housingDecorPlace.DecorGuid.ToString(), decorEntryId);
-    }
-
+    // The client names the piece by the GUID of its storage entry: a redeem's reply (hbcd3 1443667 then the place at
+    // 1443983), or any piece the storage lists. Housing::PlaceDecorWithGuid takes it out of the account's storage.
     // Client sends Euler angles (via TaggedPosition<XYZ> Rotation) — convert to quaternion
     float yaw = housingDecorPlace.Rotation.Pos.GetPositionX();
     float pitch = housingDecorPlace.Rotation.Pos.GetPositionY();
@@ -1051,7 +1028,7 @@ void WorldSession::HandleHousingDecorPlace(WorldPackets::Housing::HousingDecorPl
     }
 
 
-    HousingResult result = housing->PlaceDecorWithGuid(housingDecorPlace.DecorGuid, decorEntryId,
+    HousingResult result = housing->PlaceDecorWithGuid(housingDecorPlace.DecorGuid,
         posX, posY, posZ, rotX, rotY, rotZ, rotW, roomGuid);
 
     // CRITICAL: Send PLACE_RESPONSE BEFORE spawning the MeshObject.
@@ -1065,8 +1042,8 @@ void WorldSession::HandleHousingDecorPlace(WorldPackets::Housing::HousingDecorPl
     response.Result = static_cast<uint8>(result);
     SendPacket(response.Write());
 
-    TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_PLACE DecorGuid={} EntryId={} Result={}",
-        housingDecorPlace.DecorGuid.ToString(), decorEntryId, uint32(result));
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_PLACE DecorGuid={} Result={}",
+        housingDecorPlace.DecorGuid.ToString(), uint32(result));
 
     // THEN spawn the MeshObject + update Account entity
     if (result == HOUSING_RESULT_SUCCESS)
@@ -1079,7 +1056,8 @@ void WorldSession::HandleHousingDecorPlace(WorldPackets::Housing::HousingDecorPl
                 interiorMap->SpawnSingleInteriorDecor(*newDecor, housing->GetHouseGuid());
         }
 
-        GetBattlenetAccount().SendUpdateToPlayer(player);
+        if (GetBattlenetAccount().IsHousingDecorStorageSent())
+            GetBattlenetAccount().SendUpdateToPlayer(player);
     }
 }
 
@@ -1204,16 +1182,8 @@ void WorldSession::HandleHousingDecorRemove(WorldPackets::Housing::HousingDecorR
         return;
     }
 
-    // Capture plotIndex and source info before RemoveDecor (which erases the placed entry)
     uint8 plotIndex = housing->GetPlotIndex();
     ObjectGuid decorGuid = housingDecorRemove.DecorGuid;
-    uint8 removedSourceType = DECOR_SOURCE_STANDARD;
-    std::string removedSourceValue;
-    if (auto const* placedDecor = housing->GetPlacedDecor(decorGuid))
-    {
-        removedSourceType = placedDecor->SourceType;
-        removedSourceValue = placedDecor->SourceValue;
-    }
 
     HousingResult result = housing->RemoveDecor(decorGuid);
 
@@ -1226,11 +1196,9 @@ void WorldSession::HandleHousingDecorRemove(WorldPackets::Housing::HousingDecorR
         else if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(player->GetMap()))
             interiorMap->DespawnDecorItem(decorGuid);
 
-        // Sniff: RemoveDecor deletes the Account entry, but retail keeps it with HouseGUID=Empty
-        // Re-add the entry with HouseGUID=Empty to return it to storage, preserving source info
-        Battlenet::Account& account = GetBattlenetAccount();
-        account.SetHousingDecorStorageEntry(decorGuid, ObjectGuid::Empty, removedSourceType, removedSourceValue);
-        account.SendUpdateToPlayer(player);
+        // The piece's storage entry stays, with an empty house (hbcd3 1436387); RemoveDecor set it.
+        if (GetBattlenetAccount().IsHousingDecorStorageSent())
+            GetBattlenetAccount().SendUpdateToPlayer(player);
     }
 
     // Wire format: PackedGUID DecorGUID + PackedGUID UnkGUID + uint32 Field_13 + uint8 Result
@@ -1354,23 +1322,24 @@ void WorldSession::HandleHousingDecorDeleteFromStorage(WorldPackets::Housing::Ho
     if (!player)
         return;
 
-    Housing* housing = player->GetAccountCatalogHousing();
-    if (!housing)
+    // The storage belongs to the account and needs no house.
+    HousingDecorStore* store = player->GetHousingDecorStore();
+    if (!store)
     {
         WorldPackets::Housing::HousingDecorDeleteFromStorageResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_NOT_FOUND);
+        response.Result = static_cast<uint8>(HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE);
         SendPacket(response.Write());
         return;
     }
 
-    // m3/A6 + H-10: per-session decoration throttle, charged per GUID rather than per
+    // The per-session decoration throttle is charged per GUID rather than per
     // packet. Place, move and remove each cost one operation against the 40-per-10s
-    // budget; this opcode removes up to 31 decor in a single packet, each one a
-    // synchronous DB delete plus a catalog update and an account UpdateField write.
-    // Charging it once - or not at all, as before - let a client sustain many times
-    // the rate the throttle was written to permit, through the one decor path the
-    // throttle never saw.
+    // budget; this opcode removes up to 31 decor in a single packet. Charging it once
+    // would let a client sustain many times the rate the throttle was written to permit.
+    // Only pieces in storage can be destroyed; a placed piece is not in storage.
     HousingResult result = HOUSING_RESULT_SUCCESS;
+    Battlenet::Account& account = GetBattlenetAccount();
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     for (ObjectGuid const& decorGuid : housingDecorDeleteFromStorage.DecorGuids)
     {
         if (!CheckHousingDecorThrottle())
@@ -1379,14 +1348,23 @@ void WorldSession::HandleHousingDecorDeleteFromStorage(WorldPackets::Housing::Ho
             break;
         }
 
-        HousingResult r = housing->RemoveDecor(decorGuid);
-        if (r != HOUSING_RESULT_SUCCESS)
-            result = r;
+        if (!store->DestroyStored(decorGuid, trans))
+        {
+            result = HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE;
+            continue;
+        }
+
+        if (account.IsHousingDecorStorageSent())
+            account.RemoveHousingDecorStorageEntry(decorGuid);
     }
+    CharacterDatabase.CommitTransaction(trans);
 
     WorldPackets::Housing::HousingDecorDeleteFromStorageResponse response;
     response.Result = static_cast<uint8>(result);
     SendPacket(response.Write());
+
+    if (account.IsHousingDecorStorageSent())
+        account.SendUpdateToPlayer(player);
 
     TC_LOG_INFO("housing", "CMSG_HOUSING_DECOR_DELETE_FROM_STORAGE Count: {}, Result: {}",
         uint32(housingDecorDeleteFromStorage.DecorGuids.size()), uint32(result));
@@ -1412,19 +1390,12 @@ void WorldSession::HandleHousingDecorRequestStorage(WorldPackets::Housing::Housi
     response.ResultCode = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
     SendPacket(response.Write());
 
+    // Then the account's storage, saved piece by piece, whether or not the account has a house (hbcd3 352093-352181:
+    // 12 pieces before the first purchase).
+    player->PushHousingDecorStorage();
     Housing* housing = player->GetAccountCatalogHousing();
-    if (!housing)
-        return;
-
-    // Populate catalog (unplaced) entries into Account entity, refresh budgets,
-    //    then send Account + HousingPlayerHouseEntity + decor MeshObjects in a SINGLE
-    //    UPDATE_OBJECT. The Account must be sent as CREATE (not VALUES_UPDATE) because
-    //    the initial login CREATE had an empty FHousingStorage_C.Decor MapUpdateField —
-    //    a VALUES_UPDATE for an initially-empty map field does not deliver new keys.
-    //    Decor MeshObjects are bundled so the client can correlate FHousingDecor_C.DecorGUID
-    //    with FHousingStorage_C entries in one pass.
-    housing->PopulateCatalogStorageEntries();
-    housing->SyncUpdateFields();
+    if (housing)
+        housing->SyncUpdateFields();
     {
         UpdateData updateData(player->GetMapId());
         WorldPacket updatePacket;
@@ -1434,12 +1405,15 @@ void WorldSession::HandleHousingDecorRequestStorage(WorldPackets::Housing::Housi
         player->m_clientSessionEntityGUIDs.insert(GetBattlenetAccount().GetGUID());
 
         // HousingPlayerHouseEntity (budgets)
-        if (player->HaveAtClient(&GetHousingPlayerHouseEntity(housing->GetHouseGuid())))
-            GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildValuesUpdateBlockForPlayer(&updateData, player);
-        else
+        if (housing)
         {
-            GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildCreateUpdateBlockForPlayer(&updateData, player);
-            player->m_clientSessionEntityGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
+            if (player->HaveAtClient(&GetHousingPlayerHouseEntity(housing->GetHouseGuid())))
+                GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildValuesUpdateBlockForPlayer(&updateData, player);
+            else
+            {
+                GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildCreateUpdateBlockForPlayer(&updateData, player);
+                player->m_clientSessionEntityGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
+            }
         }
 
         // Bundle ALL decor MeshObject CREATEs
@@ -1479,13 +1453,11 @@ void WorldSession::HandleHousingDecorRequestStorage(WorldPackets::Housing::Housi
         player->SendDirectMessage(&updatePacket);
 
         GetBattlenetAccount().ClearUpdateMask(true);
-        GetHousingPlayerHouseEntity(housing->GetHouseGuid()).ClearUpdateMask(true);
+        if (housing)
+            GetHousingPlayerHouseEntity(housing->GetHouseGuid()).ClearUpdateMask(true);
 
         TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_REQUEST_STORAGE: Sent Account CREATE + {} decor MeshObject CREATEs", meshCreateCount);
     }
-
-    TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_REQUEST_STORAGE: sent the storage reply and the account update, {} catalog entries",
-        uint32(housing->GetCatalogEntries().size()));
 }
 
 void WorldSession::HandleHousingDecorRedeemDeferredDecor(WorldPackets::Housing::HousingDecorRedeemDeferredDecor const& housingDecorRedeemDeferredDecor)
@@ -1494,111 +1466,168 @@ void WorldSession::HandleHousingDecorRedeemDeferredDecor(WorldPackets::Housing::
     if (!player)
         return;
 
-    uint32 decorEntryId = housingDecorRedeemDeferredDecor.DeferredDecorID;
-    uint32 sequenceIndex = housingDecorRedeemDeferredDecor.RedemptionToken;
+    uint32 const decorEntryId = housingDecorRedeemDeferredDecor.DeferredDecorID;
+    uint32 const transactionId = housingDecorRedeemDeferredDecor.RedemptionToken;
 
-    TC_LOG_DEBUG("housing", ">>> CMSG_HOUSING_DECOR_REDEEM_DEFERRED DeferredDecorID={} RedemptionToken={}",
-        decorEntryId, sequenceIndex);
+    TC_LOG_DEBUG("housing", ">>> CMSG_HOUSING_DECOR_REDEEM_DEFERRED DecorID={} TransactionID={}", decorEntryId, transactionId);
 
-    Housing* housing = player->GetAccountCatalogHousing();
-    if (!housing)
-    {
-        WorldPackets::Housing::HousingRedeemDeferredDecorResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_NOT_FOUND);
-        response.SequenceIndex = sequenceIndex;
-        SendPacket(response.Write());
-        return;
-    }
-
-    // Verify the deferred decor entry exists in DB2
     HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
-    if (!decorData)
+    HousingDecorStore* store = player->GetHousingDecorStore();
+    if (!decorData || !store)
+    {
+        FinishHousingDecorRedeem(decorEntryId, transactionId, 0);
+        return;
+    }
+
+    // What the account is owed of this entry: its starting quantity, and one copy per RetroactiveDecorReward row whose
+    // achievement or quest the account has done. Only when the starting quantity is used up are the rewards counted.
+    uint32 const redeemed = store->GetRedeemed(decorEntryId);
+    std::vector<HousingDecorStore::RetroactiveReward> rewards = HousingDecorStore::GetRetroactiveRewards(decorEntryId);
+    if (HousingDecorStore::GetOwedCount(decorData->StartingQuantity, decorData->Flags, 0, redeemed) > 0 || rewards.empty())
+    {
+        FinishHousingDecorRedeem(decorEntryId, transactionId, 0);
+        return;
+    }
+
+    // This character first; she is the one in memory.
+    uint32 const earnedHere = HousingDecorStore::CountEarnedRetroactiveRewards(rewards,
+        [player](uint32 achievementId) { return player->HasAchieved(achievementId); },
+        [player](uint32 questId) { return player->IsQuestRewarded(questId); });
+    if (HousingDecorStore::GetOwedCount(decorData->StartingQuantity, decorData->Flags, earnedHere, redeemed) > 0)
+    {
+        FinishHousingDecorRedeem(decorEntryId, transactionId, earnedHere);
+        return;
+    }
+
+    // Then every character of the Battle.net account, from the database. That lookup costs two database queries, so
+    // it is charged against the same per-session budget as placing and moving decor.
+    if (!CheckHousingDecorThrottle())
     {
         WorldPackets::Housing::HousingRedeemDeferredDecorResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_DECOR_NOT_FOUND);
-        response.SequenceIndex = sequenceIndex;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_TOO_MANY_REQUESTS);
+        response.SequenceIndex = transactionId;
         SendPacket(response.Write());
         return;
     }
 
-    // Add the deferred decor to the player's catalog/storage (SourceType=3 = deferred)
-    HousingResult result = housing->AddToCatalog(decorEntryId, DECOR_SOURCE_DEFERRED);
-    if (result != HOUSING_RESULT_SUCCESS)
+    std::string achievementIds;
+    std::string questIds;
+    for (HousingDecorStore::RetroactiveReward const& reward : rewards)
     {
-        WorldPackets::Housing::HousingRedeemDeferredDecorResponse response;
-        response.Result = static_cast<uint8>(result);
-        response.SequenceIndex = sequenceIndex;
-        SendPacket(response.Write());
-        return;
-    }
-
-    // instanceIndex is still needed below to choose INSERT vs UPDATE on the catalog row.
-    uint32 instanceIndex = 0;
-    for (Housing::CatalogEntry const& entry : housing->GetCatalogEntries())
-    {
-        if (entry.DecorEntryId == decorEntryId)
+        for (auto const& [achievementId, questId] : reward.Criteria)
         {
-            instanceIndex = entry.Count - 1; // Count was just incremented by AddToCatalog
-            break;
+            if (achievementId > 0)
+                achievementIds += (achievementIds.empty() ? "" : ",") + std::to_string(achievementId);
+            if (questId > 0)
+                questIds += (questIds.empty() ? "" : ",") + std::to_string(questId);
         }
     }
+    if (achievementIds.empty())
+        achievementIds = "0";
+    if (questIds.empty())
+        questIds = "0";
 
-    // H-15: the counter used to be computed as
-    //   playerGuidCounter * 100000 + decorEntryId * 100 + instanceIndex
-    // which allots each player a 100,000-wide band and each decor entry a 100-wide
-    // slot inside it. Neither bound holds - decorEntryId * 100 leaves the band once
-    // the entry id passes 999, and the starter tables already use 1700, 2549, 8910
-    // and 9144, so redeeming entry 8910 landed nearly nine bands into another
-    // character's range. Mint from the same global generator every other decor path
-    // uses instead; the banded arithmetic had no property worth preserving.
-    ObjectGuid decorGuid = housing->GenerateDecorGuid(decorEntryId);
+    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_GAME_ACCOUNT_IDS);
+    stmt->setUInt32(0, GetBattlenetAccountId());
+    GetQueryProcessor().AddCallback(LoginDatabase.AsyncQuery(stmt)
+        .WithChainingPreparedCallback([achievementIds, questIds](QueryCallback& chain, PreparedQueryResult gameAccounts)
+        {
+            std::string accountIds;
+            if (gameAccounts)
+            {
+                do
+                {
+                    if (!accountIds.empty())
+                        accountIds += ',';
+                    accountIds += std::to_string(gameAccounts->Fetch()[0].GetUInt32());
+                } while (gameAccounts->NextRow());
+            }
 
-    // Push the new decor entry to the Account entity's FHousingStorage_C fragment.
-    // Sniff: SourceType=3 marks it as redeemed from deferred queue. HouseGUID=empty (not yet placed).
-    Battlenet::Account& account = GetBattlenetAccount();
-    account.SetHousingDecorStorageEntry(decorGuid, ObjectGuid::Empty, 3);
+            // No game account: ask for nothing that can match.
+            if (accountIds.empty())
+                accountIds = "0";
 
-    // Sniff-verified packet order:
-    // 1. SMSG_HOUSING_REDEEM_DEFERRED_DECOR_RESPONSE (DecorGuid + Status=0 + SequenceIndex)
-    // 2. SMSG_UPDATE_OBJECT (BNetAccount entity with new Decor entry, ChangeType=1, SourceType=3)
+            chain.SetNextQuery(CharacterDatabase.AsyncQuery(Trinity::StringFormat(
+                "SELECT 0, a.achievement FROM character_achievement a JOIN characters c ON c.guid = a.guid "
+                "WHERE c.account IN ({0}) AND a.achievement IN ({1}) "
+                "UNION SELECT 1, r.quest FROM character_queststatus_rewarded r JOIN characters c ON c.guid = r.guid "
+                "WHERE c.account IN ({0}) AND r.quest IN ({2})", accountIds, achievementIds, questIds).c_str()));
+        })
+        .WithCallback([this, decorEntryId, transactionId, rewards](QueryResult done)
+        {
+            std::unordered_set<uint32> achievements;
+            std::unordered_set<uint32> quests;
+            if (done)
+            {
+                do
+                {
+                    Field* fields = done->Fetch();
+                    (fields[0].GetUInt32() == 0 ? achievements : quests).insert(fields[1].GetUInt32());
+                } while (done->NextRow());
+            }
+
+            Player* current = GetPlayer();
+            uint32 const earned = HousingDecorStore::CountEarnedRetroactiveRewards(rewards,
+                [&achievements, current](uint32 achievementId) { return achievements.contains(achievementId) || (current && current->HasAchieved(achievementId)); },
+                [&quests, current](uint32 questId) { return quests.contains(questId) || (current && current->IsQuestRewarded(questId)); });
+            FinishHousingDecorRedeem(decorEntryId, transactionId, earned);
+        }));
+}
+
+void WorldSession::FinishHousingDecorRedeem(uint32 decorEntryId, uint32 transactionId, uint32 earnedRetroactiveRewards)
+{
+    Player* player = GetPlayer();
+    if (!player)
+        return;
+
+    HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
+    HousingDecorStore* store = player->GetHousingDecorStore();
+
+    // A redeem turns one owed copy into a piece; with nothing owed it is refused, echoing the transaction.
+    uint32 const owed = decorData && store
+        ? HousingDecorStore::GetOwedCount(decorData->StartingQuantity, decorData->Flags, earnedRetroactiveRewards, store->GetRedeemed(decorEntryId))
+        : 0;
+    if (!owed)
+    {
+        WorldPackets::Housing::HousingRedeemDeferredDecorResponse response;
+        response.Result = static_cast<uint8>(decorData ? HOUSING_RESULT_DECOR_CANNOT_BE_REDEEMED : HOUSING_RESULT_DECOR_NOT_FOUND);
+        response.SequenceIndex = transactionId;
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_REDEEM_DEFERRED: {} is owed no decor {}, refused", player->GetGUID().ToString(), decorEntryId);
+        return;
+    }
+
+    bool firstOwned = false;
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    Housing::PlacedDecor const piece = store->CreateStored(decorEntryId, DECOR_SOURCE_REDEEMED, {}, firstOwned, trans);
+    store->AddRedeemed(decorEntryId, trans);
+
+    // Retail's order (hled1 788897-789026, 790913-790928): the reply with the new piece's GUID, then the account's
+    // update with that piece in storage (source 3, no house, no value). No add-to-chest and no first-time message.
     WorldPackets::Housing::HousingRedeemDeferredDecorResponse response;
-    response.DecorGuid = decorGuid;
-    response.Result = 0;
-    response.SequenceIndex = sequenceIndex;
-    WorldPacket const* redeemPkt = response.Write();
-    TC_LOG_DEBUG("housing", "<<< SMSG_HOUSING_REDEEM_DEFERRED_DECOR_RESPONSE ({} bytes): {}",
-        redeemPkt->size(), HexDumpPacket(redeemPkt));
-    TC_LOG_ERROR("housing", "    DecorGuid={} Result={} SequenceIndex={}", decorGuid.ToString(), response.Result, sequenceIndex);
-    SendPacket(redeemPkt);
+    response.DecorGuid = piece.Guid;
+    response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
+    response.SequenceIndex = transactionId;
+    SendPacket(response.Write());
 
-    // Push Account entity update to deliver the FHousingStorage_C change to the client
+    // The first update of a session carries the whole storage (hled1 788973-789026); later ones only the new piece.
+    Battlenet::Account& account = GetBattlenetAccount();
+    if (account.IsHousingDecorStorageSent())
+        account.SetHousingDecorStorageEntry(piece.Guid, ObjectGuid::Empty, piece.SourceType, piece.SourceValue);
+    else
+        player->PushHousingDecorStorage();
     account.SendUpdateToPlayer(player);
 
-    // Persist the new catalog entry to DB (crash safety)
-    if (instanceIndex == 0)
-    {
-        // First copy of this decor — INSERT new row
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_CATALOG);
-        uint8 idx = 0;
-        stmt->setUInt32(idx++, GetBattlenetAccountId());
-        stmt->setUInt32(idx++, decorEntryId);
-        stmt->setUInt32(idx++, 1);
-        stmt->setUInt8(idx++, DECOR_SOURCE_DEFERRED);
-        stmt->setString(idx++, std::string{});
-        CharacterDatabase.Execute(stmt);
-    }
-    else
-    {
-        // Additional copy — UPDATE existing row count
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_CATALOG_COUNT);
-        stmt->setUInt32(0, instanceIndex + 1);
-        stmt->setUInt32(1, GetBattlenetAccountId());
-        stmt->setUInt32(2, decorEntryId);
-        CharacterDatabase.Execute(stmt);
-    }
+    // Then the piece is saved with the GUID that was sent.
+    CharacterDatabase.CommitTransaction(trans);
 
-    TC_LOG_ERROR("housing", "    Player {} redeemed decor entry={} → GUID={} (SourceType=3, Seq={}, instanceIdx={})",
-        player->GetGUID().ToString(), decorEntryId, decorGuid.ToString(), sequenceIndex, instanceIndex);
+    // Nothing else follows a redeem. Retail sent no house experience update and no "collect unique decor" criteria
+    // update for any of three redeems of entries that carry a first-acquisition bonus (hbcd3 Numbers 16637-16738: the
+    // reply and the account update only). The saved piece already counts the entry as owned.
+
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_REDEEM_DEFERRED: {} redeemed decor {} as {} (transaction {}, {} owed before)",
+        player->GetGUID().ToString(), decorEntryId, piece.Guid.ToString(), transactionId, owed);
 }
 
 // ============================================================
@@ -1700,13 +1729,12 @@ void WorldSession::HandleHousingFixtureSetEditMode(WorldPackets::Housing::Housin
     // Prepare catalog/storage data before sending packets (enter only).
     if (entering)
     {
-        housing->ResetStoragePopulated();
-        housing->PopulateCatalogStorageEntries();
+        player->PushHousingDecorStorage();
         housing->SyncUpdateFields();
     }
 
     // CRITICAL: Clear Account entity dirty state BEFORE sending any packets.
-    // PopulateCatalogStorageEntries() modifies FHousingStorage_C which marks the
+    // PushHousingDecorStorage() modifies FHousingStorage_C which marks the
     // Account entity dirty. Unlike decor edit mode, fixture edit mode doesn't send
     // the Account entity as CREATE here. If we leave it dirty, Map::SendObjectUpdates()
     // will send a VALUES_UPDATE on the next tick, which the client rejects because
@@ -2296,8 +2324,7 @@ void WorldSession::HandleHousingRoomSetLayoutEditMode(WorldPackets::Housing::Hou
     // Sync entity data for layout mode (enter needs budget values)
     if (housingRoomSetLayoutEditMode.Active)
     {
-        housing->ResetStoragePopulated();
-        housing->PopulateCatalogStorageEntries();
+        player->PushHousingDecorStorage();
         housing->SyncUpdateFields();
     }
 
@@ -4552,13 +4579,12 @@ void WorldSession::HandleHousingResetHouse(WorldPackets::Housing::HousingResetHo
     bool wantExterior = (scope == 2);
     uint8 plotIndex = housing->GetPlotIndex();
 
-    // Snapshot the decor to be removed (guid + source info) before the model teardown,
-    // so we can despawn the visuals and return each item to storage afterwards.
-    struct RemovedDecor { ObjectGuid Guid; uint8 SourceType; std::string SourceValue; };
-    std::vector<RemovedDecor> removedList;
+    // The pieces to take out, so their visuals can be despawned afterwards. ResetDecor puts each into the account's
+    // storage.
+    std::vector<ObjectGuid> removedList;
     for (auto const& [guid, decor] : housing->GetPlacedDecorMap())
         if (Housing::IsExteriorDecorPlacement(decor.RoomGuid) == wantExterior)
-            removedList.push_back({ guid, decor.SourceType, decor.SourceValue });
+            removedList.push_back(guid);
 
     uint32 removed = 0;
     HousingResult result = housing->ResetDecor(scope, &removed);
@@ -4567,17 +4593,15 @@ void WorldSession::HandleHousingResetHouse(WorldPackets::Housing::HousingResetHo
     {
         HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap());
         HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(player->GetMap());
-        Battlenet::Account& account = GetBattlenetAccount();
-        for (RemovedDecor const& rd : removedList)
+        for (ObjectGuid const& decorGuid : removedList)
         {
             if (housingMap)
-                housingMap->DespawnDecorItem(plotIndex, rd.Guid);
+                housingMap->DespawnDecorItem(plotIndex, decorGuid);
             else if (interiorMap)
-                interiorMap->DespawnDecorItem(rd.Guid);
-            // Return the decor to storage (HouseGUID=Empty), matching the single-remove flow.
-            account.SetHousingDecorStorageEntry(rd.Guid, ObjectGuid::Empty, rd.SourceType, rd.SourceValue);
+                interiorMap->DespawnDecorItem(decorGuid);
         }
-        account.SendUpdateToPlayer(player);
+        if (GetBattlenetAccount().IsHousingDecorStorageSent())
+            GetBattlenetAccount().SendUpdateToPlayer(player);
     }
 
     sendResult(result);
@@ -4886,40 +4910,39 @@ void WorldSession::HandleGetAllLicensedDecorQuantities(WorldPackets::Housing::Ge
 
     WorldPackets::Housing::GetAllLicensedDecorQuantitiesResponse response;
 
-    Housing* housing = player->GetAccountCatalogHousing();
-    if (housing)
+    // One entry per HouseDecor id the account holds under a shop license (source 7 or 8): how many of those pieces
+    // are placed and how many are in storage (hbcd3 1431934; hled1 789147-789152 reads 1 and 1 for 12247 once one is
+    // placed). Starter, redeemed and item decor are not licensed and are not listed.
+    auto isLicensed = [](uint8 sourceType) { return sourceType == DECOR_SOURCE_SHOP_LICENSE || sourceType == DECOR_SOURCE_SHOP_LICENSE_2; };
+    std::map<uint32, WorldPackets::Housing::JamLicensedDecorQuantity> quantities;
+    if (HousingDecorStore* store = player->GetHousingDecorStore())
     {
-        // Populate from the player's catalog (persisted decor they own)
-        for (Housing::CatalogEntry const& entry : housing->GetCatalogEntries())
+        for (Housing::PlacedDecor const& decor : store->GetStored())
         {
-            WorldPackets::Housing::JamLicensedDecorQuantity qty;
-            qty.HouseDecorID = entry.DecorEntryId;
-            qty.PlacedQuantity = entry.Count;
-            response.Quantities.push_back(qty);
-        }
-
-        // Merge starter decor that may not be in catalog yet (safety net)
-        auto starterDecor = sHousingMgr.GetStarterDecorWithQuantities(player->GetTeam());
-        for (auto const& [decorId, quantity] : starterDecor)
-        {
-            bool found = false;
-            for (auto const& existing : response.Quantities)
-            {
-                if (existing.HouseDecorID == decorId)
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                WorldPackets::Housing::JamLicensedDecorQuantity qty;
-                qty.HouseDecorID = decorId;
-                qty.PlacedQuantity = quantity;
-                response.Quantities.push_back(qty);
-            }
+            if (!isLicensed(decor.SourceType))
+                continue;
+            WorldPackets::Housing::JamLicensedDecorQuantity& qty = quantities[decor.DecorEntryId];
+            qty.HouseDecorID = decor.DecorEntryId;
+            ++qty.StoredQuantity;
         }
     }
+    // A packed house keeps its pieces placed in it, so they count as placed, as the storage lists them.
+    for (Housing const* housing : player->GetAllHousings(/*includePacked*/ true))
+    {
+        if (housing->IsDeleted())
+            continue;
+
+        for (auto const& [decorGuid, decor] : housing->GetPlacedDecorMap())
+        {
+            if (!isLicensed(decor.SourceType))
+                continue;
+            WorldPackets::Housing::JamLicensedDecorQuantity& qty = quantities[decor.DecorEntryId];
+            qty.HouseDecorID = decor.DecorEntryId;
+            ++qty.PlacedQuantity;
+        }
+    }
+    for (auto const& [decorEntryId, qty] : quantities)
+        response.Quantities.push_back(qty);
 
     SendPacket(response.Write());
 
@@ -5024,15 +5047,6 @@ void WorldSession::HandleBulkRefund(WorldPackets::Housing::BulkRefund const& bul
 
     for (ObjectGuid const& decorGuid : bulkRefund.DecorGUIDs)
     {
-        // Capture source info before removal
-        uint8 removedSourceType = DECOR_SOURCE_STANDARD;
-        std::string removedSourceValue;
-        if (Housing::PlacedDecor const* placedDecor = housing->GetPlacedDecor(decorGuid))
-        {
-            removedSourceType = placedDecor->SourceType;
-            removedSourceValue = placedDecor->SourceValue;
-        }
-
         HousingResult result = housing->RemoveDecor(decorGuid);
         if (result != HOUSING_RESULT_SUCCESS)
         {
@@ -5047,15 +5061,11 @@ void WorldSession::HandleBulkRefund(WorldPackets::Housing::BulkRefund const& bul
         else if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(player->GetMap()))
             interiorMap->DespawnDecorItem(decorGuid);
 
-        // Return to storage in Account entity (same as individual remove)
-        Battlenet::Account& account = GetBattlenetAccount();
-        account.SetHousingDecorStorageEntry(decorGuid, ObjectGuid::Empty, removedSourceType, removedSourceValue);
-
         ++refundedCount;
     }
 
     // Send single batch update to client after all removals
-    if (refundedCount > 0)
+    if (refundedCount > 0 && GetBattlenetAccount().IsHousingDecorStorageSent())
         GetBattlenetAccount().SendUpdateToPlayer(player);
 
     WorldPackets::Housing::BulkRefundResponse response;
@@ -5077,8 +5087,12 @@ void WorldSession::HandleGetLastCatalogFetch(WorldPackets::Housing::GetLastCatal
     TC_LOG_DEBUG("housing", "CMSG_GET_LAST_CATALOG_FETCH from player {}",
         GetPlayer() ? GetPlayer()->GetGUID().ToString() : "null");
 
+    // The time stored for the account, or 0 before any update. Retail answered the same stored value, 0x6A64F75E, to
+    // requests twenty minutes apart (hled1 99487, 422569, 617088), not the current time.
     WorldPackets::Housing::LastCatalogFetchResponse response;
-    response.Timestamp = uint64(GameTime::GetGameTime());
+    if (Player* player = GetPlayer())
+        if (HousingDecorStore* store = player->GetHousingDecorStore())
+            response.Timestamp = store->GetLastCatalogFetch();
     SendPacket(response.Write());
 }
 
@@ -5089,8 +5103,12 @@ void WorldSession::HandleUpdateLastCatalogFetch(WorldPackets::Housing::UpdateLas
     TC_LOG_DEBUG("housing", "CMSG_UPDATE_LAST_CATALOG_FETCH from player {}",
         GetPlayer() ? GetPlayer()->GetGUID().ToString() : "null");
 
+    // The reply carries the time stored before this update; the update then stores now, for every character of the
+    // account and across sessions.
     WorldPackets::Housing::LastCatalogFetchResponse response;
-    response.Timestamp = uint64(GameTime::GetGameTime());
+    if (Player* player = GetPlayer())
+        if (HousingDecorStore* store = player->GetHousingDecorStore())
+            response.Timestamp = store->ExchangeLastCatalogFetch(uint64(GameTime::GetGameTime()));
     SendPacket(response.Write());
 }
 
@@ -5310,7 +5328,7 @@ void WorldSession::HandleHousingBlueprintRequestContents(WorldPackets::Housing::
                     target = housing;
 
         HousingBlueprintEvaluation evaluation;
-        HousingBlueprintMgr::Evaluate(*blueprint, target, target ? target : player->GetHousing(), evaluation);
+        HousingBlueprintMgr::Evaluate(*blueprint, target, player->GetHousingDecorStore(), evaluation);
 
         response.Result = HOUSING_RESULT_SUCCESS;
         response.UnmetRequirementFlags = evaluation.UnmetRequirementFlags;
@@ -5370,7 +5388,7 @@ void WorldSession::HandleHousingBlueprintImport(WorldPackets::Housing::HousingBl
             return HOUSING_RESULT_BLUEPRINT_ROOM_PLACEMENT_REQUIRED;
 
         HousingBlueprintEvaluation evaluation;
-        HousingBlueprintMgr::Evaluate(*blueprint, housing, housing, evaluation);
+        HousingBlueprintMgr::Evaluate(*blueprint, housing, player->GetHousingDecorStore(), evaluation);
         if (evaluation.IsBlocked())
             return HOUSING_RESULT_BLUEPRINT_REQUIREMENTS_UNMET;
 

@@ -31,6 +31,8 @@
 #include "Garrison.h"
 #include "Group.h"
 #include "Housing.h"
+#include "HousingDecorStore.h"
+#include "HousingMgr.h"
 #include "InstanceScript.h"
 #include "Item.h"
 #include "ItemBonusMgr.h"
@@ -600,9 +602,35 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
         // --- housing
         case CriteriaType::PlaceDecor:
         case CriteriaType::RemoveDecor:
-        case CriteriaType::CollectUniqueDecor:
             SetCriteriaProgress(criteria, 1, referencePlayer, PROGRESS_ACCUMULATE);
             break;
+        case CriteriaType::CollectUniqueDecor:
+        {
+            // Counted here as the decor entries the Battle.net account has owned, whichever character got them. That
+            // is not known to be what retail counts. In hbcd3 criteria 109249 read 1 at login (147482) and 109 at the
+            // house purchase, when only seven starter pieces arrived (1299380-1299576), and achievements 61309 and
+            // 61310 were earned then (1299588, 1299666); the account's whole storage right after held 15 distinct
+            // entries (1431714-1431809), so this count gives about 15 there and neither achievement. It stayed 109
+            // when decor 1163 arrived (1783639) and read 110 when 1482 arrived (2106237). The asset is the least item
+            // quality that counts: criteria 109249 has asset 2 for "Collect 100 unique decor of uncommon quality or
+            // higher" (achievement 61310). A decor with no item has no quality and counts only when the criteria asks
+            // for none.
+            uint32 owned = 0;
+            if (HousingDecorStore const* store = referencePlayer ? referencePlayer->GetHousingDecorStore() : nullptr)
+            {
+                int32 const minQuality = criteria->Entry->Asset.ID;
+                owned = store->CountOwnedEntries([minQuality](uint32 decorEntryId)
+                {
+                    if (minQuality <= 0)
+                        return true;
+                    HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
+                    ItemTemplate const* item = decorData && decorData->ItemID > 0 ? sObjectMgr->GetItemTemplate(uint32(decorData->ItemID)) : nullptr;
+                    return item && int32(item->GetQuality()) >= minQuality;
+                });
+            }
+            SetCriteriaProgress(criteria, owned, referencePlayer, PROGRESS_HIGHEST);
+            break;
+        }
         // std case: increment at miscValue1
         case CriteriaType::MoneyEarnedFromSales:
         case CriteriaType::MoneySpentOnRespecs:
@@ -1750,7 +1778,9 @@ bool CriteriaHandler::RequirementsSatisfied(Criteria const* criteria, uint64 mis
             if (miscValue1 != uint32(criteria->Entry->Asset.TaxiNodesID))
                 return false;
             break;
-        // No asset - the ModifierTree discriminates, but it needs a real HouseDecor entry in miscValue1.
+        // Placing and removing decor have no asset; the ModifierTree discriminates. "Collect unique decor" has a
+        // minimum item quality as its asset, applied where UpdateCriteria counts. All three need a real HouseDecor
+        // entry in miscValue1.
         case CriteriaType::PlaceDecor:
         case CriteriaType::RemoveDecor:
         case CriteriaType::CollectUniqueDecor:

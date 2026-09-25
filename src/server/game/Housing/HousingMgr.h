@@ -416,12 +416,8 @@ public:
     // Find the first HouseRoom entry with visual components (not the base room 18)
     uint32 GetDefaultVisualRoomEntry() const;
 
-    // Starter decor (items granted on first house purchase)
-    // Returns starter decor IDs filtered by faction (teamId: ALLIANCE=469, HORDE=67)
-    // Sniff-verified: Alliance and Horde receive different starter decor sets
-    std::vector<uint32> GetStarterDecorIds(uint32 teamId) const;
-    // Returns {DecorID, StartingQuantity} pairs for populating the catalog on purchase
-    std::vector<std::pair<uint32, int32>> GetStarterDecorWithQuantities(uint32 teamId) const;
+    // The HouseDecor row whose ItemID is the item, or 0. Spell 1256487 names no decor; its item 253493 is decor 1163.
+    uint32 GetDecorIdForItem(uint32 itemId) const;
 
     // Access control — checks if visitor can access a plot/house based on owner's settings
     // accessMask = HOUSE_SETTING_HOUSE_ACCESS_* for interior, HOUSE_SETTING_PLOT_ACCESS_* for exterior

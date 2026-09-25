@@ -236,18 +236,44 @@ enum HousingRoomComponentOptionType : uint8
     HOUSING_ROOM_COMPONENT_OPTION_DOORWAY       = 2
 };
 
-// DecorSourceType — identifies how a decor item was acquired.
-// IDA-verified: client reads SourceType as uint8 and SourceValue as SizedCString from DecorStoragePersistedData.
-// Retail sniff examples:
-//   SourceType=5, SourceValue="1250393"            → spell-acquired (spell ID as string)
-//   SourceType=6, SourceValue="3713-0-40000009CD1F16CB" → item-acquired (item GUID as string)
+// How the account got a piece of decor, as its storage entry says (DecorStoragePersistedData.SourceType).
 enum DecorSourceType : uint8
 {
-    DECOR_SOURCE_STANDARD       = 0, // Default / starter decor / placed
-    DECOR_SOURCE_SPELL          = 5, // Acquired via spell cast (SourceValue = spell ID string)
-    DECOR_SOURCE_ITEM           = 6, // Acquired via item use (SourceValue = item GUID string)
-    DECOR_SOURCE_DEFERRED       = 3, // Redeemed from deferred reward queue
+    // What a placed piece's own decor data carries, whatever its storage entry says (hbcd3 1402938, 1411644).
+    DECOR_SOURCE_NONE           = 0,
+    // Pre-placed in a house when it was bought (hbcd3 1431714-1431809). After a relog the value reads
+    // "4-2-0-A584" (hf1 393546); what it stands for is not known, so none is written.
+    DECOR_SOURCE_STARTER        = 2,
+    // Owed decor turned into a piece by a redeem request; no value (hled1 789024).
+    DECOR_SOURCE_REDEEMED       = 3,
+    // A grant from a spell not cast by an item, with the spell id as the value. The port's reading; none of the
+    // owner's captures has one.
+    DECOR_SOURCE_SPELL          = 5,
+    // A grant from a spell an item cast, with the item's GUID as the value (hled1 789060-789062).
+    DECOR_SOURCE_ITEM           = 6,
+    // Shop licenses; the value is a number whose meaning is not known (hbcd3 352155, 352175).
+    DECOR_SOURCE_SHOP_LICENSE   = 7,
+    DECOR_SOURCE_SHOP_LICENSE_2 = 8,
 };
+
+// DecorStoragePersistedData.PlacementStatus is new in 12.1 and no 12.1 capture of the storage exists, so which value
+// means placed and which means in storage is not known. These are the values this server sends until one is seen.
+enum DecorPlacementStatus : uint8
+{
+    DECOR_PLACEMENT_STATUS_STORED = 0,
+    DECOR_PLACEMENT_STATUS_PLACED = 1,
+};
+
+// Arg1 of every decor GUID: 1443 on all of the owner's account's decor (hbcd3 1443668; hled1 788898-809213). Another
+// account's placed decor carried 1437 (hbcd3 847418), so what the number stands for is not known.
+static constexpr uint32 HOUSING_DECOR_GUID_ARG1 = 1443;
+
+// FHousingStorage_C.DecorMaxOwnedCount (hbcd3 352181, 1431809).
+static constexpr uint32 HOUSING_DECOR_MAX_OWNED_COUNT = 7500;
+
+// HouseDecor.Flags of the twelve "[DNT] ... Platform - WMO - DO NOT USE" rows with a starting quantity. They are never
+// owed and never listed to the client.
+static constexpr int32 HOUSE_DECOR_FLAGS_DO_NOT_USE = 192;
 
 // HousingCatalogEntryType enum - 3 values
 enum HousingCatalogEntryType : uint8

@@ -446,6 +446,34 @@ struct HouseDecorLoadInfo
     static constexpr DB2LoadInfo Instance{ Fields, 19, &HouseDecorMeta::Instance, HOTFIX_SEL_HOUSE_DECOR };
 };
 
+struct RetroactiveDecorRewardLoadInfo
+{
+    static constexpr DB2FieldMeta Fields[6] =
+    {
+        { .IsSigned = false, .Type = FT_INT, .Name = "ID" },
+        { .IsSigned = true, .Type = FT_INT, .Name = "Flags" },
+        { .IsSigned = true, .Type = FT_INT, .Name = "AchievementID" },
+        { .IsSigned = true, .Type = FT_INT, .Name = "QuestID" },
+        { .IsSigned = true, .Type = FT_INT, .Name = "Field_4" },
+        { .IsSigned = false, .Type = FT_INT, .Name = "HouseDecorID" },
+    };
+
+    static constexpr DB2LoadInfo Instance{ Fields, 6, &RetroactiveDecorRewardMeta::Instance, HOTFIX_SEL_RETROACTIVE_DECOR_REWARD };
+};
+
+struct RetroactiveDecorRewardCriteriaLoadInfo
+{
+    static constexpr DB2FieldMeta Fields[4] =
+    {
+        { .IsSigned = false, .Type = FT_INT, .Name = "ID" },
+        { .IsSigned = true, .Type = FT_INT, .Name = "AchievementID" },
+        { .IsSigned = true, .Type = FT_INT, .Name = "QuestID" },
+        { .IsSigned = false, .Type = FT_INT, .Name = "RetroactiveDecorRewardID" },
+    };
+
+    static constexpr DB2LoadInfo Instance{ Fields, 4, &RetroactiveDecorRewardCriteriaMeta::Instance, HOTFIX_SEL_RETROACTIVE_DECOR_REWARD_CRITERIA };
+};
+
 struct HouseDecorMaterialLoadInfo
 {
     static constexpr DB2FieldMeta Fields[6] =

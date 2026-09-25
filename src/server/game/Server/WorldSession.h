@@ -1754,6 +1754,8 @@ class TC_GAME_API WorldSession
         // Retired 2026-05-12: HandleHousingDecorDeleteFromStorageById (fake CMSG 0x30000A).
         void HandleHousingDecorRequestStorage(WorldPackets::Housing::HousingDecorRequestStorage const& housingDecorRequestStorage);
         void HandleHousingDecorRedeemDeferredDecor(WorldPackets::Housing::HousingDecorRedeemDeferredDecor const& housingDecorRedeemDeferredDecor);
+        // Answers a redeem once it is known how many of the entry's retroactive rewards the account has earned.
+        void FinishHousingDecorRedeem(uint32 decorEntryId, uint32 transactionId, uint32 earnedRetroactiveRewards);
         // Retired 2026-05-11: HandleHousingDecorStartPlacingNewDecor + CatalogCreateSearcher (TC-CUSTOM CMSGs).
         void HandleGetLastCatalogFetch(WorldPackets::Housing::GetLastCatalogFetch const& getLastCatalogFetch);
         void HandleUpdateLastCatalogFetch(WorldPackets::Housing::UpdateLastCatalogFetch const& updateLastCatalogFetch);

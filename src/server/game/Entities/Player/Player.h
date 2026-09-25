@@ -87,6 +87,7 @@ class Housing;
 class Group;
 class Guild;
 class Housing;
+class HousingDecorStore;
 class Item;
 class LootRoll;
 class LootStore;
@@ -1038,7 +1039,8 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR,
     PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_ROOMS,
     PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES,
-    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR_ENTRIES,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -2953,14 +2955,20 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         // neighborhood of the current housing map. Anywhere else it is the account's only standing house, and nothing
         // when the account has two, because nothing says which one is meant. A packed house is never named here.
         Housing* GetHousing() const;
-        // A house through which to reach the account's decor catalog and collections, which every house of the
-        // account shares: the one GetHousing names, otherwise any house of the account. Nothing when it has none.
+        // A house through which to reach the account's collections, which every house of the account shares: the one
+        // GetHousing names, otherwise any house of the account. Nothing when it has none. Decor does not need a house:
+        // it is in the account's decor store.
         Housing* GetAccountCatalogHousing() const;
+        // The account's decor store, loaded at login whether or not the account has a house.
+        HousingDecorStore* GetHousingDecorStore() const { return _housingDecorStore.get(); }
+        // Sends the account's whole decor storage to her client through the Battle.net account's update fields: every
+        // piece in storage and every piece placed in one of the account's houses, packed ones included.
+        void PushHousingDecorStorage();
         // One of the account's houses by its GUID, packed or not, or nothing when the account does not own that house.
         Housing* GetHousingByGuid(ObjectGuid houseGuid) const;
         Housing* GetHousingForNeighborhood(ObjectGuid neighborhoodGuid) const;
-        // The account's houses that stand on a plot; packed houses are left out.
-        std::vector<Housing const*> GetAllHousings() const;
+        // The account's houses that stand on a plot; packed houses are left out unless includePacked is set.
+        std::vector<Housing const*> GetAllHousings(bool includePacked = false) const;
         // Refreshes the house entity of the account's other online characters after a change they must see, such as
         // a new cosmetic owner. World thread only, because it touches characters on other maps.
         void SyncAccountHouseOnOtherCharacters(ObjectGuid houseGuid);
@@ -3558,6 +3566,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         std::unique_ptr<Garrison> _garrison;
         std::vector<std::unique_ptr<Housing>> _housings;
+        std::shared_ptr<HousingDecorStore> _housingDecorStore;
 
         bool _advancedCombatLoggingEnabled;
 

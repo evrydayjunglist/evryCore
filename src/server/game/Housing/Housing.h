@@ -32,6 +32,7 @@
 #include <unordered_map>
 #include <vector>
 
+class HousingDecorStore;
 class Map;
 class Player;
 
@@ -39,7 +40,6 @@ namespace WorldPackets
 {
     namespace Housing
     {
-        class HousingCatalogStateSync;
         struct JamCliHouse;
     }
 }
@@ -63,7 +63,7 @@ public:
         ObjectGuid RoomGuid;
         bool Locked = false;
         time_t PlacementTime = 0;
-        uint8 SourceType = DECOR_SOURCE_STANDARD;
+        uint8 SourceType = DECOR_SOURCE_NONE;
         std::string SourceValue;
         ObjectGuid PetGuid;         // battle-pet bound to this decor slot (empty = none)
         uint8 PetFlag = 0;          // client-sent flag accompanying the pet binding
@@ -99,17 +99,9 @@ public:
         uint32 OptionId = 0;
     };
 
-    struct CatalogEntry
-    {
-        uint32 DecorEntryId = 0;
-        uint32 Count = 0;
-        uint8 SourceType = DECOR_SOURCE_STANDARD;
-        std::string SourceValue;
-    };
-
     // A house belongs to a Battle.net account. Every character of that account that is online holds its own
     // Housing object for the house (its own editor state), and all of them share one stored state per house and
-    // one decor catalog per account, so an edit made by one character is what the others see and save.
+    // the account's decor store, so an edit made by one character is what the others see and save.
     // databaseId 0 takes a new id for a house that is being bought; slot is only used for a new house.
     // The owner's session must have a Battle.net account: callers refuse before constructing otherwise.
     Housing(Player* owner, uint64 databaseId, uint8 slot = 0);
@@ -165,6 +157,15 @@ public:
     // same Battle.net account bought a house after this character logged in.
     static std::vector<AccountHouse> GetAccountHouses(uint32 bnetAccountId);
 
+    // A decor GUID: subtype 1, arg1 HOUSING_DECOR_GUID_ARG1, the HouseDecor id and the piece's own low part, which is
+    // saved with it and never changes (hled1 788898: decor 524 with low 0x912C021A is 0xDC2005A30000020C /
+    // 0x00000000912C021A).
+    static ObjectGuid MakeDecorGuid(uint32 decorEntryId, uint64 low);
+    // A GUID for a new piece, from the one counter every account shares.
+    static ObjectGuid NewDecorGuid(uint32 decorEntryId);
+    // Keeps the counter past a low part read from the database.
+    static void NoteDecorDbId(uint64 low);
+
     uint64 GetDatabaseId() const { return _state->DatabaseId; }
     uint32 GetOwnerAccountId() const { return _state->OwnerAccountId; }
     uint8 GetSlot() const { return _state->Slot; }
@@ -183,9 +184,9 @@ public:
     static void InitializeDbIdGenerators();
 
     // house is the house's row from CHAR_SEL_ACCOUNT_HOUSING; decor, rooms and fixtures are that house's rows from
-    // the account-wide login queries, already split by house; catalog is the account's catalog.
+    // the account-wide login queries, already split by house.
     bool LoadFromDB(Field* house, std::vector<Field*> const& decor, std::vector<Field*> const& rooms,
-        std::vector<Field*> const& fixtures, PreparedQueryResult catalog);
+        std::vector<Field*> const& fixtures);
     // For a character of the account whose house another online character already holds: takes that house's
     // loaded state. False when no character holds it loaded, or it has been deleted.
     bool JoinLoadedState();
@@ -195,11 +196,13 @@ public:
     // Builds a new house in memory only. The purchase saves it with SaveToDB in the same transaction as the plot
     // claim and the money, so a crash cannot leave one without the others.
     HousingResult Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
-    // Deletes the house's rows and frees its plot in one transaction.
+    // Deletes the house's rows and frees its plot in one transaction. Its placed decor goes back into the account's
+    // storage, because the decor belongs to the account.
     void Delete();
     // Relinquishing packs a house instead of deleting it: rooms, decor, fixtures, level and favor are kept, the
-    // house leaves its plot, and the next purchase unpacks it. Pack appends the row change to trans; Unpack only
-    // changes memory, and the purchase saves the whole house in its transaction.
+    // house leaves its plot, and the next purchase unpacks it. Placed decor keeps naming the packed house and does not
+    // go into storage, so it comes back where it stood. Pack appends the row change to trans; Unpack only changes
+    // memory, and the purchase saves the whole house in its transaction.
     void Pack(CharacterDatabaseTransaction trans);
     HousingResult Unpack(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
     // Appends the house row's neighborhood, plot and packed flag, for a move.
@@ -236,23 +239,13 @@ public:
     void SetInInterior(bool interior) { _isInInterior = interior; }
     bool IsInInterior() const { return _isInInterior; }
 
-    // Decor operations — StartPlacingNewDecor creates a pending placement, PlaceDecorWithGuid commits it
-    // Mint a decor GUID from the global generator. Every decor GUID must come
-    // from here or from StartPlacingNewDecor/PlaceDecor, all of which draw the
-    // counter from s_nextDecorDbId, so ids stay unique across players and across
-    // a reload. The deferred-redeem path used to compute its own from
-    // (playerGuid * 100000 + entryId * 100 + index), which overflows its band
-    // into another character's range as soon as the entry id passes 999.
-    ObjectGuid GenerateDecorGuid(uint32 decorEntryId);
-    ObjectGuid StartPlacingNewDecor(uint32 catalogEntryId, HousingResult& result);
-    uint32 GetPendingPlacementEntryId(ObjectGuid decorGuid) const;
-    void CancelPendingPlacement(ObjectGuid decorGuid);
-    HousingResult PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntryId, float x, float y, float z,
-        float rotX, float rotY, float rotZ, float rotW, ObjectGuid roomGuid);
-    HousingResult PlaceDecor(uint32 decorEntryId, float x, float y, float z,
+    // Places a piece of the account's storage in this house: the client names the piece by the GUID its storage entry
+    // carries (hbcd3 1443983 places the piece a redeem just made). The piece keeps its GUID and source.
+    HousingResult PlaceDecorWithGuid(ObjectGuid decorGuid, float x, float y, float z,
         float rotX, float rotY, float rotZ, float rotW, ObjectGuid roomGuid);
     HousingResult MoveDecor(ObjectGuid decorGuid, float x, float y, float z,
         float rotX, float rotY, float rotZ, float rotW, float scale = 1.0f);
+    // Takes a placed piece out of the house into the account's storage.
     HousingResult RemoveDecor(ObjectGuid decorGuid);
     // M2: single source of truth for exterior-vs-interior decor budget routing.
     // A placement is exterior (charged to the yard budget) when it has no room
@@ -272,10 +265,24 @@ public:
     std::vector<PlacedDecor const*> GetAllPlacedDecor() const;
     uint32 GetDecorCount() const { return static_cast<uint32>(_state->PlacedDecorByGuid.size()); }
 
-    // Auto-place starter decor in the visual room (called after catalog is populated).
-    // Sniff-verified: retail pre-places starter items at fixed positions in Room 1.
-    // The "Welcome Home" quest requires the player to remove 3 of these items.
-    uint32 PlaceStarterDecor();
+    // A piece the account just got: its entry, whether the account owned none of that entry before, and whether a
+    // first-time message announces it.
+    struct AcquiredDecor
+    {
+        uint32 DecorEntryId = 0;
+        bool FirstOwned = false;
+        bool Announced = false;
+    };
+
+    // The decor a newly bought house comes with: new pieces of the account, source "starter", placed in the house
+    // (hbcd3 1431714-1431809). Returns them in the order they were made, one per piece, for the first-time messages.
+    // The account's rows are appended to trans; the placed pieces are saved with the house.
+    std::vector<AcquiredDecor> PlaceStarterDecor(CharacterDatabaseTransaction trans);
+    // What a new piece of an account gives the character who got it: the entry's first-acquisition experience the
+    // first time the account owns it, and progress on "collect unique decor".
+    static void OnDecorAcquired(Player* player, uint32 decorEntryId, bool firstOwned);
+    // The placed piece this house's exit door rides, or nothing when it has none (hbcd3 1402903-1402945: decor 10952).
+    PlacedDecor const* FindExitDoorDecor() const;
 
     // Room operations
     HousingResult PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 orientation, bool mirrored, ObjectGuid* outRoomGuid = nullptr, int32 gridX = 0, int32 gridY = 0, int32 floorIndex = 0);
@@ -305,13 +312,10 @@ public:
     uint32 GetCoreExteriorComponentID() const;
     std::unordered_map<uint8, uint32> GetRootComponentOverrides() const;
 
-    // Catalog operations
-    HousingResult AddToCatalog(uint32 decorEntryId, uint8 sourceType = DECOR_SOURCE_STANDARD, std::string sourceValue = {});
-    HousingResult RemoveFromCatalog(uint32 decorEntryId);
-    HousingResult DestroyAllCopies(uint32 decorEntryId);
-    // Copies, taken under the catalog's lock: spells and initiative rewards add to the account's catalog from the
-    // map a character is on, and two characters of the account can be on maps updated at the same time.
-    std::vector<CatalogEntry> GetCatalogEntries() const;
+    // The account's decor store, which this house shares with every other house and character of the account.
+    HousingDecorStore& GetDecorStore() const { return *_decorStore; }
+    // Pieces of that entry in the account's storage.
+    uint32 GetStoredDecorCount(uint32 decorEntryId) const;
 
     // House level and favor
     void AddLevel(uint32 amount);
@@ -381,26 +385,11 @@ public:
 
     // Direct access to placed decor map (for GO spawning)
     std::unordered_map<ObjectGuid, PlacedDecor> const& GetPlacedDecorMap() const { return _state->PlacedDecorByGuid; }
-    bool IsStoragePopulated() const { return _storagePopulated; }
-    void ResetStoragePopulated() { _storagePopulated = false; }
-
-    // Populate ALL decor entries (placed + catalog) into the Account entity's FHousingStorage_C.
-    // Called on-demand by REQUEST_STORAGE handler. Retail does NOT populate storage at login —
-    // FHousingStorage_C is only sent when the player enters edit mode or requests storage.
-    void PopulateCatalogStorageEntries();
-
-    // Build the per-character HousingCatalog ownership snapshot broadcast via
-    // SMSG_HOUSING_CATALOG_STATE_SYNC on every housing-map entry. Aggregates across:
-    //   - Placed decor instances -> OwnedModifiedStack entries keyed by DecorEntryId
-    //   - Storage-only stacks (catalog.Count minus placed count) -> OwnedUnmodifiedStack
-    //   - Placed rooms                                           -> Room entries (isRoom=1)
-    // PackedState bit layout matches the IDA-decoded format for ClientMirrorSystem 0x56000E:
-    //   bits 0-1 subtype | bit 3 isRoom | bit 4 catalog-visible flag (always set)
-    void BuildCatalogStateSync(WorldPackets::Housing::HousingCatalogStateSync& packet) const;
 
 private:
-    uint64 GenerateDecorDbId();
     uint64 GenerateRoomDbId();
+    // Sets the owner's storage entry for a piece of this house, when her client has been sent the storage.
+    void SetOwnerStorageEntry(PlacedDecor const& decor, bool placed) const;
 
     // Room connectivity helpers
     ObjectGuid FindBaseRoomGuid() const;
@@ -428,7 +417,7 @@ private:
     // read without the lock. That holds because only the housing packet handlers change them (directly or through
     // the blueprint code), and those all run on the world thread, which never runs while maps update; map code only
     // reads them. A change made from map code (a spell, a quest, an initiative reward) may only touch the level,
-    // the favor and the catalog, which it does under the lock.
+    // the favor and the account's decor store, which it does under their locks.
     struct PersistentState
     {
         std::recursive_mutex Lock;
@@ -470,38 +459,25 @@ private:
         std::unordered_map<uint32 /*fixturePointId*/, Fixture> Fixtures;
     };
 
-    // The decor catalog of one Battle.net account, shared by all of its houses and characters.
-    struct AccountCatalog
-    {
-        std::recursive_mutex Lock;
-        bool Loaded = false;
-        std::unordered_map<uint32 /*decorEntryId*/, CatalogEntry> Entries;
-    };
-
     using StateLock = std::unique_lock<std::recursive_mutex>;
     StateLock LockState() const { return StateLock(_state->Lock); }
-    // Always takes the house before the catalog, so two threads never wait on each other.
-    std::scoped_lock<std::recursive_mutex, std::recursive_mutex> LockStateAndCatalog() const
-    {
-        return std::scoped_lock<std::recursive_mutex, std::recursive_mutex>(_state->Lock, _catalog->Lock);
-    }
+    // Takes the house and the account's decor store together (std::scoped_lock orders them), so two threads never
+    // wait on each other.
+    std::scoped_lock<std::recursive_mutex, std::recursive_mutex> LockStateAndStore() const;
 
     Player* _owner;
     std::shared_ptr<PersistentState> _state;
-    std::shared_ptr<AccountCatalog> _catalog;
+    std::shared_ptr<HousingDecorStore> _decorStore;
 
     // Per character: each character that has the house open has its own editor state.
     HousingEditorMode _editorMode = HOUSING_EDITOR_MODE_NONE;
     bool _isInInterior = false;
-    bool _storagePopulated = false; // True after PopulateCatalogStorageEntries() — gates Account entity updates
     bool _photoSharingAuthorized = false; // Per-session photo sharing authorization state
-    std::unordered_map<ObjectGuid, uint32 /*decorEntryId*/> _pendingPlacements;
 
-    // Shared states by house database id and catalogs by Battle.net account. An entry lives as long as one Housing
-    // object holds it; the last one to go erases it, so a later login reads the saved rows again.
+    // Shared states by house database id. An entry lives as long as one Housing object holds it; the last one to go
+    // erases it, so a later login reads the saved rows again.
     static std::mutex s_sharedStateLock;
     static std::unordered_map<uint64, std::weak_ptr<PersistentState>> s_houseStates;
-    static std::unordered_map<uint32, std::weak_ptr<AccountCatalog>> s_accountCatalogs;
 
     // Global DB ID generators (atomic, shared across all Housing instances)
     static std::atomic<uint64> s_nextHouseDbId;

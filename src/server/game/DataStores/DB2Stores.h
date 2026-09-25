@@ -56,6 +56,8 @@ TC_GAME_API extern DB2Storage<HouseExteriorWmoDataEntry>            sHouseExteri
 TC_GAME_API extern DB2Storage<HouseDecorThemeSetEntry>              sHouseDecorThemeSetStore;
 TC_GAME_API extern DB2Storage<HouseDecorEntry>                      sHouseDecorStore;
 TC_GAME_API extern DB2Storage<HouseDecorMaterialEntry>              sHouseDecorMaterialStore;
+TC_GAME_API extern DB2Storage<RetroactiveDecorRewardEntry>          sRetroactiveDecorRewardStore;
+TC_GAME_API extern DB2Storage<RetroactiveDecorRewardCriteriaEntry>  sRetroactiveDecorRewardCriteriaStore;
 TC_GAME_API extern DB2Storage<ExteriorComponentXGroupEntry>          sExteriorComponentXGroupStore;
 TC_GAME_API extern DB2Storage<ExteriorComponentTypeEntry>            sExteriorComponentTypeStore;
 TC_GAME_API extern DB2Storage<ExteriorComponentEntry>                sExteriorComponentStore;

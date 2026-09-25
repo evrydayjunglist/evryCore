@@ -100,6 +100,14 @@ void HotfixDatabaseConnection::DoPrepareStatements()
     PREPARE_LOCALE_STMT(HOTFIX_SEL_HOUSE_DECOR, "SELECT ID, Name_lang FROM house_decor_locale WHERE (`VerifiedBuild` > 0) = ? AND locale = ?", CONNECTION_SYNCH);
     PrepareStatement(HOTFIX_SEL_HOUSE_DECOR_MATERIAL, "SELECT ID, WMOMaterialReference, MaterialTextureIndex, HouseThemeID, TextureAFileDataID, TextureBFileDataID FROM house_decor_material WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
     PREPARE_MAX_ID_STMT(HOTFIX_SEL_HOUSE_DECOR_MATERIAL, "SELECT MAX(ID) + 1 FROM house_decor_material", CONNECTION_SYNCH);
+
+    // RetroactiveDecorReward.db2
+    PrepareStatement(HOTFIX_SEL_RETROACTIVE_DECOR_REWARD, "SELECT ID, Flags, AchievementID, QuestID, Field_4, HouseDecorID FROM retroactive_decor_reward WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
+    PREPARE_MAX_ID_STMT(HOTFIX_SEL_RETROACTIVE_DECOR_REWARD, "SELECT MAX(ID) + 1 FROM retroactive_decor_reward", CONNECTION_SYNCH);
+
+    // RetroactiveDecorRewardCriteria.db2
+    PrepareStatement(HOTFIX_SEL_RETROACTIVE_DECOR_REWARD_CRITERIA, "SELECT ID, AchievementID, QuestID, RetroactiveDecorRewardID FROM retroactive_decor_reward_criteria WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
+    PREPARE_MAX_ID_STMT(HOTFIX_SEL_RETROACTIVE_DECOR_REWARD_CRITERIA, "SELECT MAX(ID) + 1 FROM retroactive_decor_reward_criteria", CONNECTION_SYNCH);
     PrepareStatement(HOTFIX_SEL_EXTERIOR_COMPONENT_X_GROUP, "SELECT ID, ExteriorComponentGroupID, ExteriorComponentID FROM exterior_component_x_group WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
     PREPARE_MAX_ID_STMT(HOTFIX_SEL_EXTERIOR_COMPONENT_X_GROUP, "SELECT MAX(ID) + 1 FROM exterior_component_x_group", CONNECTION_SYNCH);
     PrepareStatement(HOTFIX_SEL_EXTERIOR_COMPONENT_TYPE, "SELECT Name, ID, ParentComponentType FROM exterior_component_type WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);

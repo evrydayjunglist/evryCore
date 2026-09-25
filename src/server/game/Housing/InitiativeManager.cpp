@@ -21,6 +21,8 @@
 #include "CharacterDatabase.h"
 #include "CriteriaHandler.h"
 #include "Housing.h"
+#include "HousingDecorStore.h"
+#include "HousingMgr.h"
 #include "DB2Stores.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
@@ -1425,14 +1427,21 @@ void InitiativeManager::GrantMilestoneRewards(Player* player, uint32 milestoneID
         // Grant based on reward fields
         // DB2 fields: Money(int64), DecorID(FK->HouseDecor), DecorQuantity, Field_6, Favor, RewardQuestID(FK->QuestV2)
 
-        // Grant decor items if DecorID is set
-        if (reward->DecorID > 0 && reward->DecorQuantity > 0)
+        // Grant decor items if DecorID is set. The decor goes to the account's store, which needs no house. No
+        // capture shows a milestone's decor arriving, so no add-to-chest or first-time message is sent; the pieces
+        // appear in the storage the next time it is sent.
+        if (reward->DecorID > 0 && reward->DecorQuantity > 0 && sHousingMgr.GetHouseDecorData(uint32(reward->DecorID)))
         {
-            // The decor catalog belongs to the account, so any of its houses will do.
-            if (Housing* housing = player->GetAccountCatalogHousing())
+            if (HousingDecorStore* store = player->GetHousingDecorStore())
             {
+                CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
                 for (int32 i = 0; i < reward->DecorQuantity; ++i)
-                    housing->AddToCatalog(static_cast<uint32>(reward->DecorID));
+                {
+                    bool firstOwned = false;
+                    store->CreateStored(uint32(reward->DecorID), DECOR_SOURCE_NONE, {}, firstOwned, trans);
+                    Housing::OnDecorAcquired(player, uint32(reward->DecorID), firstOwned);
+                }
+                CharacterDatabase.CommitTransaction(trans);
 
                 TC_LOG_DEBUG("housing", "InitiativeManager::GrantMilestoneRewards: Granted {}x decor {} to player {}",
                     reward->DecorQuantity, reward->DecorID, player->GetGUID().ToString());

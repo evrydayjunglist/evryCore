@@ -18,6 +18,8 @@
 #include "HousingPackets.h"
 #include "Log.h"
 #include "PacketOperators.h"
+#include <atomic>
+#include <string_view>
 
 // ============================================================
 // Housing namespace (Decor, Fixture, Room, Services, Misc)
@@ -56,20 +58,69 @@ void HousingPhotoSharingCompleteAuthorization::Read()
     _worldPacket >> SizedString::Data(Token);
 }
 
+namespace
+{
+// CMSG_HOUSING_DECOR_PLACE carries seven floats after the decor GUID on 12.0.7: position, rotation and scale (hbcd3
+// 1443057 and 1443983, 54 and 53 bytes; hled1 805424, 68 bytes), and WowPacketParser's reader has not changed for
+// 12.1. No capture has a CMSG_HOUSING_DECOR_MOVE; it is read the same way by assumption. The port read eleven, a
+// quaternion between rotation and scale, from its reading of the 12.1.0.69587 client. No 12.1 capture of either
+// packet exists, so both are accepted: seven first, and eleven when reading seven does not end exactly at the end of
+// the packet. readTail reads what follows the scale.
+template <typename ReadTail>
+uint8 ReadDecorTransform(WorldPacket& packet, TaggedPosition<Position::XYZ>& position, TaggedPosition<Position::XYZ>& rotation,
+    std::array<float, 4>& quaternion, float& scale, ReadTail readTail)
+{
+    size_t const start = packet.rpos();
+    try
+    {
+        packet >> position;
+        packet >> rotation;
+        packet >> scale;
+        quaternion = { };
+        readTail();
+        if (packet.rpos() == packet.size())
+            return 7;
+    }
+    catch (ByteBufferException const&)
+    {
+    }
+
+    packet.rpos(start);
+    packet.ResetBitPos();
+    packet >> position;
+    packet >> rotation;
+    for (float& component : quaternion)
+        packet >> component;
+    packet >> scale;
+    readTail();
+    return 11;
+}
+
+// Says once per form and opcode which one the client sends, so the log settles the question.
+void LogDecorFloatCountOnce(std::string_view opcode, uint8 floatCount, std::atomic<uint8>& seenForms)
+{
+    uint8 const bit = floatCount == 7 ? 1 : 2;
+    if (!(seenForms.fetch_or(bit) & bit))
+        TC_LOG_INFO("network.opcode", "{}: the client sends {} floats after the decor GUID", opcode, floatCount);
+}
+
+std::atomic<uint8> SeenDecorPlaceForms{ 0 };
+std::atomic<uint8> SeenDecorMoveForms{ 0 };
+}
+
 void HousingDecorPlace::Read()
 {
     _worldPacket >> DecorGuid;
-    _worldPacket >> Position;
-    _worldPacket >> Rotation;
-    for (float& component : Quaternion)
-        _worldPacket >> component;
-    _worldPacket >> Scale;
-    _worldPacket >> AttachParentGuid;
-    _worldPacket >> RoomGuid;
-    _worldPacket >> AnchorMeshObjectGuid;
-    _worldPacket >> AttachPoint;
+    FloatCount = ReadDecorTransform(_worldPacket, Position, Rotation, Quaternion, Scale, [this]()
+    {
+        _worldPacket >> AttachParentGuid;
+        _worldPacket >> RoomGuid;
+        _worldPacket >> AnchorMeshObjectGuid;
+        _worldPacket >> AttachPoint;
+    });
+    LogDecorFloatCountOnce("CMSG_HOUSING_DECOR_PLACE", FloatCount, SeenDecorPlaceForms);
 
-    TC_LOG_INFO("network.opcode", "CMSG_HOUSING_DECOR_PLACE DecorGuid: {} Pos: ({}, {}, {}) Rot: ({}, {}, {}) Scale: {} AttachParent: {} RoomGuid: {} AnchorMesh: {} AttachPoint: {}",
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_DECOR_PLACE DecorGuid: {} Pos: ({}, {}, {}) Rot: ({}, {}, {}) Scale: {} AttachParent: {} RoomGuid: {} AnchorMesh: {} AttachPoint: {}",
         DecorGuid.ToString(), Position.Pos.GetPositionX(), Position.Pos.GetPositionY(), Position.Pos.GetPositionZ(),
         Rotation.Pos.GetPositionX(), Rotation.Pos.GetPositionY(), Rotation.Pos.GetPositionZ(), Scale,
         AttachParentGuid.ToString(), RoomGuid.ToString(),
@@ -79,18 +130,17 @@ void HousingDecorPlace::Read()
 void HousingDecorMove::Read()
 {
     _worldPacket >> DecorGuid;
-    _worldPacket >> Position;
-    _worldPacket >> Rotation;
-    for (float& component : Quaternion)
-        _worldPacket >> component;
-    _worldPacket >> Scale;
-    _worldPacket >> AttachParentGuid;
-    _worldPacket >> RoomGuid;
-    _worldPacket >> Field_70;
-    _worldPacket >> Field_80;
-    _worldPacket >> Field_85;
-    _worldPacket >> Field_86;
-    _worldPacket >> Bits<1>(IsBasicMove);
+    FloatCount = ReadDecorTransform(_worldPacket, Position, Rotation, Quaternion, Scale, [this]()
+    {
+        _worldPacket >> AttachParentGuid;
+        _worldPacket >> RoomGuid;
+        _worldPacket >> Field_70;
+        _worldPacket >> Field_80;
+        _worldPacket >> Field_85;
+        _worldPacket >> Field_86;
+        _worldPacket >> Bits<1>(IsBasicMove);
+    });
+    LogDecorFloatCountOnce("CMSG_HOUSING_DECOR_MOVE", FloatCount, SeenDecorMoveForms);
 
     TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_DECOR_MOVE DecorGuid: {} Pos: ({}, {}, {}) Rot: ({}, {}, {}) Scale: {} IsBasicMove: {}",
         DecorGuid.ToString(), Position.Pos.GetPositionX(), Position.Pos.GetPositionY(), Position.Pos.GetPositionZ(),

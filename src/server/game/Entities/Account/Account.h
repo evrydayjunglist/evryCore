@@ -44,8 +44,15 @@ public:
     // Housing storage data (decor catalog) — only FHousingStorage_C belongs on the BNetAccount entity.
     // FHousingPlayerHouse_C is on the Housing/3 entity (HousingPlayerHouseEntity).
     // FNeighborhoodMirrorData_C is on the Housing/4 entity (HousingNeighborhoodMirrorEntity).
+    // One piece of the account's decor: houseGuid is the house it stands in, empty while it is in storage.
     void SetHousingDecorStorageEntry(ObjectGuid decorGuid, ObjectGuid houseGuid, uint8 sourceType, std::string sourceValue = {});
     void RemoveHousingDecorStorageEntry(ObjectGuid decorGuid);
+    // Whether this session's client has been sent the account's whole decor storage. Until then a single change is
+    // not sent on its own: the whole storage goes out when the client asks for it or opens an editor.
+    bool IsHousingDecorStorageSent() const { return m_housingDecorStorageSent; }
+    void SetHousingDecorStorageSent() { m_housingDecorStorageSent = true; }
+    // Cleared when her character logs out, because the next character's client starts without the storage.
+    void ClearHousingDecorStorageSent() { m_housingDecorStorageSent = false; }
 
     UF::UpdateField<UF::HousingStorageData, int32(WowCS::EntityFragment::FHousingStorage_C), 0> m_housingStorageData;
 
@@ -58,6 +65,7 @@ protected:
 private:
     WorldSession* m_session;
     std::string m_name;
+    bool m_housingDecorStorageSent = false;
 };
 }
 

@@ -735,6 +735,9 @@ void WorldSession::LogoutPlayer(bool save)
 
         // The house entities belong to that character's view of the account's houses; the next character builds its own.
         _housingPlayerHouseEntities.clear();
+        // So is the account's decor storage: the next character's client is sent the whole of it again before any
+        // single change.
+        _battlenetAccount->ClearHousingDecorStorageSent();
 
         //! Send the 'logout complete' packet to the client
         //! Client will respond by sending 3x CMSG_CANCEL_TRADE, which we currently dont handle

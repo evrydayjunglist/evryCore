@@ -89,7 +89,7 @@ public:
         // on every plot's exterior, not just the logged-in owner's.
         std::unordered_map<uint32, uint32> Fixtures;
 
-        // Mirrored from character_housing_decor. Every placed decor item
+        // Mirrored from account_housing_decor (the pieces placed in the plot's house). Every placed decor item
         // (exterior AND interior) for this plot's owner. HousingMap uses the
         // exterior entries (RoomGuid.IsEmpty()) at preload so visitors see
         // neighbours' placed decor even when the owner is offline. Interior

@@ -44,6 +44,8 @@ namespace
         { "HouseLevelRewardInfo", &HouseLevelRewardInfoLoadInfo::Instance, sizeof(HouseLevelRewardInfoEntry) },
         { "HouseRoom", &HouseRoomLoadInfo::Instance, sizeof(HouseRoomEntry) },
         { "HouseTheme", &HouseThemeLoadInfo::Instance, sizeof(HouseThemeEntry) },
+        { "RetroactiveDecorReward", &RetroactiveDecorRewardLoadInfo::Instance, sizeof(RetroactiveDecorRewardEntry) },
+        { "RetroactiveDecorRewardCriteria", &RetroactiveDecorRewardCriteriaLoadInfo::Instance, sizeof(RetroactiveDecorRewardCriteriaEntry) },
         { "InitiativeCycle", &InitiativeCycleLoadInfo::Instance, sizeof(InitiativeCycleEntry) },
         { "InitiativeCyclePriority", &InitiativeCyclePriorityLoadInfo::Instance, sizeof(InitiativeCyclePriorityEntry) },
         { "InitiativeMilestone", &InitiativeMilestoneLoadInfo::Instance, sizeof(InitiativeMilestoneEntry) },

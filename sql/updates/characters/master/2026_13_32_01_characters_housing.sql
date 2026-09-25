@@ -3,8 +3,10 @@
 --
 -- A house belongs to a Battle.net account, not to a character: every character of the account sees and
 -- edits it, and the character who bought it is only shown as its owner. character_housing.guid is the
--- house's own database id; the decor, room and fixture rows point at it through houseGuid, and the decor
--- catalog is kept per Battle.net account.
+-- house's own database id; the room and fixture rows point at it through houseGuid.
+--
+-- Decor belongs to the Battle.net account as well, one row per piece with its own GUID. A piece placed in a
+-- house names that house in houseGuid, which it keeps while the house is packed; a piece in storage has 0.
 
 CREATE TABLE IF NOT EXISTS `character_housing` (
     `guid` BIGINT UNSIGNED NOT NULL COMMENT 'House database id',
@@ -34,10 +36,13 @@ CREATE TABLE IF NOT EXISTS `character_housing` (
     KEY `idx_neighborhood` (`neighborhoodGuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS `character_housing_decor` (
-    `houseGuid` BIGINT UNSIGNED NOT NULL COMMENT 'character_housing.guid',
-    `id` BIGINT UNSIGNED NOT NULL,
+CREATE TABLE IF NOT EXISTS `account_housing_decor` (
+    `guid` BIGINT UNSIGNED NOT NULL COMMENT 'Low part of the decor GUID, from one counter shared by every account',
+    `bnetAccountId` INT UNSIGNED NOT NULL COMMENT 'Battle.net account that owns the decor',
     `houseDecorId` INT UNSIGNED NOT NULL,
+    `sourceType` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'How the account got it: 2 starter, 3 redeemed, 6 item, 7 and 8 shop licenses',
+    `sourceValue` VARCHAR(128) NOT NULL DEFAULT '',
+    `houseGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'character_housing.guid of the house it is placed in, 0 while it is in storage',
     `posX` FLOAT NOT NULL DEFAULT 0,
     `posY` FLOAT NOT NULL DEFAULT 0,
     `posZ` FLOAT NOT NULL DEFAULT 0,
@@ -52,11 +57,11 @@ CREATE TABLE IF NOT EXISTS `character_housing_decor` (
     `roomGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `locked` TINYINT UNSIGNED NOT NULL DEFAULT 0,
     `placementTime` BIGINT UNSIGNED NOT NULL DEFAULT 0,
-    `sourceType` TINYINT UNSIGNED NOT NULL DEFAULT 0,
-    `sourceValue` VARCHAR(128) NOT NULL DEFAULT '',
     `petGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `petFlag` TINYINT UNSIGNED NOT NULL DEFAULT 0,
-    PRIMARY KEY (`houseGuid`, `id`)
+    PRIMARY KEY (`guid`),
+    KEY `idx_account` (`bnetAccountId`),
+    KEY `idx_house` (`houseGuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `character_housing_rooms` (
@@ -93,14 +98,18 @@ CREATE TABLE IF NOT EXISTS `character_housing_fixtures` (
     INDEX `idx_house` (`houseGuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS `character_housing_catalog` (
-    `bnetAccountId` INT UNSIGNED NOT NULL COMMENT 'Battle.net account that owns the decor',
-    `houseDecorId` INT UNSIGNED NOT NULL,
-    `quantity` INT UNSIGNED NOT NULL DEFAULT 1,
-    `acquiredTime` INT UNSIGNED NOT NULL DEFAULT 0,
-    `sourceType` TINYINT UNSIGNED NOT NULL DEFAULT 0,
-    `sourceValue` VARCHAR(128) NOT NULL DEFAULT '',
+CREATE TABLE IF NOT EXISTS `account_housing_decor_entry` (
+    `bnetAccountId` INT UNSIGNED NOT NULL,
+    `houseDecorId` INT UNSIGNED NOT NULL COMMENT 'A decor entry the account has owned at least once',
+    `redeemed` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Owed copies of this entry already turned into decor',
+    `firstOwnedTime` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (`bnetAccountId`, `houseDecorId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `account_housing_catalog_fetch` (
+    `bnetAccountId` INT UNSIGNED NOT NULL,
+    `lastFetchTime` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Unix time the client last said it fetched the decor catalog',
+    PRIMARY KEY (`bnetAccountId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `neighborhoods` (

@@ -249,6 +249,26 @@ CREATE TABLE IF NOT EXISTS `house_decor_material` (
   PRIMARY KEY (`ID`, `VerifiedBuild`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `retroactive_decor_reward` (
+  `ID` int unsigned NOT NULL DEFAULT 0,
+  `Flags` int NOT NULL DEFAULT 0,
+  `AchievementID` int NOT NULL DEFAULT 0,
+  `QuestID` int NOT NULL DEFAULT 0,
+  `Field_4` int NOT NULL DEFAULT 0,
+  `HouseDecorID` int unsigned NOT NULL DEFAULT 0,
+  `VerifiedBuild` int NOT NULL DEFAULT 0,
+  PRIMARY KEY (`ID`, `VerifiedBuild`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `retroactive_decor_reward_criteria` (
+  `ID` int unsigned NOT NULL DEFAULT 0,
+  `AchievementID` int NOT NULL DEFAULT 0,
+  `QuestID` int NOT NULL DEFAULT 0,
+  `RetroactiveDecorRewardID` int unsigned NOT NULL DEFAULT 0,
+  `VerifiedBuild` int NOT NULL DEFAULT 0,
+  PRIMARY KEY (`ID`, `VerifiedBuild`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `house_decor_theme_set` (
   `ID` int unsigned NOT NULL DEFAULT 0,
   `Name` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,

@@ -76,6 +76,7 @@
 #include "GitRevision.h"
 #include "HouseInteriorMap.h"
 #include "Housing.h"
+#include "HousingDecorStore.h"
 #include "HousingMap.h"
 #include "HousingRoomEntity.h"
 #include "HousingMgr.h"
@@ -174,6 +175,7 @@
 #include <G3D/g3dmath.h>
 #include <cmath>
 #include <sstream>
+#include <unordered_set>
 
 // corpse reclaim times
 #define DEATH_EXPIRE_STEP (5*MINUTE)
@@ -19092,11 +19094,12 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         }
     }
 
-    // Houses belong to the Battle.net account: every character of the account loads all of its houses. The login
-    // queries return the account's rows for all houses at once; split the decor, room and fixture rows by house.
-    // This runs before the login map is created, because a character who logged out inside a house interior is put
-    // back into that house's instance, and MapManager picks it from her houses.
-    if (PreparedQueryResult houses = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING); houses && GetSession()->GetBattlenetAccountId())
+    // Houses and decor belong to the Battle.net account: every character of the account loads all of its houses and
+    // its decor store, which it has with or without a house. The login queries return the account's rows for all
+    // houses at once; split the decor, room and fixture rows by house. This runs before the login map is created,
+    // because a character who logged out inside a house interior is put back into that house's instance, and
+    // MapManager picks it from her houses.
+    if (uint32 const bnetAccountId = GetSession()->GetBattlenetAccountId())
     {
         auto splitByHouse = [](PreparedQueryResult const& result, uint32 houseColumn)
         {
@@ -19112,11 +19115,10 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             return rowsByHouse;
         };
 
-        // The house column is the last one each of these statements selects.
+        // The house column is the last one each of these statements selects; a piece of decor in storage has house 0.
         std::unordered_map<uint64, std::vector<Field*>> decorByHouse = splitByHouse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR), 20);
         std::unordered_map<uint64, std::vector<Field*>> roomsByHouse = splitByHouse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_ROOMS), 20);
         std::unordered_map<uint64, std::vector<Field*>> fixturesByHouse = splitByHouse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES), 2);
-        PreparedQueryResult catalog = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG);
         std::vector<Field*> const noRows;
         auto rowsOf = [&noRows](std::unordered_map<uint64, std::vector<Field*>> const& rowsByHouse, uint64 houseId) -> std::vector<Field*> const&
         {
@@ -19124,16 +19126,31 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             return itr != rowsByHouse.end() ? itr->second : noRows;
         };
 
-        do
-        {
-            Field* houseFields = houses->Fetch();
-            uint64 houseId = houseFields[0].GetUInt64();
+        _housingDecorStore = HousingDecorStore::Acquire(bnetAccountId);
 
-            std::unique_ptr<Housing> housing = std::make_unique<Housing>(this, houseId);
-            if (housing->LoadFromDB(houseFields, rowsOf(decorByHouse, houseId), rowsOf(roomsByHouse, houseId),
-                rowsOf(fixturesByHouse, houseId), catalog))
-                _housings.push_back(std::move(housing));
-        } while (houses->NextRow());
+        std::unordered_set<uint64> houseIds;
+        if (PreparedQueryResult houses = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING))
+        {
+            do
+            {
+                Field* houseFields = houses->Fetch();
+                uint64 houseId = houseFields[0].GetUInt64();
+                houseIds.insert(houseId);
+
+                std::unique_ptr<Housing> housing = std::make_unique<Housing>(this, houseId);
+                if (housing->LoadFromDB(houseFields, rowsOf(decorByHouse, houseId), rowsOf(roomsByHouse, houseId),
+                    rowsOf(fixturesByHouse, houseId)))
+                    _housings.push_back(std::move(housing));
+            } while (houses->NextRow());
+        }
+
+        // The pieces in storage, and any piece whose house no longer exists, which is in storage from now on.
+        std::vector<Field*> storedDecor;
+        for (auto const& [houseId, rows] : decorByHouse)
+            if (!houseIds.contains(houseId))
+                storedDecor.insert(storedDecor.end(), rows.begin(), rows.end());
+        _housingDecorStore->LoadFromDB(storedDecor, holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR_ENTRIES),
+            holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH));
     }
 
     // A house another game account of the same Battle.net account bought while this login was being read is held by
@@ -21751,6 +21768,8 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
     for (auto const& h : _housings)
         if (h)
             h->SaveToDB(trans);
+    if (_housingDecorStore)
+        _housingDecorStore->SaveToDB(trans);
 
     // check if stats should only be saved on logout
     // save stats can be out of transaction
@@ -26360,7 +26379,7 @@ void Player::SendInitialPacketsAfterAddToMap()
                 // bundle serialises the Decor map. This is a setter-only op
                 // on the session entity; the wire emission happens inside the
                 // Player CREATE bundle via BNetAccount BuildCreateUpdateBlock.
-                housing->PopulateCatalogStorageEntries();
+                PushHousingDecorStorage();
             }
 
             TC_LOG_INFO("housing", "Player {} entered neighborhood map {} - state set on session entities (blizzlike: no unprompted SMSGs emitted). Neighborhood='{}' {}, Members={}, Plots={}, HasHouse={}",
@@ -32173,6 +32192,44 @@ Housing* Player::GetAccountCatalogHousing() const
     return nullptr;
 }
 
+void Player::PushHousingDecorStorage()
+{
+    if (!_housingDecorStore || !GetSession())
+        return;
+
+    Battlenet::Account& account = GetSession()->GetBattlenetAccount();
+    std::unordered_set<ObjectGuid> pieces;
+
+    for (Housing::PlacedDecor const& decor : _housingDecorStore->GetStored())
+    {
+        account.SetHousingDecorStorageEntry(decor.Guid, ObjectGuid::Empty, decor.SourceType, decor.SourceValue);
+        pieces.insert(decor.Guid);
+    }
+
+    // Every house of the account is held here, packed ones too, and a packed house's pieces keep naming it.
+    for (std::unique_ptr<Housing> const& housing : _housings)
+    {
+        if (!housing || housing->IsDeleted())
+            continue;
+
+        for (auto const& [decorGuid, decor] : housing->GetPlacedDecorMap())
+        {
+            account.SetHousingDecorStorageEntry(decorGuid, housing->GetHouseGuid(), decor.SourceType, decor.SourceValue);
+            pieces.insert(decorGuid);
+        }
+    }
+
+    // A piece another character of the account destroyed or placed elsewhere since the last push.
+    std::vector<ObjectGuid> gone;
+    for (auto const& [decorGuid, value] : account.m_housingStorageData->Decor)
+        if (value.state != UF::MapUpdateFieldState::Deleted && !pieces.contains(decorGuid))
+            gone.push_back(decorGuid);
+    for (ObjectGuid const& decorGuid : gone)
+        account.RemoveHousingDecorStorageEntry(decorGuid);
+
+    account.SetHousingDecorStorageSent();
+}
+
 Housing* Player::GetHousingByGuid(ObjectGuid houseGuid) const
 {
     if (houseGuid.IsEmpty())
@@ -32195,12 +32252,12 @@ Housing* Player::GetHousingForNeighborhood(ObjectGuid neighborhoodGuid) const
     return nullptr;
 }
 
-std::vector<Housing const*> Player::GetAllHousings() const
+std::vector<Housing const*> Player::GetAllHousings(bool includePacked /*= false*/) const
 {
     std::vector<Housing const*> result;
     result.reserve(_housings.size());
     for (auto const& h : _housings)
-        if (h && !h->IsPacked())
+        if (h && (includePacked || !h->IsPacked()))
             result.push_back(h.get());
     return result;
 }

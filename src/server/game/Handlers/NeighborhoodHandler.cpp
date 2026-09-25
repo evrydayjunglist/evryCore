@@ -25,6 +25,7 @@
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Housing.h"
+#include "HousingDecorStore.h"
 #include "HousingDefines.h"
 #include "HousingMap.h"
 #include "HousingMgr.h"
@@ -1409,14 +1410,17 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         return;
     }
 
-    // The plot, the money and the house as one unit, so a crash cannot leave the plot taken without a house, or the
-    // money gone without either.
+    // The plot, the money, the house and a new house's starter decor as one unit, so a crash cannot leave the plot
+    // taken without a house, or the money gone without either. An unpacked house brings its own decor.
     neighborhood->ClearReservation(player->GetGUID());
     player->ModifyMoney(-static_cast<int64>(price));
+    std::vector<Housing::AcquiredDecor> starterDecor;
     {
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
         neighborhood->AppendPlotClaim(claim, trans);
         player->SaveInventoryAndGoldToDB(trans);
+        if (!packedHouse)
+            starterDecor = housing->PlaceStarterDecor(trans);
         housing->SaveToDB(trans);
         CharacterDatabase.CommitTransaction(trans);
     }
@@ -1425,9 +1429,23 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     neighborhood->UpdatePlotHouseInfo(resolvedPlotIndex, housing->GetHouseGuid(), GetBattlenetAccountGUID(), housing->GetDatabaseId());
     neighborhood->UpdatePlotHouseMirror(*housing);
 
-    // Retail's order after a purchase (hbcd3 Numbers 13862-13869): the plot's world state, one update with the
-    // cornerstone and the house's room, the House Purchase Cover Spell, the buy reply, then the level and favor.
-    // Retail also sent first-time decor messages before these; that set comes with the per-instance decor work.
+    // Retail's order after a purchase (hbcd3 Numbers 13844-13869): the first-time decor messages, the plot's world
+    // state, one update with the cornerstone and the house's room, the House Purchase Cover Spell, the buy reply, then
+    // the level and favor.
+    // One first-time message per starter piece, repeats included, in the order the pieces were made (hbcd3
+    // 1299364-1299534: 1700, 81, 2549, 10952, 8910, 1700, 2549). No capture shows the Alliance set, so an Alliance
+    // purchase sends none.
+    for (Housing::AcquiredDecor const& acquired : starterDecor)
+    {
+        if (acquired.Announced)
+        {
+            WorldPackets::Housing::HousingFirstTimeDecorAcquisition firstTime;
+            firstTime.DecorEntryID = acquired.DecorEntryId;
+            SendPacket(firstTime.Write());
+        }
+        Housing::OnDecorAcquired(player, acquired.DecorEntryId, acquired.FirstOwned);
+    }
+
     // Two places differ from retail here. The cornerstone's new state goes out with the map's next object update,
     // after the buy reply, not in the same update as the house. And game's force cast runs the cover spell's child
     // spells (and 1253555's refusal) before the buy reply, where retail sent them after the reply and the first
@@ -1523,7 +1541,7 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     // retail sent one only in answer to CMSG_HOUSING_DECOR_REQUEST_STORAGE (hbcd3 Numbers 3263/3265 and 19645/19647),
     // and none in the purchase (Numbers 13842-13926).
     {
-        housing->PopulateCatalogStorageEntries();
+        player->PushHousingDecorStorage();
         housing->SyncUpdateFields();
 
         // Send Account + HousingPlayerHouseEntity together so budget data

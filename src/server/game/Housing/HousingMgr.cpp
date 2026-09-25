@@ -900,56 +900,15 @@ uint32 HousingMgr::GetRoomWeightCost(uint32 roomEntryId) const
     return 1;
 }
 
-std::vector<uint32> HousingMgr::GetStarterDecorIds(uint32 teamId) const
+uint32 HousingMgr::GetDecorIdForItem(uint32 itemId) const
 {
-    // Sniff 12.0.1 verified: Alliance and Horde receive different starter decor sets.
-    // HouseDecor.Flags encodes faction availability:
-    //   bit 0 (0x1) = Alliance, bit 1 (0x2) = Horde, 0 or 0x3 = both factions
-    // Sniff-observed sets (unique IDs only, 7-8 per faction):
-    //   Alliance: 389, 726, 1994, 1435, 9144
-    //   Horde:    1700, 81, 10952, 2549, 8910
-    // FirstTimeDecorAcquisition sends one packet per UNIQUE decor ID.
-    // StartingQuantity determines catalog count, NOT notification count.
-    static constexpr int32 HOUSE_DECOR_FLAG_FACTION_ALLIANCE = 0x1;
-    static constexpr int32 HOUSE_DECOR_FLAG_FACTION_HORDE    = 0x2;
-    static constexpr int32 HOUSE_DECOR_FLAG_FACTION_MASK     = 0x3;
+    if (!itemId)
+        return 0;
 
-    int32 factionBit = (teamId == ALLIANCE) ? HOUSE_DECOR_FLAG_FACTION_ALLIANCE : HOUSE_DECOR_FLAG_FACTION_HORDE;
-
-    std::vector<uint32> result;
     for (auto const& [id, decor] : _houseDecorStore)
-    {
-        if (decor.StartingQuantity <= 0)
-            continue;
-
-        int32 decorFaction = decor.Flags & HOUSE_DECOR_FLAG_FACTION_MASK;
-        // Include decor if: no faction restriction (0 or both bits set), or matches player's faction
-        if (decorFaction == 0 || decorFaction == HOUSE_DECOR_FLAG_FACTION_MASK || (decorFaction & factionBit))
-            result.push_back(id);  // One entry per unique decor ID
-    }
-    return result;
-}
-
-std::vector<std::pair<uint32, int32>> HousingMgr::GetStarterDecorWithQuantities(uint32 teamId) const
-{
-    // Returns {DecorID, StartingQuantity} pairs for populating the catalog
-    static constexpr int32 HOUSE_DECOR_FLAG_FACTION_ALLIANCE = 0x1;
-    static constexpr int32 HOUSE_DECOR_FLAG_FACTION_HORDE    = 0x2;
-    static constexpr int32 HOUSE_DECOR_FLAG_FACTION_MASK     = 0x3;
-
-    int32 factionBit = (teamId == ALLIANCE) ? HOUSE_DECOR_FLAG_FACTION_ALLIANCE : HOUSE_DECOR_FLAG_FACTION_HORDE;
-
-    std::vector<std::pair<uint32, int32>> result;
-    for (auto const& [id, decor] : _houseDecorStore)
-    {
-        if (decor.StartingQuantity <= 0)
-            continue;
-
-        int32 decorFaction = decor.Flags & HOUSE_DECOR_FLAG_FACTION_MASK;
-        if (decorFaction == 0 || decorFaction == HOUSE_DECOR_FLAG_FACTION_MASK || (decorFaction & factionBit))
-            result.push_back({ id, decor.StartingQuantity });
-    }
-    return result;
+        if (decor.ItemID == int32(itemId))
+            return id;
+    return 0;
 }
 
 bool HousingMgr::CanVisitorAccessPlot(Player const* visitor, ObjectGuid ownerGuid, uint32 settingsFlags, bool isInterior) const

@@ -48,6 +48,7 @@
 #include "Group.h"
 #include "Guild.h"
 #include "Housing.h"
+#include "HousingDecorStore.h"
 #include "HousingMgr.h"
 #include "HousingPackets.h"
 #include "InstanceScript.h"
@@ -6428,73 +6429,63 @@ void Spell::EffectCollectHousingDecor()
     if (!player)
         return;
 
-    // The account's collections are shared by all its houses, so any house of the account will do.
-    Housing* housing = player->GetAccountCatalogHousing();
-    if (!housing)
+    // The decor goes to the Battle.net account's store, which needs no house.
+    HousingDecorStore* store = player->GetHousingDecorStore();
+    if (!store)
         return;
 
+    // A spell with no decor in MiscValue grants its item's decor: 1256487 cast by item 253493 is decor 1163.
     uint32 decorEntryId = effectInfo->MiscValue;
-    if (!decorEntryId)
-        return;
+    if (!decorEntryId && m_castItemEntry)
+        decorEntryId = sHousingMgr.GetDecorIdForItem(m_castItemEntry);
 
-    HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
+    HouseDecorData const* decorData = decorEntryId ? sHousingMgr.GetHouseDecorData(decorEntryId) : nullptr;
     if (!decorData)
     {
-        TC_LOG_ERROR("spells", "Spell::EffectCollectHousingDecor: Invalid HouseDecor ID {} from spell {}",
-            decorEntryId, m_spellInfo->Id);
+        TC_LOG_ERROR("spells", "Spell::EffectCollectHousingDecor: spell {} (item {}) names no known HouseDecor ({})",
+            m_spellInfo->Id, m_castItemEntry, decorEntryId);
         return;
     }
 
-    HousingResult result = housing->AddToCatalog(decorEntryId, DECOR_SOURCE_SPELL,
-        std::to_string(m_spellInfo->Id));
-
-    if (result != HOUSING_RESULT_SUCCESS)
+    // One new piece in storage. Cast by an item, its source is the item with the item's GUID as the value (hled1
+    // 789060-789062); otherwise the spell, with its id.
+    uint8 sourceType = DECOR_SOURCE_SPELL;
+    std::string sourceValue = std::to_string(m_spellInfo->Id);
+    if (!m_castItemGUID.IsEmpty())
     {
-        TC_LOG_ERROR("spells", "Spell::EffectCollectHousingDecor: AddToCatalog failed (result={}) for decor {} spell {}",
-            uint32(result), decorEntryId, m_spellInfo->Id);
-        return;
+        sourceType = DECOR_SOURCE_ITEM;
+        sourceValue = HousingDecorStore::MakeItemSourceValue(sRealmList->GetCurrentRealmId().Realm, m_castItemGUID.GetCounter());
     }
 
-    // Notify client of the new decor acquisition
-    WorldPackets::Housing::HousingFirstTimeDecorAcquisition decorAcq;
-    decorAcq.DecorEntryID = decorEntryId;
-    player->SendDirectMessage(decorAcq.Write());
+    bool firstOwned = false;
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    Housing::PlacedDecor const piece = store->CreateStored(decorEntryId, sourceType, std::move(sourceValue), firstOwned, trans);
+    CharacterDatabase.CommitTransaction(trans);
 
-    // If the Account entity's FHousingStorage_C has already been populated (player opened
-    // edit mode), add the new catalog entry directly and send a VALUES_UPDATE so the client's
-    // decor list refreshes without requiring a relog or mode toggle.
-    if (housing->IsStoragePopulated())
+    // Retail's order (hbcd3 Numbers 20363-20365 for decor 1163 from item 253493): the account's update with the new
+    // piece, then the "collect unique decor" criteria update, then the add-to-chest reply naming the piece. Here that
+    // criteria update only goes out when the count of owned entries changes, because the shared criteria code sends
+    // nothing for an unchanged count; retail repeated it unchanged (Number 20364 read 109, as Number 19800 had). The
+    // update carried no source value; the saved one appears after a relog. No first-time message follows a grant in any
+    // capture. For an entry owned for the first time retail then sent the house level and favor update (Number 25462
+    // for decor 1482); that packet is not sent here yet.
+    WorldSession* session = player->GetSession();
+    Battlenet::Account& account = session->GetBattlenetAccount();
+    if (account.IsHousingDecorStorageSent())
     {
-        Optional<Housing::CatalogEntry> catEntry;
-        for (Housing::CatalogEntry const& entry : housing->GetCatalogEntries())
-        {
-            if (entry.DecorEntryId == decorEntryId)
-            {
-                catEntry = entry;
-                break;
-            }
-        }
-        if (catEntry)
-        {
-            // Generate a unique GUID for the new storage entry (same scheme as PopulateCatalogStorageEntries)
-            uint64 catalogGuidBase = player->GetGUID().GetCounter() * 100000;
-            uint32 storageIdx = catEntry->Count > 0 ? catEntry->Count - 1 : 0;
-            uint64 uniqueId = catalogGuidBase + decorEntryId * 100 + storageIdx;
-            ObjectGuid catalogDecorGuid = ObjectGuid::Create<HighGuid::Housing>(
-                /*subType*/ 1,
-                /*arg1*/ sRealmList->GetCurrentRealmId().Realm,
-                /*arg2*/ decorEntryId,
-                uniqueId);
-
-            Battlenet::Account& account = player->GetSession()->GetBattlenetAccount();
-            account.SetHousingDecorStorageEntry(catalogDecorGuid, ObjectGuid::Empty,
-                catEntry->SourceType, catEntry->SourceValue);
-            account.SendUpdateToPlayer(player);
-        }
+        account.SetHousingDecorStorageEntry(piece.Guid, ObjectGuid::Empty, piece.SourceType, std::string());
+        account.SendUpdateToPlayer(player);
     }
 
-    TC_LOG_DEBUG("spells", "Spell::EffectCollectHousingDecor: Player {} learned decor '{}' (ID: {}) from spell {}",
-        player->GetName(), decorData->Name, decorEntryId, m_spellInfo->Id);
+    Housing::OnDecorAcquired(player, decorEntryId, firstOwned);
+
+    WorldPackets::Housing::HousingDecorAddToHouseChestResponse chestResponse;
+    chestResponse.Success = true;
+    chestResponse.DecorGuids.push_back(piece.Guid);
+    player->SendDirectMessage(chestResponse.Write());
+
+    TC_LOG_DEBUG("spells", "Spell::EffectCollectHousingDecor: Player {} got decor '{}' (ID: {}) as {} from spell {}",
+        player->GetName(), decorData->Name, decorEntryId, piece.Guid.ToString(), m_spellInfo->Id);
 }
 
 void Spell::EffectLearnHouseRoom()

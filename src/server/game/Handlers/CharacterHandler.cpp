@@ -387,7 +387,7 @@ bool LoginQueryHolder::Initialize()
     stmt->setUInt64(0, lowGuid);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_RESEARCH_HISTORY, stmt);
 
-    // Houses and the decor catalog belong to the Battle.net account: every character of it loads them all.
+    // Houses and decor belong to the Battle.net account: every character of it loads them all.
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING);
     stmt->setUInt32(0, m_bnetAccountId);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING, stmt);
@@ -404,9 +404,13 @@ bool LoginQueryHolder::Initialize()
     stmt->setUInt32(0, m_bnetAccountId);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES, stmt);
 
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_CATALOG);
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_DECOR_ENTRIES);
     stmt->setUInt32(0, m_bnetAccountId);
-    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG, stmt);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR_ENTRIES, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_CATALOG_FETCH);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH, stmt);
 
     return res;
 }

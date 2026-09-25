@@ -103,12 +103,15 @@ public:
     void SpawnInteriorDecor(Housing* housing);
 
     /// Overload for visits to offline owners — iterates a raw decor vector
-    /// sourced from Neighborhood::PlotInfo.Decor (mirror of character_housing_decor)
+    /// sourced from Neighborhood::PlotInfo.Decor (mirror of account_housing_decor, the pieces placed in the plot's house)
     /// with the owner's HouseGuid passed explicitly.
     void SpawnInteriorDecorFromList(std::vector<Housing::PlacedDecor> const& decor, ObjectGuid houseGuid);
 
     /// Spawn a single placed decor item immediately (called from PLACE handler).
     void SpawnSingleInteriorDecor(Housing::PlacedDecor const& decor, ObjectGuid houseGuid);
+    // Whether a piece is the house's exit door (its HouseDecor gameobject is an exit door). The exit door code stands the
+    // door on it, so the decor spawns leave it out.
+    static bool IsExitDoorDecor(Housing::PlacedDecor const& decor);
 
     /// Update position/rotation of a single interior decor item.
     void UpdateDecorPosition(ObjectGuid decorGuid, Position const& pos, QuaternionData const& rot, float scale = 1.0f);

@@ -23,6 +23,7 @@
 #include "DB2Stores.h"
 #include "GameTime.h"
 #include "Housing.h"
+#include "HousingDecorStore.h"
 #include "HousingMgr.h"
 #include "Log.h"
 #include "Neighborhood.h"
@@ -152,65 +153,37 @@ uint32 FixtureComponentId(HousingBlueprintFixture const& fixture)
     return fixture.OptionId ? fixture.OptionId : fixture.FixturePointId;
 }
 
-uint32 CatalogCount(Housing const& housing, uint32 decorEntryId)
-{
-    for (Housing::CatalogEntry const& entry : housing.GetCatalogEntries())
-        if (entry.DecorEntryId == decorEntryId)
-            return entry.Count;
-    return 0;
-}
+// The pieces an import took out of the house, by entry. They are in the account's storage; the import puts them
+// back first, so a layout that is imported again keeps its pieces' GUIDs.
+using DecorPool = std::unordered_map<uint32 /*decorEntryId*/, std::vector<ObjectGuid>>;
 
-struct PooledDecor
-{
-    ObjectGuid Guid;
-    uint8 SourceType = DECOR_SOURCE_STANDARD;
-    std::string SourceValue;
-};
-
-using DecorPool = std::unordered_map<uint32 /*decorEntryId*/, std::vector<PooledDecor>>;
-
-void PlaceBlueprintDecor(Player* player, Housing* housing, HousingBlueprintDecor const& decor, ObjectGuid roomGuid, Frame const& frame,
+void PlaceBlueprintDecor(Housing* housing, HousingBlueprintDecor const& decor, ObjectGuid roomGuid, Frame const& frame,
     DecorPool& pool, HousingBlueprintApplyResult& result)
 {
     float x, y, z;
     Quat rot;
     ToWorld(frame, decor, x, y, z, rot);
 
-    // Reuse an instance this import took out of the house before minting a new one, so the account's decor storage keeps
-    // one entry per owned item.
-    bool fromPool = false;
-    PooledDecor pooled;
-    std::vector<PooledDecor>& instances = pool[decor.DecorEntryId];
-    if (!instances.empty())
+    // A piece of that entry from the account's storage: one this import took out of the house if any is left,
+    // otherwise any other. Without one the decor is skipped; an import never makes decor.
+    ObjectGuid decorGuid;
+    std::vector<ObjectGuid>& instances = pool[decor.DecorEntryId];
+    while (!instances.empty() && decorGuid.IsEmpty())
     {
-        pooled = std::move(instances.back());
+        if (housing->GetDecorStore().FindStored(instances.back()))
+            decorGuid = instances.back();
         instances.pop_back();
-        fromPool = true;
     }
+    if (decorGuid.IsEmpty())
+        decorGuid = housing->GetDecorStore().FindStoredOfEntry(decor.DecorEntryId);
 
-    uint32 const storageBefore = CatalogCount(*housing, decor.DecorEntryId);
-    uint32 placedOfType = 0;
-    for (auto const& [guid, placed] : housing->GetPlacedDecorMap())
-        if (placed.DecorEntryId == decor.DecorEntryId)
-            ++placedOfType;
-
-    ObjectGuid const decorGuid = fromPool ? pooled.Guid : housing->GenerateDecorGuid(decor.DecorEntryId);
-    HousingResult placeResult = housing->PlaceDecorWithGuid(decorGuid, decor.DecorEntryId, x, y, z, rot.X, rot.Y, rot.Z, rot.W, roomGuid);
+    HousingResult placeResult = decorGuid.IsEmpty() ? HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE
+        : housing->PlaceDecorWithGuid(decorGuid, x, y, z, rot.X, rot.Y, rot.Z, rot.W, roomGuid);
     if (placeResult != HOUSING_RESULT_SUCCESS)
     {
-        if (fromPool)
-            instances.push_back(std::move(pooled));
         ++result.SkippedDecor;
         TC_LOG_DEBUG("housing", "HousingBlueprintMgr: decor {} not placed ({})", decor.DecorEntryId, uint32(placeResult));
         return;
-    }
-
-    // A new instance came out of storage: drop the storage entry Housing::PopulateCatalogStorageEntries created for it.
-    if (!fromPool && housing->IsStoragePopulated() && player->GetSession() && storageBefore > placedOfType)
-    {
-        uint64 const uniqueId = player->GetGUID().GetCounter() * 100000 + decor.DecorEntryId * 100 + (storageBefore - placedOfType - 1);
-        player->GetSession()->GetBattlenetAccount().RemoveHousingDecorStorageEntry(ObjectGuid::Create<HighGuid::Housing>(
-            /*subType*/ 1, /*arg1*/ sRealmList->GetCurrentRealmId().Realm, /*arg2*/ decor.DecorEntryId, uniqueId));
     }
 
     if (std::abs(decor.Scale - 1.0f) > 0.001f && decor.Scale > 0.0f)
@@ -220,17 +193,6 @@ void PlaceBlueprintDecor(Player* player, Housing* housing, HousingBlueprintDecor
         housing->CommitDecorDyes(decorGuid, decor.DyeSlots);
 
     ++result.PlacedDecor;
-}
-
-void ReturnPoolToStorage(Player* player, DecorPool const& pool)
-{
-    if (!player->GetSession())
-        return;
-
-    Battlenet::Account& account = player->GetSession()->GetBattlenetAccount();
-    for (auto const& [entryId, instances] : pool)
-        for (PooledDecor const& instance : instances)
-            account.SetHousingDecorStorageEntry(instance.Guid, ObjectGuid::Empty, instance.SourceType, instance.SourceValue);
 }
 
 void TakeDecorOut(Housing* housing, bool exterior, DecorPool& pool, HousingBlueprintApplyResult& result)
@@ -246,12 +208,11 @@ void TakeDecorOut(Housing* housing, bool exterior, DecorPool& pool, HousingBluep
         if (!decor)
             continue;
 
-        PooledDecor pooled{ guid, decor->SourceType, decor->SourceValue };
         uint32 const entryId = decor->DecorEntryId;
         if (housing->RemoveDecor(guid) != HOUSING_RESULT_SUCCESS)
             continue;
 
-        pool[entryId].push_back(std::move(pooled));
+        pool[entryId].push_back(guid);
         result.RemovedDecor.push_back(guid);
     }
 }
@@ -718,7 +679,7 @@ HousingResult HousingBlueprintMgr::Snapshot(Housing const& housing, HousingBluep
     return HOUSING_RESULT_SUCCESS;
 }
 
-void HousingBlueprintMgr::Evaluate(HousingBlueprint const& blueprint, Housing const* target, Housing const* storageSource,
+void HousingBlueprintMgr::Evaluate(HousingBlueprint const& blueprint, Housing const* target, HousingDecorStore const* storage,
     HousingBlueprintEvaluation& evaluation)
 {
     evaluation = {};
@@ -754,7 +715,7 @@ void HousingBlueprintMgr::Evaluate(HousingBlueprint const& blueprint, Housing co
             continue;
         }
 
-        uint32 available = storageSource ? CatalogCount(*storageSource, entryId) : 0;
+        uint32 available = storage ? storage->CountStored(entryId) : 0;
         if (target && replaces)
         {
             // Decor the import takes out of the house counts as owned.
@@ -865,7 +826,7 @@ HousingResult HousingBlueprintMgr::ApplyLayout(Player* player, Housing* housing,
         return HOUSING_RESULT_BLUEPRINT_TYPE_INVALID;
 
     HousingBlueprintEvaluation evaluation;
-    Evaluate(blueprint, housing, housing, evaluation);
+    Evaluate(blueprint, housing, &housing->GetDecorStore(), evaluation);
     if (evaluation.IsBlocked())
         return HOUSING_RESULT_BLUEPRINT_REQUIREMENTS_UNMET;
 
@@ -960,7 +921,7 @@ HousingResult HousingBlueprintMgr::ApplyLayout(Player* player, Housing* housing,
                 continue;
             ObjectGuid const exteriorRoomGuid = ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 2, /*arg1*/ 0,
                 /*arg2*/ sHousingMgr.GetBaseRoomEntryId(), /*counter*/ ObjectGuid::LowType(housing->GetPlotIndex()) + 1);
-            PlaceBlueprintDecor(player, housing, decor, exteriorRoomGuid, plotFrame, pool, result);
+            PlaceBlueprintDecor(housing, decor, exteriorRoomGuid, plotFrame, pool, result);
             continue;
         }
 
@@ -971,11 +932,10 @@ HousingResult HousingBlueprintMgr::ApplyLayout(Player* player, Housing* housing,
             ++result.SkippedDecor;
             continue;
         }
-        PlaceBlueprintDecor(player, housing, decor, roomGuid, InteriorRoomFrame(room->GridX, room->GridY, room->FloorIndex, room->Orientation),
+        PlaceBlueprintDecor(housing, decor, roomGuid, InteriorRoomFrame(room->GridX, room->GridY, room->FloorIndex, room->Orientation),
             pool, result);
     }
 
-    ReturnPoolToStorage(player, pool);
     housing->RecalculateBudgets();
     housing->SyncUpdateFields();
 
@@ -985,7 +945,7 @@ HousingResult HousingBlueprintMgr::ApplyLayout(Player* player, Housing* housing,
     return HOUSING_RESULT_SUCCESS;
 }
 
-void HousingBlueprintMgr::ApplyRoomDecor(Player* player, Housing* housing, HousingBlueprint const& blueprint, ObjectGuid roomGuid,
+void HousingBlueprintMgr::ApplyRoomDecor(Player* /*player*/, Housing* housing, HousingBlueprint const& blueprint, ObjectGuid roomGuid,
     HousingBlueprintApplyResult& result)
 {
     Housing::Room const* room = housing->GetRoom(roomGuid);
@@ -1012,7 +972,7 @@ void HousingBlueprintMgr::ApplyRoomDecor(Player* player, Housing* housing, Housi
     DecorPool pool;
     for (HousingBlueprintDecor const& decor : blueprint.Content.Decor)
         if (decor.RoomIndex == 0)
-            PlaceBlueprintDecor(player, housing, decor, roomGuid, frame, pool, result);
+            PlaceBlueprintDecor(housing, decor, roomGuid, frame, pool, result);
 
     housing->RecalculateBudgets();
     housing->SyncUpdateFields();

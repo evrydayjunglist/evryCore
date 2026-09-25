@@ -1122,6 +1122,10 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
             continue;
         }
 
+        // The exit door's piece is the door's own decor entity, which the exit door code places.
+        if (IsExitDoorDecor(decor))
+            continue;
+
         // Skip decor already spawned (e.g., placed during this session via SpawnSingleInteriorDecor)
         if (_decorGuidToObjGuid.count(decor.Guid))
             continue;
@@ -1204,7 +1208,7 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
                     go->SetObjectScale(decorScale);
                     // Template default flags — keep CHAIR/CHEST/MAILBOX interactive behavior.
                     go->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0,
-                        roomEntityGuid, decor.SourceType, decor.SourceValue);
+                        roomEntityGuid, DECOR_SOURCE_NONE, std::string());
                     go->InitHousingDecorMirroredPosition(localPos, rot, decorScale, roomEntityGuid, attachFlags);
                     // It rides the room it stands in, at its place and turn in that room (hbcd3 1411570-1411650).
                     if (!roomEntityGuid.IsEmpty())
@@ -1267,7 +1271,7 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
         }
 
         PhasingHandler::InitDbPhaseShift(mesh->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-        mesh->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0, roomEntityGuid, decor.SourceType, decor.SourceValue);
+        mesh->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0, roomEntityGuid, DECOR_SOURCE_NONE, std::string());
 
         if (AddToMap(mesh))
         {
@@ -1289,6 +1293,12 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
         spawnCount, _owner.ToString(), totalDecor, exteriorSkipped);
 }
 
+bool HouseInteriorMap::IsExitDoorDecor(Housing::PlacedDecor const& decor)
+{
+    HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decor.DecorEntryId);
+    return decorData && (decorData->GameObjectID == int32(INTERIOR_DOOR_GO_HORDE) || decorData->GameObjectID == int32(INTERIOR_DOOR_GO_ALLIANCE));
+}
+
 void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& decor, ObjectGuid houseGuid)
 {
     // If RoomGuid is empty, the decor was placed without room association.
@@ -1303,6 +1313,10 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
 
     // Already spawned?
     if (_decorGuidToObjGuid.count(decor.Guid))
+        return;
+
+    // The exit door's piece is the door's own decor entity, which the exit door code places.
+    if (IsExitDoorDecor(decor))
         return;
 
     HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decor.DecorEntryId);
@@ -1401,7 +1415,7 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
                 go->SetObjectScale(decorScale);
                 go->ReplaceAllFlags(GameObjectFlags(0x40000));
                 go->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0,
-                    roomEntityGuid, decor.SourceType, decor.SourceValue);
+                    roomEntityGuid, DECOR_SOURCE_NONE, std::string());
                 go->InitHousingDecorMirroredPosition(localPos, rot, decorScale, roomEntityGuid, attachFlags);
                 // It rides the room it stands in, at its place and turn in that room (hbcd3 1411570-1411650).
                 if (!roomEntityGuid.IsEmpty())
@@ -1448,7 +1462,7 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
         return;
 
     PhasingHandler::InitDbPhaseShift(mesh->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-    mesh->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0, roomEntityGuid, decor.SourceType, decor.SourceValue);
+    mesh->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0, roomEntityGuid, DECOR_SOURCE_NONE, std::string());
 
     if (AddToMap(mesh))
     {
@@ -1599,7 +1613,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
         // Populate Account entity with FHousingStorage_C + budget data
         // so the initial UPDATE_OBJECT includes full housing context
-        preloadHousing->PopulateCatalogStorageEntries();
+        player->PushHousingDecorStorage();
         preloadHousing->SyncUpdateFields();
 
         // Relocate player to the visual room BEFORE map add so they
@@ -1785,7 +1799,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
                     // 5) Account CREATE + HousingPlayerHouseEntity + decor
                     {
-                        housing->PopulateCatalogStorageEntries();
+                        p->PushHousingDecorStorage();
                         housing->SyncUpdateFields();
 
                         WorldSession* session = p->GetSession();
@@ -1990,9 +2004,13 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
                         ObjectGuid interiorHouseGuid = ownerHousing->GetHouseGuid();
 
-                        // The decor entity's GUID is still the port's own make; per-instance decor GUIDs come with the
-                        // decor storage work.
-                        ObjectGuid decorGuid = ObjectGuidFactory::CreateHousing(1, 0, doorGoEntry, GetInstanceId() + 900000);
+                        // The decor entity is the house's exit door piece, so its GUID is that piece's, the one the
+                        // account's storage lists (hbcd3 1402903 and 1431719: decor 10952, low 0x91090076). A house
+                        // without that piece (an Alliance house whose door decor is missing from HouseDecor, or one
+                        // whose piece was taken out) gets a GUID made from the interior instead.
+                        Housing::PlacedDecor const* doorDecor = ownerHousing->FindExitDoorDecor();
+                        ObjectGuid decorGuid = doorDecor ? doorDecor->Guid
+                            : ObjectGuidFactory::CreateHousing(1, HOUSING_DECOR_GUID_ARG1, doorGoEntry, GetInstanceId() + 900000);
 
                         GameObject* doorGo = GameObject::CreateGameObject(doorGoEntry, this, doorWorldPos,
                             QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 255, GO_STATE_READY);

@@ -63,6 +63,8 @@ DB2Storage<HouseExteriorWmoDataEntry>           sHouseExteriorWmoDataStore("Hous
 DB2Storage<HouseDecorThemeSetEntry>             sHouseDecorThemeSetStore("HouseDecorThemeSet.db2", &HouseDecorThemeSetLoadInfo::Instance);
 DB2Storage<HouseDecorEntry>                     sHouseDecorStore("HouseDecor.db2", &HouseDecorLoadInfo::Instance);
 DB2Storage<HouseDecorMaterialEntry>             sHouseDecorMaterialStore("HouseDecorMaterial.db2", &HouseDecorMaterialLoadInfo::Instance);
+DB2Storage<RetroactiveDecorRewardEntry>         sRetroactiveDecorRewardStore("RetroactiveDecorReward.db2", &RetroactiveDecorRewardLoadInfo::Instance);
+DB2Storage<RetroactiveDecorRewardCriteriaEntry> sRetroactiveDecorRewardCriteriaStore("RetroactiveDecorRewardCriteria.db2", &RetroactiveDecorRewardCriteriaLoadInfo::Instance);
 DB2Storage<ExteriorComponentXGroupEntry>         sExteriorComponentXGroupStore("ExteriorComponentXGroup.db2", &ExteriorComponentXGroupLoadInfo::Instance);
 DB2Storage<ExteriorComponentTypeEntry>           sExteriorComponentTypeStore("ExteriorComponentType.db2", &ExteriorComponentTypeLoadInfo::Instance);
 DB2Storage<ExteriorComponentEntry>               sExteriorComponentStore("ExteriorComponent.db2", &ExteriorComponentLoadInfo::Instance);
@@ -887,6 +889,8 @@ uint32 DB2Manager::LoadStores(std::string const& dataPath, LocaleConstant defaul
     LOAD_DB2(sHouseStore);
     LOAD_DB2(sHouseDecorStore);
     LOAD_DB2(sHouseDecorMaterialStore);
+    LOAD_DB2(sRetroactiveDecorRewardStore);
+    LOAD_DB2(sRetroactiveDecorRewardCriteriaStore);
     LOAD_DB2(sHouseDecorThemeSetStore);
     LOAD_DB2(sHouseExteriorWmoDataStore);
     LOAD_DB2(sHouseLevelDataStore);

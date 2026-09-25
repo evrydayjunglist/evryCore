@@ -29,6 +29,7 @@
 #include <vector>
 
 class Housing;
+class HousingDecorStore;
 class Player;
 
 // A saved layout. Decor is stored relative to its room (interior) or to the plot (exterior), so a blueprint lands the same
@@ -157,9 +158,9 @@ public:
     // Exterior = house type, size, position, fixtures and yard decor, Room = one room and its decor.
     static HousingResult Snapshot(Housing const& housing, HousingBlueprintType type, ObjectGuid roomGuid, HousingBlueprintContent& content);
 
-    // Contents, costs and unmet requirements of importing into target (nullptr: no house context; ownership is then taken
-    // from storageSource).
-    static void Evaluate(HousingBlueprint const& blueprint, Housing const* target, Housing const* storageSource,
+    // Contents, costs and unmet requirements of importing into target (nullptr: no house context). What is owned is the
+    // account's storage, plus, for an import that replaces them, the pieces the import takes out of target.
+    static void Evaluate(HousingBlueprint const& blueprint, Housing const* target, HousingDecorStore const* storage,
         HousingBlueprintEvaluation& evaluation);
 
     // Imports a house, interior or exterior blueprint into the model of housing. Saves the replaced part as an automatic

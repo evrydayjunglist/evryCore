@@ -305,6 +305,27 @@ struct HouseDecorEntry
     int32 UiModelSceneID;
 };
 
+// A piece of decor the account is owed once it has earned an achievement or quest (flag 1: every criteria row is
+// needed). Rows 1-245 carry their pair here as well as in RetroactiveDecorRewardCriteria; later rows keep them only
+// there (12.1 client data, clientdata121 out_RetroactiveDecorReward.json).
+struct RetroactiveDecorRewardEntry
+{
+    uint32 ID;
+    int32 Flags;                             // RetroactiveDecorRewardFlags; 1 on every 12.1 row
+    int32 AchievementID;
+    int32 QuestID;
+    int32 Field_4;                           // 0 on every 12.1 row
+    uint32 HouseDecorID;                     // the decor it owes
+};
+
+struct RetroactiveDecorRewardCriteriaEntry
+{
+    uint32 ID;
+    int32 AchievementID;
+    int32 QuestID;
+    uint32 RetroactiveDecorRewardID;
+};
+
 struct HouseDecorMaterialEntry
 {
     uint32 ID;

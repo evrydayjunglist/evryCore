@@ -16,6 +16,7 @@
 */
 
 #include "Account.h"
+#include "HousingDefines.h"
 #include "Map.h"
 #include "Player.h"
 #include "StringFormat.h"
@@ -33,8 +34,8 @@ Account::Account(WorldSession* session, ObjectGuid guid, std::string&& name) : m
     // FNeighborhoodMirrorData_C → Housing/4 entity (HousingNeighborhoodMirrorEntity)
     m_entityFragments.Add(WowCS::EntityFragment::FHousingStorage_C, false, WowCS::GetRawFragmentData(m_housingStorageData));
 
-    // Default value
-    SetUpdateFieldValue(m_values.ModifyValue(&Account::m_housingStorageData).ModifyValue(&UF::HousingStorageData::DecorMaxOwnedCount), 5000);
+    // The most decor an account may own (hbcd3 352181).
+    SetUpdateFieldValue(m_values.ModifyValue(&Account::m_housingStorageData).ModifyValue(&UF::HousingStorageData::DecorMaxOwnedCount), HOUSING_DECOR_MAX_OWNED_COUNT);
 }
 
 std::string Account::GetNameForLocaleIdx(LocaleConstant /*locale*/) const
@@ -87,7 +88,7 @@ void Account::SendUpdateToPlayer(Player* player)
     // BaseEntity::SendUpdateToPlayer is const and skips BuildUpdateChangesMask(),
     // so ContentsChangedMask is 0 and the VALUES_UPDATE contains no fragment data.
     // We must compute the mask before serializing so that pending fragment changes
-    // (e.g., FHousingStorage_C populated by PopulateCatalogStorageEntries) are included.
+    // (e.g., FHousingStorage_C filled by Player::PushHousingDecorStorage) are included.
     BuildUpdateChangesMask();
     BaseEntity::SendUpdateToPlayer(player);
     ClearUpdateMask(true);
@@ -97,6 +98,8 @@ void Account::SetHousingDecorStorageEntry(ObjectGuid decorGuid, ObjectGuid house
 {
     auto ref = m_values.ModifyValue(&Account::m_housingStorageData).ModifyValue(&UF::HousingStorageData::Decor, decorGuid);
     SetUpdateFieldValue(ref.ModifyValue(&UF::DecorStoragePersistedData::HouseGUID), houseGuid);
+    SetUpdateFieldValue(ref.ModifyValue(&UF::DecorStoragePersistedData::PlacementStatus),
+        uint8(houseGuid.IsEmpty() ? DECOR_PLACEMENT_STATUS_STORED : DECOR_PLACEMENT_STATUS_PLACED));
     SetUpdateFieldValue(ref.ModifyValue(&UF::DecorStoragePersistedData::SourceType), sourceType);
     SetUpdateFieldValue(ref.ModifyValue(&UF::DecorStoragePersistedData::SourceValue), std::move(sourceValue));
 }

@@ -1060,6 +1060,26 @@ enum OpcodeClient : uint32
     CMSG_WORLD_LOOT_OBJECT_CLICK                                    = 0x3D02D7,
     CMSG_WORLD_PORT_RESPONSE                                        = 0x430025,
     CMSG_WRAP_ITEM                                                  = 0x400000,
+    // TC-CUSTOM housing/neighborhood-initiative CMSG opcodes merged from ADV (e004d7a4bf).
+    // Values are UNKNOWN_OPCODE: ADV's raw 68275-era suffixes collide with real 12.1 opcodes in
+    // their families (CMSG_HOUSING_DECOR_SET_TRANSFORM_12_1's 0x320002
+    // collides with CMSG_HOUSING_DECOR_MOVE), and family 0x38 (neighborhood initiative) has no
+    // capacity reserved in GetOpcodeArrayIndex at all. Packet classes compile; IsValid() is false
+    // so nothing dispatches until each is re-derived from a verified 12.1 capture.
+    CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST                   = UNKNOWN_OPCODE, // wire: PackedGUID (Lua C_NeighborhoodInitiative.RequestNeighborhoodInitiativeInfo)
+    CMSG_HOUSING_DECOR_SET_TRANSFORM_12_1                           = UNKNOWN_OPCODE, // wire: pguid f32x11 pguid pguid pguid u32 u8 u8 bits<1>; unreferenced elsewhere in the tree
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_01                          = UNKNOWN_OPCODE, // wire: PackedGUID
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_05                          = UNKNOWN_OPCODE, // wire: uint32 + PackedGUID
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_06                          = UNKNOWN_OPCODE, // wire: empty
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_07                          = UNKNOWN_OPCODE, // wire: uint32
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_08                          = UNKNOWN_OPCODE, // wire: empty
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_09                          = UNKNOWN_OPCODE, // wire: float
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_0A                          = UNKNOWN_OPCODE, // wire: uint32
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_0B                          = UNKNOWN_OPCODE, // wire: uint32
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_0C                          = UNKNOWN_OPCODE, // wire: PackedGUID
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_0D                          = UNKNOWN_OPCODE, // wire: uint32 + uint32 + (uint32,uint32)[N] + Bits<1>
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_0E                          = UNKNOWN_OPCODE, // wire: uint32 + uint32[N]
+    CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_0F                          = UNKNOWN_OPCODE, // wire: uint32 + (uint32×4)[N]
 
     CMSG_BATTLE_PET_DELETE_PET_CHEAT                                = CMSG_BATTLE_PET_DELETE_PET + 1,
     CMSG_PET_BATTLE_WILD_LOCATION_FAIL                              = CMSG_PET_BATTLE_REQUEST_WILD + 1,
@@ -1677,6 +1697,9 @@ enum OpcodeServer : uint32
     SMSG_HOUSING_BLUEPRINT_GET_RESPONSE                             = 0x540001,
     SMSG_HOUSING_BLUEPRINT_IMPORT_RESPONSE                          = 0x540004,
     SMSG_HOUSING_BLUEPRINT_RENAME_RESPONSE                          = 0x540002,
+    SMSG_HOUSING_CATALOG_STATE_SYNC                                 = UNKNOWN_OPCODE, // no value for this name in the 12.1 client
+    SMSG_HOUSING_EXPORT_HOUSE_RESPONSE                              = UNKNOWN_OPCODE, // no value for this name in the 12.1 client
+    SMSG_HOUSING_HOUSE_BUDGETS_UPDATE                               = UNKNOWN_OPCODE, // no value for this name in the 12.1 client
     SMSG_HOUSING_DECOR_ADD_TO_HOUSE_CHEST_RESPONSE                  = 0x550009,
     SMSG_HOUSING_DECOR_DELETE_FROM_STORAGE_RESPONSE                 = 0x550007,
     SMSG_HOUSING_DECOR_DRAW_SERVER_LIGHTING_DEBUG_SPHERES_RESPONSE  = 0x550002,

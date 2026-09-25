@@ -345,9 +345,12 @@ public:
     std::string GetHouseDescription() const;
     void SetHouseNameDescription(std::string const& name, std::string const& desc);
 
-    // Exterior lock state
-    void SetExteriorLocked(bool locked);
-    bool IsExteriorLocked() const { return _state->ExteriorLocked; }
+    // The character holding the house's exterior lock: the one in fixture edit, or the one dragging the house
+    // (hled1 645300-645918). Kept in memory only; it ends when she unlocks, leaves the map or logs out.
+    void SetExteriorLockHolder(ObjectGuid playerGuid);
+    ObjectGuid GetExteriorLockHolder() const;
+    // Ends the lock when this character holds it. Returns whether she did.
+    bool ReleaseExteriorLock(ObjectGuid playerGuid);
 
     // Photo sharing authorization (per-session, volatile)
     void SetPhotoSharingAuthorized(bool authorized) { _photoSharingAuthorized = authorized; }
@@ -446,7 +449,7 @@ private:
         uint32 Favor = 0;
         uint64 Favor64 = 0;
         uint32 SettingsFlags = HOUSE_SETTING_DEFAULT;
-        bool ExteriorLocked = false;
+        ObjectGuid ExteriorLockHolder;
         uint8 HouseSize = HOUSING_FIXTURE_SIZE_SMALL;
         uint32 HouseType = 0;
         uint32 CreateTime = 0;

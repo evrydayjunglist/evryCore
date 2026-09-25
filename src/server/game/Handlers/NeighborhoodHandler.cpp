@@ -1516,13 +1516,6 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         guild->BroadcastPacket(notification.Write());
     }
 
-    // Notify client that the basic house was created
-    {
-        WorldPackets::Housing::HousingFixtureCreateBasicHouseResponse houseResponse;
-        houseResponse.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-        SendPacket(houseResponse.Write());
-    }
-
     // Refresh NeighborhoodMirrorData (Houses[] changed) on all online members
     neighborhood->RefreshMirrorDataForOnlineMembers();
 

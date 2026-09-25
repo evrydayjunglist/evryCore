@@ -22,6 +22,7 @@
 #include "ObjectGuid.h"
 #include "QuaternionData.h"
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -162,4 +163,26 @@ TEST_CASE("A house's exterior root has an Entity GUID made from its plot", "[Hou
     // Every plot of a map has its own, and none of them can meet a counter the map hands out from 1.
     REQUIRE(HousingMgr::MakeExteriorRootGuid(2736, 12) != root);
     REQUIRE(HousingMgr::MakeExteriorRootGuid(2736, 0).GetCounter() > UI64LIT(0xFFFFFFFF));
+}
+
+TEST_CASE("A dragged house's placement is checked against its room and turns the root", "[Housing][Exterior]")
+{
+    // hled1 645894: the client put the root at (-7.4893, 1.7693, 0.02055) facing 1.5707932, and the root's update
+    // at 645930 carried z 0.70710564, w 0.7071079.
+    Position const dragged(-7.4893188f, 1.7693481f, 0.0205500f, 1.5707932f);
+    REQUIRE(HousingMgr::IsRootPlacementInRoom(dragged));
+
+    // The same turn as a quaternion; its sign is the server's choice, and both signs turn the root alike.
+    QuaternionData const rotation = WithPositiveW(QuaternionData::fromEulerAnglesZYX(dragged.GetOrientation(), 0.0f, 0.0f));
+    REQUIRE(rotation.z == Catch::Approx(0.70710564f).margin(0.00001f));
+    REQUIRE(rotation.w == Catch::Approx(0.7071079f).margin(0.00001f));
+
+    // The room's geobox is 35 yards each way along x, 30 along y, and from 1 below the anchor to 125 above it.
+    REQUIRE(HousingMgr::IsRootPlacementInRoom(Position(35.0f, -30.0f, 125.0f, 0.0f)));
+    REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(35.5f, 0.0f, 0.0f, 0.0f)));
+    REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(0.0f, -30.5f, 0.0f, 0.0f)));
+    REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(0.0f, 0.0f, -1.5f, 0.0f)));
+    REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(0.0f, 0.0f, 125.5f, 0.0f)));
+    REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(std::nanf(""), 0.0f, 0.0f, 0.0f)));
+    REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(0.0f, 0.0f, std::numeric_limits<float>::infinity(), 0.0f)));
 }

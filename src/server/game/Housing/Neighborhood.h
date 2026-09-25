@@ -107,6 +107,11 @@ public:
         // Refreshed when an online owner mutates their Housing settings.
         uint32 HouseSettingsFlags = 0;
 
+        // The house's placement inside the plot's room (character_housing posX, posY, posZ and facing), so a house
+        // its owner moved stands where she put it while no character of her account is on the map.
+        bool HasHousePlacement = false;
+        Position HousePlacement;
+
         bool IsOccupied() const { return PlotIndex != INVALID_PLOT_INDEX; }
     };
 
@@ -200,6 +205,7 @@ public:
     // Keep the plot's copy of a house's settings and shown owner current, found by the house, not by a character.
     void UpdatePlotSettingsFlagsByHouse(ObjectGuid houseGuid, uint32 settingsFlags);
     void UpdatePlotCosmeticOwnerByHouse(ObjectGuid houseGuid, ObjectGuid cosmeticOwnerGuid);
+    void UpdatePlotHousePlacementByHouse(ObjectGuid houseGuid, Position const& placement);
     // Moves a house to another vacant plot of this neighborhood. The roster entry that held the old plot is
     // updated in trans; moverGuid is the character asking, whose House Finder hold on the plot is allowed.
     HousingResult MoveHouse(ObjectGuid houseGuid, ObjectGuid moverGuid, uint8 newPlotIndex, CharacterDatabaseTransaction trans);

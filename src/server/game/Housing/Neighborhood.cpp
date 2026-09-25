@@ -97,7 +97,9 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
             Field* houseFields = houses->Fetch();
 
             //        0         1             2           3                 4          5          6        7          8           9
-            // SELECT guid, bnetAccountId, slot, cosmeticOwnerGuid, plotIndex, houseLevel, favor, houseName, houseType, settingsFlags
+            // SELECT guid, bnetAccountId, slot, cosmeticOwnerGuid, plotIndex, houseLevel, favor, houseName, houseType, settingsFlags,
+            //        10    11    12     13
+            //        posX, posY, posZ, facing
             // FROM character_housing WHERE neighborhoodGuid = ? AND packed = 0
             uint8 plotIndex = houseFields[4].GetUInt8();
             if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS)
@@ -127,6 +129,11 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
             plot.HouseName        = houseFields[7].GetString();
             plot.HouseType        = houseFields[8].GetUInt32();
             plot.HouseSettingsFlags = houseFields[9].GetUInt32();
+            plot.HousePlacement.Relocate(houseFields[10].GetFloat(), houseFields[11].GetFloat(), houseFields[12].GetFloat(),
+                houseFields[13].GetFloat());
+            // The same test Housing::LoadFromDB makes: a saved placement is any that is not all zero.
+            plot.HasHousePlacement = plot.HousePlacement.GetPositionX() != 0.0f || plot.HousePlacement.GetPositionY() != 0.0f
+                || plot.HousePlacement.GetPositionZ() != 0.0f || plot.HousePlacement.GetOrientation() != 0.0f;
 
             TC_LOG_INFO("housing", "Neighborhood::LoadFromDB plot[{}] house={} owner={} lvl={} favor={} name='{}'",
                 plotIndex, plot.HouseGuid.ToString(), plot.OwnerGuid.ToString(), plot.HouseLevel, plot.HouseFavor, plot.HouseName);
@@ -1198,6 +1205,8 @@ void Neighborhood::UpdatePlotHouseMirror(Housing const& housing)
     plot.HouseType = housing.GetHouseType();
     plot.HouseSettingsFlags = housing.GetSettingsFlags();
     plot.Fixtures = housing.GetFixtureOverrideMap();
+    plot.HasHousePlacement = housing.HasCustomPosition();
+    plot.HousePlacement = housing.GetHousePosition();
 
     plot.Rooms.clear();
     for (Housing::Room const* room : housing.GetRooms())
@@ -1229,6 +1238,19 @@ void Neighborhood::UpdatePlotCosmeticOwnerByHouse(ObjectGuid houseGuid, ObjectGu
         if (plot.IsOccupied() && !houseGuid.IsEmpty() && plot.HouseGuid == houseGuid)
         {
             plot.OwnerGuid = cosmeticOwnerGuid;
+            return;
+        }
+    }
+}
+
+void Neighborhood::UpdatePlotHousePlacementByHouse(ObjectGuid houseGuid, Position const& placement)
+{
+    for (PlotInfo& plot : _plots)
+    {
+        if (plot.IsOccupied() && !houseGuid.IsEmpty() && plot.HouseGuid == houseGuid)
+        {
+            plot.HasHousePlacement = true;
+            plot.HousePlacement = placement;
             return;
         }
     }

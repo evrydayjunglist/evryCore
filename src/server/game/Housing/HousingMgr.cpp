@@ -606,6 +606,14 @@ bool HousingMgr::GetPlotRoomAnchor(uint32 neighborhoodMapId, uint8 plotIndex, Po
     return ObjectGuid::Create<HighGuid::Entity>(uint16(worldMapId), 0, HOUSING_EXTERIOR_ROOT_GUID_COUNTER_BASE + plotIndex);
 }
 
+/*static*/ bool HousingMgr::IsRootPlacementInRoom(Position const& placement)
+{
+    return placement.IsPositionValid() && std::isfinite(placement.GetOrientation())
+        && std::fabs(placement.GetPositionX()) <= HOUSING_ROOT_MAX_LOCAL_X
+        && std::fabs(placement.GetPositionY()) <= HOUSING_ROOT_MAX_LOCAL_Y
+        && placement.GetPositionZ() >= HOUSING_ROOT_MIN_LOCAL_Z && placement.GetPositionZ() <= HOUSING_ROOT_MAX_LOCAL_Z;
+}
+
 /*static*/ WorldLocation HousingMgr::MakePlotArrival(NeighborhoodPlotData const& plot, uint32 worldMapId)
 {
     return WorldLocation(worldMapId, plot.TeleportPosition[0], plot.TeleportPosition[1], plot.TeleportPosition[2],

@@ -884,8 +884,8 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_SEL_BATTLEPAY_CHARACTER, "SELECT account, class, level, race, inventorySlots FROM characters WHERE guid = ? AND deleteInfos_Name IS NULL", CONNECTION_SYNCH);
 
     // Housing
-    PrepareStatement(CHAR_SEL_ACCOUNT_HOUSING, "SELECT guid, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed, refundAmount FROM character_housing WHERE bnetAccountId = ? ORDER BY slot", CONNECTION_ASYNC);
-    PrepareStatement(CHAR_INS_CHARACTER_HOUSING, "INSERT INTO character_housing (guid, bnetAccountId, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed, refundAmount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_ACCOUNT_HOUSING, "SELECT guid, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed, refundAmount FROM character_housing WHERE bnetAccountId = ? ORDER BY slot", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_CHARACTER_HOUSING, "INSERT INTO character_housing (guid, bnetAccountId, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed, refundAmount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHARACTER_HOUSING, "DELETE FROM character_housing WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_ACCOUNT_HOUSING_DECOR, "SELECT d.id, d.houseDecorId, d.posX, d.posY, d.posZ, d.rotX, d.rotY, d.rotZ, d.rotW, d.scale, d.dyeSlot0, d.dyeSlot1, d.dyeSlot2, d.roomGuid, d.locked, d.placementTime, d.sourceType, d.sourceValue, d.petGuid, d.petFlag, d.houseGuid FROM character_housing_decor d INNER JOIN character_housing ch ON ch.guid = d.houseGuid WHERE ch.bnetAccountId = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_INS_CHARACTER_HOUSING_DECOR, "INSERT INTO character_housing_decor (houseGuid, id, houseDecorId, posX, posY, posZ, rotX, rotY, rotZ, rotW, scale, dyeSlot0, dyeSlot1, dyeSlot2, roomGuid, locked, placementTime, sourceType, sourceValue, petGuid, petFlag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
@@ -900,7 +900,6 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_INS_CHARACTER_HOUSING_CATALOG, "INSERT INTO character_housing_catalog (bnetAccountId, houseDecorId, quantity, sourceType, sourceValue) VALUES (?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHARACTER_HOUSING_CATALOG, "DELETE FROM character_housing_catalog WHERE bnetAccountId = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_SETTINGS, "UPDATE character_housing SET settingsFlags = ? WHERE guid = ?", CONNECTION_ASYNC);
-    PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_EXTERIOR_LOCKED, "UPDATE character_housing SET exteriorLocked = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_HOUSE_SIZE, "UPDATE character_housing SET houseSize = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_HOUSE_TYPE, "UPDATE character_housing SET houseType = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_POSITION, "UPDATE character_housing SET posX = ?, posY = ?, posZ = ?, facing = ? WHERE guid = ?", CONNECTION_ASYNC);
@@ -936,7 +935,7 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_SEL_NEIGHBORHOOD_MEMBERS, "SELECT playerGuid, role, joinTime, plotIndex FROM neighborhood_members WHERE neighborhoodGuid = ?", CONNECTION_SYNCH);
     // The houses standing in a neighborhood. Plots are filled from these rows, not from the member rows,
     // because a house belongs to a Battle.net account and any of its characters may be the one shown as owner.
-    PrepareStatement(CHAR_SEL_NEIGHBORHOOD_HOUSES, "SELECT guid, bnetAccountId, slot, cosmeticOwnerGuid, plotIndex, houseLevel, favor, houseName, houseType, settingsFlags FROM character_housing WHERE neighborhoodGuid = ? AND packed = 0", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_SEL_NEIGHBORHOOD_HOUSES, "SELECT guid, bnetAccountId, slot, cosmeticOwnerGuid, plotIndex, houseLevel, favor, houseName, houseType, settingsFlags, posX, posY, posZ, facing FROM character_housing WHERE neighborhoodGuid = ? AND packed = 0", CONNECTION_SYNCH);
     // Owner-keyed batch fetches used to preload all occupied-plot exterior and
     // interior spawn data at neighborhood init, so houses render for every plot
     // regardless of whether the owner is online. Filtered to the houses that stand

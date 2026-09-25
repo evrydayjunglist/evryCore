@@ -29,23 +29,15 @@ namespace WorldPackets::Housing
 
 void HouseExteriorCommitPosition::Read()
 {
-    // Wire format (from client decompilation): Bool HasPosition + ObjectGuid HouseGuid + [position data]
-    // When HasPosition=true, the remaining fields contain the new position and rotation.
-    _worldPacket >> Bits<1>(HasPosition);
     _worldPacket >> HouseGuid;
-    if (HasPosition)
-    {
-        _worldPacket >> PositionX;
-        _worldPacket >> PositionY;
-        _worldPacket >> PositionZ;
-        _worldPacket >> RotationX;
-        _worldPacket >> RotationY;
-        _worldPacket >> RotationZ;
-        _worldPacket >> RotationW;
-    }
+    _worldPacket >> BnetAccountGuid;
+    _worldPacket >> PositionX;
+    _worldPacket >> PositionY;
+    _worldPacket >> PositionZ;
+    _worldPacket >> Facing;
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION HouseGuid: {} HasPos: {} Pos: ({}, {}, {}) Rot: ({}, {}, {}, {})",
-        HouseGuid.ToString(), HasPosition, PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, RotationW);
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION HouseGuid: {} BnetAccountGuid: {} Position: ({}, {}, {}) Facing: {}",
+        HouseGuid.ToString(), BnetAccountGuid.ToString(), PositionX, PositionY, PositionZ, Facing);
 }
 
 // --- Decor System ---
@@ -200,14 +192,14 @@ void HousingFixtureSetCoreFixture::Read()
 
 void HousingFixtureCreateFixture::Read()
 {
+    _worldPacket >> HouseGuid;
     _worldPacket >> AttachParentGuid;
-    _worldPacket >> HookEntityGuid;
     _worldPacket >> ExteriorComponentHookID;
     _worldPacket >> ExteriorComponentID;
     _worldPacket >> Flags;
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_FIXTURE_CREATE AttachParentGuid: {} HookEntity: {} HookID: {} ComponentID: {} Flags: {}",
-        AttachParentGuid.ToString(), HookEntityGuid.ToString(), ExteriorComponentHookID, ExteriorComponentID, Flags);
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_FIXTURE_CREATE HouseGuid: {} AttachParentGuid: {} HookID: {} ComponentID: {} Flags: {}",
+        HouseGuid.ToString(), AttachParentGuid.ToString(), ExteriorComponentHookID, ExteriorComponentID, Flags);
 }
 
 void HousingFixtureDeleteFixture::Read()
@@ -245,12 +237,12 @@ void HousingFixtureSetHouseType::Read()
 void HouseExteriorLock::Read()
 {
     _worldPacket >> HouseGuid;
-    _worldPacket >> PlotGuid;
-    _worldPacket >> NeighborhoodGuid;
+    _worldPacket >> HouseOwnerAccountGuid;
+    _worldPacket >> PlayerGuid;
     _worldPacket >> Bits<1>(Locked);
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSE_EXTERIOR_LOCK HouseGuid: {} PlotGuid: {} NeighborhoodGuid: {} Locked: {}",
-        HouseGuid.ToString(), PlotGuid.ToString(), NeighborhoodGuid.ToString(), Locked);
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSE_EXTERIOR_LOCK HouseGuid: {} HouseOwnerAccountGuid: {} PlayerGuid: {} Locked: {}",
+        HouseGuid.ToString(), HouseOwnerAccountGuid.ToString(), PlayerGuid.ToString(), Locked);
 }
 
 // --- Room System ---
@@ -591,14 +583,14 @@ WorldPacket const* HousingCatalogStateSync::Write()
 
 WorldPacket const* HouseExteriorLockResponse::Write()
 {
-    _worldPacket << FixtureEntityGuid;
+    _worldPacket << HouseGuid;
     _worldPacket << EditorPlayerGuid;
     _worldPacket << uint8(Result);
     _worldPacket.WriteBit(Active);
     _worldPacket.FlushBits();
 
-    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSE_EXTERIOR_LOCK_RESPONSE FixtureEntity: {} EditorPlayer: {} Result: {} Active: {}",
-        FixtureEntityGuid.ToString(), EditorPlayerGuid.ToString(), Result, Active);
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSE_EXTERIOR_LOCK_RESPONSE HouseGuid: {} EditorPlayer: {} Result: {} Active: {}",
+        HouseGuid.ToString(), EditorPlayerGuid.ToString(), Result, Active);
 
     return &_worldPacket;
 }
@@ -799,16 +791,6 @@ WorldPacket const* HousingFixtureSetEditModeResponse::Write()
 
     TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_FIXTURE_SET_EDIT_MODE_RESPONSE HouseGuid: {} EditorPlayer: {} Result: {}",
         HouseGuid.ToString(), EditorPlayerGuid.ToString(), Result);
-
-    return &_worldPacket;
-}
-
-WorldPacket const* HousingFixtureCreateBasicHouseResponse::Write()
-{
-    // IDA case 5373953: uint8(Result) only
-    _worldPacket << uint8(Result);
-
-    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_FIXTURE_CREATE_BASIC_HOUSE_RESPONSE Result: {}", Result);
 
     return &_worldPacket;
 }

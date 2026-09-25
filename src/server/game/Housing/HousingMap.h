@@ -95,8 +95,10 @@ public:
     // house this way.
     bool SpawnHouseFromState(uint8 plotIndex, Housing const& housing);
     void DespawnHouseForPlot(uint8 plotIndex);
-    void RespawnDoorGOAtHook(uint8 plotIndex, uint32 hookID, uint32 doorComponentID, Housing const* housing, Player* player = nullptr);
-    void DespawnDoorGO(uint8 plotIndex);
+    void RespawnDoorGOAtHook(uint8 plotIndex, uint32 hookID, uint32 doorComponentID, Housing const* housing);
+    // Takes the house's door and the Entity it rides off the map. removed, when given, gets the door's GUID and then the
+    // Entity's.
+    void DespawnDoorGO(uint8 plotIndex, std::vector<ObjectGuid>* removed = nullptr);
     GameObject* GetHouseGameObject(uint8 plotIndex);
     int8 GetPlotIndexForHouseGO(ObjectGuid goGuid) const;
     // The house front door the player is using: of this map's house doors whose goober spell is gooberSpellId, the
@@ -108,6 +110,10 @@ public:
     // Whether the house on a plot is standing (its exterior root is on the map).
     bool IsHouseSpawned(uint8 plotIndex) const;
     ObjectGuid GetExteriorRootGuid(uint8 plotIndex) const;
+    // Moves a standing house inside its room: the exterior root takes the new pose, and the pieces, the Entity the door
+    // rides and the door stand where the chain now puts them. Nothing is built again (hled1 645924: one update in which
+    // only the root's pose changes). False when the house does not stand on this plot.
+    bool MoveHouseRoot(uint8 plotIndex, Position const& placement);
     // Where a housing object of this map stands in the world, worked out along its attachment chain (a piece, the
     // exterior root, an attach point or a room). False when the chain is broken.
     bool GetWorldPose(ObjectGuid guid, Position& position, QuaternionData& rotation, uint32 depth = 0);
@@ -136,12 +142,32 @@ public:
     void DespawnAllMeshObjectsForPlot(uint8 plotIndex);
 
     // Targeted fixture mesh operations (no full house rebuild)
-    // Finds and removes the MeshObject at the given hookID for a plot, sends DESTROY to nearby players.
     MeshObject* FindMeshObjectByHookID(uint8 plotIndex, int32 hookID);
-    void DespawnSingleMeshObject(uint8 plotIndex, ObjectGuid meshGuid);
-    // Spawn a single fixture component at a hook and send CREATE to a specific player.
+    // One of this plot's house pieces, or null when the GUID names none of them.
+    MeshObject* GetPlotMeshObject(uint8 plotIndex, ObjectGuid meshGuid);
+    // Takes a piece off the map with the pieces hanging on it, and the door when it rides one of them. removed, when
+    // given, gets the GUIDs in the order retail destroyed them (hled1 819008): the door, the pieces, the door's Entity.
+    void DespawnSingleMeshObject(uint8 plotIndex, ObjectGuid meshGuid, std::vector<ObjectGuid>* removed = nullptr);
+    // Puts a piece on a hook of attachParentGuid, a piece of this plot that owns the hook, with the pieces on its own
+    // hooks and its door when it is an entry. Returns the piece on the hook.
     MeshObject* SpawnFixtureAtHook(uint8 plotIndex, uint32 hookID, uint32 componentID,
-        ObjectGuid houseGuid, int32 houseExteriorWmoDataID, Player* target);
+        ObjectGuid houseGuid, int32 houseExteriorWmoDataID, ObjectGuid attachParentGuid);
+
+    // A character who changes a fixture gets what the change does in retail's order: the reply, then one update that
+    // destroys the old pieces and creates the new one (hled1 818935 and 819008), then the new door in an update of its
+    // own (hled1 819290, which follows the second create at 819082). Retail's door came about half a second after the
+    // pieces, where this sends it at once, so a quick second change here also destroys a door and its Entity that
+    // retail never sent (hled1 819186 destroys only the piece). While a change builds, what it adds to the map is kept back from her; everyone else gets it as it is added.
+    struct HeldBackCreates
+    {
+        Player* Viewer = nullptr;
+        std::vector<ObjectGuid> Pieces;
+        std::vector<ObjectGuid> DoorObjects;
+    };
+    void BeginHoldingBackCreates(HeldBackCreates* creates) { _heldBackCreates = creates; }
+    void EndHoldingBackCreates() { _heldBackCreates = nullptr; }
+    // Sends her the destroys and the pieces in one update, then the door and its Entity in another.
+    void SendHeldBackCreates(HeldBackCreates const& creates, std::vector<ObjectGuid> const& destroyed);
 
     // Room entity management (provides Geobox for client OutsidePlotBounds check)
     bool SpawnRoomForPlot(uint8 plotIndex, Position const& anchorPos,
@@ -204,6 +230,10 @@ private:
     GameObject* CreateHouseDoor(uint8 plotIndex, ObjectGuid entryGuid, ExteriorComponentEntry const& entry,
         Position const& entryWorldPos, QuaternionData const& entryWorldRot, ObjectGuid houseGuid, HousingRoomEntity*& attachPoint);
     bool AddHouseDoor(uint8 plotIndex, GameObject* door, HousingRoomEntity* attachPoint);
+    // Marks an object as already at the held-back viewer's client before it is added to the map, so its addition does
+    // not reach her; ForgetHeldBack undoes that when the addition fails.
+    void HoldBack(ObjectGuid guid, bool isDoorObject);
+    void ForgetHeldBack(ObjectGuid guid);
     // Takes a housing entity of this map off it at once. Rooms, exterior roots and house entities have GUIDs fixed by
     // the plot or the house, and a rebuilt house makes them again in the same update, while the map's object store
     // holds one object per GUID.
@@ -238,6 +268,8 @@ private:
     std::unordered_map<ObjectGuid, uint8> _decorGuidToPlotIndex;                  // decor GUID -> plotIndex
     std::unordered_set<uint8> _decorSpawnedPlots;                                 // plots whose decor has been spawned
     std::unordered_map<ObjectGuid, uint8> _playerCurrentPlot;                    // player GUID -> current visited plot index
+
+    HeldBackCreates* _heldBackCreates = nullptr;
 };
 
 #endif // HousingMap_h__

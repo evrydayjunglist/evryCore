@@ -160,15 +160,14 @@ namespace WorldPackets::Housing
 
         void Read() override;
 
-        bool HasPosition = false;
+        // Retail 12.0.7 (hled1 645894 and 767575, 33 bytes): the house, its owner's Battle.net account, then the house's
+        // new place inside its room and its facing. No 12.1 sample of this packet exists.
         ObjectGuid HouseGuid;
+        ObjectGuid BnetAccountGuid;
         float PositionX = 0.0f;
         float PositionY = 0.0f;
         float PositionZ = 0.0f;
-        float RotationX = 0.0f;
-        float RotationY = 0.0f;
-        float RotationZ = 0.0f;
-        float RotationW = 1.0f;
+        float Facing = 0.0f;
     };
 
     class HouseExteriorLock final : public ClientPacket
@@ -178,9 +177,11 @@ namespace WorldPackets::Housing
 
         void Read() override;
 
+        // Retail 12.0.7 (hled1 645300 and 645903, 27 bytes): the house, its owner's Battle.net account, the character
+        // asking, then whether she locks or unlocks it.
         ObjectGuid HouseGuid;
-        ObjectGuid PlotGuid;
-        ObjectGuid NeighborhoodGuid;
+        ObjectGuid HouseOwnerAccountGuid;
+        ObjectGuid PlayerGuid;
         bool Locked = false;
     };
 
@@ -444,13 +445,12 @@ namespace WorldPackets::Housing
 
         void Read() override;
 
-        // IDA-verified wire (build 67186, sub_7FF75C19E5E0):
-        //   ObjectGuid AttachParent + ObjectGuid HookEntity + uint32 ExteriorComponentHookID
-        //   + uint32 ExteriorComponentID + uint8 Flags
-        ObjectGuid AttachParentGuid;         // Housing/3 exterior root entity
-        ObjectGuid HookEntityGuid;            // Housing/4 hook point entity on the house
-        uint32 ExteriorComponentHookID = 0;   // DB2 ExteriorComponentHook row ID (which hook point)
-        uint32 ExteriorComponentID = 0;       // DB2 ExteriorComponent row ID (which component to install)
+        // Retail 12.0.7 (hled1 818926, 35 bytes): the house, the piece that owns the hook, the ExteriorComponentHook
+        // row, the ExteriorComponent row to put on it, and a byte whose meaning is not known (0 in every sample).
+        ObjectGuid HouseGuid;
+        ObjectGuid AttachParentGuid;
+        uint32 ExteriorComponentHookID = 0;
+        uint32 ExteriorComponentID = 0;
         uint8 Flags = 0;
     };
 
@@ -1074,10 +1074,9 @@ namespace WorldPackets::Housing
     public:
         HouseExteriorLockResponse() : ServerPacket(SMSG_HOUSE_EXTERIOR_LOCK_RESPONSE) { }
         WorldPacket const* Write() override;
-        // Sniff-verified wire format (build 66337, 19 bytes):
-        //   PackedGUID(FixtureEntityGuid) + PackedGUID(EditorPlayerGuid) + uint8(Result) + Bits<1>(Active) + FlushBits
-        ObjectGuid FixtureEntityGuid;   // Housing/3 fixture entity (exterior root)
-        ObjectGuid EditorPlayerGuid;    // Player performing the edit
+        // Retail 12.0.7 (hled1 816934, 21 bytes): the house, the character editing it, the result, whether it is locked.
+        ObjectGuid HouseGuid;
+        ObjectGuid EditorPlayerGuid;
         uint8 Result = 0;
         bool Active = false;
     };
@@ -1244,15 +1243,6 @@ namespace WorldPackets::Housing
         // Client compares EditorPlayerGuid against stored reference: match → enter, mismatch/empty → exit
         ObjectGuid HouseGuid;           // Always empty in sniff
         ObjectGuid EditorPlayerGuid;    // Player GUID on enter, empty on exit
-        uint8 Result = 0;
-    };
-
-    class HousingFixtureCreateBasicHouseResponse final : public ServerPacket
-    {
-    public:
-        HousingFixtureCreateBasicHouseResponse() : ServerPacket(SMSG_HOUSING_FIXTURE_CREATE_BASIC_HOUSE_RESPONSE) { }
-        WorldPacket const* Write() override;
-        // IDA case 5373953: uint8(Result) only — client ignores any trailing data
         uint8 Result = 0;
     };
 

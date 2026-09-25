@@ -289,9 +289,9 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
 
     //          0     1           2                   3                 4          5           6       7
     // SELECT guid, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags,
-    //          8              9          10         11         12    13    14     15        16          17             18
-    //        exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed,
-    //          19
+    //          8          9          10         11    12    13     14        15          16             17
+    //        houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed,
+    //          18
     //        refundAmount
     // FROM character_housing WHERE bnetAccountId = ?
     Field* fields = house;
@@ -299,8 +299,8 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
     _state->HouseGuid = MakeHouseGuid(_state->Slot, _state->OwnerAccountId);
     if (uint64 cosmeticOwner = fields[2].GetUInt64())
         _state->CosmeticOwnerGuid = ObjectGuid::Create<HighGuid::Player>(cosmeticOwner);
-    _state->Packed = fields[18].GetUInt8() != 0;
-    _state->RefundAmount = fields[19].GetUInt64();
+    _state->Packed = fields[17].GetUInt8() != 0;
+    _state->RefundAmount = fields[18].GetUInt64();
     // Take the neighborhood's real GUID from the manager rather than rebuilding it: arg1 is its
     // NeighborhoodMapID, and this GUID goes out to the client in house/neighborhood packets, so a wrong arg1
     // reproduces the client-side NeighborhoodMap.db2 miss on the house path too.
@@ -321,20 +321,21 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
     // AddFavor, the house entity and the plot's copy of the house count from Favor64, so it starts at the saved favor.
     _state->Favor64 = _state->Favor;
     _state->SettingsFlags = fields[7].GetUInt32();
-    _state->ExteriorLocked = fields[8].GetUInt8() != 0;
-    _state->HouseSize = fields[9].GetUInt8();
-    _state->HouseType = fields[10].GetUInt32();
-    _state->CreateTime = fields[11].GetUInt32();
+    _state->HouseSize = fields[8].GetUInt8();
+    _state->HouseType = fields[9].GetUInt32();
+    _state->CreateTime = fields[10].GetUInt32();
 
     TC_LOG_ERROR("housing", "Housing::LoadFromDB: Loaded house HouseGuid={} NeighborhoodGuid={} PlotIndex={} Level={} HouseType={} for player {}",
         _state->HouseGuid.ToString(), _state->NeighborhoodGuid.ToString(), _state->PlotIndex, _state->Level, _state->HouseType, _owner->GetGUID().ToString());
-    _state->HousePosX = fields[12].GetFloat();
-    _state->HousePosY = fields[13].GetFloat();
-    _state->HousePosZ = fields[14].GetFloat();
-    _state->HouseFacing = fields[15].GetFloat();
-    _state->HasCustomPosition = (_state->HousePosX != 0.0f || _state->HousePosY != 0.0f || _state->HousePosZ != 0.0f);
-    _state->HouseName = fields[16].GetString();
-    _state->HouseDescription = fields[17].GetString();
+    _state->HousePosX = fields[11].GetFloat();
+    _state->HousePosY = fields[12].GetFloat();
+    _state->HousePosZ = fields[13].GetFloat();
+    _state->HouseFacing = fields[14].GetFloat();
+    // A house the owner turned without moving it still has a placement.
+    _state->HasCustomPosition = (_state->HousePosX != 0.0f || _state->HousePosY != 0.0f || _state->HousePosZ != 0.0f
+        || _state->HouseFacing != 0.0f);
+    _state->HouseName = fields[15].GetString();
+    _state->HouseDescription = fields[16].GetString();
 
     // Load rooms FIRST so decor can look up roomEntryId for GUID arg2
     //           0         1            2           3       4       5           6            7         8        9              10              11               12             13          14        15              16
@@ -700,7 +701,6 @@ void Housing::SaveToDB(CharacterDatabaseTransaction trans)
     stmt->setUInt32(houseIndex++, _state->Level);
     stmt->setUInt32(houseIndex++, _state->Favor);
     stmt->setUInt32(houseIndex++, _state->SettingsFlags);
-    stmt->setUInt8(houseIndex++, _state->ExteriorLocked ? 1 : 0);
     stmt->setUInt8(houseIndex++, _state->HouseSize);
     stmt->setUInt32(houseIndex++, _state->HouseType);
     stmt->setUInt32(houseIndex++, _state->CreateTime);
@@ -810,7 +810,8 @@ void Housing::SetEditorMode(HousingEditorMode mode)
     // the internal editor state (ClientHousingDecorSystem +329) which gates
     // ClickTarget (flag 16) for decor selection.
     if (_owner)
-        _owner->SetHousingEditorModeUpdateField(static_cast<uint8>(mode));
+        _owner->SetHousingEditorModeUpdateField(mode == HOUSING_EDITOR_MODE_EXTERIOR_CUSTOMIZATION
+            ? HOUSING_EDITOR_MODE_FIELD_FIXTURE_EDIT : static_cast<uint8>(mode));
 }
 
 HousingResult Housing::Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount)
@@ -833,7 +834,7 @@ HousingResult Housing::Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint
     _state->Favor = static_cast<uint32>(HOUSE_PURCHASE_STARTER_FAVOR);
     _state->SettingsFlags = HOUSE_SETTING_DEFAULT;
     _editorMode = HOUSING_EDITOR_MODE_NONE;
-    _state->ExteriorLocked = false;
+    _state->ExteriorLockHolder.Clear();
     _state->HouseSize = HOUSING_FIXTURE_SIZE_SMALL;
     // Racial house style: Night Elf → 55, Blood Elf → 56, other Alliance → 9, other Horde → 87
     _state->HouseType = HousingMgr::GetRacialWmoDataID(_owner->GetRace(), _owner->GetTeam());
@@ -977,7 +978,7 @@ void Housing::Delete()
     _state->Favor = 0;
     _state->SettingsFlags = HOUSE_SETTING_DEFAULT;
     _editorMode = HOUSING_EDITOR_MODE_NONE;
-    _state->ExteriorLocked = false;
+    _state->ExteriorLockHolder.Clear();
     _state->HouseSize = HOUSING_FIXTURE_SIZE_SMALL;
     _state->HouseType = 0;
     _state->HasCustomPosition = false;
@@ -2500,14 +2501,7 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
         _owner->GetName(), fixturePointId, optionId, _state->HouseGuid.ToString(),
         _state->FixtureWeightUsed, GetMaxFixtureBudget());
 
-    // Account-level notification: fixture collection update
-    if (isNew && _owner->GetSession())
-    {
-        WorldPackets::Housing::AccountExteriorFixtureCollectionUpdate notif;
-        notif.AddSingle(optionId);
-        _owner->GetSession()->SendPacket(notif.Write());
-    }
-
+    // No fixture collection update goes out for a placement: the captures hold none (hled1 818926-824177).
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
 }
@@ -3244,21 +3238,26 @@ void Housing::SetHouseNameDescription(std::string const& name, std::string const
         _owner->GetName(), _state->HouseName, _state->HouseDescription, _state->HouseGuid.ToString());
 }
 
-void Housing::SetExteriorLocked(bool locked)
+void Housing::SetExteriorLockHolder(ObjectGuid playerGuid)
 {
     auto guard = LockState();
-    _state->ExteriorLocked = locked;
+    _state->ExteriorLockHolder = playerGuid;
+}
 
-    // Immediate persist for crash safety
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_EXTERIOR_LOCKED);
-    stmt->setUInt8(0, locked ? 1 : 0);
-    stmt->setUInt64(1, GetDatabaseId());
-    CharacterDatabase.Execute(stmt);
+ObjectGuid Housing::GetExteriorLockHolder() const
+{
+    auto guard = LockState();
+    return _state->ExteriorLockHolder;
+}
 
-    SyncUpdateFields();
+bool Housing::ReleaseExteriorLock(ObjectGuid playerGuid)
+{
+    auto guard = LockState();
+    if (playerGuid.IsEmpty() || _state->ExteriorLockHolder != playerGuid)
+        return false;
 
-    TC_LOG_DEBUG("housing", "Housing::SetExteriorLocked: Player {} {} exterior of house {}",
-        _owner->GetName(), locked ? "locked" : "unlocked", _state->HouseGuid.ToString());
+    _state->ExteriorLockHolder.Clear();
+    return true;
 }
 
 void Housing::SetHouseSize(uint8 size)
@@ -3342,6 +3341,10 @@ void Housing::SetHousePosition(float x, float y, float z, float facing)
     stmt->setFloat(3, facing);
     stmt->setUInt64(4, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
+
+    // The plot's copy of the house builds it while no character of the account is on the map.
+    if (Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(_state->NeighborhoodGuid))
+        neighborhood->UpdatePlotHousePlacementByHouse(_state->HouseGuid, Position(x, y, z, facing));
 
     TC_LOG_DEBUG("housing", "Housing::SetHousePosition: Player {} positioned house at ({}, {}, {}, {}) in house {}",
         _owner->GetName(), x, y, z, facing, _state->HouseGuid.ToString());

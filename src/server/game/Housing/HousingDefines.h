@@ -152,6 +152,11 @@ enum HousingEditorMode : uint8
     HOUSING_EDITOR_MODE_EXTERIOR_CUSTOMIZATION  = 6
 };
 
+// The EditorMode update field retail sent while its character was in fixture edit: 3 (hled1 817196), though the
+// client's own list calls 3 Layout and 6 ExteriorCustomization. The server keeps the client's names for the mode it
+// tracks and sends this value for fixture edit. Decor edit sent 1, its own value.
+static constexpr uint8 HOUSING_EDITOR_MODE_FIELD_FIXTURE_EDIT = 3;
+
 // HouseEditingContext enum - 4 values
 enum HouseEditingContext : uint8
 {
@@ -783,16 +788,6 @@ static constexpr uint32 HOUSING_DECOR_CATEGORY_LIGHTING = 4;
 // with the sniffed value once an outdoor-light placement capture exists.
 static constexpr float HOUSING_LIGHT_OVERLAP_RADIUS = 3.0f;
 
-// H-05 bound for CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION. A player may nudge the
-// house around its own plot; they may not relocate it. The plot's placement
-// volume is the RoomWmoData geobox SpawnRoomForPlot uses (~+/-35 x +/-30 yards),
-// so these half-extents are deliberately a little wider than that - generous
-// enough never to reject a legitimate reposition, tight enough that the house
-// cannot be parked on a neighbour's plot or flung off the map. Before this the
-// handler validated std::isfinite() and nothing else, and the value was
-// persisted, so any finite coordinate survived a restart.
-static constexpr float HOUSING_MAX_HOUSE_PLOT_OFFSET_XY = 45.0f;
-static constexpr float HOUSING_MAX_HOUSE_PLOT_OFFSET_Z  = 50.0f;
 // m3/A6 decoration throttle: at most BURST place/move/remove ops per WINDOW_MS.
 // Generous enough for rapid legitimate redecorating, tight enough to cap the
 // AddToMap + synchronous-DB-write amplification a scripted client can drive.
@@ -866,6 +861,11 @@ static constexpr float HOUSE_INTERIOR_ARRIVAL_O = 0.0f;
 // tutorial quest it leads to through RewardNextQuest.
 static constexpr uint32 QUEST_HOUSING_A_HOUSE_FOR_YOU = 93057;
 static constexpr uint32 QUEST_HOUSING_MY_FIRST_HOME   = 91863;
+
+// "[DNT] Decorating - Disable All the Things - Fixture Editor": retail put it on the character for as long as she was in
+// fixture edit (hled1 817057, removed at 826289). Its effects hold her in place in the air with the hover animation,
+// pacify and silence her, stop her actions and clear who targets her, and it ends when she leaves the world.
+static constexpr uint32 SPELL_HOUSING_FIXTURE_EDITOR_LOCKOUT = 1270200;
 
 // Spell applied during housing decor edit mode (creates "phased-out" visual effect)
 // Sniff: aura slot 51, Flags=NoCaster, ActiveFlags=15, CastLevel=36
@@ -942,6 +942,9 @@ static constexpr uint8 HOUSING_ATTACHMENT_FLAGS_DOOR  = 7;
 // coordinates there) and the house stands at the default placement instead.
 static constexpr float HOUSING_ROOT_MAX_LOCAL_X = 35.0f;
 static constexpr float HOUSING_ROOT_MAX_LOCAL_Y = 30.0f;
+// The same geobox reaches from 1 yard below the room's anchor to 125 above it.
+static constexpr float HOUSING_ROOT_MIN_LOCAL_Z = -1.0f;
+static constexpr float HOUSING_ROOT_MAX_LOCAL_Z = 125.0f;
 
 // The plot's area trigger stands this far above the room anchor, turned like the room: 31.5 yards on plots 31, 44 and
 // 54 (hbcd3 815084, 820799, 1019792) and plot 1 (hled1).

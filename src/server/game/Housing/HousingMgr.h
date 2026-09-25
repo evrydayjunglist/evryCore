@@ -313,6 +313,10 @@ public:
     // door (hbcd3 1310328 and Number 14144, all 6616838). The counter stays clear of the ones the map hands out to
     // other entities, which start at 1. The same plot of another neighborhood of the same world map gets the same GUID.
     static ObjectGuid MakeExteriorRootGuid(uint32 worldMapId, uint8 plotIndex);
+    // Whether a house placement, the exterior root's pose inside the plot's room, lies inside the room's geobox and is
+    // a real number throughout. The client sends a drag as that pose (hled1 645894: -7.4893, 1.7693, 0.02055 facing
+    // 1.5708).
+    static bool IsRootPlacementInRoom(Position const& placement);
     // Where a character arrives on a plot: NeighborhoodPlot.TeleportPosition, facing CornerstoneRotation.z, on the
     // neighborhood's world map. Retail lands her there after Teleport Home (hbcd3 2044258) and after Exit House
     // (hbcd3 1456426), both at 902.6711, -542.7863, 1.9622 facing 4.5902157 for plot 13 of Razorwind Shores. The

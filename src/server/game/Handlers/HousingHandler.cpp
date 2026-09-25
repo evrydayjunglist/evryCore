@@ -359,131 +359,51 @@ void WorldSession::HandleHouseExteriorSetHousePosition(WorldPackets::Housing::Ho
     if (!player)
         return;
 
-    // hled1: the packet names the house being moved (0xDC60...8007 / 0x0354769D).
-    Housing* housing = ResolveRequestedHousing(player, houseExteriorCommitPosition.HouseGuid);
-    if (!housing)
-    {
-        WorldPackets::Housing::HouseExteriorSetHousePositionResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_NOT_FOUND);
-        SendPacket(response.Write());
-        return;
-    }
-
-    // C1 gate: room and exterior geometry may only be mutated by the owner,
-    // standing on their own plot or inside their own interior. Without this the
-    // _housings[0] fallback lets the edit land on a house in another neighborhood,
-    // carrying coordinates from the wrong map.
-    if (!PlayerCanEditHousing(player, housing))
-    {
-        WorldPackets::Housing::HouseExteriorSetHousePositionResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_NOT_ON_OWNED_PLOT);
-        SendPacket(response.Write());
-        return;
-    }
-
-    if (!houseExteriorCommitPosition.HasPosition)
-    {
-        // HasPosition=false: the client is cancelling the position change, just acknowledge
-        WorldPackets::Housing::HouseExteriorSetHousePositionResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-        response.HouseGuid = housing->GetHouseGuid();
-        SendPacket(response.Write());
-        return;
-    }
-
-    float posX = houseExteriorCommitPosition.PositionX;
-    float posY = houseExteriorCommitPosition.PositionY;
-    float posZ = houseExteriorCommitPosition.PositionZ;
-
-    // Validate coordinate sanity
-    if (!std::isfinite(posX) || !std::isfinite(posY) || !std::isfinite(posZ))
-    {
-        WorldPackets::Housing::HouseExteriorSetHousePositionResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_BOUNDS_FAILURE_PLOT);
-        response.HouseGuid = housing->GetHouseGuid();
-        SendPacket(response.Write());
-        return;
-    }
-
-    // H-05: bound the position to the plot. isfinite() alone accepted any finite
-    // coordinate and SetHousePosition persists it, so the 10-piece structure and its
-    // door GO could be parked on a neighbour's plot or stranded off-map, surviving a
-    // restart. Decor already goes through ValidateDecorPlacement; the house did not.
-    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-    {
-        if (Neighborhood const* neighborhood = housingMap->GetNeighborhood())
-        {
-            for (NeighborhoodPlotData const* plot : sHousingMgr.GetPlotsForMap(neighborhood->GetNeighborhoodMapID()))
-            {
-                if (plot->PlotIndex != static_cast<int32>(housing->GetPlotIndex()))
-                    continue;
-
-                if (std::fabs(posX - plot->HousePosition[0]) > HOUSING_MAX_HOUSE_PLOT_OFFSET_XY
-                    || std::fabs(posY - plot->HousePosition[1]) > HOUSING_MAX_HOUSE_PLOT_OFFSET_XY
-                    || std::fabs(posZ - plot->HousePosition[2]) > HOUSING_MAX_HOUSE_PLOT_OFFSET_Z)
-                {
-                    TC_LOG_INFO("housing", "CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION: Player {} rejected - "
-                        "({:.1f}, {:.1f}, {:.1f}) is outside plot {} centred on ({:.1f}, {:.1f}, {:.1f})",
-                        player->GetGUID().ToString(), posX, posY, posZ, plot->PlotIndex,
-                        plot->HousePosition[0], plot->HousePosition[1], plot->HousePosition[2]);
-
-                    WorldPackets::Housing::HouseExteriorSetHousePositionResponse response;
-                    response.Result = static_cast<uint8>(HOUSING_RESULT_BOUNDS_FAILURE_PLOT);
-                    response.HouseGuid = housing->GetHouseGuid();
-                    SendPacket(response.Write());
-                    return;
-                }
-                break;
-            }
-        }
-    }
-
-    // Convert quaternion to facing angle for server-side storage
-    // The client sends a full quaternion; extract yaw as the facing angle
-    float facing = std::atan2(
-        2.0f * (houseExteriorCommitPosition.RotationW * houseExteriorCommitPosition.RotationZ +
-                houseExteriorCommitPosition.RotationX * houseExteriorCommitPosition.RotationY),
-        1.0f - 2.0f * (houseExteriorCommitPosition.RotationY * houseExteriorCommitPosition.RotationY +
-                        houseExteriorCommitPosition.RotationZ * houseExteriorCommitPosition.RotationZ));
-
-    // Persist the house position to the database
-    housing->SetHousePosition(posX, posY, posZ, facing);
-
-    // Despawn and respawn house structure at new position (must also respawn decor since DespawnHouseForPlot removes all MeshObjects)
-    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-    {
-        uint8 plotIndex = housing->GetPlotIndex();
-
-        // Despawn old house (door GO + all MeshObjects including decor)
-        housingMap->DespawnAllDecorForPlot(plotIndex);
-        housingMap->DespawnHouseForPlot(plotIndex);
-
-        // Respawn at new position with current exterior component, house type, and fixture selections
-        Position newPos(posX, posY, posZ, facing);
-        auto fixtureOverrides = housing->GetFixtureOverrideMap();
-        auto rootOverrides = housing->GetRootComponentOverrides();
-        housingMap->SpawnHouseForPlot(plotIndex, &newPos,
-            static_cast<int32>(housing->GetCoreExteriorComponentID()),
-            static_cast<int32>(housing->GetHouseType()),
-            fixtureOverrides.empty() ? nullptr : &fixtureOverrides,
-            rootOverrides.empty() ? nullptr : &rootOverrides);
-        housingMap->SpawnAllDecorForPlot(plotIndex, housing);
-    }
-
-    // Send response
     WorldPackets::Housing::HouseExteriorSetHousePositionResponse response;
-    response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
+    auto reply = [&](HousingResult result)
+    {
+        response.Result = static_cast<uint8>(result);
+        SendPacket(response.Write());
+    };
+
+    // hled1 645894: the house and its owner's Battle.net account, then the root's new pose in the room.
+    Housing* housing = player->GetHousingByGuid(houseExteriorCommitPosition.HouseGuid);
+    if (!housing)
+        return reply(HOUSING_RESULT_HOUSE_NOT_FOUND);
+
     response.HouseGuid = housing->GetHouseGuid();
-    SendPacket(response.Write());
 
-    // Sniff-verified: every exterior mutation is followed by an inline UPDATE_OBJECT
-    // containing updated entity field data (player + house entity + fixture MeshObjects)
-    SendFixtureUpdateObject(player, housing);
+    if (houseExteriorCommitPosition.BnetAccountGuid != GetBattlenetAccountGUID() || !PlayerCanEditHousing(player, housing))
+        return reply(HOUSING_RESULT_PERMISSION_DENIED);
 
-    TC_LOG_INFO("housing", "CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION: Player {} repositioned house at ({:.1f}, {:.1f}, {:.1f}, {:.2f}) rot=({:.3f},{:.3f},{:.3f},{:.3f})",
-        player->GetGUID().ToString(), posX, posY, posZ, facing,
-        houseExteriorCommitPosition.RotationX, houseExteriorCommitPosition.RotationY,
-        houseExteriorCommitPosition.RotationZ, houseExteriorCommitPosition.RotationW);
+    HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap());
+    if (!housingMap || !housingMap->IsHouseSpawned(housing->GetPlotIndex()))
+        return reply(HOUSING_RESULT_INVALID_MAP);
+
+    float const x = houseExteriorCommitPosition.PositionX;
+    float const y = houseExteriorCommitPosition.PositionY;
+    float const z = houseExteriorCommitPosition.PositionZ;
+    float const facing = houseExteriorCommitPosition.Facing;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(facing))
+        return reply(HOUSING_RESULT_BOUNDS_FAILURE_PLOT);
+
+    Position const placement(x, y, z, facing);
+    if (!HousingMgr::IsRootPlacementInRoom(placement))
+    {
+        TC_LOG_INFO("housing", "CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION: {} asked to put house {} at ({:.2f}, {:.2f}, {:.2f}), outside "
+            "the room of plot {}", player->GetGUID().ToString(), housing->GetHouseGuid().ToString(), x, y, z, housing->GetPlotIndex());
+        return reply(HOUSING_RESULT_BOUNDS_FAILURE_PLOT);
+    }
+
+    // The house moves where it stands: the exterior root takes the new pose and nothing is built again.
+    if (!housingMap->MoveHouseRoot(housing->GetPlotIndex(), placement))
+        return reply(HOUSING_RESULT_INVALID_MAP);
+
+    housing->SetHousePosition(placement.GetPositionX(), placement.GetPositionY(), placement.GetPositionZ(), placement.GetOrientation());
+    reply(HOUSING_RESULT_SUCCESS);
+
+    TC_LOG_DEBUG("housing", "CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION: {} put house {} at ({:.3f}, {:.3f}, {:.3f}) facing {:.4f} in its room",
+        player->GetGUID().ToString(), housing->GetHouseGuid().ToString(), x, y, z, placement.GetOrientation());
 }
 
 void WorldSession::HandleHouseExteriorLock(WorldPackets::Housing::HouseExteriorLock const& houseExteriorLock)
@@ -492,43 +412,40 @@ void WorldSession::HandleHouseExteriorLock(WorldPackets::Housing::HouseExteriorL
     if (!player)
         return;
 
-    // hled1: the packet names the house being locked (0xDC60...8007 / 0x0354769D).
-    Housing* housing = ResolveRequestedHousing(player, houseExteriorLock.HouseGuid);
-    if (!housing)
-    {
-        WorldPackets::Housing::HouseExteriorLockResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_NOT_FOUND);
-        SendPacket(response.Write());
-        return;
-    }
-
-    // C1 gate: room and exterior geometry may only be mutated by the owner,
-    // standing on their own plot or inside their own interior. Without this the
-    // _housings[0] fallback lets the edit land on a house in another neighborhood,
-    // carrying coordinates from the wrong map.
-    if (!PlayerCanEditHousing(player, housing))
-    {
-        WorldPackets::Housing::HouseExteriorLockResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_NOT_ON_OWNED_PLOT);
-        SendPacket(response.Write());
-        return;
-    }
-
-    // Persist the exterior lock state
-    housing->SetExteriorLocked(houseExteriorLock.Locked);
-
+    // The client locks the exterior around a drag of the house and unlocks it after (hled1 645300-645918). The reply
+    // names the house and the character; nothing else is sent.
     WorldPackets::Housing::HouseExteriorLockResponse response;
-    response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-    response.FixtureEntityGuid = houseExteriorLock.HouseGuid;
     response.EditorPlayerGuid = player->GetGUID();
     response.Active = houseExteriorLock.Locked;
-    SendPacket(response.Write());
+    auto reply = [&](HousingResult result)
+    {
+        response.Result = static_cast<uint8>(result);
+        SendPacket(response.Write());
+    };
 
-    // Sniff-verified: lock operations also send an inline UPDATE_OBJECT
-    SendFixtureUpdateObject(player, housing);
+    Housing* housing = player->GetHousingByGuid(houseExteriorLock.HouseGuid);
+    if (!housing)
+        return reply(HOUSING_RESULT_HOUSE_NOT_FOUND);
 
-    TC_LOG_INFO("housing", "CMSG_HOUSE_EXTERIOR_LOCK HouseGuid: {}, Locked: {} for player {}",
-        houseExteriorLock.HouseGuid.ToString(), houseExteriorLock.Locked, player->GetGUID().ToString());
+    response.HouseGuid = housing->GetHouseGuid();
+
+    if (houseExteriorLock.HouseOwnerAccountGuid != ObjectGuid::Create<HighGuid::BNetAccount>(housing->GetOwnerAccountId())
+        || !PlayerCanEditHousing(player, housing))
+        return reply(HOUSING_RESULT_PERMISSION_DENIED);
+
+    // The exterior is on the neighborhood map; inside the house there is none to lock.
+    if (!dynamic_cast<HousingMap*>(player->GetMap()))
+        return reply(houseExteriorLock.Locked ? HOUSING_RESULT_LOCK_OPERATION_FAILED : HOUSING_RESULT_UNLOCK_OPERATION_FAILED);
+
+    if (houseExteriorLock.Locked)
+        housing->SetExteriorLockHolder(player->GetGUID());
+    else
+        housing->ReleaseExteriorLock(player->GetGUID());
+
+    reply(HOUSING_RESULT_SUCCESS);
+
+    TC_LOG_DEBUG("housing", "CMSG_HOUSE_EXTERIOR_LOCK: {} {} the exterior of house {}", player->GetGUID().ToString(),
+        houseExteriorLock.Locked ? "locked" : "unlocked", housing->GetHouseGuid().ToString());
 }
 
 // ============================================================
@@ -1762,8 +1679,8 @@ void WorldSession::HandleHousingFixtureSetEditMode(WorldPackets::Housing::Housin
         return;
     }
 
-    // C1 gate: only the owner, on their own plot / in their own interior, may
-    // ENTER fixture edit mode. Leaving (Active=false) is always allowed.
+    // Only a character of the house's account, on its plot or inside it, may enter fixture edit. Leaving is always
+    // allowed.
     if (housingFixtureSetEditMode.Active && !PlayerCanEditHousing(player, housing))
     {
         WorldPackets::Housing::HousingFixtureSetEditModeResponse response;
@@ -1772,50 +1689,13 @@ void WorldSession::HandleHousingFixtureSetEditMode(WorldPackets::Housing::Housin
         return;
     }
 
-    bool entering = housingFixtureSetEditMode.Active;
+    bool const entering = housingFixtureSetEditMode.Active;
 
-    // Client enum HouseEditorMode: 4=Customize (interior), 6=ExteriorCustomization (fixture).
+    // Retail's order (hled1 816931-817196 entering, 826232-826289 leaving): the exterior lock reply, then on the way in
+    // the pet leaving, then the fixture editor's aura or its removal, which roots her in the air with the hover
+    // animation, pacifies and silences her and stops her actions, then the edit-mode reply, then her own update with
+    // the new editor mode.
     housing->SetEditorMode(entering ? HOUSING_EDITOR_MODE_EXTERIOR_CUSTOMIZATION : HOUSING_EDITOR_MODE_NONE);
-
-    // Sniff-verified: retail sets UNIT_FLAG_PACIFIED, UNIT_FLAG2_NO_ACTIONS,
-    // and SilencedSchoolMask=127 during ALL editor modes (decor, fixture, room layout).
-    // These prevent casting/actions and are part of the UPDATE_OBJECT sent to the client.
-    if (entering)
-    {
-        player->SetUnitFlag(UNIT_FLAG_PACIFIED);
-        player->SetUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
-        player->ReplaceAllSilencedSchoolMask(SPELL_SCHOOL_MASK_ALL);
-    }
-    else
-    {
-        player->RemoveUnitFlag(UNIT_FLAG_PACIFIED);
-        player->RemoveUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
-        player->ReplaceAllSilencedSchoolMask(SpellSchoolMask(0));
-    }
-
-    // Find the exterior root MeshObject GUID (Housing/3-HousingFixture) for HOUSE_EXTERIOR_LOCK_RESPONSE.
-    ObjectGuid fixtureEntityGuid;
-    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-    {
-        uint8 plotIndex = housing->GetPlotIndex();
-        auto const& meshMap = housingMap->GetPlotMeshObjects();
-        auto meshItr = meshMap.find(plotIndex);
-        if (meshItr != meshMap.end())
-        {
-            for (ObjectGuid const& meshGuid : meshItr->second)
-            {
-                MeshObject* meshObj = housingMap->GetMeshObject(meshGuid);
-                if (meshObj && meshObj->IsCorePiece())
-                {
-                    fixtureEntityGuid = meshGuid;
-                    break;
-                }
-            }
-        }
-    }
-
-    TC_LOG_DEBUG("housing", "HandleHousingFixtureSetEditMode {}: fixtureEntity={} player={}",
-        entering ? "ENTER" : "EXIT", fixtureEntityGuid.ToString(), player->GetGUID().ToString());
 
     // Prepare catalog/storage data before sending packets (enter only).
     if (entering)
@@ -1834,172 +1714,51 @@ void WorldSession::HandleHousingFixtureSetEditMode(WorldPackets::Housing::Housin
     // Also clear on EXIT to prevent any lingering dirty state from decor operations.
     GetBattlenetAccount().ClearUpdateMask(true);
 
-    // ======================================================================
-    // Sniff-verified retail packet sequence (build 66337):
-    //   #10161 S->C SMSG_UPDATE_OBJECT (56B)                — editor mode field change
-    //   #10163 S->C SMSG_HOUSE_EXTERIOR_LOCK_RESPONSE (19B) — FixtureEntityGUID + PlayerGUID + Active
-    //   #10164 S->C SMSG_MOVE_SET_COMPOUND_STATE (32B)      — ROOT + DISABLE_GRAVITY (enter) or UNROOT + ENABLE_GRAVITY (exit)
-    //   #10170 S->C SMSG_HOUSING_FIXTURE_SET_EDIT_MODE_RESPONSE (11B) — Empty + PlayerGUID + Result
-    //   (second UPDATE_OBJECT follows)
-    // ======================================================================
-
-    // Play/remove the plot boundary spell visual on the player's plot AT.
-    // Sniff-verified: the glowing border decal is visible in ALL edit modes (decor, fixture, room).
-    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
+    // The lock reply names the house (hled1 816934, 826239). It goes out only on the plot's exterior, where the house
+    // can be locked; inside the house retail's edit modes send none. Leaving answers the lock entering took.
+    if (entering ? dynamic_cast<HousingMap*>(player->GetMap()) != nullptr : housing->GetExteriorLockHolder() == player->GetGUID())
     {
-        if (AreaTrigger* plotAt = housingMap->GetPlotAreaTrigger(housing->GetPlotIndex()))
-        {
-            if (entering)
-                plotAt->PlaySpellVisual(510142);
-        }
-    }
+        if (entering)
+            housing->SetExteriorLockHolder(player->GetGUID());
+        else
+            housing->ReleaseExteriorLock(player->GetGUID());
 
-    // 1) UPDATE_OBJECT — editor mode field change
-    {
-        player->BuildUpdateChangesMask();
-        UpdateData updateData(player->GetMapId());
-        WorldPacket updatePacket;
-        player->BuildValuesUpdateBlockForPlayer(&updateData, player);
-        updateData.BuildPacket(&updatePacket);
-        player->SendDirectMessage(&updatePacket);
-        player->ClearUpdateMask(false);
-    }
-
-    // 2) SMSG_HOUSE_EXTERIOR_LOCK_RESPONSE — tells client the fixture entity is locked for editing
-    // Only when we actually have a fixture entity to name. Inside the interior the lookup
-    // above runs against a HousingMap and finds nothing, so this used to go out with
-    // FixtureEntityGuid = 0: the client resolves that GUID to lock it, gets null, and dies
-    // (ACCESS_VIOLATION on a null read) the moment interior edit mode starts. The retail
-    // interior-customize capture (wall_floor_ceiling_customize, 66838) contains no
-    // exterior-lock response at all - that flow is DECOR_SET_EDIT_MODE /
-    // ROOM_SET_LAYOUT_EDIT_MODE - so suppressing it indoors matches retail too.
-    if (!fixtureEntityGuid.IsEmpty())
-    {
         WorldPackets::Housing::HouseExteriorLockResponse lockResponse;
-        lockResponse.FixtureEntityGuid = fixtureEntityGuid;
+        lockResponse.HouseGuid = housing->GetHouseGuid();
         lockResponse.EditorPlayerGuid = player->GetGUID();
         lockResponse.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
         lockResponse.Active = entering;
         SendPacket(lockResponse.Write());
     }
-    else
-        TC_LOG_INFO("housing", "HandleHousingFixtureSetEditMode: no fixture entity for player {} on map {} - "
-            "suppressing SMSG_HOUSE_EXTERIOR_LOCK_RESPONSE (an empty FixtureEntityGuid crashes the client)",
-            player->GetGUID().ToString(), player->GetMapId());
 
-    // 3) SMSG_MOVE_SET_COMPOUND_STATE — root + disable gravity on enter, unroot + enable gravity on exit
-    //    Also update server-side movement flags so movement validation stays consistent.
-    {
-        if (entering)
-        {
-            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            player->AddUnitMovementFlag(MOVEMENTFLAG_ROOT);
-            player->StopMoving();
-            player->AddUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY);
-            player->RemoveUnitMovementFlag(MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_SPLINE_ELEVATION);
-        }
-        else
-        {
-            player->RemoveUnitMovementFlag(MOVEMENTFLAG_ROOT);
-            player->RemoveUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY);
-        }
-
-        WorldPackets::Movement::MoveSetCompoundState compoundState;
-        compoundState.MoverGUID = player->GetGUID();
-        if (entering)
-        {
-            compoundState.StateChanges.emplace_back(SMSG_MOVE_ROOT, player->m_movementCounter++);
-            compoundState.StateChanges.emplace_back(SMSG_MOVE_DISABLE_GRAVITY, player->m_movementCounter++);
-        }
-        else
-        {
-            compoundState.StateChanges.emplace_back(SMSG_MOVE_UNROOT, player->m_movementCounter++);
-            compoundState.StateChanges.emplace_back(SMSG_MOVE_ENABLE_GRAVITY, player->m_movementCounter++);
-        }
-        SendPacket(compoundState.Write());
-    }
-
-    // 4) SMSG_HOUSING_FIXTURE_SET_EDIT_MODE_RESPONSE
-    //    HouseGuid always empty. EditorPlayerGuid = player on enter, empty on exit.
-    //    Client compares EditorPlayerGuid against stored reference: match → enter, empty → exit.
-    {
-        WorldPackets::Housing::HousingFixtureSetEditModeResponse response;
-        // HouseGuid intentionally left empty — sniff-verified: always 00 00
-        if (entering)
-            response.EditorPlayerGuid = player->GetGUID();
-        response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-        SendPacket(response.Write());
-    }
-
-    // 5) Second UPDATE_OBJECT — sniff-verified: carries unit flags (PACIFIED, NO_ACTIONS,
-    //    SilencedSchoolMask) that were set above. Client expects this after the response.
-    {
-        player->BuildUpdateChangesMask();
-        UpdateData updateData(player->GetMapId());
-        WorldPacket updatePacket;
-        player->BuildValuesUpdateBlockForPlayer(&updateData, player);
-        updateData.BuildPacket(&updatePacket);
-        player->SendDirectMessage(&updatePacket);
-        player->ClearUpdateMask(false);
-    }
-
-    // 6) Re-CREATE fixture entities now that the client's fixture manager is active.
-    //
-    // At plot entry, FlagByte=0xE0 sets multiple HouseStatus bits → the cascade function
-    // defaults to state=0 → vf5(0) → state+1048=0. CREATE_BASIC_HOUSE_RESPONSE is gated
-    // on state+1048!=0, so the rebuild never runs and state+96/+104 (house GUID) stays empty.
-    // Fixture entity CREATEs from plot entry fire the CREATE callback, but it compares the
-    // entity's FHousingFixture_C::HouseGUID against the empty state+96/+104 → mismatch → skip.
-    //
-    // Now the client has processed EDIT_MODE_RESPONSE: state+1048=6, rebuild has run,
-    // state+96/+104 is populated. Send CREATE_BASIC_HOUSE_RESPONSE (teardown+rebuild for
-    // a clean slate) then re-CREATE all fixture MeshObjects. The CREATE callback will
-    // match house GUIDs → create HousingFixturePointFrame objects → fire
-    // HOUSING_FIXTURE_POINT_FRAME_ADDED Lua events → UI populates hook points.
     if (entering)
     {
-        // CREATE_BASIC_HOUSE_RESPONSE — now that state+1048=6, the handler passes
-        // the gate check and runs teardown+rebuild for a clean fixture manager state.
-        {
-            WorldPackets::Housing::HousingFixtureCreateBasicHouseResponse fixtureInit;
-            fixtureInit.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-            SendPacket(fixtureInit.Write());
-        }
+        // Retail sent the pet away as she entered (hled1 816940-817351: no pet GUIDs, the pet's spells cleared, the pet
+        // destroyed) and did not bring it back when she left, in the 55 seconds the capture ran on.
+        player->UnsummonPetTemporaryIfAny();
 
-        // Re-CREATE all fixture MeshObjects for the player's plot.
-        if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-        {
-            uint8 plotIndex = housing->GetPlotIndex();
-            auto const& meshMap = housingMap->GetPlotMeshObjects();
-            auto meshItr = meshMap.find(plotIndex);
-            if (meshItr != meshMap.end())
-            {
-                UpdateData fixtureUpdate(player->GetMapId());
-                uint32 fixtureCreateCount = 0;
-
-                for (ObjectGuid const& meshGuid : meshItr->second)
-                {
-                    MeshObject* meshObj = housingMap->GetMeshObject(meshGuid);
-                    if (meshObj && meshObj->IsInWorld() && meshObj->m_housingFixtureData.has_value())
-                    {
-                        meshObj->BuildCreateUpdateBlockForPlayer(&fixtureUpdate, player);
-                        player->m_clientGUIDs.insert(meshGuid);
-                        ++fixtureCreateCount;
-                    }
-                }
-
-                if (fixtureCreateCount > 0)
-                {
-                    WorldPacket fixturePacket;
-                    fixtureUpdate.BuildPacket(&fixturePacket);
-                    player->SendDirectMessage(&fixturePacket);
-                }
-
-                TC_LOG_DEBUG("housing", "HandleHousingFixtureSetEditMode: Re-CREATE {} fixture MeshObjects for plot {}",
-                    fixtureCreateCount, plotIndex);
-            }
-        }
+        if (sSpellMgr->GetSpellInfo(SPELL_HOUSING_FIXTURE_EDITOR_LOCKOUT, DIFFICULTY_NONE))
+            player->CastSpell(player, SPELL_HOUSING_FIXTURE_EDITOR_LOCKOUT, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        else
+            TC_LOG_ERROR("housing", "HandleHousingFixtureSetEditMode: spell {} is missing from the spell data, so {} is not held in place "
+                "while she edits fixtures", SPELL_HOUSING_FIXTURE_EDITOR_LOCKOUT, player->GetGUID().ToString());
     }
+    else
+        player->RemoveAurasDueToSpell(SPELL_HOUSING_FIXTURE_EDITOR_LOCKOUT);
+
+    // The house is always empty; the character is named on the way in and empty on the way out (hled1 817176, 826284).
+    WorldPackets::Housing::HousingFixtureSetEditModeResponse response;
+    if (entering)
+        response.EditorPlayerGuid = player->GetGUID();
+    response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
+    SendPacket(response.Write());
+
+    // Her update with the flags the aura set and the editor mode follows the reply (hled1 817196: EditorMode 3, in the
+    // same update as her pet's values). The map's own object update carries it, so everyone who can see her also gets
+    // the flags the aura set.
+
+    TC_LOG_DEBUG("housing", "HandleHousingFixtureSetEditMode: {} {} fixture edit of house {}", player->GetGUID().ToString(),
+        entering ? "entered" : "left", housing->GetHouseGuid().ToString());
 }
 
 void WorldSession::HandleHousingFixtureSetCoreFixture(WorldPackets::Housing::HousingFixtureSetCoreFixture const& housingFixtureSetCoreFixture)
@@ -2095,137 +1854,84 @@ void WorldSession::HandleHousingFixtureCreateFixture(WorldPackets::Housing::Hous
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
+    WorldPackets::Housing::HousingFixtureCreateFixtureResponse response;
+    auto reply = [&](HousingResult result)
+    {
+        response.Result = static_cast<uint8>(result);
+        SendPacket(response.Write());
+    };
+
+    // hled1 818926: the house, the piece that owns the hook, the hook, the component, and a byte of unknown meaning.
+    Housing* housing = player->GetHousingByGuid(housingFixtureCreateFixture.HouseGuid);
     if (!housing)
-    {
-        WorldPackets::Housing::HousingFixtureCreateFixtureResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_NOT_FOUND);
-        SendPacket(response.Write());
-        return;
-    }
+        return reply(HOUSING_RESULT_HOUSE_NOT_FOUND);
 
-    // C1 gate: reject fixture creation unless the player owns the target house.
     if (!PlayerCanEditHousing(player, housing))
-    {
-        WorldPackets::Housing::HousingFixtureCreateFixtureResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_NOT_ON_OWNED_PLOT);
-        SendPacket(response.Write());
-        return;
-    }
+        return reply(HOUSING_RESULT_NOT_ON_OWNED_PLOT);
 
-    uint32 hookID = housingFixtureCreateFixture.ExteriorComponentHookID;
-    uint32 componentID = housingFixtureCreateFixture.ExteriorComponentID;
+    uint32 const hookID = housingFixtureCreateFixture.ExteriorComponentHookID;
+    uint32 const componentID = housingFixtureCreateFixture.ExteriorComponentID;
 
-    // Validate ExteriorComponentHook against DB2 store (which hook point on the house)
     ExteriorComponentHookEntry const* hookEntry = sExteriorComponentHookStore.LookupEntry(hookID);
-    if (!hookEntry)
-    {
-        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE ExteriorComponentHookID {} not found in DB2", hookID);
-        WorldPackets::Housing::HousingFixtureCreateFixtureResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_FIXTURE_NOT_FOUND);
-        SendPacket(response.Write());
-        return;
-    }
-
-    TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE DB2 lookup: HookID={}, Position=({:.1f},{:.1f},{:.1f}), TypeID={}, ParentComponentID={}",
-        hookID, hookEntry->Position[0], hookEntry->Position[1], hookEntry->Position[2],
-        hookEntry->ExteriorComponentTypeID, hookEntry->ExteriorComponentID);
-
-    // Validate ExteriorComponent against DB2 store (which component to install at the hook)
     ExteriorComponentEntry const* compEntry = sExteriorComponentStore.LookupEntry(componentID);
-    if (!compEntry)
+    if (!hookEntry || !compEntry)
     {
-        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE ExteriorComponentID {} not found in DB2", componentID);
-        WorldPackets::Housing::HousingFixtureCreateFixtureResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_FIXTURE_NOT_FOUND);
-        SendPacket(response.Write());
-        return;
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: hook {} or component {} is not in the client data", hookID, componentID);
+        return reply(HOUSING_RESULT_FIXTURE_NOT_FOUND);
     }
 
-    TC_LOG_DEBUG("housing", "  -> ExteriorComponent: ID={}, Name='{}', Type={}, Size={}, Flags={}, ParentCompID={}, ModelFileDataID={}",
-        compEntry->ID, compEntry->Name[DEFAULT_LOCALE] ? compEntry->Name[DEFAULT_LOCALE] : "", compEntry->Type, compEntry->Size,
-        compEntry->Flags, compEntry->ParentComponentID, compEntry->ModelFileDataID);
+    // The exterior's pieces stand on the neighborhood map, and the piece the client names must be the one of this
+    // house that owns the hook: the wall 1004 for hook 17265, the roof 3811 for hook 17222 (hled1 818926, 824099).
+    HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap());
+    if (!housingMap)
+        return reply(HOUSING_RESULT_INVALID_MAP);
+
+    uint8 const plotIndex = housing->GetPlotIndex();
+    MeshObject const* attachParent = housingMap->GetPlotMeshObject(plotIndex, housingFixtureCreateFixture.AttachParentGuid);
+    if (!attachParent || attachParent->GetExteriorComponentID() != static_cast<int32>(hookEntry->ExteriorComponentID))
+    {
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: {} is not the piece of house {} that owns hook {} (component {})",
+            housingFixtureCreateFixture.AttachParentGuid.ToString(), housing->GetHouseGuid().ToString(), hookID,
+            hookEntry->ExteriorComponentID);
+        return reply(HOUSING_RESULT_HOOK_NOT_CHILD_OF_FIXTURE);
+    }
 
     std::vector<uint32> removedHookIDs;
     HousingResult result = housing->SelectFixtureOption(hookID, componentID, &removedHookIDs);
+    if (result != HOUSING_RESULT_SUCCESS)
+        return reply(result);
 
-    // Spawn the fixture BEFORE sending the response so we can populate FixtureGuid.
-    // The client's CREATE_FIXTURE_RESPONSE handler uses this GUID to identify the new entity.
-    ObjectGuid newFixtureGuid;
-    if (result == HOUSING_RESULT_SUCCESS)
-    {
-        WorldPackets::Housing::AccountExteriorFixtureCollectionUpdate collectionUpdate;
-        collectionUpdate.AddSingle(componentID);
-        SendPacket(collectionUpdate.Write());
+    // The piece that was on the hook goes, with the door when it was an entry, and a door on another hook goes too:
+    // a house has one door (hled1 818926-819008, where the entry moved from hook 17262 to 17265).
+    std::vector<ObjectGuid> destroyed;
+    removedHookIDs.push_back(hookID);
+    for (uint32 removedHook : removedHookIDs)
+        if (MeshObject* oldMesh = housingMap->FindMeshObjectByHookID(plotIndex, static_cast<int32>(removedHook)))
+            housingMap->DespawnSingleMeshObject(plotIndex, oldMesh->GetGUID(), &destroyed);
 
-        if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-        {
-            uint8 plotIndex = housing->GetPlotIndex();
+    // The new piece, and its door when it is an entry, are kept back from her while they are added; everyone else
+    // gets them as usual.
+    HousingMap::HeldBackCreates creates;
+    creates.Viewer = player;
+    housingMap->BeginHoldingBackCreates(&creates);
+    MeshObject* newMesh = housingMap->SpawnFixtureAtHook(plotIndex, hookID, componentID, housing->GetHouseGuid(),
+        static_cast<int32>(housing->GetHouseType()), housingFixtureCreateFixture.AttachParentGuid);
+    if (newMesh && compEntry->Type == HOUSING_FIXTURE_TYPE_DOOR)
+        housingMap->RespawnDoorGOAtHook(plotIndex, hookID, componentID, housing);
+    housingMap->EndHoldingBackCreates();
 
-            // Despawn meshes at ALL conflict hooks (old door at different hook, or old fixture at same hook)
-            for (uint32 removedHook : removedHookIDs)
-            {
-                if (MeshObject* conflictMesh = housingMap->FindMeshObjectByHookID(plotIndex, static_cast<int32>(removedHook)))
-                {
-                    TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: Despawning conflict mesh {} at hook {}",
-                        conflictMesh->GetGUID().ToString(), removedHook);
-                    housingMap->DespawnSingleMeshObject(plotIndex, conflictMesh->GetGUID());
-                }
-            }
+    if (!newMesh)
+        TC_LOG_ERROR("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: component {} was saved on hook {} of house {} but could not be built",
+            componentID, hookID, housing->GetHouseGuid().ToString());
 
-            // Despawn any mesh at the target hook
-            if (MeshObject* oldMesh = housingMap->FindMeshObjectByHookID(plotIndex, static_cast<int32>(hookID)))
-            {
-                TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: Despawning old mesh {} at hook {}",
-                    oldMesh->GetGUID().ToString(), hookID);
-                housingMap->DespawnSingleMeshObject(plotIndex, oldMesh->GetGUID());
-            }
+    // The reply names the new piece as soon as it exists (hled1 818935), then one update destroys what went and
+    // creates the new piece, and the new door follows.
+    response.FixtureGuid = newMesh ? newMesh->GetFixtureGuid() : ObjectGuid::Empty;
+    reply(HOUSING_RESULT_SUCCESS);
+    housingMap->SendHeldBackCreates(creates, destroyed);
 
-            // Spawn new fixture mesh
-            MeshObject* newMesh = housingMap->SpawnFixtureAtHook(plotIndex, hookID, componentID,
-                housing->GetHouseGuid(), static_cast<int32>(housing->GetHouseType()), player);
-            if (newMesh)
-                newFixtureGuid = newMesh->GetFixtureGuid();
-
-            // If this is a door (type=11), respawn the clickable door GO at the hook position.
-            // Also respawn if a door was displaced from a different hook.
-            TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: compType={} hookID={} componentID={} removedHooks={}",
-                compEntry->Type, hookID, componentID, uint32(removedHookIDs.size()));
-            if (compEntry->Type == HOUSING_FIXTURE_TYPE_DOOR)
-            {
-                housingMap->RespawnDoorGOAtHook(plotIndex, hookID, componentID, housing, player);
-            }
-            else
-            {
-                // Check if we displaced a door — if so, the door GO needs to be removed
-                for (uint32 removedHook : removedHookIDs)
-                {
-                    ExteriorComponentHookEntry const* removedHookEntry = sExteriorComponentHookStore.LookupEntry(removedHook);
-                    if (removedHookEntry && removedHookEntry->ExteriorComponentTypeID == HOUSING_FIXTURE_TYPE_DOOR)
-                    {
-                        // Door was removed — despawn the door GO (no new door to spawn)
-                        housingMap->DespawnDoorGO(plotIndex);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Send response with the fixture's Housing GUID (empty on failure)
-    WorldPackets::Housing::HousingFixtureCreateFixtureResponse response;
-    response.Result = static_cast<uint8>(result);
-    response.FixtureGuid = newFixtureGuid;
-    SendPacket(response.Write());
-
-    if (result == HOUSING_RESULT_SUCCESS)
-    {
-        // Sniff-verified: UPDATE_OBJECT (~279B) follows the response
-        SendFixtureUpdateObject(player, housing);
-    }
-
-    TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE HookID={} ComponentID={} Result={}",
-        hookID, componentID, uint32(result));
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: {} put component {} on hook {} of house {} ({} objects removed)",
+        player->GetGUID().ToString(), componentID, hookID, housing->GetHouseGuid().ToString(), uint32(destroyed.size()));
 }
 
 void WorldSession::HandleHousingFixtureDeleteFixture(WorldPackets::Housing::HousingFixtureDeleteFixture const& housingFixtureDeleteFixture)

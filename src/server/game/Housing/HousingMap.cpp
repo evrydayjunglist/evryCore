@@ -477,18 +477,18 @@ void HousingMap::SpawnPlotGameObjects()
         FixtureOverrideMap const* overridesPtr = fixtureOverrides.empty() ? nullptr : &fixtureOverrides;
         RootOverrideMap const* rootOvrPtr = rootOverrides.empty() ? nullptr : &rootOverrides;
 
-        // An offline owner's placement is not in the plot's copy of the house, so her house stands at the default
-        // placement until she is on the map.
+        // A house its owner moved stands where she put it; while no character of her account is on the map the plot's
+        // copy of the house carries the placement.
         bool built = false;
         if (housing && housing->HasCustomPosition())
         {
             Position customPos = housing->GetHousePosition();
             built = SpawnHouseForPlot(plotIdx, &customPos, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
         }
+        else if (!housing && plotInfo->HasHousePlacement)
+            built = SpawnHouseForPlot(plotIdx, &plotInfo->HousePlacement, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
         else
-        {
             built = SpawnHouseForPlot(plotIdx, nullptr, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
-        }
         ++houseCount;
         if (built)
             ++houseSuccessCount;
@@ -1098,6 +1098,18 @@ void HousingMap::RemovePlayerFromMap(Player* player, bool remove)
     // survived their visit and lived as long as the map instance - which, since
     // housing maps never unload, means forever.
     ClearPlayerCurrentPlot(player->GetGUID());
+
+    // Leaving the map, by a map change or a logout, ends her fixture edit and the exterior lock she holds. The edit's
+    // aura ends by itself as she leaves the world.
+    for (Housing const* ownedHousing : player->GetAllHousings())
+    {
+        if (Housing* housing = player->GetHousingByGuid(ownedHousing->GetHouseGuid()))
+        {
+            housing->ReleaseExteriorLock(player->GetGUID());
+            if (housing->GetEditorMode() == HOUSING_EDITOR_MODE_EXTERIOR_CUSTOMIZATION)
+                housing->SetEditorMode(HOUSING_EDITOR_MODE_NONE);
+        }
+    }
 
     RemovePlayerHousing(player);
 
@@ -1752,8 +1764,7 @@ bool HousingMap::SpawnHouseForPlot(uint8 plotIndex, Position const* customPos,
     QuaternionData rootLocalRot(0.0f, 0.0f, 0.0f, 1.0f);
     if (customPos)
     {
-        if (customPos->IsPositionValid() && std::fabs(customPos->GetPositionX()) <= HOUSING_ROOT_MAX_LOCAL_X
-            && std::fabs(customPos->GetPositionY()) <= HOUSING_ROOT_MAX_LOCAL_Y)
+        if (HousingMgr::IsRootPlacementInRoom(*customPos))
         {
             rootLocalPos.Relocate(customPos->GetPositionX(), customPos->GetPositionY(), customPos->GetPositionZ());
             rootLocalRot = QuaternionData::fromEulerAnglesZYX(customPos->GetOrientation(), 0.0f, 0.0f);
@@ -1810,6 +1821,128 @@ ObjectGuid HousingMap::GetExteriorRootGuid(uint8 plotIndex) const
 {
     auto itr = _exteriorRootGuids.find(plotIndex);
     return itr != _exteriorRootGuids.end() ? itr->second : ObjectGuid::Empty;
+}
+
+bool HousingMap::MoveHouseRoot(uint8 plotIndex, Position const& placement)
+{
+    HousingRoomEntity* root = GetHousingRoomEntity(GetExteriorRootGuid(plotIndex));
+    if (!root)
+        return false;
+
+    // The root's pose in the room is all the client needs; it places everything hanging on the root from it. In hled1
+    // 645924 only the root's PositionLocalSpace and RotationLocalSpace change; retail also lists the three pieces and
+    // the Entity the door rides in that update, with no changed fields.
+    root->SetMirroredPosition(Position(placement.GetPositionX(), placement.GetPositionY(), placement.GetPositionZ()),
+        QuaternionData::fromEulerAnglesZYX(placement.GetOrientation(), 0.0f, 0.0f), 1.0f, root->GetAttachParentGUID(),
+        HOUSING_ATTACHMENT_FLAGS_PIECE);
+
+    // The server's own positions follow, so reach and distance checks use where the house now stands. A small move
+    // stays near the cell each object was added to, which is only where the grid looks for it.
+    Position worldPos;
+    QuaternionData worldRot;
+    if (GetWorldPose(root->GetGUID(), worldPos, worldRot))
+    {
+        root->Relocate(worldPos);
+        if (auto itr = _houseEntityGuids.find(plotIndex); itr != _houseEntityGuids.end())
+            if (HousingRoomEntity* house = GetHousingRoomEntity(itr->second))
+                house->Relocate(worldPos);
+    }
+
+    if (auto itr = _meshObjects.find(plotIndex); itr != _meshObjects.end())
+        for (ObjectGuid const& guid : itr->second)
+            if (MeshObject* mesh = GetMeshObject(guid))
+                if (GetWorldPose(guid, worldPos, worldRot))
+                    mesh->Relocate(worldPos);
+
+    if (auto itr = _doorAttachPointGuids.find(plotIndex); itr != _doorAttachPointGuids.end())
+    {
+        if (HousingRoomEntity* attachPoint = GetHousingRoomEntity(itr->second))
+        {
+            if (GetWorldPose(attachPoint->GetGUID(), worldPos, worldRot))
+            {
+                attachPoint->Relocate(worldPos);
+                // The door rides the Entity at position zero with no turn of its own.
+                // Its stationary position is the one a character coming near later is sent (hbcd3 1310816).
+                if (GameObject* door = GetHouseGameObject(plotIndex))
+                {
+                    door->RelocateStationaryPosition(worldPos);
+                    GameObjectRelocation(door, worldPos.GetPositionX(), worldPos.GetPositionY(), worldPos.GetPositionZ(),
+                        worldPos.GetOrientation());
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+void HousingMap::HoldBack(ObjectGuid guid, bool isDoorObject)
+{
+    if (!_heldBackCreates || !_heldBackCreates->Viewer)
+        return;
+
+    _heldBackCreates->Viewer->m_clientGUIDs.insert(guid);
+    (isDoorObject ? _heldBackCreates->DoorObjects : _heldBackCreates->Pieces).push_back(guid);
+}
+
+void HousingMap::ForgetHeldBack(ObjectGuid guid)
+{
+    if (!_heldBackCreates || !_heldBackCreates->Viewer)
+        return;
+
+    _heldBackCreates->Viewer->m_clientGUIDs.erase(guid);
+    for (std::vector<ObjectGuid>* list : { &_heldBackCreates->Pieces, &_heldBackCreates->DoorObjects })
+        list->erase(std::remove(list->begin(), list->end(), guid), list->end());
+}
+
+void HousingMap::SendHeldBackCreates(HeldBackCreates const& creates, std::vector<ObjectGuid> const& destroyed)
+{
+    Player* viewer = creates.Viewer;
+    if (!viewer)
+        return;
+
+    // Builds an object's create for her when she can see it, and otherwise forgets that she was said to have it.
+    auto buildCreate = [viewer](WorldObject* object, ObjectGuid guid, UpdateData& data)
+    {
+        if (object && object->IsInWorld() && viewer->CanSeeOrDetect(object, { .DistanceCheck = true }))
+            object->BuildCreateUpdateBlockForPlayer(&data, viewer);
+        else
+            viewer->m_clientGUIDs.erase(guid);
+    };
+
+    // The destroys and the new pieces go out together (hled1 819008: the old door, entry and Entity destroyed, the new
+    // entry created, in one update).
+    UpdateData pieces(GetId());
+    for (ObjectGuid const& guid : destroyed)
+        if (viewer->m_clientGUIDs.erase(guid))
+            pieces.AddDestroyObject(guid);
+
+    for (ObjectGuid const& guid : creates.Pieces)
+        buildCreate(GetMeshObject(guid), guid, pieces);
+
+    if (pieces.HasData())
+    {
+        WorldPacket packet;
+        pieces.BuildPacket(&packet);
+        viewer->SendDirectMessage(&packet);
+    }
+
+    // The new door and its Entity follow in their own update, as retail's did (hled1 819290, after the create at
+    // 819082). Retail's came about half a second later; this one goes at once.
+    UpdateData door(GetId());
+    for (ObjectGuid const& guid : creates.DoorObjects)
+    {
+        WorldObject* object = guid.IsGameObject() ? static_cast<WorldObject*>(GetGameObject(guid))
+            : static_cast<WorldObject*>(GetHousingRoomEntity(guid));
+        buildCreate(object, guid, door);
+    }
+
+    if (door.HasData())
+    {
+        WorldPacket packet;
+        door.BuildPacket(&packet);
+        viewer->SendDirectMessage(&packet);
+    }
 }
 
 ObjectGuid HousingMap::SpawnExteriorRoot(uint8 plotIndex, Position const& localPos, QuaternionData const& localRot, Position const& worldPos)
@@ -2328,9 +2461,11 @@ uint32 HousingMap::SpawnExtCompTree(uint8 plotIndex, uint32 extCompID,
         comp->Type, comp->Field_7, comp->Size, hookID, door ? door->GetGUID() : ObjectGuid::Empty,
         comp->Type == HOUSING_FIXTURE_TYPE_BASE && hookID < 0);
 
+    HoldBack(mesh->GetGUID(), false);
     if (!AddToMap(mesh))
     {
         TC_LOG_ERROR("housing", "HousingMap::SpawnExtCompTree: AddToMap failed for plot {} component {}", plotIndex, extCompID);
+        ForgetHeldBack(mesh->GetGUID());
         delete mesh;
         delete door;
         delete doorAttachPoint;
@@ -2443,9 +2578,17 @@ bool HousingMap::AddHouseDoor(uint8 plotIndex, GameObject* door, HousingRoomEnti
             entryMesh->SetFixtureGameObjectGUID(ObjectGuid::Empty);
     };
 
+    // Retail sent the door before the Entity it rides (hled1 819290).
+    ObjectGuid const doorGuid = door->GetGUID();
+    ObjectGuid const attachPointGuid = attachPoint->GetGUID();
+    HoldBack(doorGuid, true);
+    HoldBack(attachPointGuid, true);
+
     if (!AddToMap(attachPoint))
     {
         TC_LOG_ERROR("housing", "HousingMap::AddHouseDoor: the Entity for the door of plot {} could not be added to the map", plotIndex);
+        ForgetHeldBack(doorGuid);
+        ForgetHeldBack(attachPointGuid);
         delete attachPoint;
         delete door;
         forgetDoorOnEntry();
@@ -2456,6 +2599,8 @@ bool HousingMap::AddHouseDoor(uint8 plotIndex, GameObject* door, HousingRoomEnti
     if (!AddToMap(door))
     {
         TC_LOG_ERROR("housing", "HousingMap::AddHouseDoor: door {} of plot {} could not be added to the map", door->GetEntry(), plotIndex);
+        ForgetHeldBack(doorGuid);
+        ForgetHeldBack(attachPointGuid);
         delete door;
         // The Entity the door would have ridden leaves with it.
         _doorAttachPointGuids.erase(plotIndex);
@@ -2505,7 +2650,16 @@ MeshObject* HousingMap::FindMeshObjectByHookID(uint8 plotIndex, int32 hookID)
     return nullptr;
 }
 
-void HousingMap::DespawnSingleMeshObject(uint8 plotIndex, ObjectGuid meshGuid)
+MeshObject* HousingMap::GetPlotMeshObject(uint8 plotIndex, ObjectGuid meshGuid)
+{
+    auto itr = _meshObjects.find(plotIndex);
+    if (itr == _meshObjects.end() || std::find(itr->second.begin(), itr->second.end(), meshGuid) == itr->second.end())
+        return nullptr;
+
+    return GetMeshObject(meshGuid);
+}
+
+void HousingMap::DespawnSingleMeshObject(uint8 plotIndex, ObjectGuid meshGuid, std::vector<ObjectGuid>* removed /*= nullptr*/)
 {
     auto itr = _meshObjects.find(plotIndex);
     if (itr == _meshObjects.end())
@@ -2526,26 +2680,38 @@ void HousingMap::DespawnSingleMeshObject(uint8 plotIndex, ObjectGuid meshGuid)
     }
 
     // The door rides an Entity on its entry; it goes with the entry.
+    std::vector<ObjectGuid> doorObjects;
     if (auto doorItr = _doorAttachPointGuids.find(plotIndex); doorItr != _doorAttachPointGuids.end())
         if (HousingRoomEntity const* attachPoint = GetHousingRoomEntity(doorItr->second))
             if (std::find(toRemove.begin(), toRemove.end(), attachPoint->GetAttachParentGUID()) != toRemove.end())
-                DespawnDoorGO(plotIndex);
+                DespawnDoorGO(plotIndex, &doorObjects);
+
+    // The door first, then the pieces, then the Entity the door rode.
+    if (removed && !doorObjects.empty())
+        removed->push_back(doorObjects.front());
 
     for (ObjectGuid const& guid : toRemove)
     {
         if (MeshObject* mesh = GetMeshObject(guid))
+        {
             mesh->AddObjectToRemoveList();
+            if (removed)
+                removed->push_back(guid);
+        }
 
         auto& vec = itr->second;
         vec.erase(std::remove(vec.begin(), vec.end(), guid), vec.end());
     }
+
+    if (removed && doorObjects.size() > 1)
+        removed->insert(removed->end(), doorObjects.begin() + 1, doorObjects.end());
 
     TC_LOG_DEBUG("housing", "HousingMap::DespawnSingleMeshObject: Removed {} mesh(es) for plot {} (root {})",
         toRemove.size(), plotIndex, meshGuid.ToString());
 }
 
 MeshObject* HousingMap::SpawnFixtureAtHook(uint8 plotIndex, uint32 hookID, uint32 componentID,
-    ObjectGuid houseGuid, int32 houseExteriorWmoDataID, Player* target)
+    ObjectGuid houseGuid, int32 houseExteriorWmoDataID, ObjectGuid attachParentGuid)
 {
     ExteriorComponentHookEntry const* hookEntry = sExteriorComponentHookStore.LookupEntry(hookID);
     if (!hookEntry)
@@ -2554,28 +2720,12 @@ MeshObject* HousingMap::SpawnFixtureAtHook(uint8 plotIndex, uint32 hookID, uint3
         return nullptr;
     }
 
-    // Find the parent mesh that owns this hook (the hook's ExteriorComponentID is the parent)
-    MeshObject* parentMesh = nullptr;
-    auto meshItr = _meshObjects.find(plotIndex);
-    if (meshItr != _meshObjects.end())
+    // The piece the client named must be one of this plot's and the one that owns the hook.
+    MeshObject* parentMesh = GetPlotMeshObject(plotIndex, attachParentGuid);
+    if (!parentMesh || parentMesh->GetExteriorComponentID() != static_cast<int32>(hookEntry->ExteriorComponentID))
     {
-        for (ObjectGuid const& guid : meshItr->second)
-        {
-            if (MeshObject* mesh = GetMeshObject(guid))
-            {
-                if (mesh->GetExteriorComponentID() == static_cast<int32>(hookEntry->ExteriorComponentID))
-                {
-                    parentMesh = mesh;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (!parentMesh)
-    {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnFixtureAtHook: Parent mesh for hook {} (parent comp {}) not found on plot {}",
-            hookID, hookEntry->ExteriorComponentID, plotIndex);
+        TC_LOG_ERROR("housing", "HousingMap::SpawnFixtureAtHook: {} is not the piece of plot {} that owns hook {} (component {})",
+            attachParentGuid.ToString(), plotIndex, hookID, hookEntry->ExteriorComponentID);
         return nullptr;
     }
 
@@ -2602,26 +2752,6 @@ MeshObject* HousingMap::SpawnFixtureAtHook(uint8 plotIndex, uint32 hookID, uint3
 
     TC_LOG_DEBUG("housing", "HousingMap::SpawnFixtureAtHook: Spawned {} mesh(es) for hook {} component {} on plot {}",
         spawned, hookID, componentID, plotIndex);
-
-    // Send CREATE to the requesting player for the newly spawned meshes
-    if (target && spawned > 0 && meshItr != _meshObjects.end())
-    {
-        UpdateData updateData(GetId());
-        // The new meshes are at the end of the vector
-        size_t totalMeshes = meshItr->second.size();
-        for (size_t i = totalMeshes - spawned; i < totalMeshes; ++i)
-        {
-            ObjectGuid const& guid = meshItr->second[i];
-            if (MeshObject* mesh = GetMeshObject(guid))
-            {
-                mesh->BuildCreateUpdateBlockForPlayer(&updateData, target);
-                target->m_clientGUIDs.insert(guid);
-            }
-        }
-        WorldPacket updatePacket;
-        updateData.BuildPacket(&updatePacket);
-        target->SendDirectMessage(&updatePacket);
-    }
 
     // Return the first (root) mesh at the hook
     return FindMeshObjectByHookID(plotIndex, static_cast<int32>(hookID));
@@ -2666,12 +2796,16 @@ ObjectGuid HousingMap::GetRoomIdentityGuid(uint8 plotIndex) const
     return itr != _roomIdentityGuids.end() ? itr->second : ObjectGuid::Empty;
 }
 
-void HousingMap::DespawnDoorGO(uint8 plotIndex)
+void HousingMap::DespawnDoorGO(uint8 plotIndex, std::vector<ObjectGuid>* removed /*= nullptr*/)
 {
     if (auto itr = _houseGameObjects.find(plotIndex); itr != _houseGameObjects.end())
     {
         if (GameObject* go = GetGameObject(itr->second))
+        {
             go->AddObjectToRemoveList();
+            if (removed)
+                removed->push_back(itr->second);
+        }
 
         TC_LOG_DEBUG("housing", "HousingMap::DespawnDoorGO: Removed door GO {} for plot {}",
             itr->second.ToString(), plotIndex);
@@ -2681,12 +2815,16 @@ void HousingMap::DespawnDoorGO(uint8 plotIndex)
     if (auto itr = _doorAttachPointGuids.find(plotIndex); itr != _doorAttachPointGuids.end())
     {
         if (HousingRoomEntity* attachPoint = GetHousingRoomEntity(itr->second))
+        {
             attachPoint->AddObjectToRemoveList();
+            if (removed)
+                removed->push_back(itr->second);
+        }
         _doorAttachPointGuids.erase(itr);
     }
 }
 
-void HousingMap::RespawnDoorGOAtHook(uint8 plotIndex, uint32 hookID, uint32 doorComponentID, Housing const* housing, Player* /*player*/)
+void HousingMap::RespawnDoorGOAtHook(uint8 plotIndex, uint32 hookID, uint32 doorComponentID, Housing const* housing)
 {
     ExteriorComponentEntry const* doorComp = sExteriorComponentStore.LookupEntry(doorComponentID);
     if (!doorComp || doorComp->GameObjectID <= 0 || !housing)

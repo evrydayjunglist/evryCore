@@ -458,3 +458,95 @@ TEST_CASE("Housing initiative packets match retail", "[Housing][Packets]")
             0x9E, 0xF1, 0x0C, 0x40 });
     }
 }
+
+namespace
+{
+WorldPacket Wire(OpcodeClient opcode, std::vector<uint8> const& bytes)
+{
+    WorldPacket wire(opcode);
+    wire.append(bytes.data(), bytes.size());
+    return wire;
+}
+}
+
+TEST_CASE("Housing exterior edit packets are read in retail's layout", "[Housing][Packets]")
+{
+    SECTION("A house drag reads the house, the account and the root's pose in its room (hled1 645894)")
+    {
+        HouseExteriorCommitPosition packet(Wire(CMSG_HOUSE_EXTERIOR_SET_HOUSE_POSITION, {
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0x0F, 0x80, 0x9D, 0x76, 0x54, 0x03, 0x78,
+            0x80, 0xA8, 0xEF, 0xC0, 0x00, 0x7A, 0xE2, 0x3F, 0x80, 0x58, 0xA8, 0x3C, 0xC0, 0x0F, 0xC9, 0x3F }));
+        packet.Read();
+
+        REQUIRE(packet.HouseGuid == RetailHouse);
+        REQUIRE(packet.BnetAccountGuid == RetailBnetAccount);
+        REQUIRE(packet.PositionX == Catch::Approx(-7.4893188f));
+        REQUIRE(packet.PositionY == Catch::Approx(1.7693481f));
+        REQUIRE(packet.PositionZ == Catch::Approx(0.0205500f));
+        REQUIRE(packet.Facing == Catch::Approx(1.5707932f));
+        REQUIRE(packet.GetRawPacket()->rpos() == packet.GetSize());
+    }
+
+    SECTION("An exterior lock reads the house, the owner's account, the character and the lock bit (hled1 645300, 645903)")
+    {
+        std::vector<uint8> bytes = {
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0x0F, 0x80, 0x9D, 0x76, 0x54, 0x03, 0x78,
+            0x0F, 0xE0, 0x88, 0xFE, 0xE2, 0x0B, 0x88, 0x02, 0x08,
+            0x80 };
+        HouseExteriorLock lock(Wire(CMSG_HOUSE_EXTERIOR_LOCK, bytes));
+        lock.Read();
+        REQUIRE(lock.HouseGuid == RetailHouse);
+        REQUIRE(lock.HouseOwnerAccountGuid == RetailBnetAccount);
+        REQUIRE(lock.PlayerGuid == RetailCharacter);
+        REQUIRE(lock.Locked);
+        REQUIRE(lock.GetRawPacket()->rpos() == lock.GetSize());
+
+        bytes.back() = 0x00;
+        HouseExteriorLock unlock(Wire(CMSG_HOUSE_EXTERIOR_LOCK, bytes));
+        unlock.Read();
+        REQUIRE_FALSE(unlock.Locked);
+    }
+
+    SECTION("A fixture create reads the house, the piece owning the hook, the hook, the component and a byte (hled1 818926)")
+    {
+        HousingFixtureCreateFixture packet(Wire(CMSG_HOUSING_FIXTURE_CREATE_FIXTURE, {
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0xEF, 0xFE, 0xA7, 0x88, 0x65, 0x12, 0xEA, 0xC3, 0x01, 0xDB, 0x5C, 0x19, 0x56, 0xAD, 0x3C, 0xE0,
+            0x71, 0x43, 0x00, 0x00, 0xCF, 0x03, 0x00, 0x00, 0x00 }));
+        packet.Read();
+
+        REQUIRE(packet.HouseGuid == RetailHouse);
+        REQUIRE(packet.AttachParentGuid == Guid(UI64LIT(0xE03CAD56195CDB00), UI64LIT(0x01C3EA00126588A7)));
+        REQUIRE(packet.ExteriorComponentHookID == 17265);
+        REQUIRE(packet.ExteriorComponentID == 975);
+        REQUIRE(packet.Flags == 0);
+        REQUIRE(packet.GetRawPacket()->rpos() == packet.GetSize());
+    }
+}
+
+TEST_CASE("Housing exterior edit replies are written in retail's layout", "[Housing][Packets]")
+{
+    SECTION("The lock reply names the house and the character (hled1 816934, 21 bytes)")
+    {
+        HouseExteriorLockResponse response;
+        response.HouseGuid = RetailHouse;
+        response.EditorPlayerGuid = RetailCharacter;
+        response.Result = 0;
+        response.Active = true;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0x0F, 0xE0, 0x88, 0xFE, 0xE2, 0x0B, 0x88, 0x02, 0x08,
+            0x00, 0x80 });
+    }
+
+    SECTION("The house position reply is the result then the house (hled1 645911)")
+    {
+        HouseExteriorSetHousePositionResponse response;
+        response.Result = 0;
+        response.HouseGuid = RetailHouse;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x00, 0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC });
+    }
+}

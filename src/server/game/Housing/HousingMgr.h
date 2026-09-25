@@ -28,6 +28,7 @@
 #include <vector>
 
 class Neighborhood;
+class Player;
 struct GameObjectsEntry;
 struct QuaternionData;
 struct ExteriorComponentEntry;

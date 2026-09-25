@@ -1412,6 +1412,21 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         return;
     }
 
+    // The account's first house credits the decor its earlier deeds are owed, from what its characters have done. The
+    // other characters' part is read from the database at login; until it is here the purchase waits.
+    if (firstHouse && !packedHouse && !decorStore->IsRetroactiveProgressLoaded())
+    {
+        LoadHousingRetroactiveProgress();
+
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_TOO_MANY_REQUESTS);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {}'s account has not finished reading what its characters have done, so the first purchase waits",
+            player->GetGUID().ToString());
+        return;
+    }
+
     // Buying a plot joins its neighborhood. AddResident performs no faction or invite checks (unlike
     // InviteResident), so they are made here, before a wrong-faction or uninvited player could join a private or
     // faction-locked neighborhood simply by buying a plot.
@@ -1465,19 +1480,51 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         return;
     }
 
-    // The plot, the money, the house and the first house's starter decor as one unit, so a crash cannot leave the plot
-    // taken without a house, or the money gone without either. The starter decor comes with the account's first
-    // house only; an unpacked house brings its own decor.
+    // The plot, the money, the house and the first house's starter decor and credited decor as one unit, so a crash
+    // cannot leave the plot taken without a house, or the money gone without either. The starter decor and the credit
+    // come with the account's first house only; an unpacked house brings its own decor.
     neighborhood->ClearReservation(player->GetGUID());
     player->ModifyMoney(-static_cast<int64>(price));
     std::vector<Housing::AcquiredDecor> starterDecor;
+    std::vector<uint32> creditedDecor;
     {
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
         neighborhood->AppendPlotClaim(claim, trans);
         player->SaveInventoryAndGoldToDB(trans);
         if (firstHouse && !packedHouse)
         {
+            auto firstAcquisitionBonus = [](uint32 decorEntryId)
+            {
+                HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
+                return decorData ? decorData->FirstAcquisitionBonus : 0;
+            };
+
             starterDecor = housing->PlaceStarterDecor(trans);
+
+            // The decor the account is owed through RetroactiveDecorReward rows it has earned counts as collected from
+            // now on and gives the new house its first-acquisition favor, as retail's first purchase did (see
+            // HousingDecorStore::GetFirstHouseCredit). The pieces themselves are still redeemed one at a time.
+            std::vector<uint32> const owed = HousingDecorStore::GetEarnedRetroactiveEntries(
+                [player, decorStore](uint32 achievementId) { return decorStore->AccountHasRetroactiveAchievement(achievementId) || player->HasAchieved(achievementId); },
+                [player, decorStore](uint32 questId) { return decorStore->AccountHasRetroactiveQuest(questId) || player->IsQuestRewarded(questId); });
+            HousingDecorStore::FirstHouseCredit credit = HousingDecorStore::GetFirstHouseCredit(owed,
+                [decorStore](uint32 decorEntryId) { return decorStore->HasOwned(decorEntryId); }, firstAcquisitionBonus);
+            for (uint32 decorEntryId : credit.NewlyOwned)
+                decorStore->MarkOwned(decorEntryId, trans);
+
+            // The house's whole starting favor, the starter pieces' first-acquisition bonuses included, so no favor
+            // update goes out for each piece: retail sent none between the buy request and the buy reply's two favor
+            // packets (hbcd3 1299314-1299772).
+            uint64 startingFavor = credit.Favor;
+            for (Housing::AcquiredDecor const& acquired : starterDecor)
+                if (int32 const bonus = firstAcquisitionBonus(acquired.DecorEntryId); acquired.FirstOwned && bonus > 0)
+                    startingFavor += uint64(bonus);
+            housing->AddStartingFavor(startingFavor);
+            creditedDecor = std::move(credit.NewlyOwned);
+
+            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: first house of {}'s account: {} owed decor entries, {} of them newly collected, starting favor {}",
+                player->GetGUID().ToString(), uint32(owed.size()), uint32(creditedDecor.size()), startingFavor);
+
             decorStore->RecordFirstHouse(trans);
         }
         housing->SaveToDB(trans);
@@ -1494,6 +1541,8 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     // One first-time message per starter piece, repeats included, in the order the pieces were made (hbcd3
     // 1299364-1299534: 1700, 81, 2549, 10952, 8910, 1700, 2549). No capture shows the Alliance set, so an Alliance
     // purchase sends none.
+    // "Collect unique decor" counts the credited entries as well: retail's count read 109 right after the second message
+    // (hbcd3 Number 13846), 108 more than at login, and achievements 61309 and 61310 followed.
     for (Housing::AcquiredDecor const& acquired : starterDecor)
     {
         if (acquired.Announced)
@@ -1502,8 +1551,10 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
             firstTime.DecorEntryID = acquired.DecorEntryId;
             SendPacket(firstTime.Write());
         }
-        Housing::OnDecorAcquired(player, acquired.DecorEntryId, acquired.FirstOwned);
+        Housing::UpdateDecorCollectionCriteria(player, acquired.DecorEntryId);
     }
+    if (starterDecor.empty() && !creditedDecor.empty())
+        Housing::UpdateDecorCollectionCriteria(player, creditedDecor.front());
 
     // Two places differ from retail here. The cornerstone's new state goes out with the map's next object update,
     // after the buy reply, not in the same update as the house. And game's force cast runs the cover spell's child
@@ -1556,8 +1607,9 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
 
     // Level and favor in retail's two packets (hbcd3 1299772, Number 13869, and 1301305, Number 13925): first
     // change -1 and reason -1 with the house at level -1 and its favor, then the favor as the change with reason 1
-    // and the house at -1 and -1. Retail carried 1080 as the favor; where that number comes from is not known, so the
-    // house's own favor is sent in its place.
+    // and the house at -1 and -1. Retail's 1080 is the new house's own favor: its house entity and the neighborhood's
+    // copy read Favor 1080 at level 1 (hbcd3 1310396, 1305136). A first house gets it from the decor its purchase
+    // credits.
     {
         int32 const favor = static_cast<int32>(housing->GetFavor());
 
@@ -1581,6 +1633,10 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         changeHouse.FavorValue = -1;
         SendPacket(favorChange.Write());
     }
+
+    // The account now has a house here, so its characters on this neighborhood's map get the residents' auras, which
+    // retail cast right after the purchase's favor packets (hbcd3 1300176-1300450).
+    HousingMap::RefreshNeighborhoodAurasOnMap(neighborhood);
 
     // The buyer now has a house on a plot: the other members' rosters need it.
     neighborhood->BroadcastRoster(player->GetGUID());

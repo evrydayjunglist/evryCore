@@ -5123,6 +5123,24 @@ void SpellMgr::LoadSpellInfoCorrections()
     // ENDOF DARKFLAME CLEFT SPELLS
     //
 
+    //
+    // HOUSING SPELLS
+    //
+
+    // [DNT] In Plot, [DNT] Visiting Neighbor Plot, [DNT] In Own Plot, Housing Fixup Aura, Player Action React (DNT),
+    // [DNT] Endeavor Cover Aura
+    // Retail took these off when the character left the neighborhood map: they were on her there and missing from the
+    // aura list the house map sent next (hbcd3 1339732-1340466, then 1408747), and were cast again when she came back
+    // (1517298-1517678). Their data lacks the leave-world interrupt that the neighborhood's other auras (In Your
+    // Neighborhood, the sound aura) carry, so it is added: they end on a map change or logout and are never saved.
+    ApplySpellFix({ 1239847, 469226, 468939, 1272741, 1263578, 1276064 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AuraInterruptFlags |= SpellAuraInterruptFlags::LeaveWorld;
+    });
+
+    // ENDOF HOUSING SPELLS
+    //
+
     // Earthquake
     ApplySpellFix({ 61882 }, [](SpellInfo* spellInfo)
     {

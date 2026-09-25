@@ -333,8 +333,80 @@ class spell_housing_teleport_home : public SpellScript
     }
 };
 
+// 1239847 - [DNT] In Plot
+// Cast on a character standing in a plot's area trigger (HousingMap::ApplyPlotAuras). Its two effects are linked
+// auras: effect 0 brings 469226 "[DNT] Visiting Neighbor Plot" and effect 1 brings 468939 "[DNT] In Own Plot" (12.1
+// SpellEffect 1237864 and 1237865), and a plain cast would apply both. On her own plot retail applied only 468939
+// (hbcd3 1339732-1339912 and 1556464-1556644; hled1 has three more), and no captured cast of 1239847 brought 469226
+// (hbcd3, hf1, hbst1 and hled1 hold none at all). So 468939 comes only on a plot of her own Battle.net account, and
+// 469226 waits for a capture of a character on someone else's plot.
+// Retail's aura showed effect 1 alone as active (ActiveFlags 2 at hbcd3 1339742 and 1556474, and hled1 614047), so
+// effect 0 takes no target and never becomes part of the aura. Stopping only its handler would not be enough: the
+// effect would still count as active, and the aura's periodic target update would apply it again.
+class spell_housing_in_plot : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_0 } });
+    }
+
+    void LeaveOutVisitingNeighbor(WorldObject*& target) const
+    {
+        target = nullptr;
+    }
+
+    void Register() override
+    {
+        OnObjectTargetSelect += SpellObjectTargetSelectFn(spell_housing_in_plot::LeaveOutVisitingNeighbor, EFFECT_0, TARGET_UNIT_CASTER);
+    }
+};
+
+class spell_housing_in_plot_aura : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } })
+            && spellInfo->GetEffect(EFFECT_0).IsAura(SPELL_AURA_LINKED_2)
+            && spellInfo->GetEffect(EFFECT_1).IsAura(SPELL_AURA_LINKED_2);
+    }
+
+    static bool IsOnOwnPlot(Unit const* target)
+    {
+        Player const* player = target ? target->ToPlayer() : nullptr;
+        HousingMap const* housingMap = player ? dynamic_cast<HousingMap const*>(player->GetMap()) : nullptr;
+        if (!housingMap || !housingMap->GetNeighborhood() || !player->GetSession())
+            return false;
+
+        int8 const plotIndex = housingMap->GetPlayerCurrentPlot(player->GetGUID());
+        if (plotIndex < 0)
+            return false;
+
+        Neighborhood::PlotInfo const* plot = housingMap->GetNeighborhood()->GetPlotInfo(uint8(plotIndex));
+        return plot && plot->IsOwnedByAccount(player->GetSession()->GetBattlenetAccountGUID());
+    }
+
+    // Effect 0 is left out of the cast above; this covers the aura when it is added without a cast, by a GM command.
+    void PreventVisitingNeighbor(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void ApplyOnlyOnOwnPlot(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (!IsOnOwnPlot(GetTarget()))
+            PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        OnEffectApply += AuraEffectApplyFn(spell_housing_in_plot_aura::PreventVisitingNeighbor, EFFECT_0, SPELL_AURA_LINKED_2, AURA_EFFECT_HANDLE_REAL);
+        OnEffectApply += AuraEffectApplyFn(spell_housing_in_plot_aura::ApplyOnlyOnOwnPlot, EFFECT_1, SPELL_AURA_LINKED_2, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_housing_spell_scripts()
 {
+    RegisterSpellAndAuraScriptPair(spell_housing_in_plot, spell_housing_in_plot_aura);
     RegisterSpellScript(spell_housing_enter_house);
     RegisterSpellScript(spell_housing_exit_house);
     RegisterSpellScript(spell_housing_skip_first_housing_tutorial);

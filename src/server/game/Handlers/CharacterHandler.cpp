@@ -1730,6 +1730,9 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     // "A House For You" for a character whose Warband has not finished the housing tutorial.
     OfferHousingBreadcrumbQuest();
 
+    // Which achievements and quests of the account owe it decor, ready for its first house purchase.
+    LoadHousingRetroactiveProgress();
+
     TC_METRIC_EVENT("player_events", "Login", pCurrChar->GetName());
 }
 

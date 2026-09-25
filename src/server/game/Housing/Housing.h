@@ -321,6 +321,9 @@ public:
     // What a new piece of an account gives the character who got it: the entry's first-acquisition experience the
     // first time the account owns it, and progress on "collect unique decor".
     static void OnDecorAcquired(Player* player, uint32 decorEntryId, bool firstOwned);
+    // Progress on "collect unique decor" alone, for decor whose first-acquisition experience is already counted
+    // elsewhere, as a new house's starting favor counts it.
+    static void UpdateDecorCollectionCriteria(Player* player, uint32 decorEntryId);
     // The placed piece this house's exit door rides, or nothing when it has none (hbcd3 1402903-1402945: decor 10952).
     PlacedDecor const* FindExitDoorDecor() const;
 
@@ -360,6 +363,9 @@ public:
     // House level and favor
     void AddLevel(uint32 amount);
     void AddFavor(uint64 amount, HousingFavorUpdateSource source = HOUSING_FAVOR_SOURCE_UNKNOWN, bool emitUpdate = true);
+    // Favor a house has from its purchase, before it is first saved: the purchase's SaveToDB writes it, and the buy
+    // reply's two favor packets carry it. Nothing is written or sent here.
+    void AddStartingFavor(uint64 amount);
     // SMSG_HOUSING_SVCS_UPDATE_HOUSES_LEVEL_FAVOR for this house: its new level, or -1 when the level did not change,
     // and the favor it gained.
     void SendLevelFavorUpdate(int32 newLevel, int32 favorGained, HousingFavorUpdateSource source) const;

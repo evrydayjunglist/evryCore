@@ -848,9 +848,10 @@ HousingResult Housing::Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint
     _state->NeighborhoodGuid = neighborhoodGuid;
     _state->PlotIndex = plotIndex;
     _state->Level = 1;
-    // A new house starts with the starter favor, saved with the rest of the house by the purchase.
-    _state->Favor64 = HOUSE_PURCHASE_STARTER_FAVOR;
-    _state->Favor = static_cast<uint32>(HOUSE_PURCHASE_STARTER_FAVOR);
+    // A new house starts with no favor. The account's first purchase adds what the decor it credits gives
+    // (AddStartingFavor), and the purchase saves the house with it.
+    _state->Favor64 = 0;
+    _state->Favor = 0;
     _state->SettingsFlags = HOUSE_SETTING_DEFAULT;
     _editorMode = HOUSING_EDITOR_MODE_NONE;
     _state->ExteriorLockHolder.Clear();
@@ -1187,10 +1188,15 @@ void Housing::OnDecorAcquired(Player* player, uint32 decorEntryId, bool firstOwn
         }
     }
 
-    // "Collect unique decor" is counted as the entries the account has owned. Retail's count is not known to be that:
-    // criteria 109249 went from 1 to 109 at a house purchase that brought seven starter pieces, when the account had
-    // 15 distinct entries (see CriteriaHandler::UpdateCriteria).
-    player->UpdateCriteria(CriteriaType::CollectUniqueDecor, decorEntryId);
+    UpdateDecorCollectionCriteria(player, decorEntryId);
+}
+
+void Housing::UpdateDecorCollectionCriteria(Player* player, uint32 decorEntryId)
+{
+    // "Collect unique decor" is counted as the entries the account has owned (CriteriaHandler::UpdateCriteria),
+    // including those the first house purchase credits.
+    if (player)
+        player->UpdateCriteria(CriteriaType::CollectUniqueDecor, decorEntryId);
 }
 
 HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, float x, float y, float z,
@@ -2593,6 +2599,13 @@ void Housing::AddFavor(uint64 amount, HousingFavorUpdateSource source /*= HOUSIN
     // Skipped when the caller sends its own level and favor packet.
     if (emitUpdate)
         SendLevelFavorUpdate(-1, static_cast<int32>(std::min<uint64>(amount, std::numeric_limits<int32>::max())), source);
+}
+
+void Housing::AddStartingFavor(uint64 amount)
+{
+    auto guard = LockState();
+    _state->Favor64 += amount;
+    _state->Favor = static_cast<uint32>(std::min<uint64>(_state->Favor64, std::numeric_limits<uint32>::max()));
 }
 
 void Housing::SendLevelFavorUpdate(int32 newLevel, int32 favorGained, HousingFavorUpdateSource source) const

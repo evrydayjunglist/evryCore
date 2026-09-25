@@ -210,23 +210,32 @@ public:
     // Accessor for fixture MeshObjects (plotIndex → vector of MeshObject GUIDs)
     std::unordered_map<uint8, std::vector<ObjectGuid>> const& GetPlotMeshObjects() const { return _meshObjects; }
 
-    // Manual spell packet helpers — called from AddPlayerToMap and at_housing_plot AT script.
-    // These spells don't exist in DB2, so CastSpell() silently fails; manual packets are required.
-    void SendPlotEnterSpellPackets(Player* player, uint8 plotIndex);
-    void SendPlotLeaveAuraRemoval(Player* player);
-
-    // Retail's neighborhood-map-entry aura burst. Sniff-decoded from
-    // dump_12.0.1.66838_2026-04-15_09-35-59.pkt at idx 9985-10000 (and
-    // cross-checked against the 2026-04-10 capture). Emits the four
-    // housing-specific AURA_UPDATE+SPELL_START+SPELL_GO triples that retail
-    // sends immediately after the big UPDATE_OBJECT batch: Housing Fixup
-    // (1272741 slot 20), Player Action React (1263578 slot 22), Endeavor
-    // Cover (1276064 slot 53), In Your Neighborhood (1227147 slot 121 with
-    // SpellXSpellVisualID 503683). Each aura has ActiveFlags and Flags
-    // sniff-verified per slot. Non-housing pre-existing character auras
-    // (e.g. class talents) are intentionally excluded — core TC aura
-    // resync handles those.
-    void SendNeighborhoodMapEntryAuras(Player* player);
+    // The housing auras are real casts: the server's aura system owns them, picks their slots and tells the client,
+    // as retail's own casts do (each one an aura update, a spell start and a spell go from the character to herself).
+    //
+    // Casts one of them on her, from her to herself. The core sends a spell start and a spell go only for a cast it
+    // does not count as triggered (or one with a spell visual, which most of these spells lack), so this cast skips
+    // only the cast time, the power cost, the check for a cast in progress, the shapeshift check and the error report.
+    // The spells' own data allows them while she is dead, mounted, sitting, stunned, fleeing, confused or on a
+    // vehicle, and gives them no cooldown and no global cooldown. If the cast is refused anyway (a sleep or another
+    // hold the spells do not allow), the aura is cast again as a triggered cast, which applies it with the aura update
+    // alone, so that she is never left without it.
+    static void CastHousingAura(Player* player, uint32 spellId);
+    //
+    // Standing on a plot: "[DNT] In Plot", whose linked effects bring "[DNT] In Own Plot" on a plot of her own account
+    // (hbcd3 1339732-1339912). Nothing is applied again while she already has it for the same plot; stepping from one
+    // plot into another (plotChanged) casts it again, since which aura it brings depends on whose plot it is.
+    void ApplyPlotAuras(Player* player, uint8 plotIndex, bool plotChanged);
+    // Leaving a plot, or losing it: takes "[DNT] In Plot" off, and what it brought with it.
+    static void RemovePlotAuras(Player* player);
+    // Being on a neighborhood map: "Housing Fixup Aura" and the sound aura for everyone (hbcd3 421786-421956, before
+    // her account had a house), and for a character whose account has a house in this neighborhood "Player Action
+    // React", "[DNT] Endeavor Cover Aura" and "In Your Neighborhood" as well (hbcd3 1300176-1300450 at the purchase,
+    // 1517298-1517783 on coming back). A character whose account no longer has a house here loses those three.
+    void RefreshNeighborhoodAuras(Player* player);
+    // The same for every character on the neighborhood's map, once a house there has been bought or packed. Called
+    // from the world thread, while no map updates.
+    static void RefreshNeighborhoodAurasOnMap(Neighborhood const* neighborhood);
 
 private:
     uint32 _neighborhoodId;

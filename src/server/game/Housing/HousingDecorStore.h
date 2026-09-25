@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -120,14 +121,15 @@ public:
     // starting quantity of 1700 (two), 81 and 10952 (one each) (hbcd3 1299364-1299534, 1431714-1431809), and the
     // account's later storage holds no redeemed copy of them (hled1 788960-789160).
     static bool StarterPieceUsesStartingQuantity(int32 startingQuantity, int32 houseDecorFlags, uint32 redeemed);
-    // Whether a RetroactiveDecorReward row is earned. Each criteria row is an achievement or a quest; with
-    // AllCriteriaRequired every row must be met, otherwise one is enough. A reward with no criteria rows is never earned.
-    static bool IsRetroactiveRewardEarned(int32 rewardFlags, std::vector<std::pair<int32 /*achievementId*/, int32 /*questId*/>> const& criteria,
+    // Whether a RetroactiveDecorReward row is earned. Each criteria row is an achievement or a quest, and meeting any
+    // one of them is enough, as the owner chose: the rewards with two rows pair a quest of each faction (rewards 251,
+    // 252 and 253), so needing both would lock a one-faction account out. Every row carries the flag the client calls
+    // "all criteria required", so that flag is not read. A reward with no criteria rows is never earned.
+    static bool IsRetroactiveRewardEarned(std::vector<std::pair<int32 /*achievementId*/, int32 /*questId*/>> const& criteria,
         std::function<bool(uint32)> const& hasAchievement, std::function<bool(uint32)> const& hasQuest);
-    // One RetroactiveDecorReward row of a decor entry: its flags and its (achievement, quest) criteria pairs.
+    // One RetroactiveDecorReward row of a decor entry: its (achievement, quest) criteria pairs.
     struct RetroactiveReward
     {
-        int32 Flags = 0;
         std::vector<std::pair<int32 /*achievementId*/, int32 /*questId*/>> Criteria;
     };
     // The rows owing the entry. RetroactiveDecorRewardCriteria holds the pairs of every reward; rows 1-245 repeat
@@ -135,6 +137,37 @@ public:
     static std::vector<RetroactiveReward> GetRetroactiveRewards(uint32 decorEntryId);
     static uint32 CountEarnedRetroactiveRewards(std::vector<RetroactiveReward> const& rewards,
         std::function<bool(uint32)> const& hasAchievement, std::function<bool(uint32)> const& hasQuest);
+    // Every achievement and every quest any RetroactiveDecorReward row asks for.
+    static void GetRetroactiveCriteriaIds(std::vector<uint32>& achievementIds, std::vector<uint32>& questIds);
+    // The decor entries an account is owed through the RetroactiveDecorReward rows it has earned, each entry once,
+    // without the "[DNT] ... DO NOT USE" platforms.
+    static std::vector<uint32> GetEarnedRetroactiveEntries(std::function<bool(uint32)> const& hasAchievement,
+        std::function<bool(uint32)> const& hasQuest);
+
+    // What the account's first house purchase credits: the owed retroactive entries the account has never owned, which
+    // become owned there, and the favor their first acquisition gives the new house. Retail's first purchase raised
+    // "collect unique decor" (criteria 109249) from 1 to 109 and gave the new house 1080 favor, 108 entries at the
+    // FirstAcquisitionBonus of 10 that 242 of the 245 retroactive entries carry (hbcd3 147482, 1299379-1299576,
+    // 1310396; the favor packets at 1299772 and 1301305), and earned achievements 61309 and 61310 (1299585-1299666).
+    // Retail sent no favor update for each of them, and later redeems of such entries gave neither favor nor a
+    // criteria update (hbcd3 Numbers 16637-16738).
+    struct FirstHouseCredit
+    {
+        std::vector<uint32> NewlyOwned;
+        uint64 Favor = 0;
+    };
+    static FirstHouseCredit GetFirstHouseCredit(std::vector<uint32> const& owedEntries, std::function<bool(uint32)> const& alreadyOwned,
+        std::function<int32(uint32)> const& firstAcquisitionBonus);
+
+    // The achievements and quests of the account's characters that RetroactiveDecorReward rows ask for, as the
+    // database held them when they were read at login. The first house purchase adds what the buyer has done since,
+    // from her own character. StartRetroactiveProgressLoad is true only for the one caller that should read them; the
+    // rows arrive later through SetRetroactiveProgress.
+    bool StartRetroactiveProgressLoad();
+    void SetRetroactiveProgress(std::unordered_set<uint32> achievements, std::unordered_set<uint32> quests);
+    bool IsRetroactiveProgressLoaded() const;
+    bool AccountHasRetroactiveAchievement(uint32 achievementId) const;
+    bool AccountHasRetroactiveQuest(uint32 questId) const;
 
     // The source value of a piece granted by an item's spell: the realm, 0 and the item GUID's low part in hex. Decor
     // 1163 came from item 0x0C028800000000004000000A7D89D45C on realm 162 (hbcd3 1783383) and reads
@@ -161,6 +194,10 @@ private:
     uint64 _lastCatalogFetch = 0;
     // Unix time the account bought its first house, 0 before it did.
     uint64 _firstHouseTime = 0;
+    bool _retroactiveProgressRequested = false;
+    bool _retroactiveProgressLoaded = false;
+    std::unordered_set<uint32> _retroactiveAchievements;
+    std::unordered_set<uint32> _retroactiveQuests;
 
     static std::mutex s_registryLock;
     static std::unordered_map<uint32, std::weak_ptr<HousingDecorStore>> s_stores;

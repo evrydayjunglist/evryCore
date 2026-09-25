@@ -1054,6 +1054,10 @@ void NeighborhoodMgr::PackHouseForOwnerLoss(Neighborhood* neighborhood, uint8 pl
 
     neighborhood->RefreshMirrorDataForOnlineMembers();
 
+    // The account no longer has this house here, so its characters on the neighborhood's map lose the residents' auras
+    // unless another house of the account stands there.
+    HousingMap::RefreshNeighborhoodAurasOnMap(neighborhood);
+
     // The house leaves the guild's list of member houses, as it does when a member relinquishes one.
     if (Guild* guild = guildId ? sGuildMgr->GetGuildById(guildId) : nullptr)
     {

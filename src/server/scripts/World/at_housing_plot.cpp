@@ -95,13 +95,11 @@ struct at_housing_plot : AreaTriggerAI
         player->SetCurrentHouse(houseGuid);
 
         if (!alreadyOnPlot)
-        {
             housingMap->SetPlayerCurrentPlot(player->GetGUID(), static_cast<uint8>(plotIdx));
 
-            // Plot-enter spell packets (1239847, 469226, 1266699) still apply — those
-            // spells don't exist in DB2 so we send them via manual packets.
-            housingMap->SendPlotEnterSpellPackets(player, static_cast<uint8>(plotIdx));
-        }
+        // "[DNT] In Plot" is cast whenever she stands in the box without it, also when her arrival on the map already
+        // counted her plot as her current one: that is set for her own plot wherever on the map she arrives.
+        housingMap->ApplyPlotAuras(player, static_cast<uint8>(plotIdx), !alreadyOnPlot);
 
         // Entering her own plot changes no phase: no capture shows that. Retail changes phases on tutorial quest
         // steps instead (hbcd3 716276, after "(Quest) Let's go!").
@@ -130,8 +128,16 @@ struct at_housing_plot : AreaTriggerAI
             ? nbh->GetPlotInfo(static_cast<uint8>(plotIdx)) : nullptr;
         bool isOwnPlot = plotInfo && player->GetSession() && plotInfo->IsOwnedByAccount(player->GetSession()->GetBattlenetAccountGUID());
 
-        // Remove plot-auras (manual packets, spells aren't in DB2).
-        housingMap->SendPlotLeaveAuraRemoval(player);
+        // She may already have stepped into the next plot, whose trigger saw her first: then that plot is her current
+        // one and keeps its aura.
+        if (plotIdx < 0 || housingMap->GetPlayerCurrentPlot(player->GetGUID()) != plotIdx)
+        {
+            TC_LOG_DEBUG("housing", "at_housing_plot: Player {} left plot AT {}, but her current plot is another one",
+                player->GetGUID().ToString(), at->GetGUID().ToString());
+            return;
+        }
+
+        HousingMap::RemovePlotAuras(player);
 
         housingMap->ClearPlayerCurrentPlot(player->GetGUID());
 

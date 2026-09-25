@@ -1796,6 +1796,9 @@ class TC_GAME_API WorldSession
         void StartHousingTutorial(bool warbandCompletedMyFirstHome, ObjectGuid const& neighborhoodGuid, std::string const& neighborhoodName);
         // Offers "A House For You" at login while no character of the Warband has completed "My First Home".
         void OfferHousingBreadcrumbQuest();
+        // Reads what the Battle.net account's characters have done that RetroactiveDecorReward rows ask for, once for an
+        // account that has not had its first house; that purchase credits the decor it is owed.
+        void LoadHousingRetroactiveProgress();
         // Tells the callback whether any character of this Battle.net account has turned in the quest.
         void QueryWarbandQuestRewarded(uint32 questId, std::function<void(bool)>&& callback);
         void HandleHousingSvcsAcceptNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsAcceptNeighborhoodOwnership const& housingSvcsAcceptNeighborhoodOwnership);

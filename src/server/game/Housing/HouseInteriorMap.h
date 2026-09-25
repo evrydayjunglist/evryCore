@@ -138,9 +138,6 @@ public:
     /// Get HousingRoomEntity instances for inclusion in initial UPDATE_OBJECT
     std::vector<HousingRoomEntity*> const& GetRoomEntities() const { return _roomEntities; }
 
-    /// Send post-tutorial aura packets so the client knows the tutorial is complete
-    /// and unlocks all editor modes (expert, cleanup, layout, customize).
-
     // Puts QUEST_HOUSING_TUTORIAL_COMPLETE in the log and credits the house-entered kill credit.
     // That quest is AUTO_ACCEPT|AUTO_COMPLETE with no quest-giver NPC at either end, so nothing in
     // the world can hand it out - without this the housing editor stays locked forever.

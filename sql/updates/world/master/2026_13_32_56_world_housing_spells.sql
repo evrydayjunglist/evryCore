@@ -32,3 +32,22 @@ INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 DELETE FROM `spell_script_names` WHERE `spell_id`=1233637 AND `ScriptName`='spell_housing_teleport_home';
 INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 (1233637, 'spell_housing_teleport_home');
+
+-- 1239847 "[DNT] In Plot" is cast on a character standing on a plot. Its two linked effects would bring both
+-- 469226 "[DNT] Visiting Neighbor Plot" and 468939 "[DNT] In Own Plot"; spell_housing_in_plot keeps 468939 for a plot of
+-- her own account, as retail applied it (hbcd3 1339732-1339912), and holds 469226 back until a capture shows it.
+DELETE FROM `spell_script_names` WHERE `spell_id`=1239847 AND `ScriptName`='spell_housing_in_plot';
+INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
+(1239847, 'spell_housing_in_plot');
+
+-- 1227147 "In Your Neighborhood" is cast on a character on a neighborhood map where her account has a house. Its second
+-- effect makes area trigger 40326 on her. Retail's (hbcd3 578477-578586, on another resident): area trigger 41610, a
+-- sphere of radius 40 riding the character, with spell visual 503683 from the spell. What it does is not captured, so
+-- it has no actions and no script.
+DELETE FROM `areatrigger_template` WHERE `Id`=41610 AND `IsCustom`=0;
+INSERT INTO `areatrigger_template` (`Id`, `IsCustom`, `Flags`, `ActionSetId`, `ActionSetFlags`, `VerifiedBuild`) VALUES
+(41610, 0, 0, 0, 0, 68887);
+
+DELETE FROM `areatrigger_create_properties` WHERE `Id`=40326 AND `IsCustom`=0;
+INSERT INTO `areatrigger_create_properties` (`Id`, `IsCustom`, `AreaTriggerId`, `IsAreatriggerCustom`, `Flags`, `MoveCurveId`, `ScaleCurveId`, `MorphCurveId`, `FacingCurveId`, `AnimId`, `AnimKitId`, `DecalPropertiesId`, `SpellForVisuals`, `TimeToTargetScale`, `Speed`, `SpeedIsTime`, `Shape`, `ShapeData0`, `ShapeData1`, `ShapeData2`, `ShapeData3`, `ShapeData4`, `ShapeData5`, `ShapeData6`, `ShapeData7`, `ScriptName`, `VerifiedBuild`) VALUES
+(40326, 0, 41610, 0, 0, 0, 0, 0, 0, -1, 0, 0, NULL, 0, 1, 0, 0, 40, 40, 0, 0, 0, 0, 0, 0, '', 68887);

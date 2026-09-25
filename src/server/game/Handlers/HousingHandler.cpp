@@ -165,75 +165,60 @@ namespace
         }
     }
 
-    // Sends manual SMSG_AURA_UPDATE + SMSG_SPELL_START + SMSG_SPELL_GO for a housing
-    // spell that doesn't exist in our DB2/spell data. The sniff shows these spells use:
-    //   AURA_UPDATE: CastID matches SPELL_START/SPELL_GO CastID
-    //   SPELL_START: Target.Flags=0 (Self), CastTime=0
-    //   SPELL_GO: Target.Flags=2 (Unit), HitTargets={self}, CastTime=getMSTime(), LogData filled
-    void SendManualHousingSpellPackets(Player* player, uint32 spellId, uint8 auraSlot,
-        uint8 auraActiveFlags, uint32 spellStartCastFlags, uint32 spellGoCastFlags,
-        uint32 spellGoCastFlagsEx = 16, uint32 spellGoCastFlagsEx2 = 4)
+    // Asks the database which of the given achievements and quests any character of the Battle.net account has done:
+    // first the account's game accounts, then their characters' achievements and rewarded quests. The result has one
+    // row per match, 0 and the achievement, or 1 and the quest.
+    QueryCallback QueryAccountAchievementsAndQuests(uint32 bnetAccountId, std::vector<uint32> const& achievementIds,
+        std::vector<uint32> const& questIds)
     {
-        // Generate a CastID GUID shared across AURA_UPDATE, SPELL_START, and SPELL_GO
-        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), spellId,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        // 1. SMSG_AURA_UPDATE — apply the aura (CastID must match spell packets)
+        auto join = [](std::vector<uint32> const& ids)
         {
-            WorldPackets::Spells::AuraUpdate auraUpdate;
-            auraUpdate.UpdateAll = false;
-            auraUpdate.UnitGUID = player->GetGUID();
+            std::string list;
+            for (uint32 id : ids)
+                list += (list.empty() ? "" : ",") + std::to_string(id);
+            // An empty list asks for nothing that can match.
+            return list.empty() ? std::string("0") : list;
+        };
 
-            WorldPackets::Spells::AuraInfo auraInfo;
-            auraInfo.Slot = auraSlot;
-            auraInfo.AuraData.emplace();
-            auraInfo.AuraData->CastID = castId;
-            auraInfo.AuraData->SpellID = spellId;
-            auraInfo.AuraData->Flags = AFLAG_SELF_CAST;
-            auraInfo.AuraData->ActiveFlags = auraActiveFlags;
-            auraInfo.AuraData->CastLevel = 36;
-            auraInfo.AuraData->Applications = 0;
-            auraUpdate.Auras.push_back(std::move(auraInfo));
+        LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_GAME_ACCOUNT_IDS);
+        stmt->setUInt32(0, bnetAccountId);
+        return LoginDatabase.AsyncQuery(stmt)
+            .WithChainingPreparedCallback([achievementList = join(achievementIds), questList = join(questIds)](QueryCallback& chain, PreparedQueryResult gameAccounts)
+            {
+                std::string accountIds;
+                if (gameAccounts)
+                {
+                    do
+                    {
+                        if (!accountIds.empty())
+                            accountIds += ',';
+                        accountIds += std::to_string(gameAccounts->Fetch()[0].GetUInt32());
+                    } while (gameAccounts->NextRow());
+                }
 
-            player->SendDirectMessage(auraUpdate.Write());
-        }
+                // No game account: ask for nothing that can match.
+                if (accountIds.empty())
+                    accountIds = "0";
 
-        // 2. SMSG_SPELL_START
+                chain.SetNextQuery(CharacterDatabase.AsyncQuery(Trinity::StringFormat(
+                    "SELECT 0, a.achievement FROM character_achievement a JOIN characters c ON c.guid = a.guid "
+                    "WHERE c.account IN ({0}) AND a.achievement IN ({1}) "
+                    "UNION SELECT 1, r.quest FROM character_queststatus_rewarded r JOIN characters c ON c.guid = r.guid "
+                    "WHERE c.account IN ({0}) AND r.quest IN ({2})", accountIds, achievementList, questList).c_str()));
+            });
+    }
+
+    // Splits the rows of QueryAccountAchievementsAndQuests.
+    void ReadAccountAchievementsAndQuests(QueryResult const& result, std::unordered_set<uint32>& achievements, std::unordered_set<uint32>& quests)
+    {
+        if (!result)
+            return;
+
+        do
         {
-            WorldPackets::Spells::SpellStart spellStart;
-            spellStart.Cast.CasterGUID = player->GetGUID();
-            spellStart.Cast.CasterUnit = player->GetGUID();
-            spellStart.Cast.CastID = castId;
-            spellStart.Cast.SpellID = spellId;
-            spellStart.Cast.CastFlags = spellStartCastFlags;
-            spellStart.Cast.CastTime = 0;
-            // Target.Flags = 0 (Self) — default
-
-            player->SendDirectMessage(spellStart.Write());
-        }
-
-        // 3. SMSG_SPELL_GO (CombatLogServerPacket — has LogData)
-        {
-            WorldPackets::Spells::SpellGo spellGo;
-            spellGo.Cast.CasterGUID = player->GetGUID();
-            spellGo.Cast.CasterUnit = player->GetGUID();
-            spellGo.Cast.CastID = castId;
-            spellGo.Cast.SpellID = spellId;
-            spellGo.Cast.CastFlags = spellGoCastFlags;
-            spellGo.Cast.CastFlagsEx = spellGoCastFlagsEx;
-            spellGo.Cast.CastFlagsEx2 = spellGoCastFlagsEx2;
-            spellGo.Cast.CastTime = getMSTime();
-            spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-            spellGo.Cast.HitTargets.push_back(player->GetGUID());
-            spellGo.Cast.HitStatus.emplace_back(uint8(0));
-            spellGo.LogData.Initialize(player);
-
-            player->SendDirectMessage(spellGo.Write());
-        }
-
-        TC_LOG_DEBUG("housing", "  Sent manual AURA_UPDATE + SPELL_START + SPELL_GO for spell {} (slot {}, CastID={})",
-            spellId, auraSlot, castId.ToString());
+            Field* fields = result->Fetch();
+            (fields[0].GetUInt32() == 0 ? achievements : quests).insert(fields[1].GetUInt32());
+        } while (result->NextRow());
     }
 
     // Refreshes all room MeshObjects in the player's interior instance after a room
@@ -304,7 +289,7 @@ namespace
                 if (neighborhood->CheckHouseEntry(visitor, plotIndex, false).Allowed)
                     continue;
 
-                housingMap->SendPlotLeaveAuraRemoval(visitor);
+                HousingMap::RemovePlotAuras(visitor);
                 housingMap->ClearPlayerCurrentPlot(visitor->GetGUID());
                 visitor->SetCurrentHouse(ObjectGuid::Empty);
 
@@ -703,19 +688,9 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
         // Packet order: AURA_UPDATE(1263303) → SPELL_START(1263303) → SPELL_GO(1263303)
         //   → EDIT_MODE_RESPONSE → UPDATE_OBJECT(EditorMode=1 + BNetAccount/FHousingStorage_C)
 
-        // 1. Apply edit mode aura + spell cast packets (spell 1263303)
-        if (sSpellMgr->GetSpellInfo(SPELL_HOUSING_EDIT_MODE_AURA, DIFFICULTY_NONE))
-        {
-            player->CastSpell(player, SPELL_HOUSING_EDIT_MODE_AURA, true);
-        }
-        else
-        {
-            // Spell not in DB2 — send manual AURA_UPDATE + SPELL_START + SPELL_GO
-            SendManualHousingSpellPackets(player, SPELL_HOUSING_EDIT_MODE_AURA,
-                /*auraSlot=*/51, /*auraActiveFlags=*/15,
-                /*spellStartCastFlags=*/CAST_FLAG_PENDING | CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4,  // 15
-                /*spellGoCastFlags=*/CAST_FLAG_PENDING | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10);  // 781
-        }
+        // 1. The edit mode aura, cast for real so the server's aura system owns it and picks its slot (retail: hbcd3
+        // 1431558-1431622, slot 104).
+        HousingMap::CastHousingAura(player, SPELL_HOUSING_EDIT_MODE_AURA);
 
         // 2. Build response with AllowedEditor containing the player
         response.AllowedEditor.push_back(player->GetGUID());
@@ -923,23 +898,7 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
         // Packet order: AURA_UPDATE → EDIT_MODE_RESPONSE → UPDATE_OBJECT
 
         // 1. Remove edit mode aura
-        if (sSpellMgr->GetSpellInfo(SPELL_HOUSING_EDIT_MODE_AURA, DIFFICULTY_NONE))
-        {
-            player->RemoveAurasDueToSpell(SPELL_HOUSING_EDIT_MODE_AURA);
-        }
-        else
-        {
-            // Spell not in DB2 — send aura removal manually (empty AuraData = HasAura=False)
-            WorldPackets::Spells::AuraUpdate auraUpdate;
-            auraUpdate.UpdateAll = false;
-            auraUpdate.UnitGUID = player->GetGUID();
-
-            WorldPackets::Spells::AuraInfo auraInfo;
-            auraInfo.Slot = 51;
-            auraUpdate.Auras.push_back(std::move(auraInfo));
-
-            player->SendDirectMessage(auraUpdate.Write());
-        }
+        player->RemoveAurasDueToSpell(SPELL_HOUSING_EDIT_MODE_AURA);
 
         // 2. The unit flags entering set came off with the editor mode above (Housing::SetEditorMode), leaving any
         // her auras still need.
@@ -1565,67 +1524,59 @@ void WorldSession::HandleHousingDecorRedeemDeferredDecor(WorldPackets::Housing::
         return;
     }
 
-    std::string achievementIds;
-    std::string questIds;
+    std::vector<uint32> achievementIds;
+    std::vector<uint32> questIds;
     for (HousingDecorStore::RetroactiveReward const& reward : rewards)
     {
         for (auto const& [achievementId, questId] : reward.Criteria)
         {
             if (achievementId > 0)
-                achievementIds += (achievementIds.empty() ? "" : ",") + std::to_string(achievementId);
+                achievementIds.push_back(uint32(achievementId));
             if (questId > 0)
-                questIds += (questIds.empty() ? "" : ",") + std::to_string(questId);
+                questIds.push_back(uint32(questId));
         }
     }
-    if (achievementIds.empty())
-        achievementIds = "0";
-    if (questIds.empty())
-        questIds = "0";
 
-    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_GAME_ACCOUNT_IDS);
-    stmt->setUInt32(0, GetBattlenetAccountId());
-    GetQueryProcessor().AddCallback(LoginDatabase.AsyncQuery(stmt)
-        .WithChainingPreparedCallback([achievementIds, questIds](QueryCallback& chain, PreparedQueryResult gameAccounts)
-        {
-            std::string accountIds;
-            if (gameAccounts)
-            {
-                do
-                {
-                    if (!accountIds.empty())
-                        accountIds += ',';
-                    accountIds += std::to_string(gameAccounts->Fetch()[0].GetUInt32());
-                } while (gameAccounts->NextRow());
-            }
-
-            // No game account: ask for nothing that can match.
-            if (accountIds.empty())
-                accountIds = "0";
-
-            chain.SetNextQuery(CharacterDatabase.AsyncQuery(Trinity::StringFormat(
-                "SELECT 0, a.achievement FROM character_achievement a JOIN characters c ON c.guid = a.guid "
-                "WHERE c.account IN ({0}) AND a.achievement IN ({1}) "
-                "UNION SELECT 1, r.quest FROM character_queststatus_rewarded r JOIN characters c ON c.guid = r.guid "
-                "WHERE c.account IN ({0}) AND r.quest IN ({2})", accountIds, achievementIds, questIds).c_str()));
-        })
+    GetQueryProcessor().AddCallback(QueryAccountAchievementsAndQuests(GetBattlenetAccountId(), achievementIds, questIds)
         .WithCallback([this, decorEntryId, transactionId, rewards](QueryResult done)
         {
             std::unordered_set<uint32> achievements;
             std::unordered_set<uint32> quests;
-            if (done)
-            {
-                do
-                {
-                    Field* fields = done->Fetch();
-                    (fields[0].GetUInt32() == 0 ? achievements : quests).insert(fields[1].GetUInt32());
-                } while (done->NextRow());
-            }
+            ReadAccountAchievementsAndQuests(done, achievements, quests);
 
             Player* current = GetPlayer();
             uint32 const earned = HousingDecorStore::CountEarnedRetroactiveRewards(rewards,
                 [&achievements, current](uint32 achievementId) { return achievements.contains(achievementId) || (current && current->HasAchieved(achievementId)); },
                 [&quests, current](uint32 questId) { return quests.contains(questId) || (current && current->IsQuestRewarded(questId)); });
             FinishHousingDecorRedeem(decorEntryId, transactionId, earned);
+        }));
+}
+
+void WorldSession::LoadHousingRetroactiveProgress()
+{
+    Player* player = GetPlayer();
+    HousingDecorStore* store = player ? player->GetHousingDecorStore() : nullptr;
+    if (!store || store->HasHadFirstHouse() || !store->StartRetroactiveProgressLoad())
+        return;
+
+    // Only an account that has not had its first house needs this: that purchase credits the decor the account's
+    // earlier deeds owe (HandleNeighborhoodBuyHouse). The query holds the account's store, so the rows reach it even
+    // when this character has logged out and another character of the account still holds it.
+    std::vector<uint32> achievementIds;
+    std::vector<uint32> questIds;
+    HousingDecorStore::GetRetroactiveCriteriaIds(achievementIds, questIds);
+
+    std::shared_ptr<HousingDecorStore> sharedStore = HousingDecorStore::Acquire(GetBattlenetAccountId());
+    GetQueryProcessor().AddCallback(QueryAccountAchievementsAndQuests(GetBattlenetAccountId(), achievementIds, questIds)
+        .WithCallback([sharedStore](QueryResult done)
+        {
+            std::unordered_set<uint32> achievements;
+            std::unordered_set<uint32> quests;
+            ReadAccountAchievementsAndQuests(done, achievements, quests);
+
+            TC_LOG_DEBUG("housing", "LoadHousingRetroactiveProgress: Battle.net account {} has {} achievement(s) and {} quest(s) that retroactive decor rewards ask for",
+                sharedStore->GetBnetAccountId(), uint32(achievements.size()), uint32(quests.size()));
+            sharedStore->SetRetroactiveProgress(std::move(achievements), std::move(quests));
         }));
 }
 
@@ -3484,6 +3435,10 @@ void WorldSession::HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::Housi
         player->SaveInventoryAndGoldToDB(trans);
         CharacterDatabase.CommitTransaction(trans);
     }
+
+    // Her account no longer has a house in this neighborhood, so its residents' auras come off every character of
+    // the account on its map.
+    HousingMap::RefreshNeighborhoodAurasOnMap(neighborhood);
 
     if (neighborhood)
         neighborhood->RefreshMirrorDataForOnlineMembers();

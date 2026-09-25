@@ -437,22 +437,15 @@ bool HousingDecorStore::StarterPieceUsesStartingQuantity(int32 startingQuantity,
     return GetOwedCount(startingQuantity, houseDecorFlags, 0, redeemed) > 0;
 }
 
-bool HousingDecorStore::IsRetroactiveRewardEarned(int32 rewardFlags, std::vector<std::pair<int32, int32>> const& criteria,
+bool HousingDecorStore::IsRetroactiveRewardEarned(std::vector<std::pair<int32, int32>> const& criteria,
     std::function<bool(uint32)> const& hasAchievement, std::function<bool(uint32)> const& hasQuest)
 {
-    if (criteria.empty())
-        return false;
-
-    auto met = [&](std::pair<int32, int32> const& row)
+    return std::any_of(criteria.begin(), criteria.end(), [&](std::pair<int32, int32> const& row)
     {
         if (row.first > 0 && hasAchievement(uint32(row.first)))
             return true;
         return row.second > 0 && hasQuest(uint32(row.second));
-    };
-
-    if (rewardFlags & RETROACTIVE_DECOR_REWARD_FLAG_ALL_CRITERIA_REQUIRED)
-        return std::all_of(criteria.begin(), criteria.end(), met);
-    return std::any_of(criteria.begin(), criteria.end(), met);
+    });
 }
 
 std::vector<HousingDecorStore::RetroactiveReward> HousingDecorStore::GetRetroactiveRewards(uint32 decorEntryId)
@@ -464,7 +457,6 @@ std::vector<HousingDecorStore::RetroactiveReward> HousingDecorStore::GetRetroact
             continue;
 
         RetroactiveReward& reward = rewards.emplace_back();
-        reward.Flags = entry->Flags;
         for (RetroactiveDecorRewardCriteriaEntry const* criteria : sRetroactiveDecorRewardCriteriaStore)
             if (criteria->RetroactiveDecorRewardID == entry->ID)
                 reward.Criteria.emplace_back(criteria->AchievementID, criteria->QuestID);
@@ -479,9 +471,105 @@ uint32 HousingDecorStore::CountEarnedRetroactiveRewards(std::vector<RetroactiveR
 {
     uint32 earned = 0;
     for (RetroactiveReward const& reward : rewards)
-        if (IsRetroactiveRewardEarned(reward.Flags, reward.Criteria, hasAchievement, hasQuest))
+        if (IsRetroactiveRewardEarned(reward.Criteria, hasAchievement, hasQuest))
             ++earned;
     return earned;
+}
+
+void HousingDecorStore::GetRetroactiveCriteriaIds(std::vector<uint32>& achievementIds, std::vector<uint32>& questIds)
+{
+    std::unordered_set<uint32> achievements;
+    std::unordered_set<uint32> quests;
+    auto add = [&](int32 achievementId, int32 questId)
+    {
+        if (achievementId > 0)
+            achievements.insert(uint32(achievementId));
+        if (questId > 0)
+            quests.insert(uint32(questId));
+    };
+
+    for (RetroactiveDecorRewardEntry const* entry : sRetroactiveDecorRewardStore)
+        add(entry->AchievementID, entry->QuestID);
+    for (RetroactiveDecorRewardCriteriaEntry const* criteria : sRetroactiveDecorRewardCriteriaStore)
+        add(criteria->AchievementID, criteria->QuestID);
+
+    achievementIds.assign(achievements.begin(), achievements.end());
+    questIds.assign(quests.begin(), quests.end());
+}
+
+std::vector<uint32> HousingDecorStore::GetEarnedRetroactiveEntries(std::function<bool(uint32)> const& hasAchievement,
+    std::function<bool(uint32)> const& hasQuest)
+{
+    std::unordered_set<uint32> decorEntryIds;
+    for (RetroactiveDecorRewardEntry const* entry : sRetroactiveDecorRewardStore)
+        decorEntryIds.insert(entry->HouseDecorID);
+
+    std::vector<uint32> earned;
+    for (uint32 decorEntryId : decorEntryIds)
+    {
+        HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
+        if (!decorData || decorData->Flags == HOUSE_DECOR_FLAGS_DO_NOT_USE)
+            continue;
+
+        if (CountEarnedRetroactiveRewards(GetRetroactiveRewards(decorEntryId), hasAchievement, hasQuest))
+            earned.push_back(decorEntryId);
+    }
+
+    std::sort(earned.begin(), earned.end());
+    return earned;
+}
+
+HousingDecorStore::FirstHouseCredit HousingDecorStore::GetFirstHouseCredit(std::vector<uint32> const& owedEntries,
+    std::function<bool(uint32)> const& alreadyOwned, std::function<int32(uint32)> const& firstAcquisitionBonus)
+{
+    FirstHouseCredit credit;
+    std::unordered_set<uint32> counted;
+    for (uint32 decorEntryId : owedEntries)
+    {
+        if (alreadyOwned(decorEntryId) || !counted.insert(decorEntryId).second)
+            continue;
+
+        credit.NewlyOwned.push_back(decorEntryId);
+        if (int32 const bonus = firstAcquisitionBonus(decorEntryId); bonus > 0)
+            credit.Favor += uint64(bonus);
+    }
+    return credit;
+}
+
+bool HousingDecorStore::StartRetroactiveProgressLoad()
+{
+    std::lock_guard<std::recursive_mutex> guard(_lock);
+    if (_retroactiveProgressRequested)
+        return false;
+
+    _retroactiveProgressRequested = true;
+    return true;
+}
+
+void HousingDecorStore::SetRetroactiveProgress(std::unordered_set<uint32> achievements, std::unordered_set<uint32> quests)
+{
+    std::lock_guard<std::recursive_mutex> guard(_lock);
+    _retroactiveAchievements = std::move(achievements);
+    _retroactiveQuests = std::move(quests);
+    _retroactiveProgressLoaded = true;
+}
+
+bool HousingDecorStore::IsRetroactiveProgressLoaded() const
+{
+    std::lock_guard<std::recursive_mutex> guard(_lock);
+    return _retroactiveProgressLoaded;
+}
+
+bool HousingDecorStore::AccountHasRetroactiveAchievement(uint32 achievementId) const
+{
+    std::lock_guard<std::recursive_mutex> guard(_lock);
+    return _retroactiveAchievements.contains(achievementId);
+}
+
+bool HousingDecorStore::AccountHasRetroactiveQuest(uint32 questId) const
+{
+    std::lock_guard<std::recursive_mutex> guard(_lock);
+    return _retroactiveQuests.contains(questId);
 }
 
 std::string HousingDecorStore::MakeItemSourceValue(uint32 realmId, uint64 itemLowGuid)

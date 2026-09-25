@@ -602,15 +602,14 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
             break;
         case CriteriaType::CollectUniqueDecor:
         {
-            // Counted here as the decor entries the Battle.net account has owned, whichever character got them. That
-            // is not known to be what retail counts. In hbcd3 criteria 109249 read 1 at login (147482) and 109 at the
-            // house purchase, when only seven starter pieces arrived (1299380-1299576), and achievements 61309 and
-            // 61310 were earned then (1299588, 1299666); the account's whole storage right after held 15 distinct
-            // entries (1431714-1431809), so this count gives about 15 there and neither achievement. It stayed 109
-            // when decor 1163 arrived (1783639) and read 110 when 1482 arrived (2106237). The asset is the least item
-            // quality that counts: criteria 109249 has asset 2 for "Collect 100 unique decor of uncommon quality or
-            // higher" (achievement 61310). A decor with no item has no quality and counts only when the criteria asks
-            // for none.
+            // Counted here as the decor entries the Battle.net account has owned, whichever character got them,
+            // including the entries its first house purchase credits for its earlier deeds. In hbcd3 criteria 109249
+            // read 1 at login (147482) and 109 at the house purchase (1299380-1299576), which brought seven starter
+            // pieces while the account's storage held 15 distinct entries right after (1431714-1431809), and
+            // achievements 61309 and 61310 were earned then (1299588, 1299666). It stayed 109 when decor 1163 arrived
+            // (1783639) and read 110 when 1482 arrived (2106237). The asset is the least item quality that counts:
+            // criteria 109249 has asset 2 for "Collect 100 unique decor of uncommon quality or higher" (achievement
+            // 61310). A decor with no item has no quality and counts only when the criteria asks for none.
             uint32 owned = 0;
             if (HousingDecorStore const* store = referencePlayer ? referencePlayer->GetHousingDecorStore() : nullptr)
             {

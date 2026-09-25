@@ -26,6 +26,7 @@
 #include "HousingDefines.h"
 #include "HousingRoomEntity.h"
 #include "HousingDecorEntity.h"
+#include "HousingMap.h"
 #include "HousingMgr.h"
 #include "Neighborhood.h"
 #include "NeighborhoodMgr.h"
@@ -1686,6 +1687,29 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
     if (result)
     {
+        // The house's auras are cast once she is in, on her next update, right after her arrival as retail cast them
+        // (hbcd3 1403680-1403850, 0.2 seconds after the house map's first update): the sound aura for everyone, and
+        // "[DNT] Homeowner is Present" for a character of the house's own account. Both end when she leaves the world.
+        // Retail also cast "[DNT] Weekly - Attend Gathering Area Aura" (1285428, hbcd3 1404318) on the owner, but its
+        // cast triggers "[DNT] Gathering Credit", a kill credit for creature 261054 on the units around her, and what
+        // that credit is for and who may take it is not captured, so it is left out.
+        {
+            ObjectGuid const playerGuid = player->GetGUID();
+            uint32 const instanceId = GetInstanceId();
+            bool const homeowner = IsHouseOwner(player);
+            player->m_Events.AddEventAtOffset([this, playerGuid, instanceId, homeowner]()
+            {
+                Player* p = ObjectAccessor::FindPlayer(playerGuid);
+                if (!p || !p->IsInWorld() || !IsStillInHouse(p, this, instanceId))
+                    return;
+
+                if (homeowner && !p->HasAura(SPELL_HOUSING_HOMEOWNER_IS_PRESENT))
+                    HousingMap::CastHousingAura(p, SPELL_HOUSING_HOMEOWNER_IS_PRESENT);
+                if (!p->HasAura(SPELL_HOUSING_SOUND_SQUISHER))
+                    HousingMap::CastHousingAura(p, SPELL_HOUSING_SOUND_SQUISHER);
+            }, Milliseconds(0));
+        }
+
         Housing* housing = player->GetHousingByGuid(_houseGuid);
         TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: housing={} for player={}",
             housing ? "VALID" : "NULL", player->GetGUID().ToString());
@@ -1836,9 +1860,6 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     // reaches the end of the visible questline and the editor never unlocks.
                     GrantHousingTutorialProgress(p);
 
-                    // 1) PostTutorialAuras (slots 8, 9, 50)
-                    SendHousingPostTutorialAuras(p);
-
                     // 5) Account CREATE + HousingPlayerHouseEntity + decor
                     {
                         p->PushHousingDecorStorage();
@@ -1928,56 +1949,8 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                                     plotAt->GetGUID().ToString(), atX, atY, atZ,
                                     housing->GetPlotIndex(), playerGuid.ToString());
 
-                                // 8) Plot enter spell packets — same as exterior AT overlap.
-                                // Sniff-verified: exterior sends 3 spell+aura sequences
-                                // (1239847@slot50, 469226@slot56, 1266699@slot9) before
-                                // ENTER_PLOT. These trigger editor availability on the client.
-                                {
-                                    plotAt->SetAreaTriggerFlag(AreaTriggerFieldFlags::HasPlayers);
-
-                                    // Spell 1239847 at slot 50 (plot enter tracking)
-                                    {
-                                        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-                                            SPELL_CAST_SOURCE_NORMAL, p->GetMapId(), SPELL_HOUSING_PLOT_ENTER,
-                                            GenerateLowGuid<HighGuid::Cast>());
-                                        WorldPackets::Spells::AuraUpdate au;
-                                        au.UpdateAll = false;
-                                        au.UnitGUID = p->GetGUID();
-                                        WorldPackets::Spells::AuraInfo ai;
-                                        ai.Slot = 55; // sniff-verified: retail uses slot 55
-                                        ai.AuraData.emplace();
-                                        ai.AuraData->CastID = castId;
-                                        ai.AuraData->SpellID = SPELL_HOUSING_PLOT_ENTER;
-                                        ai.AuraData->Flags = AFLAG_SELF_CAST;
-                                        ai.AuraData->ActiveFlags = 1; // sniff-verified: retail uses 1
-                                        ai.AuraData->CastLevel = 36;
-                                        au.Auras.push_back(std::move(ai));
-                                        p->SendDirectMessage(au.Write());
-                                    }
-
-                                    // Spell 469226 at slot 56 (plot context)
-                                    {
-                                        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-                                            SPELL_CAST_SOURCE_NORMAL, p->GetMapId(), SPELL_HOUSING_PLOT_PRESENCE,
-                                            GenerateLowGuid<HighGuid::Cast>());
-                                        WorldPackets::Spells::AuraUpdate au;
-                                        au.UpdateAll = false;
-                                        au.UnitGUID = p->GetGUID();
-                                        WorldPackets::Spells::AuraInfo ai;
-                                        ai.Slot = 56;
-                                        ai.AuraData.emplace();
-                                        ai.AuraData->CastID = castId;
-                                        ai.AuraData->SpellID = SPELL_HOUSING_PLOT_PRESENCE;
-                                        ai.AuraData->Flags = AFLAG_SELF_CAST;
-                                        ai.AuraData->ActiveFlags = 1;
-                                        ai.AuraData->CastLevel = 36;
-                                        au.Auras.push_back(std::move(ai));
-                                        p->SendDirectMessage(au.Write());
-                                    }
-
-                                    TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Sent plot enter spells (slots 50+56) for {}",
-                                        playerGuid.ToString());
-                                }
+                                // No plot aura goes with the interior's trigger: retail's house map had
+                                // neither "[DNT] In Plot" nor what it brings (hbcd3 aura list 1408747).
 
                                 // 12.0.5: SMSG_NEIGHBORHOOD_PLAYER_ENTER_PLOT is gone. The
                                 // HOUSE_PLOT_ENTERED client event is now triggered by the
@@ -2001,7 +1974,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     SpawnExitDoor();
 
                     TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Complete — "
-                        "HouseInfo+Status+Perms+Auras+Account+PlotAT+ENTER_PLOT+Door for {}",
+                        "HouseInfo+Status+Perms+Account+PlotAT+ENTER_PLOT+Door for {}",
                         playerGuid.ToString());
                 }, Milliseconds(500));
             }

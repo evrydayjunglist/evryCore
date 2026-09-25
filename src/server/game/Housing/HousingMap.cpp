@@ -554,7 +554,7 @@ void HousingMap::DespawnPlotAreaTrigger(uint8 plotIndex)
         ClearPlayerCurrentPlot(playerGuid);
         if (Player* player = GetPlayer(playerGuid))
         {
-            SendPlotLeaveAuraRemoval(player);
+            RemovePlotAuras(player);
             player->SetCurrentHouse(ObjectGuid::Empty);
         }
     }
@@ -1057,18 +1057,8 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 }
             }
 
-            // Post-tutorial + neighborhood-map-entry auras are now emitted
-            // synchronously at the end of AddPlayerToMap (see below), immediately
-            // after the initial UPDATE_OBJECT bundle flushes. They must not ride
-            // on the 500 ms defer, which left a two-minute gap before the map and
-            // its icons settled.
-            // NOTE: SendPlotEnterSpellPackets is emitted by the plot AT's OnUnitEnter
-            // hook (at_housing_plot.cpp) when the player physically overlaps the plot
-            // AreaTrigger — the trigger retail uses, per the sniff (spells
-            // "In Plot"/1239847 and "Visiting Neighbor"/469226 are plot-overlap, not
-            // map-entry auras). The previous deferred emission here fired it on map
-            // entry regardless of whether the player's spawn position was inside a
-            // plot AT, which is wrong. Removed; AT hook remains the sole caller.
+            // The plot's own auras come from the plot's area trigger (at_housing_plot's OnUnitEnter) when she stands
+            // in its box, not from arriving on the map.
 
             // Diagnostic: print AT position vs player position for OutsidePlotBounds debugging
             float dist2d = p->GetExactDist2d(plotAt);
@@ -1087,15 +1077,26 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
         }, Milliseconds(500));
     }
 
-    // Retail sniff dump_12.0.1.66838_2026-04-15_09-35-59 emits the post-tutorial
-    // aura trio and the 4-aura neighborhood-map-entry burst immediately after
-    // the big UPDATE_OBJECT at map entry, not after a multi-second delay.
-    // Emitting them synchronously here (instead of from the 500 ms deferred
-    // ENTER_PLOT callback) removes a two-minute wait before the map settled and
-    // fires the spell triples for visitors too (the deferred block was gated
-    // on the player having a house).
-    SendHousingPostTutorialAuras(player);
-    SendNeighborhoodMapEntryAuras(player);
+    // The neighborhood's auras are cast once she is in, on her next update, so they follow the aura list her arrival
+    // sends, as retail's casts followed it (hbcd3 Number 3612, the list, then 3621-3626). The event runs on whichever
+    // map she is on by then, so it acts only on this one.
+    {
+        ObjectGuid const playerGuid = player->GetGUID();
+        uint32 const mapId = GetId();
+        uint32 const instanceId = GetInstanceId();
+        player->m_Events.AddEventAtOffset([playerGuid, mapId, instanceId]()
+        {
+            Player* p = ObjectAccessor::FindPlayer(playerGuid);
+            if (!p || !p->IsInWorld())
+                return;
+
+            HousingMap* hMap = dynamic_cast<HousingMap*>(p->GetMap());
+            if (!hMap || hMap->GetId() != mapId || hMap->GetInstanceId() != instanceId)
+                return;
+
+            hMap->RefreshNeighborhoodAuras(p);
+        }, Milliseconds(0));
+    }
 
     // Send personalized per-plot WorldState values for this specific player.
     // The init world states (sent during Map::AddPlayerToMap) use map-global defaults
@@ -1107,7 +1108,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     TC_LOG_DEBUG("housing", "=== AddPlayerToMap COMPLETE for player {} ===\n"
         "  Map: {} InstanceType={} NeighborhoodId={}\n"
         "  HasHouse: {} PlotIndex: {}\n"
-        "  Packets sent: CURRENT_HOUSE_INFO, 3xAURA+3xSTART+3xGO, "
+        "  Packets sent: CURRENT_HOUSE_INFO, neighborhood auras (next update), "
         "deferred ENTER_PLOT (500ms), WorldState timer started, PerPlayerPlotWorldStates\n"
         "  Player pos: ({:.1f}, {:.1f}, {:.1f})",
         player->GetGUID().ToString(),
@@ -1121,12 +1122,9 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 
 void HousingMap::RemovePlayerFromMap(Player* player, bool remove)
 {
-    // Remove plot auras before removing housing data.
-    if (Housing const* housing = player->GetHousingForNeighborhood(_neighborhood ? _neighborhood->GetGuid() : ObjectGuid::Empty))
-    {
-        // Remove all plot enter/presence auras (manual packets — spells not in DB2)
-        SendPlotLeaveAuraRemoval(player);
-    }
+    // The plot and neighborhood auras need nothing here: each of them ends when she leaves the world (their own
+    // interrupt flag, or the one SpellMgr gives the ones whose data lacks it), so a map change or a logout takes them
+    // off and none is saved with her.
 
     // Plot tracking is cleared for EVERY player leaving, not just those who own a house
     // here. Otherwise a visitor's entry would outlive the visit and last as long as the
@@ -1153,465 +1151,97 @@ void HousingMap::RemovePlayerFromMap(Player* player, bool remove)
     Map::RemovePlayerFromMap(player, remove);
 }
 
-void SendHousingPostTutorialAuras(Player* player)
+/*static*/ void HousingMap::CastHousingAura(Player* player, uint32 spellId)
 {
-    // Sniff-verified: After QUEST_HOUSING_TUTORIAL_COMPLETE turn-in, three "post-tutorial" auras
-    // are applied at slots 8, 9, 50. These replace old tutorial-phase auras.
-    // These persist for the rest of the session. Since they don't exist in DB2, we send
-    // manual SMSG_AURA_UPDATE packets each time the player enters the housing map.
-    // Slot 8: spell 1285428 (NoCaster, ActiveFlags=1)
-    // Slot 9: spell 1285424 (NoCaster, ActiveFlags=1) — will be overwritten by plot enter aura
-    // Slot 50: spell 1266699 (NoCaster|Scalable, ActiveFlags=1, Points=1) — overwritten by plot enter
-    if (!player->GetQuestRewardStatus(QUEST_HOUSING_TUTORIAL_COMPLETE))
-        return;
-
-    // Spell 1285428 at slot 8
-    {
-        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), SPELL_HOUSING_TUTORIAL_DONE_1,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = 8;
-        auraInfo.AuraData.emplace();
-        auraInfo.AuraData->CastID = castId;
-        auraInfo.AuraData->SpellID = SPELL_HOUSING_TUTORIAL_DONE_1;
-        auraInfo.AuraData->Flags = AFLAG_SELF_CAST;
-        auraInfo.AuraData->ActiveFlags = 1;
-        auraInfo.AuraData->CastLevel = 36;
-        auraInfo.AuraData->Applications = 0;
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-        player->SendDirectMessage(auraUpdate.Write());
-
-        WorldPackets::Spells::SpellStart spellStart;
-        spellStart.Cast.CasterGUID = player->GetGUID();
-        spellStart.Cast.CasterUnit = player->GetGUID();
-        spellStart.Cast.CastID = castId;
-        spellStart.Cast.SpellID = SPELL_HOUSING_TUTORIAL_DONE_1;
-        spellStart.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4;  // 15
-        spellStart.Cast.CastTime = 0;
-        player->SendDirectMessage(spellStart.Write());
-
-        WorldPackets::Spells::SpellGo spellGo;
-        spellGo.Cast.CasterGUID = player->GetGUID();
-        spellGo.Cast.CasterUnit = player->GetGUID();
-        spellGo.Cast.CastID = castId;
-        spellGo.Cast.SpellID = SPELL_HOUSING_TUTORIAL_DONE_1;
-        spellGo.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10;  // 781
-        spellGo.Cast.CastFlagsEx = 16;
-        spellGo.Cast.CastFlagsEx2 = 4;
-        spellGo.Cast.CastTime = getMSTime();
-        spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-        spellGo.Cast.HitTargets.push_back(player->GetGUID());
-        spellGo.Cast.HitStatus.emplace_back(uint8(0));
-        spellGo.LogData.Initialize(player);
-        player->SendDirectMessage(spellGo.Write());
-    }
-
-    // Spell 1285424 at slot 9
-    {
-        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), SPELL_HOUSING_TUTORIAL_DONE_2,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = 9;
-        auraInfo.AuraData.emplace();
-        auraInfo.AuraData->CastID = castId;
-        auraInfo.AuraData->SpellID = SPELL_HOUSING_TUTORIAL_DONE_2;
-        auraInfo.AuraData->Flags = AFLAG_SELF_CAST;
-        auraInfo.AuraData->ActiveFlags = 1;
-        auraInfo.AuraData->CastLevel = 36;
-        auraInfo.AuraData->Applications = 0;
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-        player->SendDirectMessage(auraUpdate.Write());
-
-        WorldPackets::Spells::SpellStart spellStart;
-        spellStart.Cast.CasterGUID = player->GetGUID();
-        spellStart.Cast.CasterUnit = player->GetGUID();
-        spellStart.Cast.CastID = castId;
-        spellStart.Cast.SpellID = SPELL_HOUSING_TUTORIAL_DONE_2;
-        spellStart.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4;
-        spellStart.Cast.CastTime = 0;
-        player->SendDirectMessage(spellStart.Write());
-
-        WorldPackets::Spells::SpellGo spellGo;
-        spellGo.Cast.CasterGUID = player->GetGUID();
-        spellGo.Cast.CasterUnit = player->GetGUID();
-        spellGo.Cast.CastID = castId;
-        spellGo.Cast.SpellID = SPELL_HOUSING_TUTORIAL_DONE_2;
-        spellGo.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10;
-        spellGo.Cast.CastFlagsEx = 16;
-        spellGo.Cast.CastFlagsEx2 = 4;
-        spellGo.Cast.CastTime = getMSTime();
-        spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-        spellGo.Cast.HitTargets.push_back(player->GetGUID());
-        spellGo.Cast.HitStatus.emplace_back(uint8(0));
-        spellGo.LogData.Initialize(player);
-        player->SendDirectMessage(spellGo.Write());
-    }
-
-    // Spell 1266699 at slot 50 (same ID as SPELL_HOUSING_PLOT_ENTER_2, different slot + Points)
-    {
-        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), SPELL_HOUSING_TUTORIAL_DONE_3,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = 50;
-        auraInfo.AuraData.emplace();
-        auraInfo.AuraData->CastID = castId;
-        auraInfo.AuraData->SpellID = SPELL_HOUSING_TUTORIAL_DONE_3;
-        auraInfo.AuraData->Flags = AFLAG_SELF_CAST | AFLAG_SCALABLE;
-        auraInfo.AuraData->ActiveFlags = 1;
-        auraInfo.AuraData->CastLevel = 36;
-        auraInfo.AuraData->Applications = 0;
-        auraInfo.AuraData->Points.push_back(1.0f);
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-        player->SendDirectMessage(auraUpdate.Write());
-
-        WorldPackets::Spells::SpellStart spellStart;
-        spellStart.Cast.CasterGUID = player->GetGUID();
-        spellStart.Cast.CasterUnit = player->GetGUID();
-        spellStart.Cast.CastID = castId;
-        spellStart.Cast.SpellID = SPELL_HOUSING_TUTORIAL_DONE_3;
-        spellStart.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4;
-        spellStart.Cast.CastTime = 0;
-        player->SendDirectMessage(spellStart.Write());
-
-        WorldPackets::Spells::SpellGo spellGo;
-        spellGo.Cast.CasterGUID = player->GetGUID();
-        spellGo.Cast.CasterUnit = player->GetGUID();
-        spellGo.Cast.CastID = castId;
-        spellGo.Cast.SpellID = SPELL_HOUSING_TUTORIAL_DONE_3;
-        spellGo.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10;
-        spellGo.Cast.CastFlagsEx = 16;
-        spellGo.Cast.CastFlagsEx2 = 4;
-        spellGo.Cast.CastTime = getMSTime();
-        spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-        spellGo.Cast.HitTargets.push_back(player->GetGUID());
-        spellGo.Cast.HitStatus.emplace_back(uint8(0));
-        spellGo.LogData.Initialize(player);
-        player->SendDirectMessage(spellGo.Write());
-    }
-
-    TC_LOG_DEBUG("housing", "SendPostTutorialAuras: Sent 3 post-tutorial aura sequences "
-        "(1285428@s8, 1285424@s9, 1266699@s50) for player {}",
-        player->GetGUID().ToString());
-}
-
-void HousingMap::SendNeighborhoodMapEntryAuras(Player* player)
-{
-    // Retail's map-entry aura burst — decoded from
-    // dump_12.0.1.66838_2026-04-15_09-35-59.pkt idx 9988/9994/9997/10000
-    // and cross-checked against dump_12.0.1.66838_2026-04-10_08-45-23.pkt
-    // idx 15676/15682/15685/15688. Each entry is one AURA_UPDATE +
-    // SPELL_START + SPELL_GO triple. All four fields (Slot, Flags,
-    // ActiveFlags, Visual.SpellXSpellVisualID) are taken straight from the
-    // sniff. CastLevel 84 on retail; we use player->getLevel() as a bonus
-    // since the decoded value reflects whatever char captured the sniff.
-    //
-    // 431539 (Morning Star) and 1266699 (Sound Squisher) appeared in the
-    // same retail burst but are character/ambient auras pre-existing before
-    // map entry (first seen at idx 5762/5786, 127× + 8× before map entry).
-    // Core TC aura re-sync on map change already handles those; we emit
-    // only the four truly-new housing-specific auras here.
-
     if (!player)
         return;
 
-    struct MapEntryAura
+    // None of these flags makes the core count the cast as triggered, so the spell start and the spell go are sent.
+    TriggerCastFlags constexpr untriggered = TriggerCastFlags(TRIGGERED_IGNORE_POWER_COST | TRIGGERED_IGNORE_CAST_IN_PROGRESS
+        | TRIGGERED_IGNORE_CAST_TIME | TRIGGERED_IGNORE_SHAPESHIFT | TRIGGERED_DONT_REPORT_CAST_ERROR);
+    SpellCastResult const result = player->CastSpell(player, spellId, CastSpellExtraArgs(untriggered));
+    if (result == SPELL_CAST_OK)
+        return;
+
+    TC_LOG_DEBUG("housing", "HousingMap::CastHousingAura: the cast of {} on {} was refused ({}), so it is cast as a triggered cast",
+        spellId, player->GetGUID().ToString(), uint32(result));
+    player->CastSpell(player, spellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+}
+
+void HousingMap::ApplyPlotAuras(Player* player, uint8 plotIndex, bool plotChanged)
+{
+    if (!player)
+        return;
+
+    if (player->HasAura(SPELL_HOUSING_IN_PLOT))
     {
-        uint32 SpellID;
-        uint16 Slot;
-        uint16 Flags;
-        uint32 ActiveFlags;
-        uint32 VisualSpellXSpellVisualID;
+        if (!plotChanged)
+            return;
+        RemovePlotAuras(player);
+    }
+
+    // The spell's own effects link "[DNT] Visiting Neighbor Plot" and "[DNT] In Own Plot"; the scripts on it
+    // (spell_housing_in_plot) keep only "[DNT] In Own Plot", and only on a plot of her own account.
+    CastHousingAura(player, SPELL_HOUSING_IN_PLOT);
+
+    TC_LOG_DEBUG("housing", "HousingMap::ApplyPlotAuras: {} is on plot {} of neighborhood '{}'",
+        player->GetGUID().ToString(), plotIndex, _neighborhood ? _neighborhood->GetName() : std::string("?"));
+}
+
+/*static*/ void HousingMap::RemovePlotAuras(Player* player)
+{
+    if (!player)
+        return;
+
+    // Removing "[DNT] In Plot" removes what its linked effects applied; the two are named as well in case one of them
+    // came from anywhere else.
+    player->RemoveAurasDueToSpell(SPELL_HOUSING_IN_PLOT);
+    player->RemoveAurasDueToSpell(SPELL_HOUSING_IN_OWN_PLOT);
+    player->RemoveAurasDueToSpell(SPELL_HOUSING_VISITING_NEIGHBOR_PLOT);
+}
+
+void HousingMap::RefreshNeighborhoodAuras(Player* player)
+{
+    if (!player || !_neighborhood)
+        return;
+
+    auto apply = [player](uint32 spellId)
+    {
+        if (!player->HasAura(spellId))
+            CastHousingAura(player, spellId);
     };
-    constexpr std::array<MapEntryAura, 4> kAuras = {{
-        { SPELL_HOUSING_MAP_ENTRY_FIXUP,    20,  AFLAG_SELF_CAST,                1, 0                                        },
-        { SPELL_HOUSING_MAP_ENTRY_REACT,    22,  AFLAG_SELF_CAST,                1, 0                                        },
-        { SPELL_HOUSING_MAP_ENTRY_ENDEAVOR, 53,  AFLAG_SELF_CAST,                1, 0                                        },
-        { SPELL_HOUSING_MAP_ENTRY_NEIGHBOR, 121, uint16(AFLAG_SELF_CAST | AFLAG_POSITIVE), 3, VISUAL_HOUSING_MAP_ENTRY_NEIGHBOR },
-    }};
 
-    uint16 const castLevel = static_cast<uint16>(player->GetLevel());
+    apply(SPELL_HOUSING_FIXUP_AURA);
+    apply(SPELL_HOUSING_SOUND_SQUISHER);
 
-    for (MapEntryAura const& a : kAuras)
+    // A packed house stands in no neighborhood, so it does not make her a resident.
+    Housing const* housing = player->GetHousingForNeighborhood(_neighborhood->GetGuid());
+    bool const resident = housing && !housing->IsPacked();
+    for (uint32 spellId : { SPELL_HOUSING_PLAYER_ACTION_REACT, SPELL_HOUSING_ENDEAVOR_COVER, SPELL_HOUSING_IN_YOUR_NEIGHBORHOOD })
     {
-        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), a.SpellID,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = a.Slot;
-        auraInfo.AuraData.emplace();
-        auraInfo.AuraData->CastID = castId;
-        auraInfo.AuraData->SpellID = a.SpellID;
-        auraInfo.AuraData->Visual.SpellXSpellVisualID = a.VisualSpellXSpellVisualID;
-        auraInfo.AuraData->Flags = a.Flags;
-        auraInfo.AuraData->ActiveFlags = a.ActiveFlags;
-        auraInfo.AuraData->CastLevel = castLevel;
-        auraInfo.AuraData->Applications = 0;
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-        player->SendDirectMessage(auraUpdate.Write());
-
-        WorldPackets::Spells::SpellStart spellStart;
-        spellStart.Cast.CasterGUID = player->GetGUID();
-        spellStart.Cast.CasterUnit = player->GetGUID();
-        spellStart.Cast.CastID = castId;
-        spellStart.Cast.SpellID = a.SpellID;
-        spellStart.Cast.Visual.SpellXSpellVisualID = a.VisualSpellXSpellVisualID;
-        spellStart.Cast.CastFlags = CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_VISUAL_CHAIN;
-        spellStart.Cast.CastTime = 0;
-        player->SendDirectMessage(spellStart.Write());
-
-        WorldPackets::Spells::SpellGo spellGo;
-        spellGo.Cast.CasterGUID = player->GetGUID();
-        spellGo.Cast.CasterUnit = player->GetGUID();
-        spellGo.Cast.CastID = castId;
-        spellGo.Cast.SpellID = a.SpellID;
-        spellGo.Cast.Visual.SpellXSpellVisualID = a.VisualSpellXSpellVisualID;
-        spellGo.Cast.CastFlags = CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10 | CAST_FLAG_VISUAL_CHAIN;
-        spellGo.Cast.CastFlagsEx = 16;
-        spellGo.Cast.CastFlagsEx2 = 4;
-        spellGo.Cast.CastTime = getMSTime();
-        spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-        spellGo.Cast.HitTargets.push_back(player->GetGUID());
-        spellGo.Cast.HitStatus.emplace_back(uint8(0));
-        spellGo.LogData.Initialize(player);
-        player->SendDirectMessage(spellGo.Write());
+        if (resident)
+            apply(spellId);
+        else
+            player->RemoveAurasDueToSpell(spellId);
     }
 
-    TC_LOG_DEBUG("housing", "SendNeighborhoodMapEntryAuras: Sent 4 map-entry aura triples "
-        "(1272741@s20, 1263578@s22, 1276064@s53, 1227147@s121 vis={}) for player {}",
-        VISUAL_HOUSING_MAP_ENTRY_NEIGHBOR, player->GetGUID().ToString());
+    TC_LOG_DEBUG("housing", "HousingMap::RefreshNeighborhoodAuras: {} on neighborhood '{}' ({})",
+        player->GetGUID().ToString(), _neighborhood->GetName(), resident ? "resident" : "not a resident");
 }
 
-void HousingMap::SendPlotEnterSpellPackets(Player* player, uint8 plotIndex)
+/*static*/ void HousingMap::RefreshNeighborhoodAurasOnMap(Neighborhood const* neighborhood)
 {
-    // PLOT AT OVERLAP event — NOT map-entry. Wowhead:
-    //   1239847 = "[DNT] In Plot"           → applied when the player's unit
-    //                                         is inside a plot's AreaTrigger box
-    //   469226  = "[DNT] Visiting Neighbor" → applied when that plot is owned
-    //                                         by someone else
-    //   1266699 = "[DNT] Sound Squisher"    → audio mixer aura
-    //
-    // Invoked only from at_housing_plot.cpp's OnUnitEnter hook. The earlier
-    // 500 ms-deferred invocation inside HousingMap::AddPlayerToMap was moved
-    // out because it fired unconditionally on map entry regardless of whether
-    // the player was actually inside a plot AT — the retail triggers are
-    // strictly AT overlap, not map transition.
-    //
-    // Manual packets are required because these spell IDs don't exist in DB2
-    // (CastSpell() fails silently for DNT spells).
+    if (!neighborhood)
+        return;
 
-    TC_LOG_DEBUG("housing", "SendPlotEnterSpellPackets: BEGIN for player {} plot {} map {}",
-        player->GetGUID().ToString(), plotIndex, GetId());
+    uint32 const worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID());
+    HousingMap* housingMap = dynamic_cast<HousingMap*>(sMapMgr->FindMap(worldMapId, uint32(neighborhood->GetGuid().GetCounter())));
+    if (!housingMap || housingMap->GetNeighborhood() != neighborhood)
+        return;
 
-    // 1. Spell 1239847 — plot enter tracking aura (slot 55)
-    // Sniff-verified: retail sends to slot 55, ActiveFlags=1 (NOT slot 50 which is tutorial aura)
-    {
-        ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), SPELL_HOUSING_PLOT_ENTER,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = 55;
-        auraInfo.AuraData.emplace();
-        auraInfo.AuraData->CastID = castId;
-        auraInfo.AuraData->SpellID = SPELL_HOUSING_PLOT_ENTER;
-        auraInfo.AuraData->Flags = AFLAG_SELF_CAST;
-        auraInfo.AuraData->ActiveFlags = 1;
-        auraInfo.AuraData->CastLevel = 36;
-        auraInfo.AuraData->Applications = 0;
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-        player->SendDirectMessage(auraUpdate.Write());
-
-        WorldPackets::Spells::SpellStart spellStart;
-        spellStart.Cast.CasterGUID = player->GetGUID();
-        spellStart.Cast.CasterUnit = player->GetGUID();
-        spellStart.Cast.CastID = castId;
-        spellStart.Cast.SpellID = SPELL_HOUSING_PLOT_ENTER;
-        spellStart.Cast.CastFlags = CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_VISUAL_CHAIN;  // 524302 = 0x8000E
-        spellStart.Cast.CastTime = 0;
-        player->SendDirectMessage(spellStart.Write());
-
-        WorldPackets::Spells::SpellGo spellGo;
-        spellGo.Cast.CasterGUID = player->GetGUID();
-        spellGo.Cast.CasterUnit = player->GetGUID();
-        spellGo.Cast.CastID = castId;
-        spellGo.Cast.SpellID = SPELL_HOUSING_PLOT_ENTER;
-        spellGo.Cast.CastFlags = CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10 | CAST_FLAG_VISUAL_CHAIN;  // 525068 = 0x8030C
-        spellGo.Cast.CastFlagsEx = 16;
-        spellGo.Cast.CastFlagsEx2 = 4;
-        spellGo.Cast.CastTime = getMSTime();
-        spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-        spellGo.Cast.HitTargets.push_back(player->GetGUID());
-        spellGo.Cast.HitStatus.emplace_back(uint8(0));
-        spellGo.LogData.Initialize(player);
-        player->SendDirectMessage(spellGo.Write());
-    }
-
-    // 2. Set HasPlayers flag (Flags=1024) on the plot AreaTrigger.
-    // Sniff-verified: this UPDATE_OBJECT goes out between the first spell set (1239847)
-    // and the second (469226). It tells the client that players are inside this AT.
-    if (AreaTrigger* plotAt = GetPlotAreaTrigger(plotIndex))
-    {
-        plotAt->SetAreaTriggerFlag(AreaTriggerFieldFlags::HasPlayers);
-        TC_LOG_DEBUG("housing", "SendPlotEnterSpellPackets: Set HasPlayers on AT {} for player {} plot {}",
-            plotAt->GetGUID().ToString(), player->GetGUID().ToString(), plotIndex);
-    }
-
-    // 3. Spell 469226 — plot presence aura (slot 56)
-    {
-        ObjectGuid castId2 = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), SPELL_HOUSING_PLOT_PRESENCE,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = 56;
-        auraInfo.AuraData.emplace();
-        auraInfo.AuraData->CastID = castId2;
-        auraInfo.AuraData->SpellID = SPELL_HOUSING_PLOT_PRESENCE;
-        auraInfo.AuraData->Flags = AFLAG_SELF_CAST;
-        auraInfo.AuraData->ActiveFlags = 1;
-        auraInfo.AuraData->CastLevel = 36;
-        auraInfo.AuraData->Applications = 0;
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-        player->SendDirectMessage(auraUpdate.Write());
-
-        WorldPackets::Spells::SpellStart spellStart;
-        spellStart.Cast.CasterGUID = player->GetGUID();
-        spellStart.Cast.CasterUnit = player->GetGUID();
-        spellStart.Cast.CastID = castId2;
-        spellStart.Cast.SpellID = SPELL_HOUSING_PLOT_PRESENCE;
-        spellStart.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_24 | CAST_FLAG_UNKNOWN_30;  // 0x2080000B
-        spellStart.Cast.CastFlagsEx = 0x2000200;
-        spellStart.Cast.CastTime = 0;
-        player->SendDirectMessage(spellStart.Write());
-
-        WorldPackets::Spells::SpellGo spellGo;
-        spellGo.Cast.CasterGUID = player->GetGUID();
-        spellGo.Cast.CasterUnit = player->GetGUID();
-        spellGo.Cast.CastID = castId2;
-        spellGo.Cast.SpellID = SPELL_HOUSING_PLOT_PRESENCE;
-        spellGo.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10 | CAST_FLAG_UNKNOWN_24 | CAST_FLAG_UNKNOWN_30;  // 0x20800309
-        spellGo.Cast.CastFlagsEx = 0x2000210;
-        spellGo.Cast.CastFlagsEx2 = 4;
-        spellGo.Cast.CastTime = getMSTime();
-        spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-        spellGo.Cast.HitTargets.push_back(player->GetGUID());
-        spellGo.Cast.HitStatus.emplace_back(uint8(0));
-        spellGo.LogData.Initialize(player);
-        player->SendDirectMessage(spellGo.Write());
-    }
-
-    // 4. Spell 1266699 — slot 9 replacement (preceded by slot 9 removal)
-    // CastFlags: START=15, GO=781, GoEx=16, GoEx2=4
-    {
-        // Remove existing slot 9 aura
-        WorldPackets::Spells::AuraUpdate auraRemove;
-        auraRemove.UpdateAll = false;
-        auraRemove.UnitGUID = player->GetGUID();
-        WorldPackets::Spells::AuraInfo removeInfo;
-        removeInfo.Slot = 9;
-        auraRemove.Auras.push_back(std::move(removeInfo));
-        player->SendDirectMessage(auraRemove.Write());
-
-        ObjectGuid castId3 = ObjectGuid::Create<HighGuid::Cast>(
-            SPELL_CAST_SOURCE_NORMAL, player->GetMapId(), SPELL_HOUSING_PLOT_ENTER_2,
-            player->GetMap()->GenerateLowGuid<HighGuid::Cast>());
-
-        // Apply 1266699 at slot 9 (Flags=NoCaster|Scalable=9, PointsCount=1, Points[0]=1)
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = 9;
-        auraInfo.AuraData.emplace();
-        auraInfo.AuraData->CastID = castId3;
-        auraInfo.AuraData->SpellID = SPELL_HOUSING_PLOT_ENTER_2;
-        auraInfo.AuraData->Flags = AFLAG_SELF_CAST | AFLAG_SCALABLE;
-        auraInfo.AuraData->ActiveFlags = 1;
-        auraInfo.AuraData->CastLevel = 36;
-        auraInfo.AuraData->Applications = 0;
-        auraInfo.AuraData->Points.push_back(1.0f);
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-        player->SendDirectMessage(auraUpdate.Write());
-
-        WorldPackets::Spells::SpellStart spellStart;
-        spellStart.Cast.CasterGUID = player->GetGUID();
-        spellStart.Cast.CasterUnit = player->GetGUID();
-        spellStart.Cast.CastID = castId3;
-        spellStart.Cast.SpellID = SPELL_HOUSING_PLOT_ENTER_2;
-        spellStart.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_HAS_TRAJECTORY | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4;  // 15
-        spellStart.Cast.CastTime = 0;
-        player->SendDirectMessage(spellStart.Write());
-
-        WorldPackets::Spells::SpellGo spellGo;
-        spellGo.Cast.CasterGUID = player->GetGUID();
-        spellGo.Cast.CasterUnit = player->GetGUID();
-        spellGo.Cast.CastID = castId3;
-        spellGo.Cast.SpellID = SPELL_HOUSING_PLOT_ENTER_2;
-        spellGo.Cast.CastFlags = CAST_FLAG_PENDING | CAST_FLAG_UNKNOWN_3 | CAST_FLAG_UNKNOWN_4 | CAST_FLAG_UNKNOWN_9 | CAST_FLAG_UNKNOWN_10;  // 781
-        spellGo.Cast.CastFlagsEx = 16;
-        spellGo.Cast.CastFlagsEx2 = 4;
-        spellGo.Cast.CastTime = getMSTime();
-        spellGo.Cast.Target.Flags = TARGET_FLAG_UNIT;
-        spellGo.Cast.HitTargets.push_back(player->GetGUID());
-        spellGo.Cast.HitStatus.emplace_back(uint8(0));
-        spellGo.LogData.Initialize(player);
-        player->SendDirectMessage(spellGo.Write());
-    }
-
-    TC_LOG_DEBUG("housing", "SendPlotEnterSpellPackets: END — sent 3 spell sequences "
-        "(1239847@s50, 469226@s56, 1266699@s9) + AT HasPlayers flag for player {} plot {}",
-        player->GetGUID().ToString(), plotIndex);
-}
-
-void HousingMap::SendPlotLeaveAuraRemoval(Player* player)
-{
-    // Remove all plot enter/presence auras (slots 50, 56, 9)
-    // Send aura removal packets (empty AuraData = HasAura=False)
-    for (uint8 slot : { uint8(50), uint8(56), uint8(9) })
-    {
-        WorldPackets::Spells::AuraUpdate auraUpdate;
-        auraUpdate.UpdateAll = false;
-        auraUpdate.UnitGUID = player->GetGUID();
-
-        WorldPackets::Spells::AuraInfo auraInfo;
-        auraInfo.Slot = slot;
-        auraUpdate.Auras.push_back(std::move(auraInfo));
-
-        player->SendDirectMessage(auraUpdate.Write());
-    }
-    TC_LOG_DEBUG("housing", "HousingMap::SendPlotLeaveAuraRemoval: Removed auras (slots 50, 56, 9) for player {}",
-        player->GetGUID().ToString());
+    for (MapReference const& reference : housingMap->GetPlayers())
+        if (Player* player = reference.GetSource())
+            housingMap->RefreshNeighborhoodAuras(player);
 }
 
 HousingPlotOwnerType HousingMap::GetPlotOwnerTypeForPlayer(Player const* player, uint8 plotIndex) const

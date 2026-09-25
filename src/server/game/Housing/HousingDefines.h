@@ -864,10 +864,6 @@ static constexpr uint32 GUILD_NEIGHBORHOOD_MIN_ACCOUNTS        = 10;
 static constexpr uint32 GUILD_NEIGHBORHOOD_MIN_ACTIVE_ACCOUNTS = 10;
 static constexpr uint32 GUILD_NEIGHBORHOOD_ACTIVE_DAYS         = 30;
 
-// Starter favor granted on house purchase (sniff: ChangeAmount=910, NewFavorTotal=910 in the
-// post-purchase HousingSvcsUpdateHousesLevelFavor pair).
-static constexpr uint64 HOUSE_PURCHASE_STARTER_FAVOR    = 910;
-
 // Neighborhood initiative ("Endeavor" in the client UI) progress is reported to the client on a
 // 0..1000 point scale — sniff-verified: PlayerInitiativeInfo.ProgressRequired == 1000.
 // InitiativeTask.ProgressContributionAmount (12.0.7 DB2 values 10/25/50/75/100/150/300) is how
@@ -926,48 +922,30 @@ static constexpr uint32 QUEST_HOUSING_MY_FIRST_HOME   = 91863;
 // pacify and silence her, stop her actions and clear who targets her, and it ends when she leaves the world.
 static constexpr uint32 SPELL_HOUSING_FIXTURE_EDITOR_LOCKOUT = 1270200;
 
-// Spell applied during housing decor edit mode (creates "phased-out" visual effect)
-// Sniff: aura slot 51, Flags=NoCaster, ActiveFlags=15, CastLevel=36
+// Cast on her for as long as decor edit mode is on (hbcd3 1431558-1431622, and again at 1441667).
 static constexpr uint32 SPELL_HOUSING_EDIT_MODE_AURA    = 1263303;
 
-// Spell applied when player enters their own housing plot
-// Sniff: aura slot 50/55, Flags=NoCaster, ActiveFlags=1-2, CastLevel=36
-static constexpr uint32 SPELL_HOUSING_PLOT_ENTER        = 1239847;
+// The housing auras retail casts on a character, each for real, from her to herself: an aura update, a spell start and
+// a spell go, in a slot the server picks. Here HousingMap::CastHousingAura casts them so that the start and the go go
+// out as well. Names are 12.1 SpellName.
+// On a plot: "[DNT] In Plot", whose linked effects bring "[DNT] Visiting Neighbor Plot" or "[DNT] In Own Plot"
+// (hbcd3 1339732-1339912). The core casts a linked aura's spell as a triggered cast, so "[DNT] In Own Plot" arrives
+// with its aura update only; retail sent a start and a go for it too.
+static constexpr uint32 SPELL_HOUSING_IN_PLOT                 = 1239847;
+static constexpr uint32 SPELL_HOUSING_VISITING_NEIGHBOR_PLOT  = 469226;
+static constexpr uint32 SPELL_HOUSING_IN_OWN_PLOT             = 468939;
+// On a neighborhood map, for everyone (hbcd3 421786-421956), and in a house (hbcd3 1403785).
+static constexpr uint32 SPELL_HOUSING_FIXUP_AURA              = 1272741;  // "Housing Fixup Aura", neighborhood only
+static constexpr uint32 SPELL_HOUSING_SOUND_SQUISHER          = 1266699;  // "[DNT] 11.2.7 Housing - Sound Squisher - Game Object - RTPC Aura"
+// On a neighborhood map where her account has a house (hbcd3 1300176-1300450, 1517509-1517783).
+static constexpr uint32 SPELL_HOUSING_PLAYER_ACTION_REACT     = 1263578;  // "Player Action React (DNT)"
+static constexpr uint32 SPELL_HOUSING_ENDEAVOR_COVER          = 1276064;  // "[DNT] Endeavor Cover Aura"
+static constexpr uint32 SPELL_HOUSING_IN_YOUR_NEIGHBORHOOD    = 1227147;  // "In Your Neighborhood"
+// In a house of her own account (hbcd3 1403680-1403744).
+static constexpr uint32 SPELL_HOUSING_HOMEOWNER_IS_PRESENT    = 1285424;  // "[DNT] Homeowner is Present"
 
-// Second spell applied when player enters their own housing plot
-// Sniff: aura slot 56, Flags=NoCaster, ActiveFlags=1, CastLevel=36
-static constexpr uint32 SPELL_HOUSING_PLOT_PRESENCE     = 469226;
-
-// Third spell applied on first plot enter — replaces slot 9 aura
-// Sniff: aura slot 9, Flags=NoCaster|Scalable(9), ActiveFlags=1, CastLevel=36, has PointsCount
-static constexpr uint32 SPELL_HOUSING_PLOT_ENTER_2      = 1266699;
-
-// Neighborhood map-entry auras — 4 housing-specific auras applied immediately
-// after the big SMSG_UPDATE_OBJECT batch at neighborhood-map entry. Decoded
-// from dump_12.0.1.66838_2026-04-15_09-35-59.pkt idx 9985-10000 (and
-// cross-checked against the 2026-04-10 capture at idx 15673-15690).
-// Slot/Flags/ActiveFlags/Applications/SpellVisual each sniff-verified.
-static constexpr uint32 SPELL_HOUSING_MAP_ENTRY_FIXUP      = 1272741;  // "Housing Fixup Aura"
-static constexpr uint32 SPELL_HOUSING_MAP_ENTRY_REACT      = 1263578;  // "Player Action React (DNT)"
-static constexpr uint32 SPELL_HOUSING_MAP_ENTRY_ENDEAVOR   = 1276064;  // "[DNT] Endeavor Cover Aura"
-static constexpr uint32 SPELL_HOUSING_MAP_ENTRY_NEIGHBOR   = 1227147;  // "In Your Neighborhood"
-// SpellXSpellVisualID baked into spell 1227147's AuraDataInfo.Visual on retail.
-static constexpr uint32 VISUAL_HOUSING_MAP_ENTRY_NEIGHBOR  = 503683;
-
-// Quest that completes the housing tutorial. Once turned in, the player is granted the
-// post-tutorial aura set and all editor modes (expert/cleanup/layout/customize) unlock.
+// Quest that completes the housing tutorial ("Home at Last"); turning it in unlocks every editor mode.
 static constexpr uint32 QUEST_HOUSING_TUTORIAL_COMPLETE = 94455; // "Home at Last"
-
-// Post-tutorial auras — applied when QUEST_HOUSING_TUTORIAL_COMPLETE is completed.
-// Sniff-verified: quest reward removes old tutorial auras (slots 8,9,50) and replaces them
-// with these three new ones. These don't exist in DB2, so we send manual SMSG_AURA_UPDATE.
-// Slot 8: Flags=NoCaster, ActiveFlags=1, CastLevel=36
-static constexpr uint32 SPELL_HOUSING_TUTORIAL_DONE_1   = 1285428;
-// Slot 9: Flags=NoCaster, ActiveFlags=1, CastLevel=36
-static constexpr uint32 SPELL_HOUSING_TUTORIAL_DONE_2   = 1285424;
-// Slot 50: Flags=NoCaster|Scalable, ActiveFlags=1, CastLevel=36, Points=[1]
-// Note: Same spell ID as SPELL_HOUSING_PLOT_ENTER_2 but applied at slot 50 (not slot 9)
-static constexpr uint32 SPELL_HOUSING_TUTORIAL_DONE_3   = 1266699;
 
 // WS[30906]: Toggled 1 when inside a house interior (MapID=2783), 0 when leaving.
 static constexpr uint32 WORLDSTATE_HOUSING_INTERIOR     = 30906;
@@ -1150,11 +1128,6 @@ static constexpr uint32 HOUSING_BLUEPRINT_NAME_MAX_CHARACTERS           = 50;
 // https://news.blizzard.com/en-us/article/24293281, and https://news.blizzard.com/en-us/article/24295382).
 static constexpr uint32 HOUSING_MAX_PET_BEDS_INTERIOR = 100;
 static constexpr uint32 HOUSING_MAX_PET_BEDS_EXTERIOR = 25;
-
-// The three post-tutorial auras (slots 8, 9, 50) are re-sent whenever the player enters either
-// housing map, so the sequence lives in one place instead of being carried by both map classes.
-class Player;
-TC_GAME_API void SendHousingPostTutorialAuras(Player* player);
 
 
 #endif // TRINITYCORE_HOUSING_DEFINES_H

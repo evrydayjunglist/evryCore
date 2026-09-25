@@ -161,14 +161,65 @@ TEST_CASE("A retroactive decor reward is earned by its criteria", "[Housing][Dec
     std::vector<std::pair<int32, int32>> const achievementOnly = { { 40894, 0 } };
     std::vector<std::pair<int32, int32>> const twoQuests = { { 0, 48897 }, { 0, 47432 } };
 
-    REQUIRE(HousingDecorStore::IsRetroactiveRewardEarned(RETROACTIVE_DECOR_REWARD_FLAG_ALL_CRITERIA_REQUIRED, achievementOnly, hasAchievement, hasQuest));
-    REQUIRE_FALSE(HousingDecorStore::IsRetroactiveRewardEarned(RETROACTIVE_DECOR_REWARD_FLAG_ALL_CRITERIA_REQUIRED, { { 26760, 0 } }, hasAchievement, hasQuest));
+    REQUIRE(HousingDecorStore::IsRetroactiveRewardEarned(achievementOnly, hasAchievement, hasQuest));
+    REQUIRE_FALSE(HousingDecorStore::IsRetroactiveRewardEarned({ { 26760, 0 } }, hasAchievement, hasQuest));
 
-    // With every criteria row needed, one of two quests is not enough; without the flag it is.
-    REQUIRE_FALSE(HousingDecorStore::IsRetroactiveRewardEarned(RETROACTIVE_DECOR_REWARD_FLAG_ALL_CRITERIA_REQUIRED, twoQuests, hasAchievement, hasQuest));
-    REQUIRE(HousingDecorStore::IsRetroactiveRewardEarned(RETROACTIVE_DECOR_REWARD_FLAG_NONE, twoQuests, hasAchievement, hasQuest));
+    // Any one row is enough: one of the two quests earns the reward.
+    REQUIRE(HousingDecorStore::IsRetroactiveRewardEarned(twoQuests, hasAchievement, hasQuest));
 
-    REQUIRE_FALSE(HousingDecorStore::IsRetroactiveRewardEarned(RETROACTIVE_DECOR_REWARD_FLAG_NONE, {}, hasAchievement, hasQuest));
+    // A faction pair (reward 251, decor 1481: "The Downfall of Marl Wormthorn" as 26187 and as 25720) is earned by
+    // either faction's quest alone.
+    std::vector<std::pair<int32, int32>> const factionPair = { { 0, 26187 }, { 0, 25720 } };
+    REQUIRE(HousingDecorStore::IsRetroactiveRewardEarned(factionPair, hasAchievement, [](uint32 questId) { return questId == 25720; }));
+    REQUIRE(HousingDecorStore::IsRetroactiveRewardEarned(factionPair, hasAchievement, [](uint32 questId) { return questId == 26187; }));
+
+    REQUIRE_FALSE(HousingDecorStore::IsRetroactiveRewardEarned({}, hasAchievement, hasQuest));
+
+    HousingDecorStore::RetroactiveReward byAchievement, byQuest, unearned;
+    byAchievement.Criteria = achievementOnly;
+    byQuest.Criteria = twoQuests;
+    unearned.Criteria = { { 26760, 0 } };
+    std::vector<HousingDecorStore::RetroactiveReward> const rewards = { byAchievement, byQuest, unearned };
+    REQUIRE(HousingDecorStore::CountEarnedRetroactiveRewards(rewards, hasAchievement, hasQuest) == 2);
+}
+
+TEST_CASE("The first house purchase credits the owed retroactive decor", "[Housing][Decor]")
+{
+    // What hbcd3 shows at the account's first purchase: "collect unique decor" went from 1 (147482) to 109 (Number
+    // 13846) and the new house had 1080 favor (1310396), 108 entries at the FirstAcquisitionBonus of 10 that 242 of the
+    // 245 retroactive entries carry. Achievement 61310 asks for 100 of them.
+    std::set<uint32> owned = { 1 };
+    std::vector<uint32> owed;
+    for (uint32 decorEntryId = 1000; decorEntryId < 1108; ++decorEntryId)
+        owed.push_back(decorEntryId);
+
+    auto alreadyOwned = [&owned](uint32 decorEntryId) { return owned.contains(decorEntryId); };
+    auto bonus = [](uint32 /*decorEntryId*/) { return int32(10); };
+
+    HousingDecorStore::FirstHouseCredit const credit = HousingDecorStore::GetFirstHouseCredit(owed, alreadyOwned, bonus);
+    REQUIRE(credit.NewlyOwned.size() == 108);
+    REQUIRE(credit.Favor == 1080);
+
+    owned.insert(credit.NewlyOwned.begin(), credit.NewlyOwned.end());
+    REQUIRE(owned.size() == 109);
+    REQUIRE(owned.size() >= 100);
+
+    SECTION("An entry the account already owns gives nothing again")
+    {
+        std::vector<uint32> const again = { 1, 1000, 1000 };
+        HousingDecorStore::FirstHouseCredit const repeat = HousingDecorStore::GetFirstHouseCredit(again, alreadyOwned, bonus);
+        REQUIRE(repeat.NewlyOwned.empty());
+        REQUIRE(repeat.Favor == 0);
+    }
+
+    SECTION("An entry without a bonus is collected without favor")
+    {
+        std::set<uint32> none;
+        HousingDecorStore::FirstHouseCredit const noBonus = HousingDecorStore::GetFirstHouseCredit({ 5, 6, 6 },
+            [&none](uint32 decorEntryId) { return none.contains(decorEntryId); }, [](uint32 decorEntryId) { return decorEntryId == 5 ? int32(10) : int32(0); });
+        REQUIRE((noBonus.NewlyOwned == std::vector<uint32>{ 5, 6 }));
+        REQUIRE(noBonus.Favor == 10);
+    }
 }
 
 TEST_CASE("Yard decor is saved with room 0 and interior decor with its room", "[Housing][Decor]")

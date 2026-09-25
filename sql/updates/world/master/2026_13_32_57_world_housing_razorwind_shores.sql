@@ -5,8 +5,8 @@
 --   hf1: sessions\housing\dump_12.0.7.68887_2026-07-25_11-03-11 hf1_parsed.txt
 --   hled1: sessions\housing\dump_12.0.7.68887_2026-07-25_20-46-56 hled1_parsed.txt
 --   erhousing: sessions\exiles-reach\dump_12.0.7.68887_2026-07-25_01-00-26 erhousing_parsed.txt
--- WowPacketParser SQL: Builds\housing-20260923\wpp\sql\*_world.sql. Every spawn comment names the capture
--- and the parsed-text line of the retail create it came from.
+-- Templates, vendors and gossip come from WowPacketParser's world SQL output for the same captures.
+-- Every spawn comment names the capture and the parsed-text line of the retail create it came from.
 --
 -- What is in this file:
 --   Creatures and plain gameobjects on map 2736 with no CreatedBy and no SummonedBy, whose entity

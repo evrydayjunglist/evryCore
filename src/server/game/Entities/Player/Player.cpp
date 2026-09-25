@@ -1436,9 +1436,6 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
             m_teleportSpellId = teleportSpellId;
             return true;
         }
-        // 12.0.5: state transitions from Initiated → WaitingForSuspendTokenResponse
-        // later in this function (when the suspend-token request is sent). The old
-        // SetSemaphoreTeleportFar(true) marker is no longer needed.
 
         SetSelection(ObjectGuid::Empty);
 
@@ -2002,20 +1999,7 @@ GameObject* Player::GetGameObjectIfCanInteractWith(ObjectGuid const& guid) const
         return nullptr;
 
     if (!go->IsWithinDistInMap(this))
-    {
-        // Debug: log interaction failures for housing cornerstones (type 48 = UI_LINK)
-        if (go->GetGoType() == GAMEOBJECT_TYPE_UI_LINK)
-        {
-            TC_LOG_DEBUG("housing", "Player::GetGameObjectIfCanInteractWith FAILED (distance/phase): "
-                "player={} go entry={} guid={} displayId={} dist={:.1f} "
-                "inMap={} inPhase={} atInteractDist={}",
-                GetGUID().ToString(), go->GetEntry(), go->GetGUID().ToString(),
-                go->GetGOInfo()->displayId, GetExactDist(go),
-                go->IsInMap(this), go->InSamePhase(this),
-                go->IsAtInteractDistance(this));
-        }
         return nullptr;
-    }
 
     return go;
 }
@@ -9749,15 +9733,14 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId) const
 {
     uint32 mapId = GetMapId();
 
+    TC_LOG_DEBUG("network", "Player::SendInitWorldStates: Sending SMSG_INIT_WORLD_STATES for Map: {}, Zone: {}", mapId, zoneId);
+
     WorldPackets::WorldState::InitWorldStates packet;
     packet.MapID = mapId;
     packet.AreaID = zoneId;
     packet.SubareaID = areaId;
 
     WorldStateMgr::FillInitialWorldStates(packet, GetMap(), areaId);
-
-    TC_LOG_DEBUG("housing", "Player::SendInitWorldStates: Map={} Zone={} Area={} WorldStateCount={}",
-        mapId, zoneId, areaId, uint32(packet.Worldstates.size()));
 
     SendDirectMessage(packet.Write());
 }
@@ -34186,4 +34169,3 @@ bool Player::CanExecutePendingSpellCastRequest()
 
     return true;
 }
-

@@ -170,7 +170,7 @@ TEST_CASE("A house's exterior root has an Entity GUID made from its plot", "[Hou
 TEST_CASE("A dragged house's placement is checked against its room and turns the root", "[Housing][Exterior]")
 {
     // hled1 645894: the client put the root at (-7.4893, 1.7693, 0.02055) facing 1.5707932, and the root's update
-    // at 645930 carried z 0.70710564, w 0.7071079.
+    // at 645924 carried z 0.70710564, w 0.7071079.
     Position const dragged(-7.4893188f, 1.7693481f, 0.0205500f, 1.5707932f);
     REQUIRE(HousingMgr::IsRootPlacementInRoom(dragged));
 

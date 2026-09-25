@@ -847,16 +847,10 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     // actively needs it before the delayed push, CMSG_HOUSING_DECOR_REQUEST_
     // STORAGE also triggers catalog dispatch via HandleHousingDecorRequestStorage.
 
-    // ENTER_PLOT must be sent AFTER SMSG_UPDATE_OBJECT creates the AT on the client.
-    // UPDATE_OBJECT is flushed after AddPlayerToMap returns, so sending ENTER_PLOT
-    // here synchronously would reference an AT GUID the client doesn't know yet.
-    // Solution: schedule a deferred event that sends ENTER_PLOT after a short delay,
-    // giving the UPDATE_OBJECT time to flush to the client first.
-    // The at_housing_plot AT overlap script also sends ENTER_PLOT when the player
-    // physically enters the box, but on login the AT overlap check may not fire
-    // on the first tick (player already inside the AT when it was created).
-    // SetPlayerCurrentPlot is called here so the AT script's alreadyOnPlot guard
-    // prevents duplicate ENTER_PLOT sends if both paths fire.
+    // The update that creates her plot's area trigger on her client goes out only after AddPlayerToMap returns. Half
+    // a second later a deferred event refreshes that trigger for her and sets her CurrentHouse field, because the
+    // trigger's own enter script may not run when she is already inside its box as she arrives. Her current plot is
+    // set here, so when that script does run it counts the plot as unchanged and does not recast the plot's aura.
     if (housing)
     {
         uint8 plotIndex = housing->GetPlotIndex();
@@ -882,13 +876,13 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             AreaTrigger* plotAt = hMap->GetPlotAreaTrigger(deferredPlotIndex);
             if (!plotAt)
             {
-                TC_LOG_ERROR("housing", "HousingMap deferred ENTER_PLOT: No AT for plot {} player {}",
+                TC_LOG_ERROR("housing", "HousingMap deferred plot refresh: No AT for plot {} player {}",
                     deferredPlotIndex, playerGuid.ToString());
                 return;
             }
 
-            // As retail does, send a VALUES update of the area trigger
-            // at the same timestamp as ENTER_PLOT, ensuring the client entity table has fresh data.
+            // As retail does, send a values update of the plot's area trigger, so her client holds its current
+            // fields (or create it for her if her client does not have it yet).
             {
                 UpdateData atUpdate(p->GetMapId());
                 if (p->HaveAtClient(plotAt))
@@ -906,19 +900,9 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 }
             }
 
-            // REMOVED proactive SMSG_NEIGHBORHOOD_PLAYER_ENTER_PLOT (0x5C0000)
-            // and SMSG_HOUSING_FIXTURE_CREATE_BASIC_HOUSE_RESPONSE (0x520001).
-            // Sniff set-diff of 3 retail login captures shows retail never
-            // emits either opcode at login / during the deferred-map-entry
-            // window; both are strictly reactive to specific user actions
-            // (AT overlap entry, fixture-editor click). Keeping the
-            // proactive sends here put the client's housing-state machine
-            // into pre-initialised state that suppressed the world-map
-            // icon-picker refresh. The at_housing_plot AT script still
-            // emits PLAYER_ENTER_PLOT (and HouseStatus+Permissions) on
-            // actual plot overlap, which matches retail.
-            TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: proactive PLAYER_ENTER_PLOT + FIXTURE_CREATE_BASIC_HOUSE suppressed for player {}",
-                playerGuid.ToString());
+            // No plot packet is sent here. None of the retail housing captures has a plot-entry packet or a basic
+            // house fixture reply. The client learns which plot she stands on from her CurrentHouse field, which the
+            // plot's area trigger sets.
 
             // The house's pieces are not created again here. They are grid objects and reached her through the map's
             // visibility, and retail never sends a second create for a GUID the client already holds.
@@ -998,7 +982,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 // No PlayerHousesInfo reply is sent here: three retail 12.0.1 (build 66838)
                 // login captures show none that the client did not ask for.
 
-                TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: Sent Account CREATE + {} decor MeshObject CREATEs for player {}",
+                TC_LOG_DEBUG("housing", "HousingMap deferred plot refresh: Sent Account CREATE + {} decor MeshObject CREATEs for player {}",
                     meshCreateCount, playerGuid.ToString());
 
                 // The 500 ms defer sends no housing reply packets. Three retail
@@ -1065,7 +1049,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             float dist3d = p->GetExactDist(plotAt);
             bool inBox = p->IsWithinBox(*plotAt, 35.0f, 30.0f, 47.0f);  // half-extents from SQL ShapeData
 
-            TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: player {} plot {} AT {}\n"
+            TC_LOG_DEBUG("housing", "HousingMap deferred plot refresh: player {} plot {} AT {}\n"
                 "  AT pos: ({:.1f}, {:.1f}, {:.1f}, facing={:.3f})\n"
                 "  Player pos: ({:.1f}, {:.1f}, {:.1f})\n"
                 "  Dist2D={:.1f} Dist3D={:.1f} InBox={} HasPlayers={}",
@@ -1109,7 +1093,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
         "  Map: {} InstanceType={} NeighborhoodId={}\n"
         "  HasHouse: {} PlotIndex: {}\n"
         "  Packets sent: CURRENT_HOUSE_INFO, neighborhood auras (next update), "
-        "deferred ENTER_PLOT (500ms), WorldState timer started, PerPlayerPlotWorldStates\n"
+        "deferred plot refresh (500ms), WorldState timer started, PerPlayerPlotWorldStates\n"
         "  Player pos: ({:.1f}, {:.1f}, {:.1f})",
         player->GetGUID().ToString(),
         GetId(), GetEntry()->InstanceType, _neighborhoodId,

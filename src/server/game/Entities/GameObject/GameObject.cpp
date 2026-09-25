@@ -4853,4 +4853,3 @@ SpellInfo const* GameObject::GetSpellForLock(Player const* player) const
 
     return nullptr;
 }
-

@@ -168,7 +168,8 @@ public:
     // destroys the old pieces and creates the new one (hled1 818935 and 819008), then the new door in an update of its
     // own (hled1 819290, which follows the second create at 819082). Retail's door came about half a second after the
     // pieces, where this sends it at once, so a quick second change here also destroys a door and its Entity that
-    // retail never sent (hled1 819186 destroys only the piece). While a change builds, what it adds to the map is kept back from her; everyone else gets it as it is added.
+    // retail never sent (hled1 819186 destroys only the piece). While a change builds, what it adds to the map is kept
+    // back from her; everyone else gets it as it is added.
     struct HeldBackCreates
     {
         Player* Viewer = nullptr;

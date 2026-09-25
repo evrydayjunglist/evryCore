@@ -2992,8 +2992,9 @@ bool Guild::DeleteMember(CharacterDatabaseTransaction trans, ObjectGuid guid, bo
     // Call script on remove before member is actually removed from guild (and database)
     sScriptMgr->OnGuildRemoveMember(this, guid, isDisbanding, isKicked);
 
-    // A member who leaves or is removed loses her house in the guild's neighborhood: it is packed and its plot is
-    // free. What happens to a guild neighborhood when the guild disbands is not known, so disbanding does not.
+    // A member who leaves or is removed loses each house in the guild's neighborhood that she is the shown owner of:
+    // it is packed and its plot is free. What happens to a guild neighborhood when the guild disbands is not known,
+    // so disbanding does not.
     if (!isDisbanding)
         sNeighborhoodMgr.OnGuildMemberRemoved(GetId(), guid, trans);
 

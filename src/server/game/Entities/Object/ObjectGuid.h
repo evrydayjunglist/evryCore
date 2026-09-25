@@ -57,7 +57,7 @@ enum TypeID : uint8
     NUM_CLIENT_OBJECT_TYPES,
 
     // Retail sends object type 18 for the Battle.net account and for housing entities
-    // (houses, neighborhoods, room components, decor and their mirrors). It has the same
+    // (houses, neighborhoods, rooms, decor and their mirrors). It has the same
     // value as NUM_CLIENT_OBJECT_TYPES but is kept out of that count, so the update masks sized
     // by the count stay as they are.
     TYPEID_HOUSING_ENTITY         = 18

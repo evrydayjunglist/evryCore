@@ -28,14 +28,9 @@
 #include "NeighborhoodMgr.h"
 #include "Player.h"
 
-// 12.0.5 plot-entry mechanism:
-//   - No more SMSG_NEIGHBORHOOD_PLAYER_ENTER_PLOT / LEAVE_PLOT opcodes (removed in
-//     TC commit 4c14988 / WoW build 12.0.5.67114).
-//   - No more FHousingPlotAreaTrigger_C entity fragment on the plot AT.
-//   - Plot ownership / "am I on a plot" is communicated via the
-//     PlayerHouseInfoComponentData.CurrentHouse UpdateField on the Player entity.
-//     Server writes the plot's HouseGuid to CurrentHouse on enter and clears it
-//     on exit; the client observes the UPDATE_OBJECT change to track occupancy.
+// Stepping onto or off a plot has no packet of its own, and the plot's area trigger carries no housing fragment.
+// The client learns which plot she stands on from the CurrentHouse field of her PlayerHouseInfoComponentData: this
+// trigger writes the plot's house GUID there when she enters and clears it when she leaves.
 struct at_housing_plot : AreaTriggerAI
 {
     using AreaTriggerAI::AreaTriggerAI;
@@ -85,13 +80,9 @@ struct at_housing_plot : AreaTriggerAI
         int8 currentPlot = housingMap->GetPlayerCurrentPlot(player->GetGUID());
         bool alreadyOnPlot = (currentPlot == plotIdx);
 
-        // 12.0.5 plot-entry: write the plot's HouseGuid to PlayerHouseInfoComponent.CurrentHouse.
-        // The UPDATE_OBJECT carrying this change replaces the removed
-        // SMSG_NEIGHBORHOOD_PLAYER_ENTER_PLOT opcode; the client reads CurrentHouse to
-        // populate its NeighborhoodSystem TLS (+280) "am I on a plot" state.
-        // Always invoked — SetCurrentHouse short-circuits when the value is unchanged, so
-        // logged-in-on-plot players (alreadyOnPlot=true via HousingMap::SetPlayerCurrentPlot
-        // at AddPlayerToMap) still get the field-change callback wired correctly.
+        // Write the plot's house GUID to her CurrentHouse field; the client reads it to know she is on a plot. This
+        // also runs when her arrival on the map already counted this plot as her current one, and SetCurrentHouse
+        // sends nothing when the value is unchanged.
         player->SetCurrentHouse(houseGuid);
 
         if (!alreadyOnPlot)
@@ -141,8 +132,7 @@ struct at_housing_plot : AreaTriggerAI
 
         housingMap->ClearPlayerCurrentPlot(player->GetGUID());
 
-        // 12.0.5 plot-leave: clear PlayerHouseInfoComponent.CurrentHouse so the client's
-        // NeighborhoodSystem TLS drops its "on plot" flag.
+        // Clear her CurrentHouse field so the client knows she is no longer on a plot.
         player->SetCurrentHouse(ObjectGuid::Empty);
 
         TC_LOG_DEBUG("housing", "at_housing_plot: Player {} left plot AT {} (own={})",

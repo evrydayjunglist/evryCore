@@ -83,7 +83,6 @@ class Creature;
 class DynamicObject;
 class GameObject;
 class Garrison;
-class Housing;
 class Group;
 class Guild;
 class Housing;

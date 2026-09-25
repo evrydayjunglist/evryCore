@@ -1903,4 +1903,3 @@ void AreaTrigger::ClearValuesChangesMask()
     m_values.ClearChangesMask(&AreaTrigger::m_areaTriggerData);
     WorldObject::ClearValuesChangesMask();
 }
-

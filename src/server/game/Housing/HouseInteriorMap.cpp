@@ -780,11 +780,8 @@ void HouseInteriorMap::DespawnRoomEntities(ObjectGuid roomGuid)
 }
 
 void HouseInteriorMap::ReplaceWallWithDoorway(ObjectGuid roomGuid, uint32 doorComponentID,
-    int32 factionRestriction, Housing::Room const& room, ObjectGuid newRoomGuid)
+    int32 factionRestriction, Housing::Room const& room, ObjectGuid /*newRoomGuid*/)
 {
-    // The parent room keeps its Cosmetic wall (Type=0) to fill the full wall width.
-    // The child room's DoorwayWall+Doorway renders over it to create the door opening.
-    // This function is now a no-op — the parent's wall stays as-is.
     // Replace the parent's Cosmetic wall (Type=0) with DoorwayWall (Type=1) only.
     // Type=1 has the door opening + side fillers. The child room handles the Doorway (Type=2).
     auto meshItr = _roomMeshObjects.find(roomGuid);
@@ -878,7 +875,7 @@ void HouseInteriorMap::ReplaceWallWithDoorway(ObjectGuid roomGuid, uint32 doorCo
         roomGuid.ToString(), doorComponentID);
 }
 
-void HouseInteriorMap::UpdateRoomComponentTextures(ObjectGuid roomGuid, Housing::Room const& room,
+void HouseInteriorMap::UpdateRoomComponentTextures(ObjectGuid roomGuid, Housing::Room const& /*room*/,
     std::vector<uint32> const* componentIDs, int32 textureID)
 {
     // Material/texture-only change: update existing MeshObjects in-place via UPDATE_OBJECT.
@@ -1812,8 +1809,8 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
             // Defer ALL housing context packets by 500ms. The client needs time to
             // process the initial UPDATE_OBJECT (entities, room MeshObjects) before
-            // housing response packets can be processed. This mirrors the exterior
-            // map's deferred ENTER_PLOT pattern (HousingMap.cpp).
+            // housing response packets can be processed. The exterior map defers its
+            // plot refresh the same way (HousingMap.cpp).
             // Without the delay, the housing system TLS may not be ready and the
             // client silently drops the Status/Permissions packets.
             {
@@ -1840,16 +1837,9 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     if (!housing)
                         return;
 
-                    // ENTER_PLOT is sent AFTER the AT CREATE in step 8 below.
-                    // The sequence is: AT CREATE → ENTER_PLOT → re-send Status+Perms.
-                    // ENTER_PLOT fires HOUSE_PLOT_ENTERED (FrameScript event 1073) which
-                    // loads Blizzard_HousingControls. The handler resets editor state, so
-                    // Status+Perms are re-sent afterward to re-establish context.
-
-                    // Steps 1-3 (HouseInfo, Status, Permissions) moved to AFTER
-                    // ENTER_PLOT below. ENTER_PLOT resets editor state, so sending
-                    // Status+Permissions before it is wasteful. The exterior AT handler
-                    // (at_housing_plot.cpp) also sends Status+Permissions AFTER ENTER_PLOT.
+                    // No house info, status or permissions reply goes out here; the client asks for them and the
+                    // housing handlers answer. No plot-entry packet goes out either: the client learns she is on
+                    // the plot from her CurrentHouse field, which step 7 sets when it creates the plot's trigger.
 
                     // 0) Drive the housing tutorial forward. The editor UI stays locked until
                     // QUEST_HOUSING_TUTORIAL_COMPLETE ("Home at Last") is REWARDED, and that quest
@@ -1952,10 +1942,8 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                                 // No plot aura goes with the interior's trigger: retail's house map had
                                 // neither "[DNT] In Plot" nor what it brings (hbcd3 aura list 1408747).
 
-                                // 12.0.5: SMSG_NEIGHBORHOOD_PLAYER_ENTER_PLOT is gone. The
-                                // HOUSE_PLOT_ENTERED client event is now triggered by the
-                                // UPDATE_OBJECT carrying PlayerHouseInfoComponent.CurrentHouse.
-                                // Set CurrentHouse to the house GUID for the interior plot.
+                                // None of the retail housing captures has a plot-entry packet. The client
+                                // learns she is on the plot from her CurrentHouse field, set here to the house.
                                 if (Housing const* ownerHousingForCurrent = GetOwnerHousing())
                                     p->SetCurrentHouse(ownerHousingForCurrent->GetHouseGuid());
 
@@ -1974,7 +1962,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     SpawnExitDoor();
 
                     TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Complete — "
-                        "HouseInfo+Status+Perms+Account+PlotAT+ENTER_PLOT+Door for {}",
+                        "tutorial, Account+decor, plot AT, CurrentHouse, door for {}",
                         playerGuid.ToString());
                 }, Milliseconds(500));
             }

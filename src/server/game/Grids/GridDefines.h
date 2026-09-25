@@ -79,18 +79,18 @@ typedef GridRefManager<HousingDecorEntity> HousingDecorEntityMapType;
 
 enum GridMapTypeMask
 {
-    GRID_MAP_TYPE_MASK_CORPSE              = 0x01,
-    GRID_MAP_TYPE_MASK_CREATURE            = 0x02,
-    GRID_MAP_TYPE_MASK_DYNAMICOBJECT       = 0x04,
-    GRID_MAP_TYPE_MASK_GAMEOBJECT          = 0x08,
-    GRID_MAP_TYPE_MASK_PLAYER              = 0x10,
-    GRID_MAP_TYPE_MASK_AREATRIGGER         = 0x20,
-    GRID_MAP_TYPE_MASK_SCENEOBJECT         = 0x40,
-    GRID_MAP_TYPE_MASK_CONVERSATION        = 0x80,
-    GRID_MAP_TYPE_MASK_MESHOBJECT          = 0x100,
-    GRID_MAP_TYPE_MASK_HOUSING_ROOM_ENTITY  = 0x200,
+    GRID_MAP_TYPE_MASK_CORPSE           = 0x01,
+    GRID_MAP_TYPE_MASK_CREATURE         = 0x02,
+    GRID_MAP_TYPE_MASK_DYNAMICOBJECT    = 0x04,
+    GRID_MAP_TYPE_MASK_GAMEOBJECT       = 0x08,
+    GRID_MAP_TYPE_MASK_PLAYER           = 0x10,
+    GRID_MAP_TYPE_MASK_AREATRIGGER      = 0x20,
+    GRID_MAP_TYPE_MASK_SCENEOBJECT      = 0x40,
+    GRID_MAP_TYPE_MASK_CONVERSATION     = 0x80,
+    GRID_MAP_TYPE_MASK_MESHOBJECT       = 0x100,
+    GRID_MAP_TYPE_MASK_HOUSING_ROOM_ENTITY = 0x200,
     GRID_MAP_TYPE_MASK_HOUSING_DECOR_ENTITY = 0x400,
-    GRID_MAP_TYPE_MASK_ALL                  = 0x7FF
+    GRID_MAP_TYPE_MASK_ALL              = 0x7FF
 };
 
 // Creature used instead pet to simplify *::Visit templates (not required duplicate code for Creature->Pet case)

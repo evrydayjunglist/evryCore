@@ -553,7 +553,7 @@ void WorldSession::HandleNeighborhoodCharterAddSignature(WorldPackets::Neighborh
         return;
     }
 
-    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_ADD_SIGNATURECharterGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_ADD_SIGNATURE CharterGuid: {}",
         neighborhoodCharterAddSignature.CharterGuid.ToString());
 
     // CharterGuid counter maps to charter DB ID
@@ -2495,6 +2495,3 @@ void WorldSession::HandleNeighborhoodInitiativeOp0F(WorldPackets::Neighborhood::
         TC_LOG_TRACE("housing", "  record: ({}, {}, {}, {})", r.A, r.B, r.C, r.D);
 }
 #endif
-
-
-

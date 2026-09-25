@@ -913,21 +913,15 @@ static constexpr uint32 SPELL_HOUSING_TUTORIAL_DONE_3   = 1266699;
 // WS[30906]: Toggled 1 when inside a house interior (MapID=2783), 0 when leaving.
 static constexpr uint32 WORLDSTATE_HOUSING_INTERIOR     = 30906;
 
-// Synthetic per-plot binary occupancy WorldState base. Retail's NeighborhoodPlot
-// DB2 carries a `WorldState` column that is sent through SMSG_INIT_WORLD_STATES
-// (and broadcast via SMSG_UPDATE_WORLD_STATE when a plot changes owned/empty).
-// Our DB2 extraction has this column zero for every plot, so no worldstate is
-// set or broadcast — the "is a house here?" signal never reaches the client.
-// Fall back to a synthetic ID keyed on NeighborhoodMapID + PlotIndex so the
-// binary occupancy channel works even without the DB2 data. Range chosen to
-// avoid collision with live retail worldstates (< 40000 in our current world_state
-// table) and is unique per (NeighborhoodMapID, PlotIndex) pair up to map 99.
-static constexpr uint32 WORLDSTATE_HOUSING_PLOT_BASE = 40000;
+// Every plot's cornerstone is this one shared gameobject entry; the plot it stands for is in its cornerstone data
+// (PlotIndex) and in its CreatedBy. All 55 cornerstones retail created on Razorwind Shores are 457142 (hbcd3
+// 439189-615537, also hf1, hled1 and erhousing), and agatho's 12.0.1 world data (build 65940) has 457142 at every
+// plot of Founder's Point too.
+static constexpr uint32 GAMEOBJECT_HOUSING_CORNERSTONE = 457142;
 
-inline uint32 MakeHousingPlotWorldStateId(uint32 neighborhoodMapId, uint32 plotIndex)
-{
-    return WORLDSTATE_HOUSING_PLOT_BASE + (neighborhoodMapId * 100u) + plotIndex;
-}
+// A cornerstone's CreatedBy is a client actor: owner type 1, owner id the neighborhood's world map, and the plot's
+// NeighborhoodPlot.CornerstoneGameObjectID as its counter. Retail's high half is 0x5000042AC0000000 on map 2736.
+static constexpr uint16 HOUSING_CORNERSTONE_CREATOR_OWNER_TYPE = 1;
 
 // Room grid spacing for interior maps (sniff-verified: ~24 yards between room centers)
 static constexpr float HOUSING_ROOM_GRID_SPACING = 24.0f;

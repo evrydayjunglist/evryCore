@@ -249,6 +249,11 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
             SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_gameObjectData).ModifyValue(&UF::GameObjectData::CreatedBy), owner);
         }
         ObjectGuid GetOwnerGUID() const override { return m_gameObjectData->CreatedBy; }
+        // Sets CreatedBy alone. Unlike SetOwnerGUID it leaves the object spawned by default, not a summoned object.
+        void SetCreatedByGUID(ObjectGuid createdBy)
+        {
+            SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_gameObjectData).ModifyValue(&UF::GameObjectData::CreatedBy), createdBy);
+        }
 
         void SetSpellId(uint32 id)
         {

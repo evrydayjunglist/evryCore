@@ -113,13 +113,15 @@ namespace
             return nullptr;
         }
 
-        NeighborhoodPlotData const* plot = sHousingMgr.GetPlotByCornerstoneEntry(
-            map->GetNeighborhood()->GetNeighborhoodMapID(), cornerstone->GetEntry());
-        if (!plot || plot->PlotIndex < 0 || plot->PlotIndex >= int32(MAX_NEIGHBORHOOD_PLOTS))
+        // Every cornerstone shares one entry, so the plot comes from the cornerstone this map spawned for it.
+        int8 const plotIndex = map->GetPlotIndexForCornerstone(cornerstone->GetGUID());
+        NeighborhoodPlotData const* plot = plotIndex >= 0 && plotIndex < int8(MAX_NEIGHBORHOOD_PLOTS)
+            ? sHousingMgr.GetPlot(map->GetNeighborhood()->GetNeighborhoodMapID(), uint8(plotIndex))
+            : nullptr;
+        if (!plot)
         {
-            TC_LOG_DEBUG("housing", "Cornerstone refused for player {}: no plot for cornerstone {} (entry {}) on neighborhood map {}",
-                player->GetGUID().ToString(), cornerstoneGuid.ToString(), cornerstone->GetEntry(),
-                map->GetNeighborhood()->GetNeighborhoodMapID());
+            TC_LOG_DEBUG("housing", "Cornerstone refused for player {}: {} is not a plot cornerstone of neighborhood map {}",
+                player->GetGUID().ToString(), cornerstoneGuid.ToString(), map->GetNeighborhood()->GetNeighborhoodMapID());
             return nullptr;
         }
 
@@ -2045,13 +2047,7 @@ void WorldSession::HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::Neigh
         return;
     }
 
-    // Use the client's PlotIndex directly — client sends its internal plot ID
-    // which may differ from our DB2 PlotIndex values
     uint32 plotIndex = neighborhoodEvictPlot.PlotIndex;
-
-    int32 db2Resolved = sHousingMgr.ResolvePlotIndex(neighborhoodEvictPlot.NeighborhoodGuid, neighborhood);
-    TC_LOG_INFO("housing", "HandleNeighborhoodEvictPlot: Using client PlotIndex={} (DB2 resolved={})",
-        plotIndex, db2Resolved);
 
     // Only owner or manager can evict
     if (!neighborhood->IsOwner(player->GetGUID()) && !neighborhood->IsManager(player->GetGUID()))

@@ -161,36 +161,21 @@ void HousingMap::SpawnPlotGameObjects()
     uint32 goCount = 0;
     uint32 noEntryCount = 0;
 
-    TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: DB2 PlotIndex→GOEntry mapping for {} plots on map {}:",
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: {} plots on map {}:",
         uint32(plots.size()), neighborhoodMapId);
     for (NeighborhoodPlotData const* plot : plots)
     {
-        TC_LOG_DEBUG("housing", "  DB2 ID={} PlotIndex={} CornerstoneGOEntry={} Cost={} WorldState={} HousePos=({:.1f},{:.1f},{:.1f})",
+        TC_LOG_DEBUG("housing", "  DB2 ID={} PlotIndex={} CornerstoneGameObjectID={} Cost={} WorldState={} HousePos=({:.1f},{:.1f},{:.1f})",
             plot->ID, plot->PlotIndex, plot->CornerstoneGameObjectID, plot->Cost, plot->WorldState,
             plot->HousePosition[0], plot->HousePosition[1], plot->HousePosition[2]);
     }
 
     for (NeighborhoodPlotData const* plot : plots)
     {
-        float x = plot->CornerstonePosition[0];
-        float y = plot->CornerstonePosition[1];
-        float z = plot->CornerstonePosition[2];
-
-        // Ensure the grid at this position is loaded so we can add GOs
-        LoadGrid(x, y);
-
-        // Retail uses a UNIQUE CornerstoneGameObjectID per plot so the server can
-        // identify which plot a player interacted with.  All share type=48, displayId=110660.
-        // Ownership state via GOState: 0 (ACTIVE) = Owned/Claimed, 1 (READY) = ForSale sign.
         Neighborhood::PlotInfo const* plotInfo = _neighborhood->GetPlotInfo(static_cast<uint8>(plot->PlotIndex));
-        uint32 goEntry = static_cast<uint32>(plot->CornerstoneGameObjectID);
         bool isOwned = plotInfo && !plotInfo->OwnerGuid.IsEmpty();
 
-        TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} at ({:.1f}, {:.1f}, {:.1f}) -> goEntry={} (Cornerstone={}, owned={})",
-            plot->PlotIndex, x, y, z, goEntry, plot->CornerstoneGameObjectID,
-            isOwned ? "yes" : "no");
-
-        if (!goEntry)
+        if (!plot->CornerstoneGameObjectID)
         {
             TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: Plot {} has CornerstoneGameObjectID=0 - skipping",
                 plot->PlotIndex);
@@ -198,49 +183,36 @@ void HousingMap::SpawnPlotGameObjects()
             continue;
         }
 
-        // Cornerstone transform. GameObjects.db2 is the authority where it has a row for this entry: a
-        // WowPacketParser decode of the 65940 housing sniffs shows the wire position AND quaternion equal
-        // GameObjects.db2[CornerstoneGameObjectID].Pos/.Rot exactly for 55/55 plots on map 2735, while
-        // NeighborhoodPlot.CornerstonePosition/Rotation match 0/55 there (off by 1.5-18 yards, and rotation
-        // off by PI +/- 0.2..0.5 rad even where the position agrees) - i.e. that map's plot rows are simply
-        // wrong and no rotation offset can rescue them.
-        //
-        // Map 2736 is the opposite case: GameObjects.db2 has NO DisplayID-110660 rows for OwnerID 2736, and
-        // there the sniff shows wire_orientation == CornerstoneRotation.Z + PI for 48/55 plots (the 7 misses
-        // are plots whose position also drifted between builds). So the plot data plus a half turn is both the
-        // only available source and the correct one for that map.
-        float rotZ;
+        // Every plot gets a cornerstone of the one shared entry. The plot's own CornerstoneGameObjectID only names
+        // which plot it stands for, through CreatedBy.
+        GameObjectsEntry const* clientRow = sGameObjectsStore.LookupEntry(static_cast<uint32>(plot->CornerstoneGameObjectID));
+        Position pos;
         QuaternionData rot;
-        if (GameObjectsEntry const* goData = sGameObjectsStore.LookupEntry(goEntry))
-        {
-            x = goData->Pos.X;
-            y = goData->Pos.Y;
-            z = goData->Pos.Z;
-            LoadGrid(x, y);
-            rot = QuaternionData(goData->Rot[0], goData->Rot[1], goData->Rot[2], goData->Rot[3]);
-            float unusedY = 0.0f, unusedX = 0.0f;
-            rot.toEulerAnglesZYX(rotZ, unusedY, unusedX);
-        }
-        else
-        {
-            rotZ = plot->CornerstoneRotation[2] + float(M_PI);
-            rot = QuaternionData::fromEulerAnglesZYX(rotZ, plot->CornerstoneRotation[1], plot->CornerstoneRotation[0]);
-        }
+        HousingMgr::GetCornerstonePlacement(*plot, GetId(), clientRow, pos, rot);
+        LoadGrid(pos.GetPositionX(), pos.GetPositionY());
 
-        // GOState 0 (ACTIVE) = Owned/Claimed cornerstone, GOState 1 (READY) = ForSale sign
+        TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} cornerstone at ({:.1f}, {:.1f}, {:.1f}) for {} (owned={})",
+            plot->PlotIndex, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), plot->CornerstoneGameObjectID,
+            isOwned ? "yes" : "no");
+
+        // An owned plot's cornerstone has State 0 and a vacant plot's State 1, as in hbcd3.
         GOState plotState = isOwned ? GO_STATE_ACTIVE : GO_STATE_READY;
 
-        Position pos(x, y, z, rotZ);
-        GameObject* go = GameObject::CreateGameObject(goEntry, this, pos, rot, 255, plotState);
+        GameObject* go = GameObject::CreateGameObject(GAMEOBJECT_HOUSING_CORNERSTONE, this, pos, rot, 255, plotState);
         if (!go)
         {
-            TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: Failed to create GO entry {} at ({}, {}, {}) for plot {} in neighborhood '{}'",
-                goEntry, x, y, z, plot->PlotIndex, _neighborhood->GetName());
+            TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: Failed to create cornerstone {} at ({}, {}, {}) for plot {} in neighborhood '{}'",
+                GAMEOBJECT_HOUSING_CORNERSTONE, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), plot->PlotIndex,
+                _neighborhood->GetName());
             continue;
         }
 
         // Retail sniff: all Cornerstone GOs have Flags=32 (GO_FLAG_NODESPAWN)
         go->SetFlag(GO_FLAG_NODESPAWN);
+
+        // CreatedBy names the plot the way retail does. It is not an owner: the cornerstone is not a summon and is
+        // not despawned with anything.
+        go->SetCreatedByGUID(HousingMgr::MakeCornerstoneCreator(*plot, GetId()));
 
         // Housing objects are dynamically spawned (no DB spawn record), so they have no
         // phase_area association. Explicitly mark them as universally visible so they're
@@ -254,8 +226,8 @@ void HousingMap::SpawnPlotGameObjects()
         if (!AddToMap(go))
         {
             delete go;
-            TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: Failed to add GO entry {} to map for plot {} in neighborhood '{}'",
-                goEntry, plot->PlotIndex, _neighborhood->GetName());
+            TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: Failed to add the cornerstone to map for plot {} in neighborhood '{}'",
+                plot->PlotIndex, _neighborhood->GetName());
             continue;
         }
 
@@ -270,9 +242,8 @@ void HousingMap::SpawnPlotGameObjects()
         // Track the plot GO for later swap (purchase/eviction)
         _plotGameObjects[static_cast<uint8>(plot->PlotIndex)] = go->GetGUID();
 
-        TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} GO entry={} displayId={} type={} name='{}' guid={}",
-            plot->PlotIndex, goEntry, go->GetGOInfo()->displayId, go->GetGOInfo()->type,
-            go->GetGOInfo()->name, go->GetGUID().ToString());
+        TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} cornerstone guid={} createdBy={}",
+            plot->PlotIndex, go->GetGUID().ToString(), go->GetCreatorGUID().ToString());
 
         ++goCount;
 
@@ -379,15 +350,22 @@ void HousingMap::SpawnPlotGameObjects()
     for (NeighborhoodPlotData const* plot : plots)
     {
         uint8 plotIdx = static_cast<uint8>(plot->PlotIndex);
-        // Prefer the DB2 WorldState ID when present; otherwise synthesise one
-        // (DB2 extraction currently has this column zero for all plots).
-        uint32 wsId = plot->WorldState != 0 ? plot->WorldState
-                        : MakeHousingPlotWorldStateId(neighborhoodMapId, plotIdx);
+        // The plot's world state is NeighborhoodPlot.WorldState; a plot without one has none. A plot with no
+        // cornerstone was already reported above, so it is not reported twice.
+        if (plot->WorldState <= 0)
+        {
+            if (plot->CornerstoneGameObjectID)
+                TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: Plot {} on neighborhood map {} has no WorldState in NeighborhoodPlot",
+                    plot->PlotIndex, neighborhoodMapId);
+            continue;
+        }
+
+        uint32 wsId = uint32(plot->WorldState);
         Neighborhood::PlotInfo const* pi = _neighborhood->GetPlotInfo(plotIdx);
         bool occupied = pi && pi->IsOccupied() && !pi->HouseGuid.IsEmpty();
         SetWorldStateValue(wsId, occupied ? 1 : 0, /*hidden*/ false);
-        TC_LOG_INFO("housing", "  PlotWS[{}] WorldState={}{} value={} (owner={} house={})",
-            plot->PlotIndex, wsId, plot->WorldState == 0 ? " [synth]" : "",
+        TC_LOG_INFO("housing", "  PlotWS[{}] WorldState={} value={} (owner={} house={})",
+            plot->PlotIndex, wsId,
             occupied ? 1 : 0,
             pi ? pi->OwnerGuid.ToString() : "n/a",
             pi ? pi->HouseGuid.ToString() : "n/a");
@@ -589,6 +567,14 @@ int8 HousingMap::GetPlotIndexForAreaTrigger(ObjectGuid atGuid) const
     return -1;
 }
 
+int8 HousingMap::GetPlotIndexForCornerstone(ObjectGuid cornerstoneGuid) const
+{
+    for (auto const& [plotIdx, guid] : _plotGameObjects)
+        if (guid == cornerstoneGuid)
+            return static_cast<int8>(plotIdx);
+    return -1;
+}
+
 GameObject* HousingMap::GetPlotGameObject(uint8 plotIndex)
 {
     auto itr = _plotGameObjects.find(plotIndex);
@@ -645,9 +631,11 @@ void HousingMap::SetPlotOwnershipState(uint8 plotIndex, bool owned)
         if (plotData->PlotIndex != static_cast<int32>(plotIndex))
             continue;
 
-        // Prefer the DB2 WorldState ID; synthesise one when the extraction has it zero.
-        uint32 wsId = plotData->WorldState != 0 ? plotData->WorldState
-                        : MakeHousingPlotWorldStateId(neighborhoodMapId, plotIndex);
+        // The plot's world state is NeighborhoodPlot.WorldState; a plot without one has none.
+        if (plotData->WorldState <= 0)
+            break;
+
+        uint32 wsId = uint32(plotData->WorldState);
 
         // Blizzlike: the per-plot WorldState is a BINARY occupancy flag — 0 empty,
         // 1 occupied. `Map::SetWorldStateValue` stores the value (so future joins
@@ -655,9 +643,8 @@ void HousingMap::SetPlotOwnershipState(uint8 plotIndex, bool owned)
         // every player currently on the map. No per-player enum override.
         SetWorldStateValue(wsId, owned ? 1 : 0, /*hidden*/ false);
 
-        TC_LOG_DEBUG("housing", "SetPlotOwnershipState: ws={}{} value={} plot={} {} neighborhoodMap={}",
-            wsId, plotData->WorldState == 0 ? " [synth]" : "",
-            owned ? 1 : 0, plotIndex, owned ? "occupied" : "empty", neighborhoodMapId);
+        TC_LOG_DEBUG("housing", "SetPlotOwnershipState: ws={} value={} plot={} {} neighborhoodMap={}",
+            wsId, owned ? 1 : 0, plotIndex, owned ? "occupied" : "empty", neighborhoodMapId);
         break;
     }
 }

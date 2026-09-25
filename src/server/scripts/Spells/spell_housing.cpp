@@ -29,42 +29,9 @@
 #include "SpellInfo.h"
 #include "SpellScript.h"
 
-enum HousingCornerstoneSpells
-{
-    SPELL_TRIGGER_CONVO_UNOWNED_PLOT = 1266097
-};
-
 enum HousingPurchaseQuests
 {
     QUEST_MY_FIRST_HOME              = 91863
-};
-
-// 1266097 - [DNT] Trigger Convo for Unowned Plot
-// Cast by Cornerstone GO (entry 457142, type UILink) when a player clicks it.
-// The SMSG_NPC_INTERACTION_OPEN_RESULT with CornerstoneInteraction (type 70) is
-// already sent by the UILink Use() handler before this spell fires.
-// This dummy effect provides server-side validation and logging.
-class spell_housing_trigger_convo_unowned_plot : public SpellScript
-{
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return true;
-    }
-
-    void HandleDummy(SpellEffIndex /*effIndex*/) const
-    {
-        Player* caster = GetCaster()->ToPlayer();
-        if (!caster)
-            return;
-
-        TC_LOG_DEBUG("housing", "spell_housing_trigger_convo_unowned_plot: Spell {} fired for player {} ({})",
-            GetSpellInfo()->Id, caster->GetName(), caster->GetGUID().ToString());
-    }
-
-    void Register() override
-    {
-        OnEffectHit += SpellEffectFn(spell_housing_trigger_convo_unowned_plot::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
-    }
 };
 
 // 1253555 - [DNT] Skip First Housing Tutorial
@@ -240,7 +207,6 @@ class spell_housing_exit_house : public SpellScript
 
 void AddSC_housing_spell_scripts()
 {
-    RegisterSpellScript(spell_housing_trigger_convo_unowned_plot);
     RegisterSpellScript(spell_housing_enter_house);
     RegisterSpellScript(spell_housing_exit_house);
     RegisterSpellScript(spell_housing_skip_first_housing_tutorial);

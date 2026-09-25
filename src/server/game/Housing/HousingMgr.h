@@ -28,6 +28,8 @@
 #include <vector>
 
 class Neighborhood;
+struct GameObjectsEntry;
+struct QuaternionData;
 struct ExteriorComponentEntry;
 struct ExteriorComponentExitPointEntry;
 struct ExteriorComponentHookEntry;
@@ -268,8 +270,19 @@ public:
     // Neighborhood plot lookups
     uint32 GetPlotStoreSize() const { return uint32(_neighborhoodPlotStore.size()); }
     std::vector<NeighborhoodPlotData const*> GetPlotsForMap(uint32 neighborhoodMapId) const;
-    // Find a plot by its cornerstone GO entry within a specific neighborhood map
-    NeighborhoodPlotData const* GetPlotByCornerstoneEntry(uint32 neighborhoodMapId, uint32 cornerstoneGoEntry) const;
+    // The plot with this PlotIndex on a neighborhood map, or nothing.
+    NeighborhoodPlotData const* GetPlot(uint32 neighborhoodMapId, uint8 plotIndex) const;
+    // The CreatedBy of a plot's cornerstone: a client actor of owner type 1 whose owner id is the neighborhood's world
+    // map and whose counter is the plot's CornerstoneGameObjectID. For plot 13 of Razorwind Shores retail sends
+    // 0x5000042AC0000000 / 0x73FD3 (hbcd3 456682-456741).
+    static ObjectGuid MakeCornerstoneCreator(NeighborhoodPlotData const& plot, uint32 worldMapId);
+    // Where a plot's cornerstone stands and how it is turned. `clientRow` is the GameObjects.db2 row named by the
+    // plot's CornerstoneGameObjectID when that row is on the same world map (Founder's Point has one per plot, Razorwind
+    // Shores has none); its position and rotation win. Without one, a few Razorwind Shores plots whose DB2 cornerstone
+    // is known to be stale take the transform retail sent, and every other plot stands at CornerstonePosition facing
+    // CornerstoneRotation.z plus a half turn.
+    static void GetCornerstonePlacement(NeighborhoodPlotData const& plot, uint32 worldMapId, GameObjectsEntry const* clientRow,
+        Position& position, QuaternionData& rotation);
     // Where a house stands on a plot and which way it faces, as HousingMap::SpawnHouseForPlot places it before it
     // lowers the house onto the ground: NeighborhoodPlot.HousePosition, facing HouseRotation.z or, where the DB2 leaves
     // the rotation empty, towards the cornerstone. False when the map has no such plot.
@@ -281,12 +294,6 @@ public:
     static WorldLocation MakePlotArrival(NeighborhoodPlotData const& plot, uint32 worldMapId);
     // False when the neighborhood map, its world map or the plot is unknown.
     bool GetPlotArrival(uint32 neighborhoodMapId, uint8 plotIndex, WorldLocation& arrival) const;
-
-    // Resolve the canonical DB2 PlotIndex from a client-supplied GUID.
-    // The client sends the cornerstone GO GUID as "NeighborhoodGuid" in many CMSGs.
-    // We extract the GO entry from that GUID and look up the DB2 plot data.
-    // Returns the DB2 PlotIndex, or -1 if resolution failed (caller should use clientPlotIndex as fallback).
-    int32 ResolvePlotIndex(ObjectGuid cornerstoneGuid, Neighborhood const* neighborhood) const;
 
     // Get the NeighborhoodMapData for a world MapID (returns nullptr if not a neighborhood)
     NeighborhoodMapData const* GetNeighborhoodMapDataForWorldMap(uint32 mapId) const;

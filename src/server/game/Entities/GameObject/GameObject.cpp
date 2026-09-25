@@ -31,7 +31,6 @@
 #include "GameObjectAI.h"
 #include "GameObjectModel.h"
 #include "GameObjectPackets.h"
-#include "NPCPackets.h"
 #include "GameTime.h"
 #include "GossipDef.h"
 #include "GridNotifiersImpl.h"
@@ -3451,44 +3450,12 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
             if (!player)
                 return;
 
-            TC_LOG_DEBUG("housing", "GameObject::Use(GAMEOBJECT_TYPE_UI_LINK): entry={} guid={} "
-                "UILinkType={} PlayerInteractionType={} spell={} player={}",
-                GetEntry(), GetGUID().ToString(),
-                GetGOInfo()->UILink.UILinkType,
-                GetGOInfo()->UILink.PlayerInteractionType,
-                GetGOInfo()->UILink.spell,
-                player->GetGUID().ToString());
-
+            WorldPackets::GameObject::GameObjectInteraction gameObjectUILink;
+            gameObjectUILink.ObjectGUID = GetGUID();
             if (GetGOInfo()->UILink.PlayerInteractionType)
-            {
-                WorldPackets::NPC::NPCInteractionOpenResult npcInteraction;
-                npcInteraction.Npc = GetGUID();
-                npcInteraction.InteractionType = static_cast<PlayerInteractionType>(GetGOInfo()->UILink.PlayerInteractionType);
-                npcInteraction.Success = true;
-                player->SendDirectMessage(npcInteraction.Write());
-
-                TC_LOG_DEBUG("housing", "  -> Sent SMSG_NPC_INTERACTION_OPEN_RESULT: npc={} interactionType={} success=true",
-                    GetGUID().ToString(), GetGOInfo()->UILink.PlayerInteractionType);
-
-                uint32 spellId = GetGOInfo()->UILink.spell;
-
-                // Per-plot cornerstone GOs from DB2 CASC data have spell=0 in their
-                // template.  The master template (entry 457142) has Data8=1266097 but
-                // the actual per-plot entries do not.  Fall back to the known spell
-                // for CornerstoneInteraction (type 70).
-                if (!spellId && GetGOInfo()->UILink.PlayerInteractionType == 70)
-                    spellId = 1266097; // [DNT] Trigger Convo for Unowned Plot
-
-                if (spellId)
-                {
-                    TC_LOG_DEBUG("housing", "  -> Casting spell {} on player", spellId);
-                    player->CastSpell(player, spellId, true);
-                }
-            }
+                gameObjectUILink.InteractionType = static_cast<PlayerInteractionType>(GetGOInfo()->UILink.PlayerInteractionType);
             else
             {
-                WorldPackets::GameObject::GameObjectInteraction gameObjectUILink;
-                gameObjectUILink.ObjectGUID = GetGUID();
                 switch (GetGOInfo()->UILink.UILinkType)
                 {
                     case 0:
@@ -3503,11 +3470,19 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
                     case 3:
                         gameObjectUILink.InteractionType = PlayerInteractionType::ItemInteraction;
                         break;
+                    case 4:
+                        gameObjectUILink.InteractionType = PlayerInteractionType::CornerstoneInteraction;
+                        break;
                     default:
                         break;
                 }
-                player->SendDirectMessage(gameObjectUILink.Write());
             }
+            player->SendDirectMessage(gameObjectUILink.Write());
+
+            // A housing cornerstone (457142) names spell 1266097. Retail sends the interaction (type 70) and then the
+            // player casts that spell on herself (hbcd3 1294983, SMSG_SPELL_START at 1294987).
+            if (uint32 spellId = GetGOInfo()->UILink.spell)
+                player->CastSpell(player, spellId, true);
             return;
         }
         case GAMEOBJECT_TYPE_GATHERING_NODE:                //50

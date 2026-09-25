@@ -31,6 +31,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "QuaternionData.h"
 #include "RaceMask.h"
 #include "Random.h"
 #include "SharedDefines.h"
@@ -377,41 +378,18 @@ void HousingMgr::LoadNeighborhoodPlotData()
         }
     }
 
-    // Validate that all CornerstoneGameObjectID entries have matching gameobject_template entries.
+    // Every cornerstone is the shared entry 457142, whose template comes from the world database. The plots'
+    // CornerstoneGameObjectID values are not gameobject entries on Razorwind Shores (retail uses them only as the
+    // cornerstone's CreatedBy counter), so no template is made up for them.
+    if (!sObjectMgr->GetGameObjectTemplate(GAMEOBJECT_HOUSING_CORNERSTONE))
+        TC_LOG_ERROR("housing", "HousingMgr::LoadNeighborhoodPlotData: gameobject_template {} (the plot cornerstone) is missing; "
+            "neighborhoods will have no cornerstones", GAMEOBJECT_HOUSING_CORNERSTONE);
+
+    // Validate that all PlotGameObjectID entries have matching gameobject_template entries.
     // Templates are loaded from GameObjects.db2 (CASC) + gameobject_template SQL table.
-    // Per-plot entries that are missing from CASC need world_housing_go_templates.sql applied.
-    uint32 missingCornerstone = 0, missingPlotGO = 0, dynamicAdded = 0;
+    uint32 missingPlotGO = 0;
     for (auto const& [id, plot] : _neighborhoodPlotStore)
     {
-        if (plot.CornerstoneGameObjectID)
-        {
-            uint32 entry = static_cast<uint32>(plot.CornerstoneGameObjectID);
-            if (!sObjectMgr->GetGameObjectTemplate(entry))
-            {
-                // Dynamically register the missing cornerstone template.
-                // All cornerstones are identical: type=48 (UILink), displayId=110660, scale=1.0
-                // Data0=4 (CornerstoneInteraction), Data4=10 (radius), Data7=70 (PlayerInteractionType), Data8=1266097 (spell)
-                GameObjectTemplate& got = const_cast<ObjectMgr*>(sObjectMgr)->GetGameObjectTemplateStoreForHotfix()[entry];
-                got.entry = entry;
-                got.type = 48; // GAMEOBJECT_TYPE_UI_LINK
-                got.displayId = 110660;
-                got.name = Trinity::StringFormat("Cornerstone Plot {} Map {}", plot.PlotIndex, plot.NeighborhoodMapID);
-                got.IconName = "buy";
-                got.size = 1.0f;
-                memset(got.raw.data, 0, sizeof(got.raw.data));
-                got.raw.data[0] = 4;       // UILinkType = CornerstoneInteraction
-                got.raw.data[2] = 1;       // GiganticAOI
-                got.raw.data[4] = 10;      // radius
-                got.raw.data[7] = 70;      // PlayerInteractionType = CornerstoneInteraction
-                got.raw.data[8] = 1266097; // spell = [DNT] Trigger Convo for Unowned Plot
-                got.ContentTuningId = 0;
-                got.RequiredLevel = 0;
-                got.ScriptId = 0;
-                got.InitializeQueryData();
-                ++dynamicAdded;
-                ++missingCornerstone;
-            }
-        }
         if (plot.PlotGameObjectID)
         {
             uint32 entry = static_cast<uint32>(plot.PlotGameObjectID);
@@ -431,18 +409,14 @@ void HousingMgr::LoadNeighborhoodPlotData()
                 got.RequiredLevel = 0;
                 got.ScriptId = 0;
                 got.InitializeQueryData();
-                ++dynamicAdded;
                 ++missingPlotGO;
             }
         }
     }
 
-    if (dynamicAdded > 0)
-    {
-        TC_LOG_ERROR("housing", "HousingMgr::LoadNeighborhoodPlotData: {} cornerstone + {} plot marker GO templates were MISSING from gameobject_template and GameObjects.db2. "
-            "Dynamically registered them. Apply sql/housing/world_housing_go_templates.sql to the world DB to fix permanently.",
-            missingCornerstone, missingPlotGO);
-    }
+    if (missingPlotGO > 0)
+        TC_LOG_ERROR("housing", "HousingMgr::LoadNeighborhoodPlotData: {} plot marker GO templates were missing from "
+            "gameobject_template and GameObjects.db2 and were registered in memory.", missingPlotGO);
 }
 
 void HousingMgr::LoadNeighborhoodNameGenData()
@@ -610,57 +584,83 @@ bool HousingMgr::GetPlotArrival(uint32 neighborhoodMapId, uint8 plotIndex, World
     return false;
 }
 
-NeighborhoodPlotData const* HousingMgr::GetPlotByCornerstoneEntry(uint32 neighborhoodMapId, uint32 cornerstoneGoEntry) const
+NeighborhoodPlotData const* HousingMgr::GetPlot(uint32 neighborhoodMapId, uint8 plotIndex) const
 {
     auto itr = _plotsByMap.find(neighborhoodMapId);
     if (itr == _plotsByMap.end())
         return nullptr;
 
     for (NeighborhoodPlotData const* plot : itr->second)
-        if (static_cast<uint32>(plot->CornerstoneGameObjectID) == cornerstoneGoEntry)
+        if (plot && plot->PlotIndex == int32(plotIndex))
             return plot;
 
     return nullptr;
 }
 
-int32 HousingMgr::ResolvePlotIndex(ObjectGuid cornerstoneGuid, Neighborhood const* neighborhood) const
+/*static*/ ObjectGuid HousingMgr::MakeCornerstoneCreator(NeighborhoodPlotData const& plot, uint32 worldMapId)
 {
-    if (!neighborhood)
+    return ObjectGuid::Create<HighGuid::ClientActor>(HOUSING_CORNERSTONE_CREATOR_OWNER_TYPE, uint16(worldMapId),
+        uint32(plot.CornerstoneGameObjectID));
+}
+
+namespace
+{
+    // Razorwind Shores plots whose NeighborhoodPlot cornerstone does not match what retail sends. Retail puts the
+    // cornerstones of plots 12, 16, 27, 30, 43 and 49 6.8 to 61.4 yards away from the DB2's CornerstonePosition,
+    // about three yards from the plot's TeleportPosition, the way every Founder's Point cornerstone in GameObjects.db2
+    // stands. Plot 22 stands where the DB2 says but faces 0.22 radians away from CornerstoneRotation.z plus a half
+    // turn. Each value is the same in every capture that shows that plot (hbcd3, hf1, hled1 and erhousing, except that
+    // plot 49's cornerstone is not in erhousing); the lines are hbcd3's creates. The cornerstone's rotation in those
+    // captures is a turn about the vertical axis only.
+    struct CapturedCornerstone
     {
-        TC_LOG_ERROR("housing", "HousingMgr::ResolvePlotIndex: neighborhood is null");
-        return -1;
+        uint32 WorldMapId;
+        int32 PlotIndex;
+        float X, Y, Z, Orientation;
+    };
+
+    constexpr CapturedCornerstone CapturedCornerstones[] =
+    {
+        { 2736, 12, 544.6215f, 637.1024f, 155.30049f, 0.567232f },      // hbcd3 457672
+        { 2736, 16, 1482.4688f, -9.611112f, 78.111244f, 2.0943933f },   // hbcd3 439189
+        { 2736, 22, 488.31598f, 304.342f, 99.204994f, 2.7052553f },     // hbcd3 457609
+        { 2736, 27, 1166.5642f, 464.5434f, 154.02097f, 4.5553107f },    // hbcd3 453368
+        { 2736, 30, 955.0191f, 477.25522f, 108.65986f, 4.878198f },     // hbcd3 453822
+        { 2736, 43, 639.67365f, 708.3299f, 113.78312f, 5.777043f },     // hbcd3 457483
+        { 2736, 49, 403.60764f, 192.3507f, 109.80048f, 1.4573486f },    // hbcd3 474886
+    };
+}
+
+/*static*/ void HousingMgr::GetCornerstonePlacement(NeighborhoodPlotData const& plot, uint32 worldMapId,
+    GameObjectsEntry const* clientRow, Position& position, QuaternionData& rotation)
+{
+    // Founder's Point: agatho's decode of the 12.0.1 captures (build 65940) puts all 55 cornerstones at their
+    // GameObjects.db2 row's position. Only 22 of them also stand at the NeighborhoodPlot CornerstonePosition, and only
+    // 16 of those face CornerstoneRotation.z plus a half turn.
+    if (clientRow && clientRow->OwnerID == worldMapId)
+    {
+        rotation = QuaternionData(clientRow->Rot[0], clientRow->Rot[1], clientRow->Rot[2], clientRow->Rot[3]);
+        float orientation = 0.0f, unusedY = 0.0f, unusedX = 0.0f;
+        rotation.toEulerAnglesZYX(orientation, unusedY, unusedX);
+        position.Relocate(clientRow->Pos.X, clientRow->Pos.Y, clientRow->Pos.Z, orientation);
+        return;
     }
 
-    // Only GameObject GUIDs encode a GO entry that can be matched against cornerstone entries.
-    // Housing/Neighborhood GUIDs (HighGuid 55) don't have a GO entry — callers sometimes
-    // pass these for diagnostic purposes; silently return -1.
-    if (cornerstoneGuid.GetHigh() != HighGuid::GameObject)
+    for (CapturedCornerstone const& captured : CapturedCornerstones)
     {
-        TC_LOG_DEBUG("housing", "HousingMgr::ResolvePlotIndex: GUID {} is not a GameObject (HighGuid: {}), skipping",
-            cornerstoneGuid.ToString(), static_cast<uint32>(cornerstoneGuid.GetHigh()));
-        return -1;
+        if (captured.WorldMapId != worldMapId || captured.PlotIndex != plot.PlotIndex)
+            continue;
+
+        position.Relocate(captured.X, captured.Y, captured.Z, captured.Orientation);
+        rotation = QuaternionData::fromEulerAnglesZYX(captured.Orientation, 0.0f, 0.0f);
+        return;
     }
 
-    uint32 goEntry = cornerstoneGuid.GetEntry();
-    if (!goEntry)
-    {
-        TC_LOG_ERROR("housing", "HousingMgr::ResolvePlotIndex: GetEntry() returned 0 for GUID {} (HighGuid: {})",
-            cornerstoneGuid.ToString(), static_cast<uint32>(cornerstoneGuid.GetHigh()));
-        return -1;
-    }
-
-    uint32 neighborhoodMapId = neighborhood->GetNeighborhoodMapID();
-    NeighborhoodPlotData const* plotData = GetPlotByCornerstoneEntry(neighborhoodMapId, goEntry);
-    if (!plotData)
-    {
-        TC_LOG_ERROR("housing", "HousingMgr::ResolvePlotIndex: No plot found for goEntry={} in neighborhoodMapId={} (GUID: {})",
-            goEntry, neighborhoodMapId, cornerstoneGuid.ToString());
-        return -1;
-    }
-
-    TC_LOG_DEBUG("housing", "HousingMgr::ResolvePlotIndex: Resolved GUID {} (entry={}) -> PlotIndex {} (DB2 ID {})",
-        cornerstoneGuid.ToString(), goEntry, plotData->PlotIndex, plotData->ID);
-    return plotData->PlotIndex;
+    // Razorwind Shores: 49 of 55 cornerstones stand at CornerstonePosition (the height differs by up to 0.41 yards),
+    // and 48 of those face CornerstoneRotation.z plus a half turn (hbcd3).
+    float const orientation = Position::NormalizeOrientation(plot.CornerstoneRotation[2] + float(M_PI));
+    position.Relocate(plot.CornerstonePosition[0], plot.CornerstonePosition[1], plot.CornerstonePosition[2], orientation);
+    rotation = QuaternionData::fromEulerAnglesZYX(orientation, plot.CornerstoneRotation[1], plot.CornerstoneRotation[0]);
 }
 
 std::string HousingMgr::GenerateNeighborhoodName(uint32 neighborhoodMapId) const

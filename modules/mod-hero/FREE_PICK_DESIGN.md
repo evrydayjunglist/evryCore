@@ -4,6 +4,8 @@ The owner approved this integration contract on 23 September 2026: authenticated
 
 ## Approved integration
 
+On 24 September 2026 the owner approved purchasing eligible abilities independently of equipped weapons. The purchase availability check must not call `HasItemFitToSpellRequirements`. Actual casting continues to use the core's normal equipment and resource checks. Weapon skills remain part of Hero's ordinary race/class skill data, applied by `Player::LearnDefaultSkills` during creation and login.
+
 Use a consumed `evryCA` addon message on the existing authenticated game connection. The normal Dawnrise window drives it; the player does not type commands. In `WorldSession::HandleChatAddonMessage`, validate prefix/text lengths before dispatch, retain existing addon enablement and flood controls, and ask PlayerScript whether a module consumed the message. The addon opcodes are already `STATUS_LOGGEDIN` and `PROCESS_THREADUNSAFE`. The module obtains the character from that session, never from a claimed account or character in the payload.
 
 The implementation adds narrowly scoped callbacks to the existing PlayerScript family, with no behavior for an unhandled player:

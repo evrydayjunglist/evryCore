@@ -150,9 +150,10 @@ uint32 Available(Player const* player)
         Entry const& entry = Entries[i];
         if (!entry.Reviewed || player->GetLevel() < entry.Level)
             continue;
+        // Equipped weapons are checked by the normal spell cast after acquisition.
         SpellInfo const* info = sSpellMgr->GetSpellInfo(entry.Spell, DIFFICULTY_NONE);
         if (!info || !SpellMgr::IsSpellValid(info, const_cast<Player*>(player), false) || info->IsRanked() ||
-            info->HasEffect(SPELL_EFFECT_LEARN_SPELL) || !player->HasItemFitToSpellRequirements(info))
+            info->HasEffect(SPELL_EFFECT_LEARN_SPELL))
             continue;
         auto learned = sSpellMgr->GetSpellLearnSpellMapBounds(entry.Spell);
         auto required = sSpellMgr->GetSpellsRequiringSpellBounds(entry.Spell);

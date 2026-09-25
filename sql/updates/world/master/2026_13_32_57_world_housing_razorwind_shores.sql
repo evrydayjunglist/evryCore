@@ -473,7 +473,7 @@ INSERT IGNORE INTO `gameobject_template_addon` (`entry`, `faction`, `flags`, `Wo
 (619776, 0, 0x31844000, 31818, 0),
 (619777, 0, 0x31844000, 31818, 0),
 (619778, 0, 0x31844000, 31818, 0),
-(587318, 0, 0x40001, 0, 0),
+(587318, 0, 0x40000, 0, 0), -- exit door; the flags of its create at hbcd3 1411705, without the in-use flag a later update set
 (457142, 0, 0x20, 0, 0);
 
 -- Creature templates exist on the live database with empty stats; fill only what is still at its default
@@ -6450,11 +6450,27 @@ INSERT IGNORE INTO `creature_template_gossip` (`CreatureID`, `MenuID`, `Verified
 (227801, 35728, 68887), -- Thrauna - first menu shown on click in hbcd3
 (255325, 41396, 68887); -- "High Tides" Ren - first menu shown on click in hbcd3
 
--- Quest enders. The first two are the turn-ins seen in hbcd3; the turn-in of the third is not captured.
+-- Quest enders. Tocho ending 94210 and the steward ending 91863 are the turn-ins seen in hbcd3. Tocho also ends
+-- 91863: while it was still incomplete, his menu 40494 listed it with the quest type this core gives a quest the
+-- creature ends (hbcd3 688675). That keeps the quest finishable when the summoned steward is gone before the
+-- turn-in, for example after a logout or a map change. The turn-in of 94379 is not captured.
 INSERT IGNORE INTO `creature_questender` (`id`, `quest`, `VerifiedBuild`) VALUES
 (233708, 94210, 68887), -- Tocho Cloudhide ends Feathering the Nest, turned in at hbcd3 2231345
 (249848, 91863, 68887), -- the player's own steward ends My First Home, turned in at hbcd3 1318088
-(233708, 94379, 68887); -- Tocho Cloudhide ends This Old Hearth; the turn-in is not captured, this is the Horde counterpart of Lyssabel Dawnpetal (233063), who ends it on the live database. hbcd3 2241798 shows Tocho offering it right after the 94210 turn-in, but no starter row is added here, so this row does nothing until one exists
+(233708, 91863, 68887), -- Tocho Cloudhide also ends My First Home: his menu lists it to hand in while it is still incomplete (hbcd3 688675)
+(233708, 94379, 68887); -- Tocho Cloudhide ends This Old Hearth; the turn-in is not captured, this is the Horde counterpart of Lyssabel Dawnpetal (233063), who ends it on the live database
+
+-- Quest starter. Right after "Feathering the Nest" (94210) was turned in, Tocho's menu 40494 offered "This Old
+-- Hearth" (94379) as a quest to take (hbcd3 2241798). A few seconds earlier, with 94210 still in the log, the same
+-- menu listed only 94210 (hbcd3 2228535). So Tocho starts 94379, and only once 94210 is rewarded. Its objectives
+-- need credit from the General Contractor (257414), which nothing grants yet, so it can be taken but not finished.
+INSERT IGNORE INTO `creature_queststarter` (`id`, `quest`, `VerifiedBuild`) VALUES
+(233708, 94379, 68887); -- Tocho Cloudhide starts This Old Hearth
+
+INSERT IGNORE INTO `quest_template_addon` (`ID`, `PrevQuestID`) VALUES
+(94379, 94210);
+
+UPDATE `quest_template_addon` SET `PrevQuestID`=94210 WHERE `ID`=94379 AND `PrevQuestID`=0;
 
 -- Tutorial and portal arrival point: SMSG_NEW_WORLD after spell 1258484 (hbcd3 line 356147) and after
 -- spell 1235590 (erhousing line 415921). The facing matches SpellEffect.EffectPosFacing in the 12.1 client.

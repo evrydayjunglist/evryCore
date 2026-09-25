@@ -1,12 +1,43 @@
 # Free Pick purchase integration contract
 
-The owner approved this integration contract on 23 September 2026: authenticated ability messages handled by mod-hero, recorded independent/purchased spell sources, and the 5% base-mana Hero Rejuvenation fallback with existing heals allowed to finish. The selected product milestone remains the complete server-authoritative purchase, cast, refund, and persistence loop. The first ruleset is a versioned Hero adaptation: one durable 8-AE allocation, reviewed Normal entries at 2 AE, and full refunds of the recorded price. It is not recovered Ascension server behavior.
+## Current normal-mode correction, 25 September 2026
+
+Rules revision 3 follows `hero-reference-20260921-r1`'s Area 52 Live-channel
+catalog and legacy UI concepts. The evryLoader document
+`docs/NORMAL_FREE_PICK_BASELINE_69814.md` is the policy/evidence record.
+Regular Free Pick has no seasonal Masteries page or Class Points. Normal
+shared-fee families are ordinary class abilities, with reference rarity costs.
+Intimidating Shout is standalone; Rallying Cry and Tar Trap have no inferred
+family discount. New restricted/unclassified purchases remain blocked until
+their normal rules are defined. Current retail talent nodes and acquisition
+thresholds replace retired-node and blanket-level assumptions; multi-rank or
+unresolved paths stay previews. No spell effects change.
+
+`PurchaseEnabled` governs new acquisitions independently of `Reviewed`, which
+keeps the existing ownership reconciliation functional. Normal requests use
+rules revision 3 in the existing V3 carrier. New profiles initialize at 3;
+the owner declared existing characters disposable, so validation uses a new
+Hero without conversion, deletion or a new character migration. The historical
+decisions below explain the transaction infrastructure and earlier prototypes.
+
+The owner approved this integration contract on 23 September 2026: authenticated ability messages handled by mod-hero, recorded independent/purchased spell sources, and the 5% base-mana Hero Rejuvenation fallback with existing heals allowed to finish. The selected product milestone remains the complete server-authoritative purchase, cast, refund, and persistence loop. The initial owner-tested prototype used one durable 8-AE allocation. The owner has since approved the Area 52 progression extended to level 90: 9 AE initially, then one AE and one TE at every level from 10 through 90, totaling 90 AE and 81 TE. Original purchases and their recorded prices remain in the same profile.
 
 ## Approved integration
 
+On 25 September 2026 the owner approved the shared-cost mastery model for regular
+Free Pick: 1 AE per family plus 1 AE per member, with a family fee present exactly
+when at least one member is selected. Parent records live in the existing owned
+ledger with catalog `retail-12.1.0.69814:masteries` and spell zero. They must never
+enter spell reconciliation, `character_spell`, or independent source writes.
+The native service and server both reject incomplete family selections. The
+last member refund returns both recorded paid amounts. This uses existing module
+hooks and changes no spell effects. Freezing Trap remains a disabled preview
+until its existing core trap has a freeze handler; other mastery members use
+their current native effects and ordinary retail-derived level thresholds.
+
 On 24 September 2026 the owner approved purchasing eligible abilities independently of equipped weapons. The purchase availability check must not call `HasItemFitToSpellRequirements`. Actual casting continues to use the core's normal equipment and resource checks. Weapon skills remain part of Hero's ordinary race/class skill data, applied by `Player::LearnDefaultSkills` during creation and login.
 
-Use a consumed `evryCA` addon message on the existing authenticated game connection. The normal Dawnrise window drives it; the player does not type commands. In `WorldSession::HandleChatAddonMessage`, validate prefix/text lengths before dispatch, retain existing addon enablement and flood controls, and ask PlayerScript whether a module consumed the message. The addon opcodes are already `STATUS_LOGGEDIN` and `PROCESS_THREADUNSAFE`. The module obtains the character from that session, never from a claimed account or character in the payload.
+Use a consumed `evryCA` addon message on the existing authenticated game connection. The regular Free Pick window drives it; the player does not type commands. In `WorldSession::HandleChatAddonMessage`, validate prefix/text lengths before dispatch, retain existing addon enablement and flood controls, and ask PlayerScript whether a module consumed the message. The addon opcodes are already `STATUS_LOGGEDIN` and `PROCESS_THREADUNSAFE`. The module obtains the character from that session, never from a claimed account or character in the payload.
 
 The implementation adds narrowly scoped callbacks to the existing PlayerScript family, with no behavior for an unhandled player:
 
@@ -38,7 +69,7 @@ The approved dedicated addon hook was selected because it keeps availability a g
 
 Use the existing characters database. A stable profile key contains realm, character GUID, and Free Pick mode/ruleset family. The rules revision is a field, never part of a key that creates a newly funded wallet on upgrade. Persist a wallet version and balance, catalog-entry identity and amount actually paid, independent spell provenance, and immutable request receipts. Entry identity is the advancement catalog key, not its current spell mapping.
 
-An apply request expresses the final desired set of the ten pinned entries; the server computes the complete add/remove diff and validates the final build. The mask is only a compact transport encoding of a versioned catalog order. Unknown bits, unsupported entries, malformed integers, invalid identity, stale revision/version, death, combat, casting, unavailable resources, and insufficient AE reject the whole diff. Same request ID and payload returns the durable result; the same ID with a different payload rejects. Stored paid values determine refunds exactly once.
+An apply request expresses the final desired set of the installed append-only catalog (up to 128 entries); the server computes the complete add/remove diff and validates the final build. The mask is only a compact transport encoding of a versioned catalog order. Unknown bits, unsupported entries, malformed integers, invalid identity, stale revision/version, death, combat, casting, unavailable entries, and insufficient AE or TE reject the whole diff. Same request ID and payload returns the durable result; the same ID with a different payload rejects. Stored paid values determine refunds exactly once.
 
 Only one apply per current character session is admitted at a time. Database uniqueness and version guards remain authoritative across sessions/restarts. Append wallet, owned-entry changes, durable receipt, and required provenance in one transaction. A transaction conflict rolls back every operation. The implementation must ensure a failed compare/version check aborts the SQL transaction rather than silently continuing after an UPDATE that affected zero rows.
 
@@ -50,17 +81,17 @@ Reconciliation treats the ledger as authority and is idempotent at commit/applic
 
 ## Bounded wire contract
 
-Reserved prefix: `evryCA`. Version: `V1`. The body uses ASCII tokens and decimal nonnegative integers, with a maximum of 255 bytes and no fragment assembly.
+Reserved prefix: `evryCA`. Version: `V3`. Requests remain one ASCII message of at most 255 bytes. Each response uses two bounded, correlated parts, assembled in fixed native storage before any state is published. Ownership masks are exactly 32 lowercase hex digits; other numeric fields are canonical decimal integers.
 
-Request: `V1 S <nonce32hex> <request32hex>` or `V1 C <nonce32hex> <request32hex> <expectedVersion> <desiredMask>`. S requests a snapshot or a previous receipt; C applies a desired set. The nonce identifies the current native lifecycle. Request identity persists across timeout/retry and is distinct from the nonce. The authenticated player supplies identity; any optional client identity field must be checked, never trusted.
+Request: `V3 S <nonce32hex> <request32hex>` or `V3 C <nonce32hex> <request32hex> <expectedVersion> <desiredHex>`. S requests a snapshot or a previous receipt; C applies a desired set. The nonce identifies the current native lifecycle. Request identity persists across timeout/retry and is distinct from the nonce. The authenticated player supplies identity; any optional client identity field must be checked, never trusted.
 
-Reply: `V1 <nonce32hex> <request32hex> <PlayerGUID> <mode> <result> <version> <ae> <ownedMask> <availableMask> <rulesRevision> <paidCSV10>`. Maximum decimal GUID/version fields, bounded result codes and ten bounded costs fit below 255 bytes (approximately 200 bytes at the documented field bounds). Native and server parsers must calculate/test the actual maximum, enforce exact token count, and reject unknown versions. A server result includes the current authoritative snapshot even when returning an old request receipt; clients reject older state versions. No client-side price or balance is accepted.
+Replies: `V3H <nonce32hex> <request32hex> <PlayerGUID> <mode> <result> <version> <ae> <te> <ownedHex> <availableHex> <rulesRevision> <earnedLevel> <entryCount>` and `V3P <nonce32hex> <request32hex> <version> <paidASCII>`. One paid-price character per catalog entry encodes ASCII 33 plus its original price. Both parts remain below 255 bytes through 128 entries. Native validates identity, version, count, masks and separate currency conservation, accepts either part order, and publishes only the complete pair. A retry preserves the economic request identity and clears partial assembly. Matching client and server catalogs are required. A server result includes the current authoritative snapshot even when returning an old request receipt; older versions cannot replace newer confirmed state. No client-side price or balance is accepted.
 
 The native bridge and module use this same fixed grammar. Ordinary unavailable/loading/refused states are visible. A timeout does not become a new purchase. No Lua or client-owner work occurs on a database worker thread.
 
 ## Validation boundary
 
-Pure reducer and parser tests, a built worldserver, and SQL/package checks are source and fixture evidence. They do not establish that a retail client can cast or heal. Owner acceptance still requires ordinary-player 8 to 6 to 4 AE purchases, real Frostbolt and Rejuvenation casts, reload/relog/restart persistence, full exact refund, duplicate requests, mode transitions, independent/manual overlap, refusal paths, and a clean exit.
+Pure reducer and parser tests, a built worldserver, and SQL/package checks are source and fixture evidence. They do not establish that a retail client can cast or heal. Owner acceptance still requires ordinary-player 9 to 7 to 5 AE purchases, TE purchase/refund and level awards, real Frostbolt and Rejuvenation casts, reload/relog/restart persistence, full exact refund, duplicate requests, mode transitions, independent/manual overlap, refusal paths, and a clean exit.
 
 ## Existing spell effects
 
@@ -74,3 +105,57 @@ The mode callback withdraws outgoing grants immediately and runs again after the
 New-character saves clear any old profile, session tokens, provenance, and tombstone for a reused GUID in the same transaction that inserts the new character. The core can reuse deleted GUIDs after restart; this reset prevents a new character from inheriting old purchases or being blocked by the old deletion tombstone. Rollback recovery removes stale character_spell copies explicitly revoked in the durable source ledger, then materializes independent copies. Purchased-only spells are never materialized.
 
 Permanent character deletion removes the ledger, provenance, and session tokens atomically with the character row and leaves a tombstone against queued writes. Configured soft deletion preserves these records alongside the retained character, so restoring that character restores the same wallet and sources. A genuinely new character reusing a permanently deleted GUID receives an atomic lifecycle reset at creation.
+
+
+## Talents and level progression
+
+The owner explicitly requested keeping current 12.1.0 spell effects unchanged.
+The first talents are Lonely Winter (205024), Thick Hide (16931), and Fleet
+Footed (378813). Each has one native rank, costs 1 TE and unlocks at level 10.
+Their native TraitNodeEntry IDs are 80238, 103306 and 112657, respectively.
+The original ten ability indices are unchanged; these talents occupy indices
+11 through 13 in the versioned transport catalog. Current native tooltips and
+spell behavior apply, even where they differ from older Ascension talents.
+There are no effect changes, custom spell IDs or hotfix-table writes.
+
+Purchasing checks level and server-reviewed spell data, without checking
+current power pools or equipped weapons. The normal cast and passive learning
+paths still apply all native requirements. AE and TE have independent balance
+and conservation checks, and mixed purchases/refunds commit atomically. Paid
+prices remain the refund authority. Passive grants are removed on refund and
+mode exit unless another source retains them; this does not alter their effects.
+
+The forward character migration adds one AE to existing wallets and adds
+`talent_balance` and `earned_level`, preserving receipts, ownership and sources.
+The existing OnLevelChanged PlayerScript callback triggers a queued refresh.
+A single guarded database update catches up to the current level and advances
+both balances and the version. Repeated or lower levels add nothing. Level
+reductions by GM command retain earned currency; reset/prestige is out of scope.
+The parser, SQL reducer and client conserve AE and TE independently against the
+same level allowance. No new core seam is required by this expansion.
+
+The matching client protocol is V3 and catalog schema is 2. All three deployment
+parts must be updated together. The new profile cannot be read by the original
+8-AE executable. Keep the database and package backups; do not attempt an
+executable-only downgrade after publishing this migration.
+
+
+## Approved six-batch expansion (25 September 2026)
+
+The owner selected three batches of ten abilities and three of ten talents.
+Install order alternates abilities/talents; counts are 23, 33, 43, 53, 63, 73.
+Generated `HeroFreePickCatalog.h` and the native catalog share stable positions.
+New abilities cost 2 AE; new single-rank talents cost 1 TE from level 10. Existing
+prices, initial identities, supported-entry policy, source ledger and progression
+are retained. Current retail effects are explicitly unchanged at owner request.
+
+The receipt migration adds nullable canonical `desired_bits` without rewriting
+legacy receipts. Reads fall back to old `desired_mask`; new receipts preserve its
+low word and record all 128 bits. This extends the existing approved mod-hero
+carrier and callbacks; it adds no new core seam. The client UI uses hex nibbles
+and a paid-price string rather than Lua floating-point ownership masks.
+
+The loader's `diagnostics/catalog-batches/OWNER_TEST.md` provides the six exact
+cumulative installers. Build/test/package evidence is distinct from owner live
+acquisition, effects, refund and persistence testing. Do not downgrade catalogs
+after purchasing entries that an earlier server cannot represent.

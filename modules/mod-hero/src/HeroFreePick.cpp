@@ -29,11 +29,11 @@ struct State
     ObjectGuid Guid;
     uint64 Generation = 0;
     Snapshot Wallet;
-    uint32 Independent = 0;
-    uint32 Dependent = 0;
-    uint32 InitialPermanent = 0;
-    uint32 Touched = 0;
-    std::array<uint64, 10> SourceRevision = {};
+    EntryMask Independent = 0;
+    EntryMask Dependent = 0;
+    EntryMask InitialPermanent = 0;
+    EntryMask Touched = 0;
+    std::array<uint64, EntryCount> SourceRevision = {};
     uint64 SourceEpoch = 0;
     std::vector<std::string> SessionTokens;
     bool HasSnapshot = false;
@@ -74,7 +74,7 @@ std::shared_ptr<State> Create(Player* player)
             value->Touched = retained->second->Touched;
             value->Independent = retained->second->Independent & value->Touched;
             for (std::size_t i = 0; i < Entries.size(); ++i)
-                if (value->Touched & (1u << i))
+                if (value->Touched & EntryMask::Bit(i))
                     value->SourceRevision[i] = 1;
             RetainedSources.erase(retained);
         }
@@ -92,14 +92,14 @@ std::shared_ptr<State> Create(Player* player)
                 spell->second.state != PLAYERSPELL_REMOVED && spell->second.state != PLAYERSPELL_TEMPORARY)
             {
                 if (spell->second.dependent)
-                    value->Dependent |= 1u << i;
+                    value->Dependent |= EntryMask::Bit(i);
                 else
                 {
-                    value->InitialPermanent |= 1u << i;
+                    value->InitialPermanent |= EntryMask::Bit(i);
                     if (spell->second.state != PLAYERSPELL_UNCHANGED)
                     {
-                        value->Independent |= 1u << i;
-                        value->Touched |= 1u << i;
+                        value->Independent |= EntryMask::Bit(i);
+                        value->Touched |= EntryMask::Bit(i);
                         value->SourceRevision[i] = 1;
                     }
                 }
@@ -124,6 +124,8 @@ std::string Key(ObjectGuid guid)
 
 std::optional<std::size_t> Index(uint32 spell)
 {
+    if (!spell)
+        return {};
     for (std::size_t i = 0; i < Entries.size(); ++i)
         if (Entries[i].Spell == spell)
             return i;
@@ -140,16 +142,22 @@ SpellPowerEntry const* RejuvenationPower()
     return power;
 }
 
-uint32 Available(Player const* player)
+EntryMask Available(Player const* player)
 {
     if (player->GetClass() != 16 || uint32(player->GetPrimarySpecialization()) != Mode)
         return 0;
-    uint32 mask = 0;
+    EntryMask mask = 0;
     for (std::size_t i = 0; i < Entries.size(); ++i)
     {
         Entry const& entry = Entries[i];
-        if (!entry.Reviewed || player->GetLevel() < entry.Level)
+        if (!entry.Reviewed || !entry.PurchaseEnabled || player->GetLevel() < entry.Level)
             continue;
+        // A mastery is a paid family record, never an invented combat spell.
+        if (!entry.Spell)
+        {
+            mask |= EntryMask::Bit(i);
+            continue;
+        }
         // Equipped weapons are checked by the normal spell cast after acquisition.
         SpellInfo const* info = sSpellMgr->GetSpellInfo(entry.Spell, DIFFICULTY_NONE);
         if (!info || !SpellMgr::IsSpellValid(info, const_cast<Player*>(player), false) || info->IsRanked() ||
@@ -159,7 +167,7 @@ uint32 Available(Player const* player)
         auto required = sSpellMgr->GetSpellsRequiringSpellBounds(entry.Spell);
         if (learned.first != learned.second || required.first != required.second)
             continue;
-        if (entry.Spell == 774 && (!RejuvenationPower() || !player->GetCreateMana() || info->IsSingleTarget() ||
+        if (entry.Spell == 774 && (!RejuvenationPower() || info->IsSingleTarget() ||
             info->HasAuraInterruptFlag(SpellAuraInterruptFlags2::ChangeSpec)))
             continue;
         if (entry.Spell == 116)
@@ -170,11 +178,16 @@ uint32 Available(Player const* player)
                 !std::ranges::any_of(info->GetEffects(), [](SpellEffectInfo const& effect) { return effect.TriggerSpell == 228597; }))
                 continue;
         }
-        auto costs = info->CalcPowerCost(player, info->GetSchoolMask(), nullptr);
-        if (costs.empty() || std::ranges::any_of(costs, [player](SpellPowerCost const& cost)
-            { return cost.Power < POWER_MANA || cost.Power >= MAX_POWERS || player->GetMaxPower(cost.Power) <= 0; }))
-            continue;
-        mask |= 1u << i;
+        if (entry.Talent)
+        {
+            TraitNodeEntryEntry const* node = sTraitNodeEntryStore.LookupEntry(entry.ValidationNode ? entry.ValidationNode : entry.Advancement);
+            TraitDefinitionEntry const* definition = node ? sTraitDefinitionStore.LookupEntry(node->TraitDefinitionID) : nullptr;
+            if (!node || node->MaxRanks != 1 || !definition || definition->SpellID != int32(entry.Spell) ||
+                definition->OverridesSpellID || !info->IsPassive() || !info->HasEffect(SPELL_EFFECT_APPLY_AURA))
+                continue;
+        }
+        // Resources govern casting, not buying an ability or passive talent.
+        mask |= EntryMask::Bit(i);
     }
     return mask;
 }
@@ -186,26 +199,34 @@ void Send(Player* player, State const& state, Request const& request, Result res
     {
         snapshot = {};
         snapshot.Essence = 0;
+        snapshot.EarnedLevel = 0;
     }
     std::string paid;
     for (uint32 amount : snapshot.Paid)
+        paid += char('!' + amount);
+    // Two correlated parts keep every frame within the native 255-byte addon
+    // limit even at 128 entries. Clients publish only a complete valid pair.
+    std::array messages = {
+        Trinity::StringFormat("V3H {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            request.Epoch, request.Id, player->GetGUID().ToString(), uint32(player->GetPrimarySpecialization()), Name(result),
+            snapshot.Version, snapshot.Essence, snapshot.TalentEssence, Hex(snapshot.Owned), Hex(state.Ready ? Available(player) : EntryMask{}),
+            RulesRevision, snapshot.EarnedLevel, EntryCount),
+        Trinity::StringFormat("V3P {} {} {} {}", request.Epoch, request.Id, snapshot.Version, paid)
+    };
+    for (std::string const& message : messages)
     {
-        if (!paid.empty())
-            paid += ',';
-        paid += std::to_string(amount);
+        if (message.size() > 255)
+        {
+            TC_LOG_ERROR("module.hero", "Hero advancement reply exceeds the addon limit for {}", player->GetGUID().ToString());
+            return;
+        }
     }
-    std::string message = Trinity::StringFormat("V1 {} {} {} {} {} {} {} {} {} {} {}",
-        request.Epoch, request.Id, player->GetGUID().ToString(), uint32(player->GetPrimarySpecialization()), Name(result),
-        snapshot.Version, snapshot.Essence, snapshot.Owned, state.Ready ? Available(player) : 0,
-        RulesRevision, paid);
-    if (message.size() > 255)
+    for (std::string const& message : messages)
     {
-        TC_LOG_ERROR("module.hero", "Hero advancement reply exceeds the addon limit for {}", player->GetGUID().ToString());
-        return;
+        WorldPackets::Chat::Chat packet;
+        packet.Initialize(CHAT_MSG_WHISPER, LANG_ADDON, player, player, message, 0, "", LOCALE_enUS, Prefix);
+        player->GetSession()->SendPacket(packet.Write());
     }
-    WorldPackets::Chat::Chat packet;
-    packet.Initialize(CHAT_MSG_WHISPER, LANG_ADDON, player, player, message, 0, "", LOCALE_enUS, Prefix);
-    player->GetSession()->SendPacket(packet.Write());
 }
 
 void AppendSources(CharacterDatabaseTransaction transaction, State const& state)
@@ -229,9 +250,9 @@ void Reconcile(Player* player, State& state)
     state.Internal = true;
     for (std::size_t i = 0; i < Entries.size(); ++i)
     {
-        if (!Entries[i].Reviewed)
+        if (!Entries[i].Reviewed || !Entries[i].Spell)
             continue;
-        uint32 bit = 1u << i;
+        EntryMask bit = EntryMask::Bit(i);
         Grant grant = DesiredGrant(bit, state.Wallet.Owned, state.Independent, state.Dependent,
             uint32(player->GetPrimarySpecialization()) == Mode, state.Ready);
         if (grant != Grant::None)
@@ -250,7 +271,7 @@ void CleanActions(Player* player, State const& state, bool send)
     for (auto const& [button, action] : player->GetActionButtons())
         if (action.GetType() == ACTION_BUTTON_SPELL)
             if (auto index = Index(uint32(action.GetAction())); index && Entries[*index].Reviewed &&
-                !((state.Wallet.Owned | state.Independent | state.Dependent) & (1u << *index)))
+                !((state.Wallet.Owned | state.Independent | state.Dependent) & EntryMask::Bit(*index)))
                 buttons.push_back(button);
     for (uint8 button : buttons)
         player->RemoveActionButton(button);
@@ -261,10 +282,10 @@ void CleanActions(Player* player, State const& state, bool send)
 struct ReadResult
 {
     Snapshot Wallet;
-    uint32 Independent = 0;
-    uint32 SourcePresent = 0;
+    EntryMask Independent = 0;
+    EntryMask SourcePresent = 0;
     uint64 SourceEpoch = 0;
-    std::array<uint64, 10> SourceRevision = {};
+    std::array<uint64, EntryCount> SourceRevision = {};
     bool ProfileFound = false;
     bool ReceiptFound = false;
     Request Receipt;
@@ -289,23 +310,24 @@ std::optional<ReadResult> Decode(QueryResult const& rows)
                 result.Wallet.Essence = fields[1].GetUInt32();
                 result.Wallet.Version = fields[2].GetUInt32();
                 result.SourceEpoch = fields[4].GetUInt64();
+                result.Wallet.TalentEssence = fields[5].GetUInt32();
+                result.Wallet.EarnedLevel = fields[6].GetUInt32();
                 break;
             case 1:
             {
-                auto index = Index(fields[2].GetUInt32());
-                if (!index || fields[1].GetUInt32() != Entries[*index].Advancement ||
-                    (result.Wallet.Owned & (1u << *index)) || fields[4].GetUInt32() != RulesRevision)
+                auto index = OwnedIndex(fields[7].GetStringView(), fields[1].GetUInt32(), fields[2].GetUInt32());
+                if (!index || (result.Wallet.Owned & EntryMask::Bit(*index)) || fields[4].GetUInt32() != RulesRevision)
                     return {};
-                result.Wallet.Owned |= 1u << *index;
+                result.Wallet.Owned |= EntryMask::Bit(*index);
                 result.Wallet.Paid[*index] = fields[3].GetUInt32();
                 break;
             }
             case 2:
                 if (auto index = Index(fields[1].GetUInt32()))
                 {
-                    result.SourcePresent |= 1u << *index;
+                    result.SourcePresent |= EntryMask::Bit(*index);
                     if (fields[2].GetUInt32())
-                        result.Independent |= 1u << *index;
+                        result.Independent |= EntryMask::Bit(*index);
                     result.SourceRevision[*index] = fields[3].GetUInt64();
                 }
                 break;
@@ -315,7 +337,8 @@ std::optional<ReadResult> Decode(QueryResult const& rows)
                 result.ReceiptFound = true;
                 result.Receipt.Commit = true;
                 result.Receipt.Version = fields[1].GetUInt32();
-                result.Receipt.Desired = fields[2].GetUInt32();
+                if (!EntryMask::Parse(fields[7].GetStringView(), result.Receipt.Desired))
+                    return {};
                 result.ReceiptResult = Result(fields[3].GetUInt32());
                 result.ReceiptVersion = fields[4].GetUInt32();
                 if (result.ReceiptResult == Result::Ok && fields[4].GetUInt32() == 0)
@@ -329,7 +352,7 @@ std::optional<ReadResult> Decode(QueryResult const& rows)
         std::optional(result) : std::nullopt;
 }
 
-void Read(std::shared_ptr<State> const& state, std::optional<Request> request, bool afterCommit, Done done);
+void Read(std::shared_ptr<State> const& state, std::optional<Request> request, bool afterCommit, Done done, bool afterEarn = false);
 
 void CommitChange(Player* player, std::shared_ptr<State> const& state, Request request, Done done)
 {
@@ -361,22 +384,23 @@ void CommitChange(Player* player, std::shared_ptr<State> const& state, Request r
         });
 }
 
-void Read(std::shared_ptr<State> const& state, std::optional<Request> request, bool afterCommit, Done done)
+void Read(std::shared_ptr<State> const& state, std::optional<Request> request, bool afterCommit, Done done, bool afterEarn)
 {
     state->Busy = true;
     std::string query = Trinity::StringFormat(
         "SELECT 0 AS kind,`balance` AS n1,`version` AS n2,`rules_revision` AS n3,"
-        "(SELECT `epoch` FROM `character_hero_source_session` WHERE {} AND `token`='{}') AS n4 FROM `character_hero_freepick` WHERE {} "
-        "UNION ALL SELECT 1,`advancement`,`spell`,`paid`,`rules_revision` FROM `character_hero_freepick_owned` WHERE {} AND `catalog`='{}' "
-        "UNION ALL SELECT 2,`spell`,`independent`,`revision`,0 FROM `character_hero_spell_source` WHERE `realm`={} AND `guid`={}",
-        Key(state->Guid), state->SessionTokens.back(), Key(state->Guid), Key(state->Guid), Catalog,
+        "(SELECT `epoch` FROM `character_hero_source_session` WHERE {} AND `token`='{}') AS n4,"
+        "`talent_balance` AS n5,`earned_level` AS n6,'' AS origin FROM `character_hero_freepick` WHERE {} "
+        "UNION ALL SELECT 1,`advancement`,`spell`,`paid`,`rules_revision`,0,0,`catalog` FROM `character_hero_freepick_owned` WHERE {} AND `catalog` IN ('{}','{}','{}','{}') "
+        "UNION ALL SELECT 2,`spell`,`independent`,`revision`,0,0,0,'' FROM `character_hero_spell_source` WHERE `realm`={} AND `guid`={}",
+        Key(state->Guid), state->SessionTokens.back(), Key(state->Guid), Key(state->Guid), Catalog, TalentCatalog, RetailAbilityCatalog, MasteryCatalog,
         state->Guid.GetRealmId(), state->Guid.GetCounter());
     if (request)
         query += Trinity::StringFormat(
-            " UNION ALL SELECT 3,`expected_version`,`desired_mask`,`result`,COALESCE(`committed_version`,0) FROM `character_hero_freepick_request` WHERE {} AND `request_id`='{}'",
+            " UNION ALL SELECT 3,`expected_version`,`desired_mask`,`result`,COALESCE(`committed_version`,0),0,0,COALESCE(`desired_bits`,LPAD(LOWER(HEX(`desired_mask`)),32,'0')) FROM `character_hero_freepick_request` WHERE {} AND `request_id`='{}'",
             Key(state->Guid), request->Id);
     Queries.AddCallback(CharacterDatabase.AsyncQuery(query.c_str()).WithCallback(
-        [state, request, afterCommit, done = std::move(done)](QueryResult rows)
+        [state, request, afterCommit, afterEarn, done = std::move(done)](QueryResult rows)
         {
             Player* current = Current(state);
             state->Busy = false;
@@ -393,8 +417,31 @@ void Read(std::shared_ptr<State> const& state, std::optional<Request> request, b
                 done();
                 return;
             }
+            if (current && std::min<uint32>(current->GetLevel(), MaximumLevel) > result->Wallet.EarnedLevel)
+            {
+                if (afterEarn || result->Wallet.Version == std::numeric_limits<uint32>::max())
+                {
+                    state->Ready = false;
+                    Reconcile(current, *state);
+                    if (request)
+                        Send(current, *state, *request, Result::Unavailable);
+                    done();
+                    return;
+                }
+                state->Busy = true;
+                CharacterDatabaseTransaction transaction = CharacterDatabase.BeginTransaction();
+                transaction->Append(EarnSql(state->Guid.GetRealmId(), state->Guid.GetCounter(), current->GetLevel()).c_str());
+                Transactions.AddCallback(CharacterDatabase.AsyncCommitTransaction(transaction)).AfterComplete(
+                    [state, request, afterCommit, done = std::move(done)](bool /*success*/)
+                    {
+                        // Read back once even if COMMIT lost its acknowledgement.
+                        // The level guard makes a later retry idempotent.
+                        Read(state, request, afterCommit, done, true);
+                    });
+                return;
+            }
             state->Wallet = result->Wallet;
-            uint32 initial = state->InitialPermanent & ~result->SourcePresent;
+            EntryMask initial = state->InitialPermanent & ~result->SourcePresent;
             state->Independent = ((result->Independent | initial) & ~state->Touched) | (state->Independent & state->Touched);
             state->Touched |= initial;
             state->SourceEpoch = result->SourceEpoch;
@@ -402,7 +449,7 @@ void Read(std::shared_ptr<State> const& state, std::optional<Request> request, b
             for (std::size_t i = 0; i < Entries.size(); ++i)
                 if (!state->HasSnapshot)
                     state->SourceRevision[i] += result->SourceRevision[i];
-                else if (!(state->Touched & (1u << i)))
+                else if (!(state->Touched & EntryMask::Bit(i)))
                     state->SourceRevision[i] = result->SourceRevision[i];
             state->HasSnapshot = true;
             state->Ready = true;
@@ -511,6 +558,12 @@ public:
             QueueInitialize(Create(player));
     }
 
+    void OnLevelChanged(Player* player, uint8) override
+    {
+        if (player->GetClass() == 16)
+            QueueInitialize(Create(player));
+    }
+
     void OnLogout(Player* player) override
     {
         auto state = Find(player->GetGUID());
@@ -576,17 +629,17 @@ public:
         if (!index || !state || player->GetClass() != 16)
             return false;
         if (state->Internal)
-            return !dependent && (state->Independent & (1u << *index));
+            return !dependent && (state->Independent & EntryMask::Bit(*index));
         if (dependent)
         {
-            state->Dependent |= 1u << *index;
-            if (state->Independent & (1u << *index))
+            state->Dependent |= EntryMask::Bit(*index);
+            if (state->Independent & EntryMask::Bit(*index))
                 dependent = false;
         }
         else
         {
-            state->Independent |= 1u << *index;
-            state->Touched |= 1u << *index;
+            state->Independent |= EntryMask::Bit(*index);
+            state->Touched |= EntryMask::Bit(*index);
             ++state->SourceRevision[*index];
         }
         return true;
@@ -604,11 +657,11 @@ public:
                 preserveAura = true;
             return true;
         }
-        state->Independent &= ~(1u << *index);
-        state->Dependent &= ~(1u << *index);
-        state->Touched |= 1u << *index;
+        state->Independent &= ~EntryMask::Bit(*index);
+        state->Dependent &= ~EntryMask::Bit(*index);
+        state->Touched |= EntryMask::Bit(*index);
         ++state->SourceRevision[*index];
-        if (state->Ready && (state->Wallet.Owned & (1u << *index)) && uint32(player->GetPrimarySpecialization()) == Mode)
+        if (state->Ready && (state->Wallet.Owned & EntryMask::Bit(*index)) && uint32(player->GetPrimarySpecialization()) == Mode)
         {
             state->Internal = true;
             player->LearnSpell(spell, true);

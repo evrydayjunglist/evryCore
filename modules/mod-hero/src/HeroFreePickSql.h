@@ -21,13 +21,14 @@ inline std::vector<std::string> InitializeSql(std::uint32_t realm, std::uint64_t
     std::string r = std::to_string(realm), g = std::to_string(guid);
     std::vector<std::string> sql;
     sql.push_back("INSERT IGNORE INTO `character_hero_freepick` (`realm`,`guid`,`profile`,`mode`,`rules_revision`,`version`,`previous_version`,`balance`) "
-        "SELECT " + SqlIdentity(realm, guid) + ",601,1,0,0,8 FROM `characters` WHERE `guid`=" + g +
+        "SELECT " + SqlIdentity(realm, guid) + ",601," + std::to_string(RulesRevision) + ",0,0,9 FROM `characters` WHERE `guid`=" + g +
         " AND `class`=16 AND `deleteDate` IS NULL AND NOT EXISTS (SELECT 1 FROM `character_hero_freepick_deleted` WHERE `realm`=" + r + " AND `guid`=" + g + ")");
     sql.push_back("UPDATE `character_hero_freepick` SET `source_epoch`=`source_epoch`+1 WHERE " + SqlKey(realm, guid));
     for (Entry const& entry : Entries)
-        sql.push_back("INSERT IGNORE INTO `character_hero_spell_source` (`realm`,`guid`,`spell`,`independent`) SELECT " + r +
-            ",`guid`,`spell`,1 FROM `character_spell` WHERE `guid`=" + g + " AND `spell`=" + std::to_string(entry.Spell) +
-            " AND EXISTS (SELECT 1 FROM `character_hero_freepick` WHERE " + SqlKey(realm, guid) + ")");
+        if (entry.Spell)
+            sql.push_back("INSERT IGNORE INTO `character_hero_spell_source` (`realm`,`guid`,`spell`,`independent`) SELECT " + r +
+                ",`guid`,`spell`,1 FROM `character_spell` WHERE `guid`=" + g + " AND `spell`=" + std::to_string(entry.Spell) +
+                " AND EXISTS (SELECT 1 FROM `character_hero_freepick` WHERE " + SqlKey(realm, guid) + ")");
     return sql;
 }
 
@@ -54,8 +55,8 @@ inline std::vector<std::string> InitializeSessionSql(std::uint32_t realm, std::u
     return sql;
 }
 
-inline std::vector<std::string> SourceSql(std::uint32_t realm, std::uint64_t guid, std::uint32_t touched,
-    std::uint32_t independent, std::array<std::uint64_t, 10> const& revisions, std::uint64_t epoch = 1,
+inline std::vector<std::string> SourceSql(std::uint32_t realm, std::uint64_t guid, EntryMask touched,
+    EntryMask independent, std::array<std::uint64_t, EntryCount> const& revisions, std::uint64_t epoch = 1,
     std::string_view sessionToken = {})
 {
     std::vector<std::string> sql;
@@ -65,10 +66,10 @@ inline std::vector<std::string> SourceSql(std::uint32_t realm, std::uint64_t gui
         "(SELECT `epoch` FROM `character_hero_source_session` WHERE " + SqlKey(realm, guid) +
         " AND `token`='" + std::string(sessionToken) + "')";
     for (std::size_t i = 0; i < Entries.size(); ++i)
-        if (touched & (1u << i))
+        if (Entries[i].Spell && (touched & EntryMask::Bit(i)))
             sql.push_back("INSERT INTO `character_hero_spell_source` (`realm`,`guid`,`spell`,`independent`,`revision`,`epoch`) SELECT " +
                 std::to_string(realm) + "," + std::to_string(guid) + "," + std::to_string(Entries[i].Spell) + "," +
-                ((independent & (1u << i)) ? "1" : "0") + "," + std::to_string(revisions[i]) + "," + epochSql +
+                ((independent & EntryMask::Bit(i)) ? "1" : "0") + "," + std::to_string(revisions[i]) + "," + epochSql +
                 " FROM `character_hero_freepick` WHERE " + SqlKey(realm, guid) +
                 (sessionToken.empty() ? "" : " AND EXISTS (SELECT 1 FROM `character_hero_source_session` WHERE " +
                     SqlKey(realm, guid) + " AND `token`='" + std::string(sessionToken) + "')") +
@@ -80,8 +81,21 @@ inline std::vector<std::string> SourceSql(std::uint32_t realm, std::uint64_t gui
     return sql;
 }
 
+inline std::string EarnSql(std::uint32_t realm, std::uint64_t guid, std::uint32_t level)
+{
+    level = level > MaximumLevel ? MaximumLevel : level;
+    // A single guarded row update conserves both currencies under concurrent
+    // refreshes, level jumps and reconnects. Repeated levels add nothing.
+    return "UPDATE `character_hero_freepick` SET `previous_version`=`version`,`version`=`version`+1,"
+        "`balance`=`balance`+" + std::to_string(TalentAllowance(level)) +
+        "-GREATEST(CAST(`earned_level` AS SIGNED)-9,0),`talent_balance`=`talent_balance`+" +
+        std::to_string(TalentAllowance(level)) + "-GREATEST(CAST(`earned_level` AS SIGNED)-9,0),"
+        "`earned_level`=" + std::to_string(level) + " WHERE " + SqlKey(realm, guid) +
+        " AND `earned_level`<" + std::to_string(level) + " AND `rules_revision`=" + std::to_string(RulesRevision);
+}
+
 inline std::vector<std::string> ApplySql(std::uint32_t realm, std::uint64_t guid, Request const& request,
-    Change const& change, std::uint32_t /*externalSources*/)
+    Change const& change, EntryMask /*externalSources*/)
 {
     if (!HexId(request.Id) || !request.Commit || (request.Desired & ~AllEntries))
         return {};
@@ -90,23 +104,24 @@ inline std::vector<std::string> ApplySql(std::uint32_t realm, std::uint64_t guid
     if (change.Code == Result::Ok)
     {
         sql.push_back("UPDATE `character_hero_freepick` SET `version`=`version`+1,`previous_version`=" +
-            std::to_string(request.Version) + ",`balance`=" + std::to_string(change.State.Essence) + " WHERE " + key);
+            std::to_string(request.Version) + ",`balance`=" + std::to_string(change.State.Essence) +
+            ",`talent_balance`=" + std::to_string(change.State.TalentEssence) + " WHERE " + key);
         for (std::size_t i = 0; i < Entries.size(); ++i)
         {
-            if (change.Removed & (1u << i))
+            if (change.Removed & EntryMask::Bit(i))
             {
                 sql.push_back("DELETE FROM `character_hero_freepick_owned` WHERE " + key + " AND `catalog`='" +
-                    std::string(Catalog) + "' AND `advancement`=" + std::to_string(Entries[i].Advancement));
+                    std::string(CatalogFor(Entries[i])) + "' AND `advancement`=" + std::to_string(Entries[i].Advancement));
             }
-            if (change.Added & (1u << i))
+            if (change.Added & EntryMask::Bit(i))
                 sql.push_back("INSERT INTO `character_hero_freepick_owned` (`realm`,`guid`,`profile`,`catalog`,`advancement`,`spell`,`paid`,`rules_revision`) VALUES (" +
-                    SqlIdentity(realm, guid) + ",'" + std::string(Catalog) + "'," + std::to_string(Entries[i].Advancement) + "," +
+                    SqlIdentity(realm, guid) + ",'" + std::string(CatalogFor(Entries[i])) + "'," + std::to_string(Entries[i].Advancement) + "," +
                     std::to_string(Entries[i].Spell) + "," + std::to_string(change.State.Paid[i]) + "," + std::to_string(RulesRevision) + ")");
         }
     }
-    sql.push_back("INSERT INTO `character_hero_freepick_request` (`realm`,`guid`,`profile`,`request_id`,`expected_version`,`desired_mask`,`result`,`committed_version`) VALUES (" +
+    sql.push_back("INSERT INTO `character_hero_freepick_request` (`realm`,`guid`,`profile`,`request_id`,`expected_version`,`desired_mask`,`desired_bits`,`result`,`committed_version`) VALUES (" +
         SqlIdentity(realm, guid) + ",'" + request.Id + "'," + std::to_string(request.Version) + "," +
-        std::to_string(request.Desired) + "," + std::to_string(std::uint32_t(change.Code)) + "," +
+        std::to_string(request.Desired.words[0]) + ",'" + Hex(request.Desired) + "'," + std::to_string(std::uint32_t(change.Code)) + "," +
         (change.Code == Result::Ok ? std::to_string(change.State.Version) : "NULL") + ")");
     return sql;
 }

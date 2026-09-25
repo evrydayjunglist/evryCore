@@ -553,8 +553,8 @@ namespace WorldPackets
         class NeighborhoodEvictPlot;
         class NeighborhoodInitiativeServiceStatusCheck;
         class GetAvailableInitiativeRequest;
+        class GetPlayerInitiativeInfoRequest;
         class GetInitiativeActivityLogRequest;
-        class GetNeighborhoodInitiativeInfoRequest;
         class InitiativeUpdateActiveNeighborhood;
         class NeighborhoodInitiativeOp01;
         class NeighborhoodInitiativeOp05;
@@ -1894,8 +1894,8 @@ class TC_GAME_API WorldSession
 
         void HandleNeighborhoodInitiativeServiceStatusCheck(WorldPackets::Neighborhood::NeighborhoodInitiativeServiceStatusCheck const& packet);
         void HandleGetAvailableInitiativeRequest(WorldPackets::Neighborhood::GetAvailableInitiativeRequest const& getAvailableInitiativeRequest);
+        void HandleGetPlayerInitiativeInfoRequest(WorldPackets::Neighborhood::GetPlayerInitiativeInfoRequest const& getPlayerInitiativeInfoRequest);
         void HandleGetInitiativeActivityLogRequest(WorldPackets::Neighborhood::GetInitiativeActivityLogRequest const& getInitiativeActivityLogRequest);
-        void HandleGetNeighborhoodInitiativeInfoRequest(WorldPackets::Neighborhood::GetNeighborhoodInitiativeInfoRequest const& getNeighborhoodInitiativeInfoRequest);
         void HandleInitiativeUpdateActiveNeighborhood(WorldPackets::Neighborhood::InitiativeUpdateActiveNeighborhood const& initiativeUpdateActiveNeighborhood);
         void HandleNeighborhoodInitiativeOp01(WorldPackets::Neighborhood::NeighborhoodInitiativeOp01 const& packet);
         void HandleNeighborhoodInitiativeOp05(WorldPackets::Neighborhood::NeighborhoodInitiativeOp05 const& packet);

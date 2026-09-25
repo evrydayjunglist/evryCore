@@ -1470,16 +1470,13 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     {
         WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
         response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-        response.House.HouseGUID = housing->GetHouseGuid();
-        response.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
-        response.House.NeighborhoodGUID = neighborhood->GetGuid();
-        response.House.PlotIndex = resolvedPlotIndex;
-        response.House.HouseLevel = static_cast<uint8>(housing->GetLevel()); // JamCliHouse carries the level, not the settings flags
+        // The bought house: plot and setting flags as retail's reply (0D 20: plot 13, flags 32; hbcd3 1299763).
+        housing->FillHouseEntry(response.House);
         SendPacket(response.Write());
 
-        TC_LOG_DEBUG("housing", "SMSG_NEIGHBORHOOD_BUY_HOUSE_RESPONSE Result={}, PlotId={}, HouseGuid={}, OwnerGuid={}",
-            uint32(response.Result), response.House.PlotIndex,
-            response.House.HouseGUID.ToString(), response.House.OwnerGUID.ToString());
+        TC_LOG_DEBUG("housing", "SMSG_NEIGHBORHOOD_BUY_HOUSE_RESPONSE Result={}, PlotId={}, HouseGuid={}, CosmeticOwner={}, Settings=0x{:X}",
+            uint32(response.Result), response.House.PlotID, response.House.HouseGUID.ToString(),
+            response.House.CosmeticOwnerGUID.ToString(), response.House.HouseSettingFlags);
     }
 
     // Level and favor in retail's two packets (hbcd3 1299772, Number 13869, and 1301305, Number 13925): first
@@ -1517,9 +1514,7 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
     {
         WorldPackets::Housing::HousingSvcsGuildAddHouseNotification notification;
-        notification.House.HouseGUID = housing->GetHouseGuid();
-        notification.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
-        notification.House.HouseLevel = static_cast<uint8>(housing->GetLevel());
+        housing->FillHouseEntry(notification.House);
         guild->BroadcastPacket(notification.Write());
     }
 
@@ -1533,17 +1528,12 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     // Refresh NeighborhoodMirrorData (Houses[] changed) on all online members
     neighborhood->RefreshMirrorDataForOnlineMembers();
 
-    // Proactively send DECOR_REQUEST_STORAGE_RESPONSE after purchase.
-    // The client requests storage at map entry (before purchase) and gets "no house".
-    // It does NOT re-request after purchase, so we must push the updated state.
-    // Retail flow: populate storage entries into Account entity THEN send update.
+    // The account's decor storage and the new house's budgets, in update fields. No storage reply goes with them:
+    // retail sent one only in answer to CMSG_HOUSING_DECOR_REQUEST_STORAGE (hbcd3 Numbers 3263/3265 and 19645/19647),
+    // and none in the purchase (Numbers 13842-13926).
     {
         housing->PopulateCatalogStorageEntries();
         housing->SyncUpdateFields();
-
-        WorldPackets::Housing::HousingDecorRequestStorageResponse storageResp;
-        storageResp.ResultCode = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-        SendPacket(storageResp.Write());
 
         // Send Account + HousingPlayerHouseEntity together so budget data
         // accompanies storage data for the client's decor count display.
@@ -1733,13 +1723,7 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
             }
         }
 
-        {
-            response.House.HouseGUID = housing->GetHouseGuid();
-            response.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
-            response.House.NeighborhoodGUID = housing->GetNeighborhoodGuid();
-            response.House.PlotIndex = housing->GetPlotIndex();
-            response.House.HouseLevel = static_cast<uint8>(housing->GetLevel()); // JamCliHouse carries level, not settings flags (RE 0x5c0006)
-        }
+        housing->FillHouseEntry(response.House);
 
         // The house moved to another plot: the other members' rosters need the new plot.
         neighborhood->BroadcastRoster(player->GetGUID());
@@ -1765,8 +1749,8 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
     if (!player)
         return;
 
-    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI PlotIndex(raw): {}, NeighborhoodGuid: {}",
-        neighborhoodOpenCornerstoneUI.PlotIndex, neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString());
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI PlotIndex(raw): {}, CornerstoneGuid: {}",
+        neighborhoodOpenCornerstoneUI.PlotIndex, neighborhoodOpenCornerstoneUI.CornerstoneGuid.ToString());
 
     // The packet's GUID is the cornerstone the player clicked. Forget the last
     // window first, so a refused open cannot leave an older plot to buy.
@@ -1777,17 +1761,17 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
     // with cornerstone entry 457142 on Razorwind Shores, hbcd3 1295070-1295072),
     // so a plot that does not match the cornerstone in reach is refused.
     Neighborhood* neighborhood = nullptr;
-    NeighborhoodPlotData const* plot = ResolveCornerstone(player, neighborhoodOpenCornerstoneUI.NeighborhoodGuid, neighborhood);
+    NeighborhoodPlotData const* plot = ResolveCornerstone(player, neighborhoodOpenCornerstoneUI.CornerstoneGuid, neighborhood);
     if (!plot || neighborhoodOpenCornerstoneUI.PlotIndex != uint32(plot->PlotIndex))
     {
         if (plot)
             TC_LOG_DEBUG("housing", "HandleNeighborhoodOpenCornerstoneUI: refused for player {}: client sent plot {} but cornerstone {} is plot {}",
                 player->GetGUID().ToString(), neighborhoodOpenCornerstoneUI.PlotIndex,
-                neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString(), plot->PlotIndex);
+                neighborhoodOpenCornerstoneUI.CornerstoneGuid.ToString(), plot->PlotIndex);
         else
             TC_LOG_DEBUG("housing", "HandleNeighborhoodOpenCornerstoneUI: refused for player {}: client sent plot {}, and the cornerstone check on {} failed",
                 player->GetGUID().ToString(), neighborhoodOpenCornerstoneUI.PlotIndex,
-                neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString());
+                neighborhoodOpenCornerstoneUI.CornerstoneGuid.ToString());
 
         WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUIResponse response;
         response.PlotIndex = neighborhoodOpenCornerstoneUI.PlotIndex;
@@ -1798,64 +1782,35 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
 
     // Remembered for the buy or move that follows; neither packet carries a plot.
     uint32 const plotIndex = uint32(plot->PlotIndex);
-    uint64 const plotCost = plot->Cost;
     _lastClientPlotIndex = plotIndex;
-    _lastCornerstoneGuid = neighborhoodOpenCornerstoneUI.NeighborhoodGuid;
+    _lastCornerstoneGuid = neighborhoodOpenCornerstoneUI.CornerstoneGuid;
 
-    // Pre-send neighborhood name response to populate the JamCliNeighborhoodName
-    // DataCache. Flag +574 in the display function checks whether the TLS
-    // NeighborhoodGuid is resolved in the DataCache. Sending this immediately
-    // before the cornerstone response ensures the cache entry exists.
-    {
-        WorldPackets::Housing::QueryNeighborhoodNameResponse nameResp;
-        nameResp.NeighborhoodGuid = neighborhood->GetGuid();
-        nameResp.Result = true;
-        nameResp.NeighborhoodName = neighborhood->GetName();
-        SendPacket(nameResp.Write());
-    }
+    // No neighborhood name goes out before this reply: retail sends it only after the client's
+    // CMSG_QUERY_NEIGHBORHOOD_INFO, which follows the reply (hbcd3 1296244, 1296252, 1296259).
 
     // Look up ownership from the Neighborhood's plot info
     uint8 plotIdx = static_cast<uint8>(plotIndex);
     Neighborhood::PlotInfo const* plotInfo = neighborhood->GetPlotInfo(plotIdx);
     bool isOwned = plotInfo && !plotInfo->OwnerGuid.IsEmpty();
 
-    // Build cornerstone UI response — wire format verified against retail 12.0.1 build 65940.
-    // Horde retail sniff shows two patterns:
-    //   Packet 1 (PlotIndex=37): PurchaseStatus=73 (PlotReserved), Cost=10M — actively reserved plot
-    //   Packet 2 (PlotIndex=54): PurchaseStatus=0, Cost=10M, HasAlternatePrice — available plot
-    // PurchaseStatus=73 = HousingResult::PlotReserved, NOT "purchasable".
-    // For unclaimed purchasable plots: PurchaseStatus=0, Cost=plotCost.
+    // Values as in both retail replies (hbcd3 1296244, a vacant plot, 29 bytes; hbcd3 1563345, the player's own plot,
+    // 44 bytes): the owner character and the house only when the plot is owned, cost 0, status 0, no cornerstone GUID,
+    // every bit off and no alternate price. Both are the tutorial plot of Razorwind Shores; what retail sends for other
+    // plots is not captured.
     WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUIResponse response;
     response.PlotIndex = plotIndex;
-    response.PurchaseStatus = 0;
-    response.NeighborhoodGuid = neighborhood->GetGuid();
-    response.CornerstoneGuid = neighborhoodOpenCornerstoneUI.NeighborhoodGuid; // GO GUID from CMSG
-    response.IsPlotOwned = isOwned;
-    response.CanPurchase = !isOwned;
     response.NeighborhoodName = neighborhood->GetName();
-
-    // Set IsInitiative when the neighborhood has an active initiative/endeavor
-    uint64 nhLowGuid = neighborhood->GetGuid().GetCounter();
-    response.IsInitiative = (sInitiativeManager.GetActiveInitiative(nhLowGuid) != nullptr);
 
     if (isOwned)
     {
-        // Owned plot: show owner info, no purchase available
         response.PlotOwnerGuid = plotInfo->OwnerGuid;
-        response.Cost = 0;
+        response.HouseGuid = plotInfo->HouseGuid;
     }
     else
     {
-        // Unclaimed plot: send cost so client can show purchase UI
-        response.PlotOwnerGuid = ObjectGuid::Empty;
-        response.Cost = plotCost;
-        response.AlternatePrice = static_cast<uint64>(GameTime::GetGameTime()) + 7 * DAY;
-
-        // If another player currently holds the 5-min reservation, retail
-        // marks the plot with PurchaseStatus = HOUSING_RESULT_PLOT_RESERVED (73).
-        // The client renders this as "Reserved" and disables the action button.
-        // The reserving player themselves still gets PurchaseStatus=0 so they
-        // can act on their own hold.
+        // Another player's reservation marks the plot with PurchaseStatus HOUSING_RESULT_PLOT_RESERVED (73); the
+        // reserving player still gets 0. The 12.0.7 captures have no reserved plot, so this case is not checked
+        // against retail.
         ObjectGuid otherReserver = neighborhood->GetPlotReserverOther(plotIdx, player->GetGUID());
         if (!otherReserver.IsEmpty())
         {
@@ -1872,20 +1827,12 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
     // on Buy, which then routes to BUY_HOUSE and gets rejected by HandleNeighborhoodBuyHouse
     // (HOUSING_RESULT_INVALID_HOUSE — "player already has a house in neighborhood").
     // Only embed when the plot is actually actionable for this player (not owned
-    // by anyone else and not reserved by anyone else).
+    // by anyone else and not reserved by anyone else). Neither retail reply covers
+    // this case: the vacant plot was clicked before that player owned a house.
     if (!isOwned && response.PurchaseStatus == 0)
     {
         if (Housing const* myHousing = player->GetHousingForNeighborhood(neighborhood->GetGuid()))
-        {
-            WorldPackets::Housing::JamCliHouse existingHouse;
-            existingHouse.HouseGUID = myHousing->GetHouseGuid();
-            existingHouse.OwnerGUID = myHousing->GetCosmeticOwnerGuid();
-            existingHouse.NeighborhoodGUID = myHousing->GetNeighborhoodGuid();
-            existingHouse.PlotIndex = myHousing->GetPlotIndex();
-            existingHouse.HouseLevel = static_cast<uint8>(myHousing->GetLevel());
-            existingHouse.HasOptionalField = false;
-            response.ExistingHouse = std::move(existingHouse);
-        }
+            myHousing->FillHouseEntry(response.ExistingHouse.emplace());
     }
     WorldPacket const* pkt = response.Write();
     SendPacket(pkt);
@@ -1893,13 +1840,13 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
     TC_LOG_DEBUG("housing", "=== SMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI_RESPONSE (0x5C000A) ===\n"
         "  PlotIndex={}, Cost={}, PurchaseStatus={}, CanPurchase={}, IsPlotOwned={}\n"
         "  PlotOwnerGuid: {} ({})\n"
-        "  NeighborhoodGuid: {} ({})\n"
+        "  HouseGuid: {} ({})\n"
         "  CornerstoneGuid: {} ({})\n"
         "  NeighborhoodName='{}' (len={})\n"
         "  Packet size={} bytes, hex:\n  {}",
         response.PlotIndex, response.Cost, uint32(response.PurchaseStatus), response.CanPurchase, response.IsPlotOwned,
         response.PlotOwnerGuid.ToString(), GuidHex(response.PlotOwnerGuid),
-        response.NeighborhoodGuid.ToString(), GuidHex(response.NeighborhoodGuid),
+        response.HouseGuid.ToString(), GuidHex(response.HouseGuid),
         response.CornerstoneGuid.ToString(), GuidHex(response.CornerstoneGuid),
         response.NeighborhoodName, response.NeighborhoodName.size(),
         pkt->size(), HexDumpPacket(pkt));
@@ -2010,16 +1957,8 @@ void WorldSession::HandleNeighborhoodGetRoster(WorldPackets::Neighborhood::Neigh
     WorldPackets::Neighborhood::NeighborhoodGetRosterResponse response;
     neighborhood->BuildRosterResponse(response);
 
-    // Pre-send neighborhood name response to populate JamCliNeighborhoodName DataCache.
-    // The roster UI resolves the neighborhood name via GroupNeighborhoodGuid cache lookup.
-    {
-        WorldPackets::Housing::QueryNeighborhoodNameResponse nameResp;
-        nameResp.NeighborhoodGuid = neighborhood->GetGuid();
-        nameResp.Result = true;
-        nameResp.NeighborhoodName = neighborhood->GetName();
-        SendPacket(nameResp.Write());
-    }
-
+    // No neighborhood name goes out with the roster: retail sends the name only in answer to the client's
+    // CMSG_QUERY_NEIGHBORHOOD_INFO (every capture has as many name replies as queries).
     WorldPacket const* rosterPkt = response.Write();
     SendPacket(rosterPkt);
 
@@ -2247,17 +2186,28 @@ void WorldSession::HandleNeighborhoodInitiativeServiceStatusCheck(WorldPackets::
     // Send initiative service status (retail-observed: this CMSG's only response)
     sInitiativeManager.SendInitiativeServiceStatus(this, true);
 
-    // REMOVED proactive SMSG_GET_PLAYER_INITIATIVE_INFO_RESULT (0x420365).
-    // Sniff set-diff of 3 retail login captures shows retail never emits
-    // this SMSG at login. The earlier comment claimed it was needed for
-    // the client's C_NeighborhoodInitiative.isLoaded flag, but that claim
-    // was not actually sniff-verified. The client sends
-    // CMSG_GET_AVAILABLE_INITIATIVE_REQUEST when it needs the data; the
-    // reactive handler at HandleGetAvailableInitiativeRequest delivers
-    // SendPlayerInitiativeInfo on demand. Hypothesis: the proactive
-    // unsolicited INITIATIVE_INFO_RESULT at login suppresses the client's
-    // map-icon refresh (same pattern as the previously-removed proactive
-    // roster response).
+    // No SMSG_GET_PLAYER_INITIATIVE_INFO_RESULT here: retail sends it only in answer to
+    // CMSG_GET_PLAYER_INITIATIVE_INFO_REQUEST (hbcd3 290809, answered at 293257).
+}
+
+namespace
+{
+    // SMSG_GET_PLAYER_INITIATIVE_INFO_RESULT for the neighborhood a request names. Without one the reply is the
+    // requested GUID and a zero flag byte: retail answered an empty request with 00 00 00 (hbcd3 293257).
+    void SendPlayerInitiativeInfoFor(WorldSession* session, Player* player, ObjectGuid requestedNeighborhood)
+    {
+        Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(requestedNeighborhood, player);
+        if (!neighborhood)
+        {
+            WorldPackets::Housing::GetPlayerInitiativeInfoResult response;
+            response.NeighborhoodGUID = requestedNeighborhood;
+            session->SendPacket(response.Write());
+            return;
+        }
+
+        ObjectGuid nhObjGuid = neighborhood->GetGuid();
+        sInitiativeManager.SendPlayerInitiativeInfo(session, nhObjGuid, nhObjGuid.GetCounter());
+    }
 }
 
 void WorldSession::HandleGetAvailableInitiativeRequest(WorldPackets::Neighborhood::GetAvailableInitiativeRequest const& getAvailableInitiativeRequest)
@@ -2266,24 +2216,24 @@ void WorldSession::HandleGetAvailableInitiativeRequest(WorldPackets::Neighborhoo
     if (!player)
         return;
 
-    Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(getAvailableInitiativeRequest.NeighborhoodGuid, player);
-    if (!neighborhood)
-    {
-        // No neighborhood: emit empty response. Wire is just GUID + uint8(0)
-        // — Flags top-2-bits == 0 makes the client skip the data block entirely,
-        // which is the no-data path. Real failures route via SMSG_HOUSING_SVCS_NOTIFY_PERMISSIONS_FAILURE.
-        WorldPackets::Housing::GetPlayerInitiativeInfoResult response;
-        response.NeighborhoodGUID = getAvailableInitiativeRequest.NeighborhoodGuid;
-        SendPacket(response.Write());
-        return;
-    }
-
-    ObjectGuid nhObjGuid = neighborhood->GetGuid();
-    uint64 nhGuid = nhObjGuid.GetCounter();
-    sInitiativeManager.SendPlayerInitiativeInfo(this, nhObjGuid, nhGuid);
+    SendPlayerInitiativeInfoFor(this, player, getAvailableInitiativeRequest.NeighborhoodGuid);
 
     TC_LOG_DEBUG("housing", "CMSG_GET_AVAILABLE_INITIATIVE_REQUEST NeighborhoodGuid: {}, Player: {}",
         getAvailableInitiativeRequest.NeighborhoodGuid.ToString(), player->GetGUID().ToString());
+}
+
+// Retail's client asks with this opcode (hbcd3 290809 and 1305387, twice at once when the panel opens) and gets one
+// SMSG_GET_PLAYER_INITIATIVE_INFO_RESULT for each request (hbcd3 293257, 1305712 and 1305721).
+void WorldSession::HandleGetPlayerInitiativeInfoRequest(WorldPackets::Neighborhood::GetPlayerInitiativeInfoRequest const& getPlayerInitiativeInfoRequest)
+{
+    Player* player = GetPlayer();
+    if (!player)
+        return;
+
+    SendPlayerInitiativeInfoFor(this, player, getPlayerInitiativeInfoRequest.NeighborhoodGuid);
+
+    TC_LOG_DEBUG("housing", "CMSG_GET_PLAYER_INITIATIVE_INFO_REQUEST NeighborhoodGuid: {}, Player: {}",
+        getPlayerInitiativeInfoRequest.NeighborhoodGuid.ToString(), player->GetGUID().ToString());
 }
 
 void WorldSession::HandleGetInitiativeActivityLogRequest(WorldPackets::Neighborhood::GetInitiativeActivityLogRequest const& getInitiativeActivityLogRequest)
@@ -2310,41 +2260,6 @@ void WorldSession::HandleGetInitiativeActivityLogRequest(WorldPackets::Neighborh
     TC_LOG_DEBUG("housing", "CMSG_GET_INITIATIVE_ACTIVITY_LOG_REQUEST NeighborhoodGuid: {}, Player: {}",
         getInitiativeActivityLogRequest.NeighborhoodGuid.ToString(), player->GetGUID().ToString());
 }
-
-// TODO housing Stage 2 (protocol migration): guarded with WorldPackets::Neighborhood::GetNeighborhoodInitiativeInfoRequest
-// (HousingPackets.h) — opcode absent in 12.1 enum: CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST.
-#if 0
-void WorldSession::HandleGetNeighborhoodInitiativeInfoRequest(WorldPackets::Neighborhood::GetNeighborhoodInitiativeInfoRequest const& getNeighborhoodInitiativeInfoRequest)
-{
-    // 12.0.5 sniff-verified opcode 0x380003. Lua entry point:
-    // C_NeighborhoodInitiative.RequestNeighborhoodInitiativeInfo(neighborhoodGUID).
-    // Always paired with CMSG_GET_INITIATIVE_ACTIVITY_LOG_REQUEST in the captured
-    // traffic — both fired when the player opens the neighborhood initiative panel.
-    // The 0x380002 request also returns initiative info but for the `Available`
-    // panel; this 0x380003 path corresponds to the active/current initiative view.
-    // Reuse SendPlayerInitiativeInfo, which serialises the current cycle, milestone,
-    // remaining duration and player tasks via SMSG_GET_PLAYER_INITIATIVE_INFO_RESULT
-    // (0x420368) — that same SMSG is consumed by the client for both panels.
-    Player* player = GetPlayer();
-    if (!player)
-        return;
-
-    Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(getNeighborhoodInitiativeInfoRequest.NeighborhoodGuid, player);
-    if (!neighborhood)
-    {
-        TC_LOG_DEBUG("housing", "CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST NeighborhoodGuid {} not resolvable for Player: {}",
-            getNeighborhoodInitiativeInfoRequest.NeighborhoodGuid.ToString(), player->GetGUID().ToString());
-        return;
-    }
-
-    ObjectGuid nhObjGuid = neighborhood->GetGuid();
-    uint64 nhGuid = nhObjGuid.GetCounter();
-    sInitiativeManager.SendPlayerInitiativeInfo(this, nhObjGuid, nhGuid);
-
-    TC_LOG_DEBUG("housing", "CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST NeighborhoodGuid: {}, Player: {}",
-        getNeighborhoodInitiativeInfoRequest.NeighborhoodGuid.ToString(), player->GetGUID().ToString());
-}
-#endif
 
 void WorldSession::HandleInitiativeUpdateActiveNeighborhood(WorldPackets::Neighborhood::InitiativeUpdateActiveNeighborhood const& initiativeUpdateActiveNeighborhood)
 {

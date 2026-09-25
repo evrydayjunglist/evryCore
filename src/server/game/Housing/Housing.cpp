@@ -913,6 +913,16 @@ void Housing::SetPlotIndex(uint8 plotIndex)
     _state->PlotIndex = plotIndex;
 }
 
+void Housing::FillHouseEntry(WorldPackets::Housing::JamCliHouse& house) const
+{
+    auto guard = LockState();
+    house.HouseGUID = _state->HouseGuid;
+    house.CosmeticOwnerGUID = _state->CosmeticOwnerGuid;
+    house.NeighborhoodGUID = _state->NeighborhoodGuid;
+    house.PlotID = _state->PlotIndex;
+    house.HouseSettingFlags = _state->SettingsFlags;
+}
+
 void Housing::SetCosmeticOwnerGuid(ObjectGuid guid)
 {
     {

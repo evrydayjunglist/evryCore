@@ -1066,7 +1066,6 @@ enum OpcodeClient : uint32
     // collides with CMSG_HOUSING_DECOR_MOVE), and family 0x38 (neighborhood initiative) has no
     // capacity reserved in GetOpcodeArrayIndex at all. Packet classes compile; IsValid() is false
     // so nothing dispatches until each is re-derived from a verified 12.1 capture.
-    CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST                   = UNKNOWN_OPCODE, // wire: PackedGUID (Lua C_NeighborhoodInitiative.RequestNeighborhoodInitiativeInfo)
     CMSG_HOUSING_DECOR_SET_TRANSFORM_12_1                           = UNKNOWN_OPCODE, // wire: pguid f32x11 pguid pguid pguid u32 u8 u8 bits<1>; unreferenced elsewhere in the tree
     CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_01                          = UNKNOWN_OPCODE, // wire: PackedGUID
     CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_05                          = UNKNOWN_OPCODE, // wire: uint32 + PackedGUID

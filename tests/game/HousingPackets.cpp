@@ -19,6 +19,7 @@
 #include "HousingBlueprintPackets.h"
 #include "HousingPackets.h"
 #include "PacketOperators.h"
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -205,5 +206,255 @@ TEST_CASE("Housing blueprint empty strings consume only their encoded bytes", "[
         REQUIRE(packet.BlueprintID == 123);
         REQUIRE(packet.Name.empty());
         REQUIRE(packet.GetRawPacket()->rpos() == packet.GetSize());
+    }
+}
+
+namespace
+{
+std::vector<uint8> Bytes(WorldPacket const* packet)
+{
+    return std::vector<uint8>(packet->data(), packet->data() + packet->size());
+}
+
+ObjectGuid Guid(uint64 high, uint64 low)
+{
+    ObjectGuid guid;
+    guid.SetRawValue(high, low);
+    return guid;
+}
+
+// The GUIDs of the owner's retail session (hbcd3): her house, her Battle.net account, her character and her
+// neighborhood on Razorwind Shores.
+ObjectGuid const RetailHouse = Guid(UI64LIT(0xDC60000000008007), UI64LIT(0x000000000354769D));
+ObjectGuid const RetailBnetAccount = Guid(UI64LIT(0x7800000000000000), UI64LIT(0x000000000354769D));
+ObjectGuid const RetailCharacter = Guid(UI64LIT(0x0802880000000000), UI64LIT(0x000000000BE2FE88));
+ObjectGuid const RetailNeighborhood = Guid(UI64LIT(0xDC80000200000000), UI64LIT(0x000000000000A584));
+
+JamCliHouse RetailHouseEntry()
+{
+    JamCliHouse house;
+    house.HouseGUID = RetailHouse;
+    house.CosmeticOwnerGUID = RetailCharacter;
+    house.NeighborhoodGUID = RetailNeighborhood;
+    house.PlotID = 13;
+    house.HouseSettingFlags = 32;
+    return house;
+}
+}
+
+TEST_CASE("Housing house entries are written in retail's layout", "[Housing][Packets]")
+{
+    SECTION("The buy reply matches hbcd3 1299763 byte for byte")
+    {
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.House = RetailHouseEntry();
+        response.Result = 0;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0x0F, 0xE0, 0x88, 0xFE, 0xE2, 0x0B, 0x88, 0x02, 0x08,
+            0x03, 0xD0, 0x84, 0xA5, 0x02, 0x80, 0xDC,
+            0x0D, 0x20, 0x00, 0x00, 0x00, 0x00,
+            0x00 });
+    }
+
+    SECTION("The houses info reply matches the 12.1.0.69382 capture line 160347")
+    {
+        HousingSvcsGetPlayerHousesInfoResponse response;
+        response.Houses.push_back(RetailHouseEntry());
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x01, 0x00, 0x00, 0x00, 0x00,
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0x0F, 0xE0, 0x88, 0xFE, 0xE2, 0x0B, 0x88, 0x02, 0x08,
+            0x03, 0xD0, 0x84, 0xA5, 0x02, 0x80, 0xDC,
+            0x0D, 0x20, 0x00, 0x00, 0x00, 0x00 });
+    }
+
+    SECTION("An empty houses info reply is five bytes (hbcd3 218452)")
+    {
+        HousingSvcsGetPlayerHousesInfoResponse response;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{ 0x00, 0x00, 0x00, 0x00, 0x00 });
+    }
+
+    SECTION("A time follows the entry only when one is set")
+    {
+        JamCliHouse house;
+        house.PlotID = 1;
+        house.ReservationTime = 0x6A64F4C8;
+        HousingGetCurrentHouseInfoResponse response;
+        response.House = house;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00,
+            0x80, 0xC8, 0xF4, 0x64, 0x6A, 0x00, 0x00, 0x00, 0x00,
+            0x00 });
+    }
+
+    SECTION("The house settings reply is the result and a house entry")
+    {
+        // A 12.0.5 sample quoted by the imported code (31 bytes): plot 41, setting flags 32.
+        HousingSvcsUpdateHouseSettingsResponse response;
+        response.House.HouseGUID = Guid(UI64LIT(0xDC60000000008007), UI64LIT(0x000000000015310B));
+        response.House.CosmeticOwnerGUID = Guid(UI64LIT(0x0800D40000000000), UI64LIT(0x000000000C610517));
+        response.House.NeighborhoodGUID = Guid(UI64LIT(0xDC80000100000000), UI64LIT(0x0000000000006CF0));
+        response.House.PlotID = 41;
+        response.House.HouseSettingFlags = 32;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x00,
+            0x07, 0xC3, 0x0B, 0x31, 0x15, 0x07, 0x80, 0x60, 0xDC,
+            0x0F, 0xA0, 0x17, 0x05, 0x61, 0x0C, 0xD4, 0x08,
+            0x03, 0xD0, 0xF0, 0x6C, 0x01, 0x80, 0xDC,
+            0x29, 0x20, 0x00, 0x00, 0x00, 0x00 });
+    }
+}
+
+TEST_CASE("Housing house status replies carry the locked decor and three edit-mode bits", "[Housing][Packets]")
+{
+    SECTION("On the plot the owner character is sent (hbcd3 1340681, 30 bytes)")
+    {
+        HousingHouseStatusResponse response;
+        response.HouseGuid = RetailHouse;
+        response.AccountGuid = RetailBnetAccount;
+        response.OwnerPlayerGuid = RetailCharacter;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0x0F, 0x80, 0x9D, 0x76, 0x54, 0x03, 0x78,
+            0x0F, 0xE0, 0x88, 0xFE, 0xE2, 0x0B, 0x88, 0x02, 0x08,
+            0x00, 0x00,
+            0x00,
+            0x00 });
+    }
+
+    SECTION("Inside the interior the owner character is empty (hbcd3 1416647, 23 bytes)")
+    {
+        HousingHouseStatusResponse response;
+        response.HouseGuid = RetailHouse;
+        response.AccountGuid = RetailBnetAccount;
+        REQUIRE(response.Write()->size() == 23);
+    }
+
+    SECTION("The edit modes are the top three bits of the last byte, decor first")
+    {
+        HousingHouseStatusResponse response;
+        response.DecorEditModeEnabled = true;
+        response.FixtureEditModeEnabled = true;
+        std::vector<uint8> const bytes = Bytes(response.Write());
+        REQUIRE(bytes.size() == 10);
+        REQUIRE(bytes.back() == 0xA0);
+    }
+}
+
+TEST_CASE("Housing storage replies answer success with new data pulled", "[Housing][Packets]")
+{
+    // hbcd3 351312, before the character owned a house: 00 00 00 80.
+    HousingDecorRequestStorageResponse response;
+    REQUIRE(Bytes(response.Write()) == std::vector<uint8>{ 0x00, 0x00, 0x00, 0x80 });
+
+    // hbcd3 351306: the request carries the Battle.net account.
+    WorldPacket wire(CMSG_HOUSING_DECOR_REQUEST_STORAGE);
+    wire << RetailBnetAccount;
+    HousingDecorRequestStorage request(std::move(wire));
+    request.Read();
+    REQUIRE(request.BnetAccountGuid == RetailBnetAccount);
+}
+
+TEST_CASE("Housing cornerstone replies match both retail samples", "[Housing][Packets]")
+{
+    SECTION("A vacant plot (hbcd3 1296244, 29 bytes)")
+    {
+        WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUIResponse response;
+        response.PlotIndex = 13;
+        response.NeighborhoodName = "94-2-87";
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x0D, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+            0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00,
+            0x00, 0x00,
+            0x04, 0x00,
+            '9', '4', '-', '2', '-', '8', '7', 0x00 });
+    }
+
+    SECTION("The player's own plot (hbcd3 1563345, 44 bytes)")
+    {
+        WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUIResponse response;
+        response.PlotIndex = 13;
+        response.PlotOwnerGuid = RetailCharacter;
+        response.HouseGuid = RetailHouse;
+        response.NeighborhoodName = "94-2-87";
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x0D, 0x00, 0x00, 0x00,
+            0x0F, 0xE0, 0x88, 0xFE, 0xE2, 0x0B, 0x88, 0x02, 0x08,
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00,
+            0x00, 0x00,
+            0x04, 0x00,
+            '9', '4', '-', '2', '-', '8', '7', 0x00 });
+    }
+
+    SECTION("The request names the cornerstone after the plot (hbcd3 1295070)")
+    {
+        ObjectGuid const cornerstone = Guid(UI64LIT(0x2C3CAD5601BE6D80), UI64LIT(0x0158580006E4ED8C));
+        WorldPacket wire(CMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI);
+        wire << uint32(13) << cornerstone;
+        WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUI request(std::move(wire));
+        request.Read();
+        REQUIRE(request.PlotIndex == 13);
+        REQUIRE(request.CornerstoneGuid == cornerstone);
+    }
+}
+
+TEST_CASE("Housing neighborhood name replies match the 12.1 capture", "[Housing][Packets]")
+{
+    // 12.1.0.69382 capture line 160391: 03 D0 84 A5 02 80 DC 80 07 '94-2-87'.
+    QueryNeighborhoodNameResponse response;
+    response.NeighborhoodGuid = RetailNeighborhood;
+    response.Result = true;
+    response.NeighborhoodName = "94-2-87";
+    REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+        0x03, 0xD0, 0x84, 0xA5, 0x02, 0x80, 0xDC, 0x80, 0x07, '9', '4', '-', '2', '-', '8', '7' });
+}
+
+TEST_CASE("Housing initiative packets match retail", "[Housing][Packets]")
+{
+    SECTION("An empty request is answered with an empty GUID and no data (hbcd3 290809 and 293257)")
+    {
+        WorldPacket wire(CMSG_GET_PLAYER_INITIATIVE_INFO_REQUEST);
+        wire << ObjectGuid::Empty;
+        WorldPackets::Neighborhood::GetPlayerInitiativeInfoRequest request(std::move(wire));
+        request.Read();
+        REQUIRE(request.NeighborhoodGuid.IsEmpty());
+        REQUIRE(request.GetRawPacket()->rpos() == request.GetSize());
+
+        GetPlayerInitiativeInfoResult result;
+        result.NeighborhoodGUID = request.NeighborhoodGuid;
+        REQUIRE(Bytes(result.Write()) == std::vector<uint8>{ 0x00, 0x00, 0x00 });
+    }
+
+    SECTION("An activity log entry matches hbcd3 1305730 byte for byte")
+    {
+        uint32 const contributionBits = 0x400CF19E;
+        float contribution = 0.0f;
+        std::memcpy(&contribution, &contributionBits, sizeof(contribution));
+
+        NICompletedTasksEntry entry;
+        entry.BnetAccountGuid = Guid(UI64LIT(0x7800000000000000), UI64LIT(0x0000000004520ED5));
+        entry.PlayerGuid = Guid(UI64LIT(0x08028C0000000000), UI64LIT(0x000000000C201282));
+        entry.TaskID = 168;
+        entry.CompletionTime = 0x6A64F4C8;
+        entry.ContributionAmount = contribution;
+
+        GetInitiativeActivityLogResult result;
+        result.NeighborhoodGuid = RetailNeighborhood;
+        result.CompletedTasks.push_back(entry);
+        REQUIRE(Bytes(result.Write()) == std::vector<uint8>{
+            0x03, 0xD0, 0x84, 0xA5, 0x02, 0x80, 0xDC,
+            0x01, 0x00, 0x00, 0x00,
+            0x0F, 0x80, 0xD5, 0x0E, 0x52, 0x04, 0x78,
+            0x0F, 0xE0, 0x82, 0x12, 0x20, 0x0C, 0x8C, 0x02, 0x08,
+            0xA8, 0x00, 0x00, 0x00,
+            0xC8, 0xF4, 0x64, 0x6A, 0x00, 0x00, 0x00, 0x00,
+            0x9E, 0xF1, 0x0C, 0x40 });
     }
 }

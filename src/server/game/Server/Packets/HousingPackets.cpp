@@ -157,9 +157,9 @@ void HousingDecorDeleteFromStorage::Read()
 
 void HousingDecorRequestStorage::Read()
 {
-    _worldPacket >> HouseGuid;
+    _worldPacket >> BnetAccountGuid;
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_DECOR_REQUEST_STORAGE HouseGuid: {}", HouseGuid.ToString());
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_DECOR_REQUEST_STORAGE BnetAccountGuid: {}", BnetAccountGuid.ToString());
 }
 
 void HousingDecorRedeemDeferredDecor::Read()
@@ -1119,35 +1119,18 @@ ByteBuffer& operator<<(ByteBuffer& data, HouseInfo const& houseInfo)
     return data;
 }
 
-// Helper: Write a JamCliHouse entry to the packet (IDA: Deserialize_ResidentArray, stride 80).
-// Wire: PackedGUID(House) + PackedGUID(Owner) + PackedGUID(Neighborhood) + uint8 + uint32 + uint8(bit7=hasOpt) [+ uint64]
-// Retail sniff confirms: GUID#1=HouseGUID, GUID#2=OwnerGUID (used for name lookup), GUID#3=NeighborhoodGUID.
+// Writes one house entry in retail's layout (see JamCliHouse in HousingPackets.h).
 static void WriteJamCliHouse(WorldPacket& packet, JamCliHouse const& house)
 {
-    // Wire: PackedGUID(House) + PackedGUID(Owner) + PackedGUID(Neighborhood)
-    //     + uint8(HouseLevel @48) + uint32(PlotIndex @72)
-    //     + uint8(bit7 = HasOptionalField) [+ uint64(OptionalValue) if flag set]
-    //
-    // Order updated 2026-06-30 to the 12.0.7 (build 68275) client binary: the
-    // JamCliHouse element reads uint8(@48) BEFORE uint32(@72). The earlier
-    // 2026-04-20 in-game test that put uint32 first validated the 12.0.5 wire
-    // (the struct's scalar order swapped between 12.0.5 and 12.0.7); the 68275
-    // serializer is authoritative. RE feedback: re_feedback_68275.json 0x54000b et al.
-    size_t beforeWpos = packet.wpos();
     packet << house.HouseGUID;
-    packet << house.OwnerGUID;
+    packet << house.CosmeticOwnerGUID;
     packet << house.NeighborhoodGUID;
-    packet << uint8(house.HouseLevel);
-    packet << uint32(house.PlotIndex);
-    packet << uint8(house.HasOptionalField ? 0x80 : 0x00);
-    if (house.HasOptionalField)
-        packet << uint64(house.OptionalValue);
-
-    TC_LOG_INFO("housing", "WriteJamCliHouse: plotIdx={} lvl={} favor={} hasOpt={} "
-        "HouseGUID={} OwnerGUID={} NeighborhoodGUID={} bytes={}",
-        house.PlotIndex, house.HouseLevel, house.OptionalValue, house.HasOptionalField,
-        house.HouseGUID.ToString(), house.OwnerGUID.ToString(), house.NeighborhoodGUID.ToString(),
-        packet.wpos() - beforeWpos);
+    packet << uint8(house.PlotID);
+    packet << uint32(house.HouseSettingFlags);
+    packet << OptionalInit(house.ReservationTime);
+    packet.FlushBits();
+    if (house.ReservationTime)
+        packet << int64(*house.ReservationTime);
 }
 
 // Helper: Write JamCliHouseFinderNeighborhood BASE format.
@@ -1383,25 +1366,15 @@ WorldPacket const* HousingSvcsGetPotentialHouseOwnersResponse::Write()
 
 WorldPacket const* HousingSvcsUpdateHouseSettingsResponse::Write()
 {
-    // 12.0.5 sniff-validated wire (SNIFF_VALIDATION_67186.md):
-    //   uint8(Result) + 3×PackedGUID + uint8(HouseLevel) + uint8(PlotIndex) + uint32(SettingsFlags)
-    // Sample sniff (31 bytes):
-    //   00 07 c3 0b 31 15 07 80 60 dc 0f a0 17 05 61 0c d4 08 03 d0 f0 6c 01 80 dc 29 20 00 00 00 00
-    //
-    // NOT WriteJamCliHouse — that helper writes uint32(PlotIndex) BEFORE uint8(HouseLevel)
-    // for opcodes 0x540012/0x540013 (IDA-confirmed via in-game testing of the regular-map
-    // neighborhood UI). 0x54001B is a different opcode with a different field order.
+    // A 12.0.5 sample (31 bytes) is the result byte and one house entry:
+    //   00 | 07 c3 0b 31 15 07 80 60 dc | 0f a0 17 05 61 0c d4 08 | 03 d0 f0 6c 01 80 dc | 29 | 20 00 00 00 | 00
+    // that is plot 41, setting flags 32 and no time, the entry retail's 12.0.7 buy reply uses.
     _worldPacket << uint8(Result);
-    _worldPacket << House.HouseGUID;
-    _worldPacket << House.OwnerGUID;
-    _worldPacket << House.NeighborhoodGUID;
-    _worldPacket << uint8(House.HouseLevel);
-    _worldPacket << uint8(House.PlotIndex & 0xFF);
-    _worldPacket << uint32(SettingsFlags);
+    WriteJamCliHouse(_worldPacket, House);
 
     TC_LOG_DEBUG("network.opcode",
-        "SMSG_HOUSING_SVCS_UPDATE_HOUSE_SETTINGS_RESPONSE Result: {} HouseGuid: {} Level: {} Plot: {} Settings: 0x{:08X}",
-        Result, House.HouseGUID.ToString(), House.HouseLevel, House.PlotIndex, SettingsFlags);
+        "SMSG_HOUSING_SVCS_UPDATE_HOUSE_SETTINGS_RESPONSE Result: {} HouseGuid: {} Plot: {} Settings: 0x{:08X}",
+        Result, House.HouseGUID.ToString(), House.PlotID, House.HouseSettingFlags);
 
     return &_worldPacket;
 }
@@ -1511,22 +1484,19 @@ static void WriteInviteEntry(WorldPacket& packet, InviteEntry const& entry)
 
 WorldPacket const* HousingHouseStatusResponse::Write()
 {
-    // IDA-verified wire format (12.0.5.67186, sub_7FF75C1D1020 case 0x550000):
-    //   PackedGUID HouseGuid
-    //   PackedGUID AccountGuid
-    //   PackedGUID OwnerPlayerGuid
-    //   PackedGUID NeighborhoodGuid
-    //   uint8 Status
-    //   uint8 PermissionFlags  (bit 7=houseEditing, bit 6=plotEntry, bit 5=houseEntry)
     _worldPacket << HouseGuid;
     _worldPacket << AccountGuid;
     _worldPacket << OwnerPlayerGuid;
-    _worldPacket << NeighborhoodGuid;
-    _worldPacket << uint8(Status);
-    _worldPacket << uint8(PermissionFlags);
+    _worldPacket << LockedDecorGuid;
+    _worldPacket << uint8(Result);
+    _worldPacket << Bits<1>(DecorEditModeEnabled);
+    _worldPacket << Bits<1>(LayoutEditModeEnabled);
+    _worldPacket << Bits<1>(FixtureEditModeEnabled);
+    _worldPacket.FlushBits();
 
-    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_HOUSE_STATUS_RESPONSE HouseGuid: {} AccountGuid: {} OwnerPlayerGuid: {} NeighborhoodGuid: {} Status: {} PermissionFlags: 0x{:02X}",
-        HouseGuid.ToString(), AccountGuid.ToString(), OwnerPlayerGuid.ToString(), NeighborhoodGuid.ToString(), Status, PermissionFlags);
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_HOUSE_STATUS_RESPONSE HouseGuid: {} AccountGuid: {} OwnerPlayerGuid: {} LockedDecorGuid: {} Result: {} Decor: {} Layout: {} Fixture: {}",
+        HouseGuid.ToString(), AccountGuid.ToString(), OwnerPlayerGuid.ToString(), LockedDecorGuid.ToString(), Result,
+        DecorEditModeEnabled, LayoutEditModeEnabled, FixtureEditModeEnabled);
 
     return &_worldPacket;
 }
@@ -1845,23 +1815,23 @@ WorldPacket const* GetPlayerInitiativeInfoResult::Write()
 
 WorldPacket const* GetInitiativeActivityLogResult::Write()
 {
-    // IDA-verified wire (build 67186, sub_7FF75C0EEF70). NO leading Result byte.
+    // No leading result byte. Each entry is laid out as NICompletedTasksEntry describes (hbcd3 1305730).
     _worldPacket << NeighborhoodGuid;
     _worldPacket << uint32(CompletedTasks.size());
     for (auto const& entry : CompletedTasks)
     {
+        _worldPacket << entry.BnetAccountGuid;
         _worldPacket << entry.PlayerGuid;
-        _worldPacket << entry.TargetGuid;
-        _worldPacket << uint32(entry.ContributionAmount);
-        _worldPacket << uint64(entry.CompletionTime);
         _worldPacket << uint32(entry.TaskID);
+        _worldPacket << uint64(entry.CompletionTime);
+        _worldPacket << float(entry.ContributionAmount);
     }
 
     TC_LOG_DEBUG("network.opcode", "SMSG_GET_INITIATIVE_ACTIVITY_LOG_RESULT NH={} CompletedTaskCount: {}",
         NeighborhoodGuid.ToString(), CompletedTasks.size());
     for (size_t i = 0; i < CompletedTasks.size(); ++i)
-        TC_LOG_DEBUG("network.opcode", "  CompletedTask[{}]: Player={} Target={} TaskID={} Contribution={} Time={}",
-            i, CompletedTasks[i].PlayerGuid.ToString(), CompletedTasks[i].TargetGuid.ToString(),
+        TC_LOG_DEBUG("network.opcode", "  CompletedTask[{}]: BnetAccount={} Player={} TaskID={} Contribution={} Time={}",
+            i, CompletedTasks[i].BnetAccountGuid.ToString(), CompletedTasks[i].PlayerGuid.ToString(),
             CompletedTasks[i].TaskID, CompletedTasks[i].ContributionAmount, CompletedTasks[i].CompletionTime);
 
     return &_worldPacket;
@@ -2128,9 +2098,9 @@ void NeighborhoodMoveHouse::Read()
 void NeighborhoodOpenCornerstoneUI::Read()
 {
     _worldPacket >> PlotIndex;
-    _worldPacket >> NeighborhoodGuid;
+    _worldPacket >> CornerstoneGuid;
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI PlotIndex: {} NeighborhoodGuid: {}", PlotIndex, NeighborhoodGuid.ToString());
+    TC_LOG_DEBUG("network.opcode", "CMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI PlotIndex: {} CornerstoneGuid: {}", PlotIndex, CornerstoneGuid.ToString());
 }
 
 void NeighborhoodOfferOwnership::Read()
@@ -2358,15 +2328,13 @@ WorldPacket const* NeighborhoodMoveHouseResponse::Write()
 
 WorldPacket const* NeighborhoodOpenCornerstoneUIResponse::Write()
 {
-    // Wire format verified against retail 12.0.1 build 65940 packet captures (Alliance + Horde)
-    // IDA deserializer sub_7FF6F6E3E200: uint32→+32, GUID→+40, GUID→+56, uint64→+72, uint8→+80, GUID→+128
-    // Fixed fields
+    // Fixed fields. Both retail samples (hbcd3 1296244 and 1563345) decode with this layout.
     _worldPacket << uint32(PlotIndex);          // Echoed from CMSG (NOT a result code)
-    _worldPacket << PlotOwnerGuid;              // →+40: Player GUID when owned, Empty when unclaimed
-    _worldPacket << NeighborhoodGuid;           // →+56: Housing GUID when owned, Empty when unclaimed
-    _worldPacket << uint64(Cost);               // →+72: Purchase price
-    _worldPacket << uint8(PurchaseStatus);      // →+80: 73=purchasable, 0=not. Client checks ==73
-    _worldPacket << CornerstoneGuid;            // →+128: Cornerstone game object
+    _worldPacket << PlotOwnerGuid;              // the owner character when owned, empty when vacant
+    _worldPacket << HouseGuid;                  // the house GUID when owned, empty when vacant
+    _worldPacket << uint64(Cost);
+    _worldPacket << uint8(PurchaseStatus);
+    _worldPacket << CornerstoneGuid;
 
     // Bit-packed section: 1 bool + 8-bit nameLen + 6 bools = 15 bits = 2 bytes.
     // Per IDA Housing_ParseCornerstoneHouseInfo, bit B.bit4 gates an embedded
@@ -2513,10 +2481,10 @@ WorldPacket const* NeighborhoodGetRosterResponse::Write()
                 continue;
             Housing::JamCliHouse house;
             house.HouseGUID = member.HouseGuid;
-            house.OwnerGUID = member.PlayerGuid;
+            house.CosmeticOwnerGUID = member.HouseCosmeticOwnerGuid.IsEmpty() ? member.PlayerGuid : member.HouseCosmeticOwnerGuid;
             house.NeighborhoodGUID = GroupNeighborhoodGuid;
-            house.HouseLevel = member.HouseLevel;
-            house.PlotIndex = member.PlotIndex;
+            house.PlotID = member.PlotIndex;
+            house.HouseSettingFlags = member.HouseSettingFlags;
             Housing::WriteJamCliHouse(_worldPacket, house);
         }
 
@@ -2601,23 +2569,19 @@ void GetAvailableInitiativeRequest::Read()
     TC_LOG_DEBUG("network.opcode", "CMSG_GET_AVAILABLE_INITIATIVE_REQUEST NeighborhoodGuid: {}", NeighborhoodGuid.ToString());
 }
 
+void GetPlayerInitiativeInfoRequest::Read()
+{
+    _worldPacket >> NeighborhoodGuid;
+
+    TC_LOG_DEBUG("network.opcode", "CMSG_GET_PLAYER_INITIATIVE_INFO_REQUEST NeighborhoodGuid: {}", NeighborhoodGuid.ToString());
+}
+
 void GetInitiativeActivityLogRequest::Read()
 {
     _worldPacket >> NeighborhoodGuid;
 
     TC_LOG_DEBUG("network.opcode", "CMSG_GET_INITIATIVE_ACTIVITY_LOG_REQUEST NeighborhoodGuid: {}", NeighborhoodGuid.ToString());
 }
-
-// TODO housing Stage 2 (protocol migration): guarded with the class declaration in HousingPackets.h —
-// opcode absent in 12.1 enum: CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST.
-#if 0
-void GetNeighborhoodInitiativeInfoRequest::Read()
-{
-    _worldPacket >> NeighborhoodGuid;
-
-    TC_LOG_DEBUG("network.opcode", "CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST NeighborhoodGuid: {}", NeighborhoodGuid.ToString());
-}
-#endif
 
 void InitiativeUpdateActiveNeighborhood::Read()
 {

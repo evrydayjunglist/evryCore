@@ -26219,19 +26219,27 @@ void Player::SendInitialPacketsBeforeAddToMap()
     // worldServerInfo.RestrictedAccountMaxMoney; /// @todo
     worldServerInfo.DifficultyID = GetMap()->GetDifficultyID();
     // worldServerInfo.XRealmPvpAlert;  /// @todo
-    if (Housing* housing = GetHousing())
+    // Housing fields as retail sends them. On a neighborhood map only the neighborhood, also before she owns a house
+    // there (hbcd3 365412 and 1465651). Inside a house interior the house, its owner's Battle.net account, its
+    // cosmetic owner and its neighborhood (hbcd3 1354029). On every other map none of them (hf1 911514, hbst1 198662).
+    if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(GetMap()))
     {
-        worldServerInfo.HouseGUID = housing->GetHouseGuid();
-        worldServerInfo.HouseOwnerAccountGUID = GetSession()->GetBattlenetAccountGUID();
-        worldServerInfo.HouseCosmeticOwnerGUID = GetSession()->GetBattlenetAccountGUID();
-        worldServerInfo.NeighborhoodGUID = housing->GetNeighborhoodGuid();
+        Housing const* interiorHousing = GetHousingByGuid(interiorMap->GetHouseGuid());
+        if (!interiorHousing)
+            interiorHousing = interiorMap->GetOwnerHousing();
+        if (interiorHousing)
+        {
+            worldServerInfo.HouseGUID = interiorHousing->GetHouseGuid();
+            worldServerInfo.HouseOwnerAccountGUID = ObjectGuid::Create<HighGuid::BNetAccount>(interiorHousing->GetOwnerAccountId());
+            worldServerInfo.HouseCosmeticOwnerGUID = interiorHousing->GetCosmeticOwnerGuid();
+            worldServerInfo.NeighborhoodGUID = interiorHousing->GetNeighborhoodGuid();
+        }
     }
-    // Ensure NeighborhoodGUID is set for all players on a housing map,
-    // not just house owners — the client needs it for roster/bulletin requests
-    if (worldServerInfo.NeighborhoodGUID.IsEmpty())
-        if (HousingMap* housingMap = dynamic_cast<HousingMap*>(GetMap()))
-            if (Neighborhood* neighborhood = housingMap->GetNeighborhood())
-                worldServerInfo.NeighborhoodGUID = neighborhood->GetGuid();
+    else if (HousingMap* housingMap = dynamic_cast<HousingMap*>(GetMap()))
+    {
+        if (Neighborhood* neighborhood = housingMap->GetNeighborhood())
+            worldServerInfo.NeighborhoodGUID = neighborhood->GetGuid();
+    }
     WorldPacket const* wsiPkt = worldServerInfo.Write();
     SendDirectMessage(wsiPkt);
 

@@ -37,6 +37,11 @@ namespace WorldPackets::Neighborhood
     class NeighborhoodGetRosterResponse;
 }
 
+namespace WorldPackets::Housing
+{
+    struct JamCliHouse;
+}
+
 class TC_GAME_API Neighborhood
 {
 public:
@@ -224,6 +229,8 @@ public:
     HouseEntry CheckHouseEntry(Player const* player, uint8 plotIndex, bool interior) const;
     // The house's current settings: from a live Housing of its account when one is online, else the plot's copy.
     uint32 GetHouseSettingsFlags(PlotInfo const& plot) const;
+    // The house standing on a plot as the neighborhood lists list it, for owners who may be offline.
+    void FillPlotHouseEntry(PlotInfo const& plot, WorldPackets::Housing::JamCliHouse& house) const;
 
     std::array<PlotInfo, MAX_NEIGHBORHOOD_PLOTS> const& GetPlots() const { return _plots; }
     uint32 GetOccupiedPlotCount() const;

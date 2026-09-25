@@ -1399,6 +1399,15 @@ void Neighborhood::BroadcastPacket(WorldPacket const* packet, ObjectGuid exclude
     }
 }
 
+void Neighborhood::FillPlotHouseEntry(PlotInfo const& plot, WorldPackets::Housing::JamCliHouse& house) const
+{
+    house.HouseGUID = plot.HouseGuid;
+    house.CosmeticOwnerGUID = plot.OwnerGuid;
+    house.NeighborhoodGUID = GetGuid();
+    house.PlotID = plot.PlotIndex;
+    house.HouseSettingFlags = GetHouseSettingsFlags(plot);
+}
+
 void Neighborhood::BuildRosterResponse(WorldPackets::Neighborhood::NeighborhoodGetRosterResponse& response) const
 {
     response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
@@ -1420,7 +1429,8 @@ void Neighborhood::BuildRosterResponse(WorldPackets::Neighborhood::NeighborhoodG
             if (PlotInfo const* plotInfo = GetPlotInfo(member.PlotIndex))
             {
                 data.HouseGuid = plotInfo->HouseGuid;
-                data.HouseLevel = plotInfo->HouseLevel;
+                data.HouseCosmeticOwnerGuid = plotInfo->OwnerGuid;
+                data.HouseSettingFlags = GetHouseSettingsFlags(*plotInfo);
             }
         }
     }

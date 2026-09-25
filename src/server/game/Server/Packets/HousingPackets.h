@@ -107,24 +107,20 @@ namespace WorldPackets::Housing
         bool IsPrivileged = false;
     };
 
-    // IDA-verified wire format for house/resident entries nested inside neighborhood data.
-    // Deserializer: Deserialize_ResidentArray (0x7FF724C3EEF0), stride 80 bytes in memory.
-    // Wire order: PackedGUID(House) + PackedGUID(Owner) + PackedGUID(Neighborhood) + uint8 + uint32 + uint8(bit7=hasOpt) [+ uint64]
-    // IDA proof: offset-0 GUID compared vs house records; offset-16 GUID passed to ai_Process_PlayerContextUpdate (name lookup).
+    // One house as retail lists it in the houses info, current house info, buy and move replies, the cornerstone reply
+    // and the neighborhood lists: house GUID, cosmetic owner, neighborhood GUID, uint8 plot, uint32 house setting
+    // flags, then one bit for an optional int64 time. Retail's buy reply ends 0D 20 00 00 00 00 (plot 13, flags 32,
+    // no time; hbcd3 1299763), and the 12.1.0.69382 houses info ends the same way. The owner slot holds the cosmetic
+    // owner, also when another character of the account asks (hbst1 291702). The optional time is most likely the
+    // house's move-out time; no capture has it set, so it stays empty. It never carries favor.
     struct JamCliHouse
     {
-        // 12.0.7 (build 68275) wire order (after the three GUIDs), per RE feedback 0x54000b et al.:
-        //   uint8  HouseLevel    -> struct +48   (written BEFORE the u32 in 12.0.7; was reversed in 12.0.5)
-        //   uint32 PlotIndex     -> struct +72   (per-plot index)
-        //   uint8  HasOpt flag   -> struct +64   (bit 7 = OptionalValue follows)
-        //   uint64 OptionalValue -> struct +56   (favor/secondary field)
-        ObjectGuid HouseGUID;            // wire pos 1, struct +0
-        ObjectGuid OwnerGUID;            // wire pos 2, struct +16
-        ObjectGuid NeighborhoodGUID;     // wire pos 3, struct +32
-        uint32 HouseLevel = 0;           // written as uint8 at struct +48 (display level)
-        uint32 PlotIndex = 0;            // written as uint32 at struct +72 (per-plot index)
-        bool HasOptionalField = false;   // struct +64 bit 7
-        uint64 OptionalValue = 0;        // struct +56 (Favor, only if HasOptionalField)
+        ObjectGuid HouseGUID;
+        ObjectGuid CosmeticOwnerGUID;
+        ObjectGuid NeighborhoodGUID;
+        uint8 PlotID = 0;
+        uint32 HouseSettingFlags = 0;
+        Optional<int64> ReservationTime;
     };
 
     // IDA-verified wire format for neighborhood entries in house finder responses.
@@ -357,7 +353,7 @@ namespace WorldPackets::Housing
 
         void Read() override;
 
-        ObjectGuid HouseGuid;
+        ObjectGuid BnetAccountGuid; // the character's Battle.net account (hbcd3 351306)
     };
 
     class HousingDecorRedeemDeferredDecor final : public ClientPacket
@@ -1666,24 +1662,10 @@ namespace WorldPackets::Housing
         HousingSvcsUpdateHouseSettingsResponse() : ServerPacket(SMSG_HOUSING_SVCS_UPDATE_HOUSE_SETTINGS_RESPONSE) { }
         WorldPacket const* Write() override;
 
-        // 12.0.5 sniff-validated wire (31 bytes total in real capture).
-        // SNIFF_VALIDATION_67186.md authoritative layout:
-        //
-        //   uint8        Result
-        //   PackedGUID   House.HouseGUID
-        //   PackedGUID   House.OwnerGUID
-        //   PackedGUID   House.NeighborhoodGUID
-        //   uint8        House.HouseLevel
-        //   uint8        PlotIndex8     (PlotIndex truncated to uint8 — sniff shows 0x20=32)
-        //   uint32       SettingsFlags  (HOUSE_SETTING_* mask; sniff shows 0)
-        //
-        // Earlier IDA case 5505051 read suggested `uint8 + uint32 + uint8 + optional uint64`
-        // for the trailing fields, but real packet capture confirms `uint8 + uint8 + uint32`
-        // (no optional uint64). The earlier form is wire-equivalent for all-zero values
-        // but mis-orders bytes when SettingsFlags != 0.
+        // uint8 Result, then the house entry, which carries the house setting flags. A 12.0.5 sample (31 bytes)
+        // ends 29 20 00 00 00 00: plot 41, setting flags 32 and no time, the same entry as retail's 12.0.7 buy reply.
         uint8 Result = 0;
         JamCliHouse House;
-        uint32 SettingsFlags = 0;
     };
 
     class HousingSvcsGetHouseFinderInfoResponse final : public ServerPacket
@@ -1752,19 +1734,18 @@ namespace WorldPackets::Housing
         HousingHouseStatusResponse() : ServerPacket(SMSG_HOUSING_HOUSE_STATUS_RESPONSE) { }
         WorldPacket const* Write() override;
 
-        // IDA-verified wire format (12.0.5.67186, sub_7FF75C1D1020 case 0x550000):
-        //   PackedGUID HouseGuid
-        //   PackedGUID AccountGuid          (BnetAccount)
-        //   PackedGUID OwnerPlayerGuid
-        //   PackedGUID NeighborhoodGuid
-        //   uint8 Status
-        //   uint8 PermissionFlags  (bit 7=houseEditing, bit 6=plotEntry, bit 5=houseEntry)
+        // Retail (hbcd3 1340681, 30 bytes): house GUID, the owner's Battle.net account, the owner character, the
+        // decor this player holds locked (empty when none), uint8 Result, then one bit each for decor, layout and
+        // fixture edit mode. Inside the house interior the owner character is empty (hbcd3 1416647, 23 bytes).
+        // Permissions are not in this reply; they have their own.
         ObjectGuid HouseGuid;
         ObjectGuid AccountGuid;
         ObjectGuid OwnerPlayerGuid;
-        ObjectGuid NeighborhoodGuid;
-        uint8 Status = 0;
-        uint8 PermissionFlags = 0;
+        ObjectGuid LockedDecorGuid;
+        uint8 Result = 0;
+        bool DecorEditModeEnabled = false;
+        bool LayoutEditModeEnabled = false;
+        bool FixtureEditModeEnabled = false;
     };
 
     class HousingGetCurrentHouseInfoResponse final : public ServerPacket
@@ -1972,23 +1953,16 @@ namespace WorldPackets::Housing
         uint32 Progress = 0;
     };
 
+    // One activity log entry. Retail (hbcd3 1305730): the contributor's Battle.net account, the contributor character,
+    // a uint32 that holds small numbers such as 168 (most likely the task; not confirmed), a uint64 unix time, and a
+    // float contribution (2.2 in that sample).
     struct NICompletedTasksEntry
     {
-        // IDA-verified wire (build 67186, sub_7FF75C0EEF70 inner loop):
-        //   PackedGUID g1
-        //   PackedGUID g2
-        //   uint32     a32
-        //   uint64     a40 (CompletionTime — 8 bytes)
-        //   uint32     a48
-        //
-        // Semantic mapping (best-guess until sniff confirms):
-        //   g1  = PlayerGuid      g2 = TargetGuid     a32 = ContributionAmount
-        //   a40 = CompletionTime  a48 = TaskID
+        ObjectGuid BnetAccountGuid;
         ObjectGuid PlayerGuid;
-        ObjectGuid TargetGuid;
-        uint32 ContributionAmount = 0;
-        uint64 CompletionTime = 0;
         uint32 TaskID = 0;
+        uint64 CompletionTime = 0;
+        float ContributionAmount = 0.0f;
     };
 
     // ============================================================
@@ -2469,7 +2443,7 @@ namespace WorldPackets::Neighborhood
 
         void Read() override;
 
-        ObjectGuid NeighborhoodGuid;
+        ObjectGuid CornerstoneGuid; // the cornerstone the player clicked (hbcd3 1295070)
         uint32 PlotIndex = 0;
     };
 
@@ -2657,14 +2631,14 @@ namespace WorldPackets::Neighborhood
         NeighborhoodOpenCornerstoneUIResponse() : ServerPacket(SMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI_RESPONSE) { }
         WorldPacket const* Write() override;
 
-        // Wire format verified against retail 12.0.1 build 65940 packet captures
-        // IDA deserializer sub_7FF6F6E3E200: uint32→+32, GUID→+40, GUID→+56, uint64→+72, uint8→+80, GUID→+128
+        // Both retail samples decode with this layout: a vacant plot (hbcd3 1296244, 29 bytes) and the player's own plot
+        // (hbcd3 1563345, 44 bytes). In both, cost, status and the cornerstone GUID are empty and every bit is off.
         uint32 PlotIndex = 0;               // Echoed from CMSG (NOT a result code)
-        ObjectGuid PlotOwnerGuid;           // →Buffer+40: Player GUID when owned, Empty when unclaimed
-        ObjectGuid NeighborhoodGuid;        // →Buffer+56: Housing GUID when owned, Empty when unclaimed
-        uint64 Cost = 0;                    // →Buffer+72: Purchase price (0 if owned or free)
-        uint8 PurchaseStatus = 0;           // →Buffer+80: 73 (0x49) = purchasable, 0 = not. Client checks ==73
-        ObjectGuid CornerstoneGuid;         // →Buffer+128: Cornerstone game object GUID
+        ObjectGuid PlotOwnerGuid;           // the plot's owner character when the plot is owned, else empty
+        ObjectGuid HouseGuid;               // the house on the plot when the plot is owned, else empty
+        uint64 Cost = 0;                    // purchase price (0 if owned or free)
+        uint8 PurchaseStatus = 0;           // 0 in both retail samples; 73 (HOUSING_RESULT_PLOT_RESERVED) when another player holds the plot
+        ObjectGuid CornerstoneGuid;         // the cornerstone game object
         bool IsPlotOwned = false;           // Whether this plot has an owner
         bool CanPurchase = false;           // Whether the player can purchase this plot
         bool HasResidents = false;          // Whether the plot has residents
@@ -2764,7 +2738,8 @@ namespace WorldPackets::Neighborhood
             ObjectGuid BnetAccountGuid;  // Usually empty
             uint8 PlotIndex = 0xFF;      // INVALID_PLOT_INDEX
             uint32 JoinTime = 0;
-            uint8 HouseLevel = 0;
+            ObjectGuid HouseCosmeticOwnerGuid;
+            uint32 HouseSettingFlags = 0;
             uint8 ResidentType = 0;      // Enum.ResidentType = NeighborhoodMemberRole (0=Resident, 1=Manager, 2=Owner)
             bool IsOnline = false;
         };
@@ -2842,6 +2817,16 @@ namespace WorldPackets::Neighborhood
         ObjectGuid NeighborhoodGuid;
     };
 
+    // Retail's client asks for this with the neighborhood it belongs to, or an empty GUID before it has one
+    // (hbcd3 290809 and 1305387, as 0x380003 in 12.0.7), and gets SMSG_GET_PLAYER_INITIATIVE_INFO_RESULT back.
+    class GetPlayerInitiativeInfoRequest final : public ClientPacket
+    {
+    public:
+        GetPlayerInitiativeInfoRequest(WorldPacket&& packet) : ClientPacket(CMSG_GET_PLAYER_INITIATIVE_INFO_REQUEST, std::move(packet)) { }
+        void Read() override;
+        ObjectGuid NeighborhoodGuid;
+    };
+
     class GetInitiativeActivityLogRequest final : public ClientPacket
     {
     public:
@@ -2849,28 +2834,6 @@ namespace WorldPackets::Neighborhood
         void Read() override;
         ObjectGuid NeighborhoodGuid;
     };
-
-    // TODO housing Stage 2 (protocol migration): opcode absent in 12.1 enum: CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST.
-    // 12.0.7 (68275) family 0x38 was renumbered to 0x3A in bare's 12.1 Opcodes.h for the 3
-    // siblings that got real names (SERVICE_STATUS_CHECK=0x3A0000, GET_AVAILABLE_INITIATIVE_REQUEST=
-    // 0x3A0002, GET_INITIATIVE_ACTIVITY_LOG_REQUEST=0x3A0004) but this opcode (old 0x380003) has no
-    // confirmed 12.1 counterpart — guessing a renumbered value would fabricate a wire opcode. Guarded
-    // out per reconcile rule 3/4 (2026-09-01); see orchestrator report.
-#if 0
-    // 12.0.5 sniff-verified opcode 0x380003. Sent by C_NeighborhoodInitiative.RequestNeighborhoodInitiativeInfo
-    // Lua API. Body = packed NeighborhoodGuid only (7 bytes). Always paired with
-    // ACTIVITY_LOG_REQUEST in observed traffic — same NeighborhoodGuid, fired together when
-    // the player opens the neighborhood initiative panel. Server should respond with current
-    // initiative state (use existing FNeighborhoodMirrorData_C update on Account entity, or
-    // an explicit JamCliInitiativeInfo SMSG once that response opcode is identified).
-    class GetNeighborhoodInitiativeInfoRequest final : public ClientPacket
-    {
-    public:
-        GetNeighborhoodInitiativeInfoRequest(WorldPacket&& packet) : ClientPacket(CMSG_GET_NEIGHBORHOOD_INITIATIVE_INFO_REQUEST, std::move(packet)) { }
-        void Read() override;
-        ObjectGuid NeighborhoodGuid;
-    };
-#endif
 
     class InitiativeUpdateActiveNeighborhood final : public ClientPacket
     {

@@ -23,7 +23,6 @@
 #include "HousingDefines.h"
 #include "HousingMap.h"
 #include "HousingMgr.h"
-#include "HousingPackets.h"
 #include "Log.h"
 #include "WorldSession.h"
 #include "Neighborhood.h"
@@ -107,36 +106,6 @@ struct at_housing_plot : AreaTriggerAI
             housingMap->SendPlotEnterSpellPackets(player, static_cast<uint8>(plotIdx));
         }
 
-        // HouseStatusResponse + Permissions keep the editor-mode gate armed on the client.
-        // These opcodes were NOT touched by 12.0.5 — still required after plot entry so the
-        // editor-gate check (a1[76] && a1[72]) evaluates true.
-        if (!houseGuid.IsEmpty())
-        {
-            Player* plotOwner = isOwnPlot ? player : ObjectAccessor::FindPlayer(ownerGuid);
-            Housing const* ownerHousing = plotOwner ? plotOwner->GetHousingByGuid(houseGuid) : nullptr;
-
-            if (ownerHousing)
-            {
-                WorldPackets::Housing::HousingHouseStatusResponse statusResponse;
-                statusResponse.HouseGuid = ownerHousing->GetHouseGuid();
-                statusResponse.AccountGuid = player->GetSession()->GetBattlenetAccountGUID();
-                statusResponse.OwnerPlayerGuid = ownerHousing->GetCosmeticOwnerGuid();
-                statusResponse.NeighborhoodGuid = ownerHousing->GetNeighborhoodGuid();
-                statusResponse.Status = 0;
-                statusResponse.PermissionFlags = isOwnPlot ? 0xE0 : 0x40; // owner gets full, visitor gets plot-entry only
-                player->SendDirectMessage(statusResponse.Write());
-
-                WorldPackets::Housing::HousingGetPlayerPermissionsResponse permResponse;
-                permResponse.HouseGuid = ownerHousing->GetHouseGuid();
-                permResponse.ResultCode = 0;
-                permResponse.PermissionFlags = isOwnPlot ? 0xE0 : 0x40;
-                player->SendDirectMessage(permResponse.Write());
-
-                TC_LOG_DEBUG("housing", "at_housing_plot: Sent HouseStatus+Permissions for player {} (own={}, flags=0x{:X})",
-                    player->GetGUID().ToString(), isOwnPlot, isOwnPlot ? 0xE0 : 0x40);
-            }
-        }
-
         // Cosmetic phase shift: owner entering own plot removes 16 cosmetic phases
         // after a ~10 second delay (sniff-verified retail behavior).
         if (isOwnPlot)
@@ -190,30 +159,6 @@ struct at_housing_plot : AreaTriggerAI
         // 12.0.5 plot-leave: clear PlayerHouseInfoComponent.CurrentHouse so the client's
         // NeighborhoodSystem TLS drops its "on plot" flag.
         player->SetCurrentHouse(ObjectGuid::Empty);
-
-        // Clear editor contexts (Decor, Room, Fixture) by sending FlagByte=0x00
-        // HouseStatusResponse. Skip when leaving the plot is the result of entering
-        // the interior — the map transfer would erase interior editor state otherwise.
-        if (isOwnPlot)
-        {
-            if (Housing const* housing = player->GetHousingByGuid(plotInfo->HouseGuid))
-            {
-                if (!housing->IsInInterior())
-                {
-                    WorldPackets::Housing::HousingHouseStatusResponse statusResponse;
-                    statusResponse.HouseGuid = housing->GetHouseGuid();
-                    statusResponse.AccountGuid = player->GetSession()->GetBattlenetAccountGUID();
-                    statusResponse.OwnerPlayerGuid = housing->GetCosmeticOwnerGuid();
-                    statusResponse.NeighborhoodGuid = housing->GetNeighborhoodGuid();
-                    statusResponse.Status = 0;
-                    statusResponse.PermissionFlags = 0x00; // leaving plot — clear all permissions
-                    player->SendDirectMessage(statusResponse.Write());
-
-                    TC_LOG_DEBUG("housing", "at_housing_plot: Sent HouseStatusResponse(PermissionFlags=0) for plot owner {} leaving plot",
-                        player->GetGUID().ToString());
-                }
-            }
-        }
 
         // Restore cosmetic phases when owner leaves.
         if (isOwnPlot)

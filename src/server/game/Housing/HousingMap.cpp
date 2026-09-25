@@ -80,58 +80,6 @@ namespace
             result += fmt::format(" ...({} more)", packet->size() - len);
         return result;
     }
-
-    // Recurring event that sends housing WorldState counters every ~300ms.
-    // Sniff-verified: 5 continuous counters throughout the entire housing map session.
-    // Counters 1-3 (13436/13437/13438) increment by ~1333 each tick.
-    // Counters 4-5 (16035/16711) increment by ~7233 each tick.
-    class HousingWorldStateCounterEvent : public BasicEvent
-    {
-    public:
-        HousingWorldStateCounterEvent(ObjectGuid playerGuid,
-            uint32 counter1, uint32 counter2, uint32 counter3,
-            uint32 counter4, uint32 counter5)
-            : _playerGuid(playerGuid)
-            , _counter1(counter1), _counter2(counter2), _counter3(counter3)
-            , _counter4(counter4), _counter5(counter5) { }
-
-        bool Execute(uint64 /*e_time*/, uint32 /*p_time*/) override
-        {
-            Player* player = ObjectAccessor::FindPlayer(_playerGuid);
-            if (!player || !player->IsInWorld())
-                return true; // delete event — player gone
-
-            // Send all five counter WorldState updates
-            player->SendUpdateWorldState(WORLDSTATE_HOUSING_COUNTER_1, _counter1);
-            player->SendUpdateWorldState(WORLDSTATE_HOUSING_COUNTER_2, _counter2);
-            player->SendUpdateWorldState(WORLDSTATE_HOUSING_COUNTER_3, _counter3);
-            player->SendUpdateWorldState(WORLDSTATE_HOUSING_COUNTER_4, _counter4);
-            player->SendUpdateWorldState(WORLDSTATE_HOUSING_COUNTER_5, _counter5);
-
-            // Increment for next tick (different rates per sniff)
-            _counter1 += HOUSING_WORLDSTATE_INCREMENT;
-            _counter2 += HOUSING_WORLDSTATE_INCREMENT;
-            _counter3 += HOUSING_WORLDSTATE_INCREMENT;
-            _counter4 += HOUSING_WORLDSTATE_INCREMENT_2;
-            _counter5 += HOUSING_WORLDSTATE_INCREMENT_2;
-
-            // Re-schedule self for next tick
-            player->m_Events.AddEventAtOffset(
-                new HousingWorldStateCounterEvent(_playerGuid,
-                    _counter1, _counter2, _counter3, _counter4, _counter5),
-                Milliseconds(HOUSING_WORLDSTATE_INTERVAL_MS));
-
-            return true; // delete this instance (new one scheduled)
-        }
-
-    private:
-        ObjectGuid _playerGuid;
-        uint32 _counter1;
-        uint32 _counter2;
-        uint32 _counter3;
-        uint32 _counter4;
-        uint32 _counter5;
-    };
 }
 
 HousingMap::HousingMap(uint32 id, time_t expiry, uint32 instanceId, Difficulty spawnMode, uint32 neighborhoodId)
@@ -1080,49 +1028,14 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 // doesn't trigger; the editor menu then never arms.
                 p->SetCurrentHouse(housing->GetHouseGuid());
 
-                // Push HouseStatus + Permissions so the client's permissions cache is populated
-                // for the player's own plot. Same reason as SetCurrentHouse above — at login
-                // OnUnitEnter doesn't fire, so the AT script's proactive push at
-                // at_housing_plot.cpp never runs and the permissions window won't open until
-                // the player walks out of the AT and back in.
-                {
-                    WorldPackets::Housing::HousingHouseStatusResponse statusResponse;
-                    statusResponse.HouseGuid = housing->GetHouseGuid();
-                    statusResponse.AccountGuid = p->GetSession()->GetBattlenetAccountGUID();
-                    statusResponse.OwnerPlayerGuid = p->GetGUID();
-                    statusResponse.NeighborhoodGuid = housing->GetNeighborhoodGuid();
-                    statusResponse.Status = 0;
-                    statusResponse.PermissionFlags = 0xE0;
-                    p->SendDirectMessage(statusResponse.Write());
-
-                    WorldPackets::Housing::HousingGetPlayerPermissionsResponse permResponse;
-                    permResponse.HouseGuid = housing->GetHouseGuid();
-                    permResponse.ResultCode = 0;
-                    permResponse.PermissionFlags = 0xE0;
-                    p->SendDirectMessage(permResponse.Write());
-
-                    TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: pushed HouseStatus+Permissions for owner {} flags=0xE0",
-                        p->GetGUID().ToString());
-                }
-
+                // No house status, permissions or storage reply goes out here. Retail sends each of them only in
+                // answer to the client's own request: every capture has as many replies as requests (hbcd3 five
+                // status and five permissions requests, hled1 one of each, none in hf1 or hbst1), and nothing is
+                // pushed on entering a plot.
                 WorldSession* session = p->GetSession();
 
-                // Mimic the retail client's auto-sent CMSG_HOUSING_DECOR_REQUEST_STORAGE
-                // response sequence. Horde sniff (dump_12.0.1.65940_2026-02-19_10-51-32,
-                // pkt 8942 @ 17:53:30.294): client auto-emits the CMSG ~9s after login
-                // once it has processed the housing UPDATE_OBJECT bundle. Retail server
-                // responds with (1) 4-byte STORAGE_RSP ack, (2) Account + Housing/3 +
-                // decor meshes in ONE UPDATE_OBJECT, (3) PLAYER_HOUSES_INFO_RESPONSE.
-                //
-                // Empirically on our server the client does NOT auto-send the CMSG
-                // (the user's "click dashboard" workaround is what triggers this path
-                // via HandleHousingDecorRequestStorage). Emitting the full sequence
-                // server-side at the 500ms defer replays the same transport the client
-                // expects, without requiring the CMSG round-trip.
-                WorldPackets::Housing::HousingDecorRequestStorageResponse storageAck;
-                storageAck.ResultCode = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-                p->SendDirectMessage(storageAck.Write());
-
+                // The account's decor storage and the house's budgets travel in update fields. They are sent here
+                // together with the placed decor, so the client can match placed decor to storage entries.
                 UpdateData storageUpdate(p->GetMapId());
                 WorldPacket storagePacket;
 
@@ -1168,7 +1081,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 // PlayerHousesInfo emissions. Per user's blizzlike guardrail this
                 // speculative re-emission is dropped.
 
-                TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: Sent STORAGE_RSP ack + Account CREATE + {} decor MeshObject CREATEs for player {}",
+                TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: Sent Account CREATE + {} decor MeshObject CREATEs for player {}",
                     meshCreateCount, playerGuid.ToString());
 
                 // BLIZZLIKE: the 500 ms defer no longer emits housing
@@ -1271,22 +1184,6 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     // on the player having a house).
     SendHousingPostTutorialAuras(player);
     SendNeighborhoodMapEntryAuras(player);
-
-    // Start the periodic housing WorldState counter timer.
-    // Sniff-verified: 5 counters sent as individual SMSG_UPDATE_WORLD_STATE packets.
-    // Counters 1-3 increment by ~1333, counters 4-5 by ~7233, every ~300ms.
-    // Seed with getMSTime()-based values (retail uses opaque server-tick values;
-    // the exact seed doesn't matter as long as the increment pattern is correct).
-    {
-        uint32 baseSeed = getMSTime();
-        player->m_Events.AddEventAtOffset(
-            new HousingWorldStateCounterEvent(player->GetGUID(),
-                baseSeed, baseSeed / 3, baseSeed + 55758738,
-                baseSeed * 2, baseSeed + 123456789),
-            Milliseconds(HOUSING_WORLDSTATE_INTERVAL_MS));
-        TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Started WorldState counter timer (5 counters) for player {}",
-            player->GetGUID().ToString());
-    }
 
     // Send personalized per-plot WorldState values for this specific player.
     // The init world states (sent during Map::AddPlayerToMap) use map-global defaults

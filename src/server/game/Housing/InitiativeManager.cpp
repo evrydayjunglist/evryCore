@@ -16,6 +16,8 @@
  */
 
 #include "InitiativeManager.h"
+#include "BattlenetAccountMgr.h"
+#include "CharacterCache.h"
 #include "CharacterDatabase.h"
 #include "CriteriaHandler.h"
 #include "Housing.h"
@@ -1006,12 +1008,27 @@ void InitiativeManager::SendPlayerInitiativeInfo(WorldSession* session, ObjectGu
 
 void InitiativeManager::SendActivityLog(WorldSession* session, ObjectGuid const& neighborhoodGuid, uint64 neighborhoodLowGuid) const
 {
-    // IDA-verified wire (sub_7FF75C0EEF70):
-    //   PackedGUID NeighborhoodGuid + uint32(count)
-    //   per entry: PackedGUID PlayerGuid, PackedGUID TargetGuid, uint32 Contribution,
-    //              uint64 CompletionTime, uint32 TaskID
+    // Each entry names the contributor's Battle.net account and character, as retail's do (hbcd3 1305730).
     WorldPackets::Housing::GetInitiativeActivityLogResult result;
     result.NeighborhoodGuid = neighborhoodGuid;
+
+    std::unordered_map<uint64, ObjectGuid> bnetAccountByCharacter;
+    auto getBnetAccountGuid = [&bnetAccountByCharacter](ObjectGuid playerGuid)
+    {
+        auto [itr, inserted] = bnetAccountByCharacter.try_emplace(playerGuid.GetCounter());
+        if (inserted)
+        {
+            uint32 bnetAccountId = 0;
+            if (Player* contributor = ObjectAccessor::FindConnectedPlayer(playerGuid))
+                bnetAccountId = contributor->GetSession()->GetBattlenetAccountId();
+            else if (uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(playerGuid))
+                bnetAccountId = Battlenet::AccountMgr::GetIdByGameAccount(accountId);
+
+            if (bnetAccountId)
+                itr->second = ObjectGuid::Create<HighGuid::BNetAccount>(bnetAccountId);
+        }
+        return itr->second;
+    };
 
     // Populate with completed initiatives as log entries
     auto itr = _activeInitiatives.find(neighborhoodLowGuid);
@@ -1033,8 +1050,8 @@ void InitiativeManager::SendActivityLog(WorldSession* session, ObjectGuid const&
                     {
                         WorldPackets::Housing::NICompletedTasksEntry entry;
                         entry.PlayerGuid = ObjectGuid::Create<HighGuid::Player>(playerGuid);
-                        entry.TargetGuid = neighborhoodGuid;
-                        entry.ContributionAmount = taskContribItr->second;
+                        entry.BnetAccountGuid = getBnetAccountGuid(entry.PlayerGuid);
+                        entry.ContributionAmount = float(taskContribItr->second);
                         entry.CompletionTime = initiative->StartTime;
                         entry.TaskID = taskId;
                         result.CompletedTasks.push_back(entry);
@@ -1046,9 +1063,7 @@ void InitiativeManager::SendActivityLog(WorldSession* session, ObjectGuid const&
                 if (!hasContributors)
                 {
                     WorldPackets::Housing::NICompletedTasksEntry entry;
-                    entry.PlayerGuid = ObjectGuid::Empty;
-                    entry.TargetGuid = neighborhoodGuid;
-                    entry.ContributionAmount = taskProgress.Progress;
+                    entry.ContributionAmount = float(taskProgress.Progress);
                     entry.CompletionTime = initiative->StartTime;
                     entry.TaskID = taskId;
                     result.CompletedTasks.push_back(entry);

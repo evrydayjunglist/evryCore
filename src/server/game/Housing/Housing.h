@@ -40,6 +40,7 @@ namespace WorldPackets
     namespace Housing
     {
         class HousingCatalogStateSync;
+        struct JamCliHouse;
     }
 }
 
@@ -223,6 +224,9 @@ public:
     // same account (hf1 1075094-1075101: a second character of the account is sent the buyer as CosmeticOwner).
     ObjectGuid GetCosmeticOwnerGuid() const { return _state->CosmeticOwnerGuid; }
     void SetCosmeticOwnerGuid(ObjectGuid guid);
+    // The house as the houses info, current house info and buy replies list it: GUID, cosmetic owner, neighborhood,
+    // plot and house setting flags.
+    void FillHouseEntry(WorldPackets::Housing::JamCliHouse& house) const;
 
     // Editor mode
     void SetEditorMode(HousingEditorMode mode);

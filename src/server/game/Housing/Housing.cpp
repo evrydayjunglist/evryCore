@@ -158,9 +158,14 @@ uint8 Housing::FindFreeSlot(std::vector<uint8> const& usedSlots)
     return 0;
 }
 
-uint64 Housing::GetPurchasePrice(std::size_t accountHouseCount, uint64 plotCost)
+bool Housing::IsFirstHouse(bool firstHouseRecorded, std::size_t accountHouseCount)
 {
-    return accountHouseCount ? plotCost : 0;
+    return !firstHouseRecorded && !accountHouseCount;
+}
+
+uint64 Housing::GetPurchasePrice(bool firstHouse, uint64 plotCost)
+{
+    return firstHouse ? 0 : plotCost;
 }
 
 void Housing::CountBattlenetAccounts(std::vector<GuildMemberAccount> const& members, uint32& accounts, uint32& activeAccounts)

@@ -125,9 +125,12 @@ public:
     // included. 0 when every slot is taken.
     static uint8 FindFreeSlot(std::vector<uint8> const& usedSlots);
 
-    // What a purchase costs: nothing for the account's first house, the plot's cost once the account has any house,
-    // standing or packed.
-    static uint64 GetPurchasePrice(std::size_t accountHouseCount, uint64 plotCost);
+    // Whether a purchase is the account's first house, which is free and comes with the starter decor: the account has
+    // never had one recorded, and has no house, standing or packed. Once recorded it stays, so a house that is gone does
+    // not make the next purchase a first house again.
+    static bool IsFirstHouse(bool firstHouseRecorded, std::size_t accountHouseCount);
+    // What a purchase costs: nothing for the account's first house, the plot's cost for every other.
+    static uint64 GetPurchasePrice(bool firstHouse, uint64 plotCost);
 
     // A guild member's Battle.net account (0 when not known) and whether that member played in the last
     // GUILD_NEIGHBORHOOD_ACTIVE_DAYS days.

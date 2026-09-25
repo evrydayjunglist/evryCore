@@ -165,41 +165,6 @@ namespace
         }
     }
 
-    // Tear a house down for CMSG_HOUSING_RESET_KIOSK_MODE: despawn everything it owns on the map, free the plot by
-    // the house, drop the plot holder from the roster and delete the rows. Returns the house GUID that was destroyed
-    // (empty if there was nothing to destroy) so the caller can fill its response. Relinquishing does not come here:
-    // it packs the house instead.
-    ObjectGuid DestroyPlayerHousing(Player* player, Housing const* housing)
-    {
-        if (!housing)
-            return ObjectGuid::Empty;
-
-        ObjectGuid houseGuid = housing->GetHouseGuid();
-        ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
-        ObjectGuid cosmeticOwnerGuid = housing->GetCosmeticOwnerGuid();
-        uint8 plotIndex = housing->GetPlotIndex();
-
-        Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
-
-        // Despawn map entities BEFORE the housing data goes away.
-        HousingMap::DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
-
-        // Housing::Delete frees the plot by the house and drops the plot holder from the roster, in the same
-        // transaction as the rows.
-        player->DeleteHousing(houseGuid);
-
-        if (neighborhood)
-            neighborhood->RefreshMirrorDataForOnlineMembers();
-
-        if (!houseGuid.IsEmpty())
-            SendGuildRemoveHouseNotification(player, houseGuid, cosmeticOwnerGuid);
-
-        TC_LOG_INFO("housing", "DestroyPlayerHousing: Player {} destroyed house {} on plot {} in neighborhood {}",
-            player->GetGUID().ToString(), houseGuid.ToString(), plotIndex, neighborhoodGuid.ToString());
-
-        return houseGuid;
-    }
-
     // Sends manual SMSG_AURA_UPDATE + SMSG_SPELL_START + SMSG_SPELL_GO for a housing
     // spell that doesn't exist in our DB2/spell data. The sniff shows these spells use:
     //   AURA_UPDATE: CastID matches SPELL_START/SPELL_GO CastID
@@ -325,36 +290,8 @@ namespace
 
         uint32 const worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID());
 
-        if (housing.GetDatabaseId() <= std::numeric_limits<uint32>::max())
-        {
-            if (HouseInteriorMap* interior = dynamic_cast<HouseInteriorMap*>(sMapMgr->FindMap(HOUSE_INTERIOR_MAP_ID, uint32(housing.GetDatabaseId()))))
-            {
-                WorldLocation arrival;
-                bool const hasArrival = sHousingMgr.GetPlotArrival(neighborhood->GetNeighborhoodMapID(), plotIndex, arrival);
-                // The house's own neighborhood instance, as in Exit House (spell_housing_exit_house).
-                Optional<uint32> instanceId;
-                uint32 const neighborhoodInstanceId = uint32(neighborhood->GetGuid().GetCounter());
-                if (hasArrival && sMapMgr->FindMap(arrival.GetMapId(), neighborhoodInstanceId))
-                    instanceId = neighborhoodInstanceId;
-                std::vector<Player*> removed;
-                for (MapReference const& ref : interior->GetPlayers())
-                {
-                    Player* visitor = ref.GetSource();
-                    if (visitor && !neighborhood->CheckHouseEntry(visitor, plotIndex, true).Allowed)
-                        removed.push_back(visitor);
-                }
-
-                for (Player* visitor : removed)
-                {
-                    if (!hasArrival || !visitor->TeleportTo(arrival, TELE_TO_SPELL, instanceId))
-                        TC_LOG_ERROR("housing", "RemoveVisitorsWithoutAccess: {} lost access to house {} but could not be put out of it",
-                            visitor->GetGUID().ToString(), housing.GetHouseGuid().ToString());
-                    else
-                        TC_LOG_DEBUG("housing", "RemoveVisitorsWithoutAccess: {} lost access to house {} and was put out on plot {}",
-                            visitor->GetGUID().ToString(), housing.GetHouseGuid().ToString(), plotIndex);
-                }
-            }
-        }
+        HouseInteriorMap::PutCharactersOut(neighborhood, plotIndex, housing.GetDatabaseId(), housing.GetHouseGuid(),
+            [neighborhood, plotIndex](Player const* visitor) { return !neighborhood->CheckHouseEntry(visitor, plotIndex, true).Allowed; });
 
         if (HousingMap* housingMap = dynamic_cast<HousingMap*>(sMapMgr->FindMap(worldMapId, uint32(neighborhood->GetGuid().GetCounter()))))
         {
@@ -3533,6 +3470,10 @@ void WorldSession::HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::Housi
         return;
     }
 
+    // Everyone inside the house, her included when she relinquished from inside, is put out on its plot first: once it
+    // is packed, Exit House finds no plot to put them on.
+    HouseInteriorMap::PutCharactersOut(neighborhood, plotIndex, housing->GetDatabaseId(), houseGuid);
+
     HousingMap::DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
 
     // The plot, the packed house and the refund as one unit.
@@ -4714,34 +4655,15 @@ void WorldSession::HandleHousingResetKioskMode(WorldPackets::Housing::HousingRes
     if (!player)
         return;
 
-    // This destroys a house, so it answers to the same switch as CMSG_HOUSING_SVCS_RELINQUISH_HOUSE; otherwise a
-    // realm with house deletion switched off would still lose houses through this opcode.
-    if (!sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_DELETE_HOUSE))
-    {
-        WorldPackets::Housing::HousingResetKioskModeResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_SERVICE_NOT_AVAILABLE);
-        SendPacket(response.Write());
-        return;
-    }
-
-    // Full teardown: despawn the structure, free the plot, drop the plot holder from the roster, delete the rows.
-    // This used to call DeleteHousing() alone, which left the ten MeshObjects and the door GO standing on a plot the
-    // server then considered vacant and re-purchasable.
-    // The kiosk request names no house: it acts on the house the character stands in or on.
-    ObjectGuid destroyedHouseGuid = DestroyPlayerHousing(player, player->GetHousing());
-
+    // Kiosk mode is a client mode the server switches on through the feature system status. This server never does:
+    // KioskModeEnabled stays off, as it is in the retail captures (hbcd3 lines 1353 and 2640), so there is no kiosk
+    // house to reset. Before, this opcode deleted the character's house outright, which also made her account a first
+    // buyer again.
     WorldPackets::Housing::HousingResetKioskModeResponse response;
-    response.Result = static_cast<uint8>(destroyedHouseGuid.IsEmpty()
-        ? HOUSING_RESULT_HOUSE_NOT_FOUND : HOUSING_RESULT_SUCCESS);
+    response.Result = static_cast<uint8>(HOUSING_RESULT_SERVICE_NOT_AVAILABLE);
     SendPacket(response.Write());
 
-    if (!destroyedHouseGuid.IsEmpty())
-    {
-        WorldPackets::Housing::HousingSvcRequestPlayerReloadData reloadData;
-        SendPacket(reloadData.Write());
-    }
-
-    TC_LOG_DEBUG("housing", "CMSG_HOUSING_RESET_KIOSK_MODE processed for player {}",
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_RESET_KIOSK_MODE refused for player {}: this server does not run kiosk mode",
         player->GetGUID().ToString());
 }
 

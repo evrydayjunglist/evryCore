@@ -185,7 +185,14 @@ public:
     HousingResult CancelInvitation(ObjectGuid inviteeGuid);
     HousingResult AcceptInvitation(ObjectGuid playerGuid);
     HousingResult DeclineInvitation(ObjectGuid playerGuid);
-    HousingResult EvictPlayer(ObjectGuid plotGuid);
+    // Whether actorGuid may evict the character holding a plot, by their roles; a character not on the roster counts as
+    // a resident.
+    HousingResult CheckEviction(ObjectGuid actorGuid, ObjectGuid targetGuid) const;
+    // Takes an evicted character off the roster, unless she is the owner or still holds a plot. The caller packs her
+    // house and frees its plot first (NeighborhoodMgr::PackHouseForOwnerLoss), which already takes the plot's roster
+    // holder off the roster; this covers the character shown as the house's owner when the plot had no roster holder.
+    // The row changes in trans.
+    void EvictPlayer(ObjectGuid playerGuid, CharacterDatabaseTransaction trans);
     HousingResult TransferOwnership(ObjectGuid newOwnerGuid);
     HousingResult OfferOwnership(ObjectGuid targetGuid);
     HousingResult AcceptOwnershipTransfer(ObjectGuid acceptorGuid);
@@ -226,6 +233,15 @@ public:
     void MovePlotHolder(uint8 plotIndex, ObjectGuid newHolderGuid, CharacterDatabaseTransaction trans);
     // The character whose roster entry holds a plot, or empty.
     ObjectGuid GetPlotHolder(uint8 plotIndex) const;
+    // A character's rows are removed for good (NeighborhoodMgr::OnCharacterRemoved): her roster entry leaves, unless it
+    // makes her this neighborhood's owner, and her invite, plot hold and any ownership offer to her go. The rows change
+    // in trans. True when the roster changed.
+    bool RemoveDeletedCharacter(ObjectGuid characterGuid, CharacterDatabaseTransaction trans);
+
+    // Whether a character in actorRole may evict the one in targetRole. The owner may evict anyone but herself; a
+    // manager may evict residents only ("Evict non-Managers from the Neighborhood", GlobalStrings
+    // HOUSING_ADD_NEIGHBORHOOD_MANAGER_CONFIRMATION); a resident may evict nobody.
+    static bool CanEvict(uint8 actorRole, uint8 targetRole);
 
     PlotInfo const* GetPlotInfo(uint8 plotIndex) const
     {

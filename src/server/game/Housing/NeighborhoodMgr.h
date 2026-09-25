@@ -107,15 +107,25 @@ public:
     // shown as owner of in one of that guild's neighborhoods is packed and its plot is free, since only a guild member
     // may own a house there. trans may be empty; the rows are then saved on their own. World thread only.
     void OnGuildMemberRemoved(uint32 guildId, ObjectGuid characterGuid, CharacterDatabaseTransaction trans);
+    // A character's rows are being removed for good (Player::DeleteFromDB with the remove method, after
+    // OnCharacterDeleted), and a new character can get her guid after a restart. Her charter that was never finalized
+    // and its signatures are dropped, and so are her signatures on other charters, the invites naming her, and her
+    // roster entries. A roster entry that makes her a neighborhood's owner stays: who takes over a neighborhood is not
+    // decided. Rows change in trans. World thread only.
+    void OnCharacterRemoved(ObjectGuid characterGuid, CharacterDatabaseTransaction trans);
+
+    // Packs a house that stands on a plot of the neighborhood, when it is not given up by choice: its owner was deleted
+    // or left the guild, or its plot was evicted. It works through a character of its account that is online and holds
+    // it, else in its rows and on the plot directly, and puts everyone inside it out on the plot first.
+    // newCosmeticOwner is who is shown as its owner afterwards when that changes, or Empty to keep the current one;
+    // clearCosmeticOwner leaves nobody shown, for a house whose account has no character left. What was paid for the
+    // house goes by mail to refundRecipient when that character exists, else to nobody. The account's online clients
+    // reload their housing data, and the guild the house was listed in is told it is gone. World thread only.
+    void PackHouseForOwnerLoss(Neighborhood* neighborhood, uint8 plotIndex, ObjectGuid houseGuid, uint64 houseDatabaseId,
+        uint32 bnetAccountId, ObjectGuid newCosmeticOwner, bool clearCosmeticOwner, ObjectGuid refundRecipient,
+        CharacterDatabaseTransaction trans);
 
 private:
-    // Packs a house that stands on a plot of the neighborhood, for OnCharacterDeleted and OnGuildMemberRemoved:
-    // through a character of its account that is online and holds it, else in its rows and on the plot directly.
-    // newCosmeticOwner is who is shown as its owner afterwards when that changes, or Empty to keep the current one;
-    // clearCosmeticOwner leaves nobody shown, for a house whose account has no character left.
-    void PackHouseForOwnerLoss(Neighborhood* neighborhood, uint8 plotIndex, ObjectGuid houseGuid, uint64 houseDatabaseId,
-        uint32 bnetAccountId, ObjectGuid newCosmeticOwner, bool clearCosmeticOwner, CharacterDatabaseTransaction trans);
-
     NeighborhoodMgr() = default;
 
     std::unordered_map<ObjectGuid, std::unique_ptr<Neighborhood>> _neighborhoods;

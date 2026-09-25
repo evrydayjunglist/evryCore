@@ -113,6 +113,14 @@ CREATE TABLE IF NOT EXISTS `account_housing_catalog_fetch` (
     PRIMARY KEY (`bnetAccountId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- A Battle.net account's first house is free and comes with the starter decor, once. The row stays when that house is
+-- packed or gone, so a later purchase pays the plot's price and brings no second starter set.
+CREATE TABLE IF NOT EXISTS `account_housing_first_house` (
+    `bnetAccountId` INT UNSIGNED NOT NULL,
+    `purchaseTime` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Unix time the account bought its first house',
+    PRIMARY KEY (`bnetAccountId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `neighborhoods` (
     `guid` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `name` VARCHAR(64) NOT NULL,

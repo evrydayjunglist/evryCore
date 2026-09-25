@@ -4400,6 +4400,11 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             stmt->setUInt64(0, guid);
             trans->Append(stmt);
 
+            // For the same reason, her charter that was never finalized and its signatures, her signatures on other
+            // charters, the invites naming her and her roster entries go. An unlinked character keeps them, since she
+            // can be restored; the final purge of deleted characters comes through here.
+            sNeighborhoodMgr.OnCharacterRemoved(playerguid, trans);
+
             // A new character can get this guid after a restart. Give back a level boost that was
             // assigned but never applied, and unlink a used one so it does not follow the guid.
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_BATTLEPAY_DISTRIBUTION_RETURN_BY_TARGET);
@@ -19167,7 +19172,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             if (!houseIds.contains(houseId))
                 storedDecor.insert(storedDecor.end(), rows.begin(), rows.end());
         _housingDecorStore->LoadFromDB(storedDecor, holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR_ENTRIES),
-            holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH));
+            holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH),
+            holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIRST_HOUSE));
     }
 
     if (PreparedQueryResult activeNeighborhood = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOUSING_ACTIVE_NEIGHBORHOOD))
@@ -31857,8 +31863,13 @@ Housing* Player::UnpackHousing(ObjectGuid houseGuid, ObjectGuid neighborhoodGuid
         return nullptr;
 
     // A house packed when the last character of its account was deleted shows nobody as its owner; the character who
-    // unpacks it becomes its owner.
-    if (housing->GetCosmeticOwnerGuid().IsEmpty())
+    // unpacks it becomes its owner. So does one whose shown owner no longer exists: when several characters of an
+    // account are deleted one after another, each delete reads the owner rows before the last one's change is saved,
+    // so a packed house can keep a deleted character as its owner, and a new character can get that guid after a
+    // restart.
+    ObjectGuid const shownOwner = housing->GetCosmeticOwnerGuid();
+    CharacterCacheEntry const* shownOwnerCharacter = shownOwner.IsEmpty() ? nullptr : sCharacterCache->GetCharacterCacheByGuid(shownOwner);
+    if (!shownOwnerCharacter || shownOwnerCharacter->IsDeleted)
         housing->SetCosmeticOwnerGuid(GetGUID());
 
     AddPlayerMirrorHouse(*housing);

@@ -769,46 +769,107 @@ HousingResult Neighborhood::DeclineInvitation(ObjectGuid playerGuid)
     return HOUSING_RESULT_SUCCESS;
 }
 
-HousingResult Neighborhood::EvictPlayer(ObjectGuid playerGuid)
+/*static*/ bool Neighborhood::CanEvict(uint8 actorRole, uint8 targetRole)
 {
-    auto it = std::find_if(_members.begin(), _members.end(),
-        [&playerGuid](Member const& member) { return member.PlayerGuid == playerGuid; });
+    if (targetRole == NEIGHBORHOOD_ROLE_OWNER)
+        return false;
+    if (actorRole == NEIGHBORHOOD_ROLE_OWNER)
+        return true;
+    return actorRole == NEIGHBORHOOD_ROLE_MANAGER && targetRole == NEIGHBORHOOD_ROLE_RESIDENT;
+}
 
-    if (it == _members.end())
+HousingResult Neighborhood::CheckEviction(ObjectGuid actorGuid, ObjectGuid targetGuid) const
+{
+    auto roleOf = [this](ObjectGuid guid) -> uint8
     {
-        TC_LOG_DEBUG("housing", "Neighborhood::EvictPlayer: Player {} is not in neighborhood '{}'",
-            playerGuid.ToString(), _name);
-        return HOUSING_RESULT_NEIGHBORHOOD_NOT_FOUND;
-    }
+        if (!guid.IsEmpty() && guid == _ownerGuid)
+            return NEIGHBORHOOD_ROLE_OWNER;
+        Member const* member = GetMember(guid);
+        return member ? member->Role : uint8(NEIGHBORHOOD_ROLE_RESIDENT);
+    };
 
-    if (it->Role == NEIGHBORHOOD_ROLE_OWNER)
+    if (!CanEvict(roleOf(actorGuid), roleOf(targetGuid)))
     {
-        TC_LOG_DEBUG("housing", "Neighborhood::EvictPlayer: Cannot evict owner {} from neighborhood '{}'",
-            playerGuid.ToString(), _name);
+        TC_LOG_DEBUG("housing", "Neighborhood::CheckEviction: {} may not evict {} from neighborhood '{}'",
+            actorGuid.ToString(), targetGuid.ToString(), _name);
         return HOUSING_RESULT_PERMISSION_DENIED;
     }
 
-    // Clear any plot assignment
-    if (it->PlotIndex != INVALID_PLOT_INDEX && it->PlotIndex < MAX_NEIGHBORHOOD_PLOTS)
-        _plots[it->PlotIndex] = PlotInfo{};
+    return HOUSING_RESULT_SUCCESS;
+}
+
+void Neighborhood::EvictPlayer(ObjectGuid playerGuid, CharacterDatabaseTransaction trans)
+{
+    auto it = std::find_if(_members.begin(), _members.end(),
+        [&playerGuid](Member const& member) { return member.PlayerGuid == playerGuid; });
+    if (it == _members.end() || it->Role == NEIGHBORHOOD_ROLE_OWNER)
+        return;
+
+    // A character who still holds a plot keeps her roster entry: without it that plot's house would have nobody on the
+    // roster. The caller has already freed the evicted plot, so this is a different one.
+    if (it->PlotIndex != INVALID_PLOT_INDEX)
+    {
+        TC_LOG_ERROR("housing", "Neighborhood::EvictPlayer: {} still holds plot {} of neighborhood '{}'; her roster entry stays",
+            playerGuid.ToString(), it->PlotIndex, _name);
+        return;
+    }
 
     _members.erase(it);
 
-    // Remove from DB
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_MEMBER);
     stmt->setUInt64(0, _guid.GetCounter());
     stmt->setUInt64(1, playerGuid.GetCounter());
     trans->Append(stmt);
-    CharacterDatabase.CommitTransaction(trans);
 
     TC_LOG_DEBUG("housing", "Neighborhood::EvictPlayer: Player {} evicted from neighborhood '{}'",
         playerGuid.ToString(), _name);
 
     // The evicted player is gone from the roster: every remaining member gets it again.
     BroadcastRoster();
+}
 
-    return HOUSING_RESULT_SUCCESS;
+bool Neighborhood::RemoveDeletedCharacter(ObjectGuid characterGuid, CharacterDatabaseTransaction trans)
+{
+    bool rosterChanged = false;
+
+    auto memberIt = std::find_if(_members.begin(), _members.end(),
+        [&characterGuid](Member const& member) { return member.PlayerGuid == characterGuid; });
+    if (memberIt != _members.end() && memberIt->Role != NEIGHBORHOOD_ROLE_OWNER && characterGuid != _ownerGuid)
+    {
+        if (memberIt->PlotIndex != INVALID_PLOT_INDEX)
+            TC_LOG_ERROR("housing", "Neighborhood::RemoveDeletedCharacter: deleted {} still held plot {} of neighborhood '{}'; the plot keeps its house without a roster entry",
+                characterGuid.ToString(), memberIt->PlotIndex, _name);
+
+        _members.erase(memberIt);
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_MEMBER);
+        stmt->setUInt64(0, _guid.GetCounter());
+        stmt->setUInt64(1, characterGuid.GetCounter());
+        trans->Append(stmt);
+        rosterChanged = true;
+    }
+
+    auto inviteIt = std::find_if(_pendingInvites.begin(), _pendingInvites.end(),
+        [&characterGuid](PendingInvite const& invite) { return invite.InviteeGuid == characterGuid; });
+    if (inviteIt != _pendingInvites.end())
+    {
+        _pendingInvites.erase(inviteIt);
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_INVITE);
+        stmt->setUInt64(0, _guid.GetCounter());
+        stmt->setUInt64(1, characterGuid.GetCounter());
+        trans->Append(stmt);
+    }
+
+    _plotReservations.erase(characterGuid);
+
+    if (_pendingTransfer && _pendingTransfer->TargetGuid == characterGuid)
+        _pendingTransfer.reset();
+
+    if (rosterChanged)
+        BroadcastRoster();
+
+    return rosterChanged;
 }
 
 ObjectGuid Neighborhood::ReleasePlotByHouse(ObjectGuid houseGuid, CharacterDatabaseTransaction trans)

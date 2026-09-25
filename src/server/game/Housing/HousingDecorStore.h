@@ -52,7 +52,8 @@ public:
     // The rows of the account's pieces that stand in none of its houses, and the account's entry and catalog fetch
     // rows. Only the first character of the account to log in loads them; later ones find the store loaded.
     bool IsLoaded() const;
-    void LoadFromDB(std::vector<Field*> const& storedDecor, PreparedQueryResult entries, PreparedQueryResult catalogFetch);
+    void LoadFromDB(std::vector<Field*> const& storedDecor, PreparedQueryResult entries, PreparedQueryResult catalogFetch,
+        PreparedQueryResult firstHouse);
     // Every change is written when it is made. This writes the pieces in storage and what the account has owned and
     // redeemed again only when loading changed something no row says yet: a piece whose house is gone, or an owned
     // entry with no row of its own. The houses save their placed pieces.
@@ -88,6 +89,12 @@ public:
     uint64 GetLastCatalogFetch() const;
     // Stores now and returns what was stored before, which is what the update's reply carries.
     uint64 ExchangeLastCatalogFetch(uint64 now);
+
+    // Whether the account has had its first house, which is free and comes with the starter decor once. It stays
+    // recorded when that house is packed or gone.
+    bool HasHadFirstHouse() const;
+    // Records the first house in the purchase's transaction.
+    void RecordFirstHouse(CharacterDatabaseTransaction trans);
 
     // Appends the row of a piece: houseDatabaseId is the house it stands in, 0 while it is in storage.
     static void AppendDecorRow(CharacterDatabaseTransaction trans, uint32 bnetAccountId, uint64 houseDatabaseId,
@@ -142,6 +149,8 @@ private:
     std::unordered_map<ObjectGuid, Housing::PlacedDecor> _stored;
     std::unordered_map<uint32 /*decorEntryId*/, OwnedEntry> _owned;
     uint64 _lastCatalogFetch = 0;
+    // Unix time the account bought its first house, 0 before it did.
+    uint64 _firstHouseTime = 0;
 
     static std::mutex s_registryLock;
     static std::unordered_map<uint32, std::weak_ptr<HousingDecorStore>> s_stores;

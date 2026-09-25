@@ -224,6 +224,29 @@ TEST_CASE("Who may buy a plot in a neighborhood", "[Housing][Neighborhood]")
     }
 }
 
+TEST_CASE("Who may evict whom from a neighborhood", "[Housing][Neighborhood]")
+{
+    SECTION("The owner evicts managers and residents, never herself")
+    {
+        REQUIRE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_OWNER, NEIGHBORHOOD_ROLE_RESIDENT));
+        REQUIRE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_OWNER, NEIGHBORHOOD_ROLE_MANAGER));
+        REQUIRE_FALSE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_OWNER, NEIGHBORHOOD_ROLE_OWNER));
+    }
+
+    SECTION("A manager evicts residents only (GlobalStrings: \"Evict non-Managers from the Neighborhood\")")
+    {
+        REQUIRE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_MANAGER, NEIGHBORHOOD_ROLE_RESIDENT));
+        REQUIRE_FALSE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_MANAGER, NEIGHBORHOOD_ROLE_MANAGER));
+        REQUIRE_FALSE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_MANAGER, NEIGHBORHOOD_ROLE_OWNER));
+    }
+
+    SECTION("A resident evicts nobody")
+    {
+        REQUIRE_FALSE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_RESIDENT, NEIGHBORHOOD_ROLE_RESIDENT));
+        REQUIRE_FALSE(Neighborhood::CanEvict(NEIGHBORHOOD_ROLE_RESIDENT, NEIGHBORHOOD_ROLE_MANAGER));
+    }
+}
+
 TEST_CASE("House styles and exterior pieces a house may use", "[Housing][Fixtures]")
 {
     auto makeHouseType = [](uint32 id, int32 flags)

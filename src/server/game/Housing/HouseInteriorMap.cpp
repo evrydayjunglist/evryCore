@@ -31,6 +31,7 @@
 #include "NeighborhoodMgr.h"
 #include "HousingPackets.h"
 #include "Log.h"
+#include "MapManager.h"
 #include "MeshObject.h"
 #include "ObjectAccessor.h"
 #include "ObjectGridLoader.h"
@@ -43,6 +44,7 @@
 #include "RealmList.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <limits>
 
 HouseInteriorMap::HouseInteriorMap(uint32 id, time_t expiry, uint32 instanceId, ObjectGuid const& owner)
     : Map(id, expiry, instanceId, DIFFICULTY_NORMAL),
@@ -113,6 +115,43 @@ Housing* HouseInteriorMap::GetOwnerHousing()
         return owner->GetHousingByGuid(_houseGuid);
 
     return nullptr;
+}
+
+/*static*/ void HouseInteriorMap::PutCharactersOut(Neighborhood const* neighborhood, uint8 plotIndex, uint64 houseDatabaseId, ObjectGuid houseGuid,
+    std::function<bool(Player const*)> const& shouldLeave /*= nullptr*/)
+{
+    if (!neighborhood || plotIndex == INVALID_PLOT_INDEX || !houseDatabaseId || houseDatabaseId > std::numeric_limits<uint32>::max())
+        return;
+
+    HouseInteriorMap* interior = dynamic_cast<HouseInteriorMap*>(sMapMgr->FindMap(HOUSE_INTERIOR_MAP_ID, uint32(houseDatabaseId)));
+    if (!interior)
+        return;
+
+    std::vector<Player*> leaving;
+    for (MapReference const& ref : interior->GetPlayers())
+        if (Player* character = ref.GetSource(); character && (!shouldLeave || shouldLeave(character)))
+            leaving.push_back(character);
+
+    if (leaving.empty())
+        return;
+
+    WorldLocation arrival;
+    bool const hasArrival = sHousingMgr.GetPlotArrival(neighborhood->GetNeighborhoodMapID(), plotIndex, arrival);
+    // The house's own neighborhood instance, as in Exit House (spell_housing_exit_house).
+    Optional<uint32> instanceId;
+    uint32 const neighborhoodInstanceId = uint32(neighborhood->GetGuid().GetCounter());
+    if (hasArrival && sMapMgr->FindMap(arrival.GetMapId(), neighborhoodInstanceId))
+        instanceId = neighborhoodInstanceId;
+
+    for (Player* character : leaving)
+    {
+        if (!hasArrival || !character->TeleportTo(arrival, TELE_TO_SPELL, instanceId))
+            TC_LOG_ERROR("housing", "HouseInteriorMap::PutCharactersOut: {} could not be put out of house {}",
+                character->GetGUID().ToString(), houseGuid.ToString());
+        else
+            TC_LOG_DEBUG("housing", "HouseInteriorMap::PutCharactersOut: {} was put out of house {} on plot {}",
+                character->GetGUID().ToString(), houseGuid.ToString(), plotIndex);
+    }
 }
 
 void HouseInteriorMap::SpawnRoomMeshObjects(Housing* housing, int32 factionRestriction)

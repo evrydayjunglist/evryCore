@@ -21,9 +21,11 @@
 #include "Housing.h"
 #include "Map.h"
 #include "ObjectGuid.h"
+#include <functional>
 #include <vector>
 
 class HousingRoomEntity;
+class Neighborhood;
 class Player;
 
 /// Map instance for a player's house interior (MAP_HOUSE_INTERIOR = 7, MapID 2783).
@@ -51,6 +53,14 @@ public:
 
     /// The live Housing of this map's house, from any online character of its account.
     Housing* GetOwnerHousing();
+
+    // Puts the characters inside a house out at its plot's arrival point, in the house's own neighborhood instance when
+    // that is loaded, where Exit House puts them. Only those shouldLeave accepts go, or all of them without it. The
+    // neighborhood and plot are passed in, so this also works while the house is being taken off its plot: a packed
+    // house has no plot for Exit House to find. The interior instance is the house's database id. World thread only,
+    // because it moves characters off another map.
+    static void PutCharactersOut(Neighborhood const* neighborhood, uint8 plotIndex, uint64 houseDatabaseId, ObjectGuid houseGuid,
+        std::function<bool(Player const*)> const& shouldLeave = nullptr);
 
     /// The neighborhood map ID the owner came from (for exit teleport).
     uint32 GetSourceNeighborhoodMapId() const { return _sourceNeighborhoodMapId; }

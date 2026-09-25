@@ -55,7 +55,8 @@ bool HousingDecorStore::IsLoaded() const
     return _loaded;
 }
 
-void HousingDecorStore::LoadFromDB(std::vector<Field*> const& storedDecor, PreparedQueryResult entries, PreparedQueryResult catalogFetch)
+void HousingDecorStore::LoadFromDB(std::vector<Field*> const& storedDecor, PreparedQueryResult entries, PreparedQueryResult catalogFetch,
+    PreparedQueryResult firstHouse)
 {
     std::lock_guard<std::recursive_mutex> guard(_lock);
     if (_loaded)
@@ -99,6 +100,10 @@ void HousingDecorStore::LoadFromDB(std::vector<Field*> const& storedDecor, Prepa
 
     if (catalogFetch)
         _lastCatalogFetch = (*catalogFetch)[0].GetUInt64();
+
+    // SELECT purchaseTime FROM account_housing_first_house WHERE bnetAccountId = ?
+    if (firstHouse)
+        _firstHouseTime = std::max<uint64>((*firstHouse)[0].GetUInt64(), 1);
 
     _loaded = true;
 
@@ -290,6 +295,29 @@ uint64 HousingDecorStore::ExchangeLastCatalogFetch(uint64 now)
     stmt->setUInt64(1, now);
     CharacterDatabase.Execute(stmt);
     return previous;
+}
+
+bool HousingDecorStore::HasHadFirstHouse() const
+{
+    std::lock_guard<std::recursive_mutex> guard(_lock);
+    return _firstHouseTime != 0;
+}
+
+void HousingDecorStore::RecordFirstHouse(CharacterDatabaseTransaction trans)
+{
+    uint64 now = 0;
+    {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
+        if (_firstHouseTime)
+            return;
+        now = std::max<uint64>(GameTime::GetGameTime(), 1);
+        _firstHouseTime = now;
+    }
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ACCOUNT_HOUSING_FIRST_HOUSE);
+    stmt->setUInt32(0, _bnetAccountId);
+    stmt->setUInt64(1, now);
+    trans->Append(stmt);
 }
 
 void HousingDecorStore::AppendDecorRow(CharacterDatabaseTransaction trans, uint32 bnetAccountId, uint64 houseDatabaseId,

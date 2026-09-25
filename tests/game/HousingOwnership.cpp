@@ -110,18 +110,27 @@ TEST_CASE("The first house of an account is free and every other purchase costs 
 
     SECTION("An account with no house pays nothing (hbcd3: no money drop at the purchase)")
     {
-        REQUIRE(Housing::GetPurchasePrice(0, PlotCost) == 0);
+        REQUIRE(Housing::IsFirstHouse(false, 0));
+        REQUIRE(Housing::GetPurchasePrice(Housing::IsFirstHouse(false, 0), PlotCost) == 0);
     }
 
     SECTION("A second house costs the plot's price")
     {
-        REQUIRE(Housing::GetPurchasePrice(1, PlotCost) == PlotCost);
+        REQUIRE_FALSE(Housing::IsFirstHouse(true, 1));
+        REQUIRE(Housing::GetPurchasePrice(Housing::IsFirstHouse(true, 1), PlotCost) == PlotCost);
     }
 
     SECTION("Buying back a packed house costs the plot's price, because its row still counts")
     {
-        REQUIRE(Housing::GetPurchasePrice(1, PlotCost) == PlotCost);
-        REQUIRE(Housing::GetPurchasePrice(2, PlotCost) == PlotCost);
+        REQUIRE_FALSE(Housing::IsFirstHouse(false, 1));
+        REQUIRE_FALSE(Housing::IsFirstHouse(true, 2));
+        REQUIRE(Housing::GetPurchasePrice(false, PlotCost) == PlotCost);
+    }
+
+    SECTION("An account whose first house is gone is not a first buyer again")
+    {
+        REQUIRE_FALSE(Housing::IsFirstHouse(true, 0));
+        REQUIRE(Housing::GetPurchasePrice(Housing::IsFirstHouse(true, 0), PlotCost) == PlotCost);
     }
 }
 

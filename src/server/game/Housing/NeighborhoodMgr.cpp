@@ -21,12 +21,19 @@
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "GameTime.h"
+#include "Guild.h"
+#include "GuildMgr.h"
+#include "HouseInteriorMap.h"
 #include "HousingDefines.h"
 #include "HousingMap.h"
 #include "HousingMgr.h"
+#include "HousingPackets.h"
 #include "Log.h"
+#include "Mail.h"
 #include "Map.h"
 #include "Neighborhood.h"
+#include "NeighborhoodCharter.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "RealmList.h"
 #include "SharedDefines.h"
@@ -1121,15 +1128,60 @@ namespace
         if (neighborhood)
             neighborhood->UpdatePlotCosmeticOwnerByHouse(houseGuid, cosmeticOwnerGuid);
     }
+
+    // A character that exists and is not waiting in the list of deleted characters.
+    bool IsLivingCharacter(ObjectGuid guid)
+    {
+        if (guid.IsEmpty())
+            return false;
+        CharacterCacheEntry const* character = sCharacterCache->GetCharacterCacheByGuid(guid);
+        return character && !character->IsDeleted;
+    }
+
+    // What was paid for a house, which relinquishing it pays back: from the Housing a character of its account holds
+    // while one is online, else from its row.
+    uint64 GetHouseRefundAmount(Player* holder, ObjectGuid houseGuid, uint64 houseDatabaseId)
+    {
+        if (Housing const* housing = holder ? holder->GetHousingByGuid(houseGuid) : nullptr)
+            return housing->GetRefundAmount();
+
+        if (!houseDatabaseId)
+            return 0;
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_REFUND_AMOUNT);
+        stmt->setUInt64(0, houseDatabaseId);
+        if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+            return (*result)[0].GetUInt64();
+        return 0;
+    }
+
+    // No capture shows the refund of a house packed without its owner giving it up, so this text is the server's own.
+    constexpr char HOUSE_PACKED_REFUND_MAIL_SUBJECT[] = "Your house was packed up";
+    constexpr char HOUSE_PACKED_REFUND_MAIL_BODY[] = "Your house was packed up and its plot is free. Your house layout has been saved; "
+        "purchase a new house to import it. Enclosed is what was paid for the house.";
 }
 
 void NeighborhoodMgr::PackHouseForOwnerLoss(Neighborhood* neighborhood, uint8 plotIndex, ObjectGuid houseGuid, uint64 houseDatabaseId,
-    uint32 bnetAccountId, ObjectGuid newCosmeticOwner, bool clearCosmeticOwner, CharacterDatabaseTransaction trans)
+    uint32 bnetAccountId, ObjectGuid newCosmeticOwner, bool clearCosmeticOwner, ObjectGuid refundRecipient, CharacterDatabaseTransaction trans)
 {
     // Packed the way relinquishing packs a house: rooms, decor, fixtures, level and favor are kept, the row keeps the
-    // neighborhood and plot it stood on, and the plot is free at once. Unlike a relinquish, nothing is paid back: the
-    // house was not given up by choice, and no source says what retail pays in this case.
+    // neighborhood and plot it stood on, and the plot is free at once. What was paid for the house is paid back, as a
+    // relinquish pays it back, since the house was not given up by choice. The money goes by mail because the
+    // character it goes to may be offline; players report a housing refund arriving by mail after a move.
     Player* holder = FindOnlineHouseHolder(bnetAccountId, houseGuid);
+
+    // Who was shown as the owner before anything changes, for the guild's list of member houses.
+    ObjectGuid shownOwner;
+    if (Neighborhood::PlotInfo const* plot = neighborhood->GetPlotInfo(plotIndex); plot && plot->HouseGuid == houseGuid)
+        shownOwner = plot->OwnerGuid;
+    uint32 guildId = neighborhood->GetGuildId();
+    if (!guildId && !shownOwner.IsEmpty())
+        guildId = uint32(sCharacterCache->GetCharacterGuildIdByGuid(shownOwner));
+
+    uint64 const refund = GetHouseRefundAmount(holder, houseGuid, houseDatabaseId);
+
+    // Everyone inside is put out on the plot first: once the house is packed, Exit House finds no plot to put them on.
+    HouseInteriorMap::PutCharactersOut(neighborhood, plotIndex, houseDatabaseId, houseGuid);
 
     HousingMap::DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
     neighborhood->ReleasePlotByHouse(houseGuid, trans);
@@ -1152,17 +1204,46 @@ void NeighborhoodMgr::PackHouseForOwnerLoss(Neighborhood* neighborhood, uint8 pl
     if (!newCosmeticOwner.IsEmpty() || clearCosmeticOwner)
         SetHouseCosmeticOwner(holder, nullptr, houseGuid, houseDatabaseId, newCosmeticOwner, trans);
 
+    bool const paid = refund && IsLivingCharacter(refundRecipient);
+    if (paid)
+    {
+        MailDraft(HOUSE_PACKED_REFUND_MAIL_SUBJECT, HOUSE_PACKED_REFUND_MAIL_BODY)
+            .AddMoney(refund)
+            .SendMailTo(trans, MailReceiver(ObjectAccessor::FindConnectedPlayer(refundRecipient), refundRecipient.GetCounter()),
+                MailSender(MAIL_NORMAL, UI64LIT(0), MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED);
+    }
+
     neighborhood->RefreshMirrorDataForOnlineMembers();
 
-    // The active endeavor of the account's online characters moves off the packed house.
-    for (auto const& [accountId, session] : sWorld->GetAllSessions())
-        if (session && session->GetBattlenetAccountId() == bnetAccountId)
-            if (Player* player = session->GetPlayer(); player && player->IsInWorld())
-                player->UpdateInitiativeComponent();
+    // The house leaves the guild's list of member houses, as it does when a member relinquishes one.
+    if (Guild* guild = guildId ? sGuildMgr->GetGuildById(guildId) : nullptr)
+    {
+        WorldPackets::Housing::HousingSvcsGuildRemoveHouseNotification notification;
+        notification.House.HouseGUID = houseGuid;
+        notification.House.CosmeticOwnerGUID = shownOwner;
+        guild->BroadcastPacket(notification.Write());
+    }
 
-    TC_LOG_INFO("housing", "NeighborhoodMgr::PackHouseForOwnerLoss: house {} (database id {}) of Battle.net account {} is packed and plot {} of neighborhood '{}' is free; shown owner {}",
+    // The account's online characters move their active endeavor off the packed house, and their clients reload the
+    // housing data, as a relinquish asks the client that gave the house up to.
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+    {
+        if (!session || session->GetBattlenetAccountId() != bnetAccountId)
+            continue;
+
+        if (Player* player = session->GetPlayer(); player && player->IsInWorld())
+        {
+            player->UpdateInitiativeComponent();
+
+            WorldPackets::Housing::HousingSvcRequestPlayerReloadData reloadData;
+            session->SendPacket(reloadData.Write());
+        }
+    }
+
+    TC_LOG_INFO("housing", "NeighborhoodMgr::PackHouseForOwnerLoss: house {} (database id {}) of Battle.net account {} is packed and plot {} of neighborhood '{}' is free; shown owner {}; {} copper paid back to {}",
         houseGuid.ToString(), houseDatabaseId, bnetAccountId, plotIndex, neighborhood->GetName(),
-        clearCosmeticOwner ? std::string("none") : newCosmeticOwner.IsEmpty() ? std::string("unchanged") : newCosmeticOwner.ToString());
+        clearCosmeticOwner ? std::string("none") : newCosmeticOwner.IsEmpty() ? std::string("unchanged") : newCosmeticOwner.ToString(),
+        paid ? refund : UI64LIT(0), paid ? refundRecipient.ToString() : std::string("nobody"));
 }
 
 void NeighborhoodMgr::OnCharacterDeleted(ObjectGuid characterGuid, CharacterDatabaseTransaction trans)
@@ -1271,9 +1352,10 @@ void NeighborhoodMgr::OnCharacterDeleted(ObjectGuid characterGuid, CharacterData
             : cosmeticOwner;
         if (newOwner.IsEmpty())
         {
-            // Nobody left may own it there, so it is packed, as Blizzard Watch says a deleted owner's house is.
+            // Nobody left may own it there, so it is packed, as Blizzard Watch says a deleted owner's house is. Its
+            // refund goes to the character now shown as its owner, or to nobody when the account has none left.
             PackHouseForOwnerLoss(neighborhood, plotIndex, house.HouseGuid, house.DatabaseId, house.BnetAccountId,
-                anyCharacter, anyCharacter.IsEmpty(), trans);
+                anyCharacter, anyCharacter.IsEmpty(), anyCharacter, trans);
             continue;
         }
 
@@ -1317,15 +1399,67 @@ void NeighborhoodMgr::OnGuildMemberRemoved(uint32 guildId, ObjectGuid characterG
 
     // Players who leave or are removed from the guild lose the plot, and the house is packed up with its layout saved
     // (Wowhead and Blizzard Watch). A house in a guild neighborhood may only be owned by a guild member (the 12.1
-    // client's COSMETIC_OWNER_NOT_IN_GUILD). She stays its shown owner.
+    // client's COSMETIC_OWNER_NOT_IN_GUILD). She stays its shown owner, and its refund goes to her.
     bool const ownTransaction = !trans;
     if (ownTransaction)
         trans = CharacterDatabase.BeginTransaction();
 
     for (GuildHouse const& house : houses)
         PackHouseForOwnerLoss(house.HouseNeighborhood, house.PlotIndex, house.HouseGuid, house.DatabaseId, house.BnetAccountId,
-            ObjectGuid::Empty, false, trans);
+            ObjectGuid::Empty, false, characterGuid, trans);
 
     if (ownTransaction)
         CharacterDatabase.CommitTransaction(trans);
+}
+
+void NeighborhoodMgr::OnCharacterRemoved(ObjectGuid characterGuid, CharacterDatabaseTransaction trans)
+{
+    if (characterGuid.IsEmpty())
+        return;
+
+    // Her charter, if it was never finalized (a finalized charter's row is gone): its id is her guid counter, and only
+    // her guid can edit or finalize it, so every account that signed it could never sign another charter. It is
+    // dropped with its signatures, and each signer online is told, as a charter edit that drops signatures tells them.
+    uint64 const charterId = characterGuid.GetCounter();
+    std::vector<ObjectGuid> signers;
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER_SIGNATURES);
+    stmt->setUInt64(0, charterId);
+    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+    {
+        do
+            signers.push_back(ObjectGuid::Create<HighGuid::Player>(result->Fetch()[0].GetUInt64()));
+        while (result->NextRow());
+    }
+    NeighborhoodCharter::DeleteFromDB(charterId, trans);
+
+    ObjectGuid const charterGuid = ObjectGuid::Create<HighGuid::Housing>(0, 0, 0, charterId);
+    for (ObjectGuid const& signer : signers)
+    {
+        if (Player* signerPlayer = ObjectAccessor::FindConnectedPlayer(signer))
+        {
+            WorldPackets::Neighborhood::NeighborhoodCharterSignatureRemovedNotification removed;
+            removed.CharterGuid = charterGuid;
+            signerPlayer->SendDirectMessage(removed.Write());
+        }
+    }
+
+    // Her signatures on other charters, which would otherwise keep her Battle.net account from signing another one.
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_CHARTER_SIGNATURES_BY_SIGNER);
+    stmt->setUInt64(0, characterGuid.GetCounter());
+    trans->Append(stmt);
+
+    // Her roster entries and the invites naming her. OnCharacterDeleted has already passed on or packed every house she
+    // was shown as owner of, and the plots she held with them.
+    for (auto const& [neighborhoodGuid, neighborhood] : _neighborhoods)
+    {
+        if (neighborhood->RemoveDeletedCharacter(characterGuid, trans))
+            neighborhood->RefreshMirrorDataForOnlineMembers();
+
+        if (neighborhood->IsOwner(characterGuid))
+            TC_LOG_INFO("housing", "NeighborhoodMgr::OnCharacterRemoved: deleted {} still owns neighborhood '{}'; its owner is not changed",
+                characterGuid.ToString(), neighborhood->GetName());
+    }
+
+    TC_LOG_DEBUG("housing", "NeighborhoodMgr::OnCharacterRemoved: removed the charter, signatures, invites and roster entries of {} ({} signer(s) of her charter)",
+        characterGuid.ToString(), uint32(signers.size()));
 }

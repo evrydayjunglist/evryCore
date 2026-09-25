@@ -1023,6 +1023,14 @@ void CharacterDatabaseConnection::DoPrepareStatements()
         "DELETE FROM character_housing_ignored_neighborhood WHERE ownerGuid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_CHARACTER_HOUSING_BY_COSMETIC_OWNER,
         "SELECT guid, bnetAccountId, slot FROM character_housing WHERE cosmeticOwnerGuid = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_SEL_ACCOUNT_HOUSING_FIRST_HOUSE,
+        "SELECT purchaseTime FROM account_housing_first_house WHERE bnetAccountId = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_ACCOUNT_HOUSING_FIRST_HOUSE,
+        "INSERT IGNORE INTO account_housing_first_house (bnetAccountId, purchaseTime) VALUES (?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_CHARACTER_HOUSING_REFUND_AMOUNT,
+        "SELECT refundAmount FROM character_housing WHERE guid = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_DEL_NEIGHBORHOOD_CHARTER_SIGNATURES_BY_SIGNER,
+        "DELETE FROM neighborhood_charter_signatures WHERE signerGuid = ?", CONNECTION_ASYNC);
 }
 
 CharacterDatabaseConnection::CharacterDatabaseConnection(MySQLConnectionInfo& connInfo, ConnectionFlags connectionFlags) : MySQLConnection(connInfo, connectionFlags)

@@ -4142,7 +4142,7 @@ Housing.EnableBuyHouse = 1
 #
 #    Housing.EnableDeleteHouse
 #        Description: Players may give up (relinquish) a house, which packs it with its layout and
-#                     frees its plot, and may reset kiosk mode, which also removes a house.
+#                     frees its plot.
 #        Default:     1 - (Enabled)
 #                     0 - (Disabled)
 #

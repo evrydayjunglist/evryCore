@@ -1394,8 +1394,11 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     // 15873337, is the +30900 quest reward). Every other purchase costs the plot's price (the wiki: 1000 gold for a
     // second house; NeighborhoodPlot Cost is 10,000,000 copper on every district plot). An account that has any
     // house row, standing or packed, pays: buying back a packed first house costs the plot's price, as the owner
-    // chose, so buying and relinquishing cannot be repeated to gain anything.
-    uint64 const price = Housing::GetPurchasePrice(accountHouses.size(), plot->Cost);
+    // chose, so buying and relinquishing cannot be repeated to gain anything. The first house is also recorded for
+    // the account, so one that is gone does not make the account a first buyer again.
+    HousingDecorStore* decorStore = player->GetHousingDecorStore();
+    bool const firstHouse = decorStore && Housing::IsFirstHouse(decorStore->HasHadFirstHouse(), accountHouses.size());
+    uint64 const price = Housing::GetPurchasePrice(firstHouse, plot->Cost);
     if (!player->HasEnoughMoney(price))
     {
         WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
@@ -1460,8 +1463,9 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         return;
     }
 
-    // The plot, the money, the house and a new house's starter decor as one unit, so a crash cannot leave the plot
-    // taken without a house, or the money gone without either. An unpacked house brings its own decor.
+    // The plot, the money, the house and the first house's starter decor as one unit, so a crash cannot leave the plot
+    // taken without a house, or the money gone without either. The starter decor comes with the account's first
+    // house only; an unpacked house brings its own decor.
     neighborhood->ClearReservation(player->GetGUID());
     player->ModifyMoney(-static_cast<int64>(price));
     std::vector<Housing::AcquiredDecor> starterDecor;
@@ -1469,8 +1473,11 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
         neighborhood->AppendPlotClaim(claim, trans);
         player->SaveInventoryAndGoldToDB(trans);
-        if (!packedHouse)
+        if (firstHouse && !packedHouse)
+        {
             starterDecor = housing->PlaceStarterDecor(trans);
+            decorStore->RecordFirstHouse(trans);
+        }
         housing->SaveToDB(trans);
         CharacterDatabase.CommitTransaction(trans);
     }
@@ -2118,47 +2125,55 @@ void WorldSession::HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::Neigh
         return;
     }
 
-    // Find the plot by index — O(1) direct array access
-    ObjectGuid evictedPlayerGuid;
-    ObjectGuid plotGuid;
-    ObjectGuid evictedHouseGuid;
-    ObjectGuid evictedBnetAccountGuid;
-    uint64 evictedHouseDatabaseId = 0;
-    if (Neighborhood::PlotInfo const* plotInfo = neighborhood->GetPlotInfo(static_cast<uint8>(plotIndex)))
+    uint8 const plotIdx = static_cast<uint8>(plotIndex);
+    Neighborhood::PlotInfo const* plotInfo = plotIndex < MAX_NEIGHBORHOOD_PLOTS ? neighborhood->GetPlotInfo(plotIdx) : nullptr;
+    if (!plotInfo)
     {
-        evictedPlayerGuid = plotInfo->OwnerGuid;
-        plotGuid = plotInfo->PlotGuid;
-        evictedHouseGuid = plotInfo->HouseGuid;
-        evictedBnetAccountGuid = plotInfo->OwnerBnetGuid;
-        evictedHouseDatabaseId = plotInfo->HouseDatabaseId;
+        WorldPackets::Neighborhood::NeighborhoodEvictPlotResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_PLOT_NOT_FOUND);
+        response.NeighborhoodGuid = neighborhoodEvictPlot.NeighborhoodGuid;
+        SendPacket(response.Write());
+        return;
     }
 
-    HousingResult result = neighborhood->EvictPlayer(evictedPlayerGuid);
+    // The character evicted is the one whose roster entry holds the plot; the character shown as the house's owner can
+    // be another character of the same account.
+    ObjectGuid const evictedOwnerGuid = plotInfo->OwnerGuid;
+    ObjectGuid const plotGuid = plotInfo->PlotGuid;
+    ObjectGuid const evictedHouseGuid = plotInfo->HouseGuid;
+    uint64 const evictedHouseDatabaseId = plotInfo->HouseDatabaseId;
+    uint32 const evictedBnetAccountId = uint32(plotInfo->OwnerBnetGuid.GetCounter());
+    ObjectGuid evictedPlayerGuid = neighborhood->GetPlotHolder(plotIdx);
+    if (evictedPlayerGuid.IsEmpty())
+        evictedPlayerGuid = evictedOwnerGuid;
+
+    HousingResult const result = neighborhood->CheckEviction(player->GetGUID(), evictedPlayerGuid);
 
     WorldPackets::Neighborhood::NeighborhoodEvictPlotResponse response;
     response.Result = static_cast<uint8>(result);
     response.NeighborhoodGuid = neighborhoodEvictPlot.NeighborhoodGuid;
     SendPacket(response.Write());
 
-    // Send eviction notice to the evicted player and broadcast roster update
     if (result == HOUSING_RESULT_SUCCESS)
     {
-        uint8 plotIdx = static_cast<uint8>(plotIndex);
-
-        // Despawn all entities on the plot
-        if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
+        // The evicted house is packed, not deleted: "Your House Layout has been saved. Please purchase a new House to
+        // import it" (GlobalStrings HOUSING_BULLETINBOARD_EVICTED_CONFIRMATION_TEXT). That keeps its rooms, fixtures and
+        // placed decor whether or not anyone of its account is online, puts everyone inside it out on the plot, frees the
+        // plot and pays back what was paid for the house to the character shown as its owner, as a relinquish would.
+        // Freeing the plot takes its roster holder off the roster. When the plot had no roster holder, the character
+        // shown as the house's owner is taken off instead, unless she is the owner or holds another plot.
         {
-            housingMap->DespawnAllDecorForPlot(plotIdx);
-            housingMap->DespawnAllMeshObjectsForPlot(plotIdx);
-            housingMap->DespawnRoomForPlot(plotIdx);
-            housingMap->DespawnHouseForPlot(plotIdx);
-            housingMap->SetPlotOwnershipState(plotIdx, false);
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            sNeighborhoodMgr.PackHouseForOwnerLoss(neighborhood, plotIdx, evictedHouseGuid, evictedHouseDatabaseId,
+                evictedBnetAccountId, ObjectGuid::Empty, false, evictedOwnerGuid, trans);
+            neighborhood->EvictPlayer(evictedPlayerGuid, trans);
+            CharacterDatabase.CommitTransaction(trans);
         }
 
         // The character shown as the owner hears of the eviction when she is online.
-        if (!evictedPlayerGuid.IsEmpty())
+        if (!evictedOwnerGuid.IsEmpty())
         {
-            if (Player* evictedPlayer = ObjectAccessor::FindPlayer(evictedPlayerGuid))
+            if (Player* evictedPlayer = ObjectAccessor::FindPlayer(evictedOwnerGuid))
             {
                 WorldPackets::Neighborhood::NeighborhoodEvictPlotNotice notice;
                 notice.PlotId = plotIndex;
@@ -2168,55 +2183,18 @@ void WorldSession::HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::Neigh
             }
         }
 
-        // The house belongs to the account the plot names, and every online character of that account holds it,
-        // not only the one shown as its owner. Delete it through one of them, which marks the shared house deleted
-        // and takes it from the others, so none of them saves it back onto the freed plot. With nobody of the
-        // account online, delete its rows directly: Housing::DeleteFromDB clears the house, its decor, rooms and
-        // fixtures, keyed by the house's own id, which the plot carries.
-        Player* evictedHolder = nullptr;
-        if (!evictedHouseGuid.IsEmpty())
-        {
-            for (auto const& [accountId, session] : sWorld->GetAllSessions())
-            {
-                if (!session || session->GetBattlenetAccountGUID() != evictedBnetAccountGuid)
-                    continue;
-                if (Player* candidate = session->GetPlayer(); candidate && candidate->GetHousingByGuid(evictedHouseGuid))
-                {
-                    evictedHolder = candidate;
-                    break;
-                }
-            }
-        }
-
-        if (evictedHolder)
-            evictedHolder->DeleteHousing(evictedHouseGuid);
-        else if (evictedHouseDatabaseId)
-        {
-            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-            Housing::DeleteFromDB(evictedHouseDatabaseId, trans);
-            CharacterDatabase.CommitTransaction(trans);
-        }
-
-        // Neighborhood::EvictPlayer already sent the remaining members the new roster.
-
         // SMSG_NEIGHBORHOOD_EVICT_PLAYER (0x5C0000). The 12.0.7 client handler (case 6029312)
         // does not decode any field — it consumes the remaining bytes as a blob and then fires
         // three neighborhood-view refreshes (codes 2, 3, 1). It is a "the roster you are showing
         // is stale, rebuild it" notification, which is exactly the state after an eviction, so it
         // goes to everyone whose view just changed: the remaining members and the evicted player.
-        if (!evictedPlayerGuid.IsEmpty())
-        {
-            WorldPackets::Neighborhood::NeighborhoodEvictPlayerResponse evictNotification;
-            evictNotification.PlayerGuid = evictedPlayerGuid;
-            WorldPacket const* evictPkt = evictNotification.Write();
+        WorldPackets::Neighborhood::NeighborhoodEvictPlayerResponse evictNotification;
+        evictNotification.PlayerGuid = evictedPlayerGuid;
+        WorldPacket const* evictPkt = evictNotification.Write();
 
-            neighborhood->BroadcastPacket(evictPkt);
-            if (Player* evictedPlayer = ObjectAccessor::FindPlayer(evictedPlayerGuid))
-                evictedPlayer->SendDirectMessage(evictPkt);
-        }
-
-        // Refresh NeighborhoodMirrorData (Houses[] changed)
-        neighborhood->RefreshMirrorDataForOnlineMembers();
+        neighborhood->BroadcastPacket(evictPkt);
+        if (Player* evictedPlayer = ObjectAccessor::FindPlayer(evictedPlayerGuid))
+            evictedPlayer->SendDirectMessage(evictPkt);
     }
 
     TC_LOG_DEBUG("housing", "EvictPlayer result: {} for plot index {} in neighborhood {}",

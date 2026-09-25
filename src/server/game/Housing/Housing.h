@@ -261,9 +261,14 @@ public:
     // plot and house setting flags.
     void FillHouseEntry(WorldPackets::Housing::JamCliHouse& house) const;
 
-    // Editor mode
+    // Editor mode. Leaving a mode that was on also takes off the restrictions entering it put on the character, and
+    // only those: see RestoreEditModeRestrictions.
     void SetEditorMode(HousingEditorMode mode);
     HousingEditorMode GetEditorMode() const { return _editorMode; }
+    // Decor and layout editing pacify and silence the character and stop her actions (the flags retail sends with
+    // the editor mode). Ending that puts each of the three back to what her auras still need: a silence, pacify or
+    // stun she carries keeps working, and only what editing added comes off.
+    static void RestoreEditModeRestrictions(Player* player);
 
     // Interior state tracking (set by door script, cleared on leave)
     void SetInInterior(bool interior) { _isInInterior = interior; }
@@ -496,6 +501,11 @@ private:
     // Takes the house and the account's decor store together (std::scoped_lock orders them), so two threads never
     // wait on each other.
     std::scoped_lock<std::recursive_mutex, std::recursive_mutex> LockStateAndStore() const;
+
+    // Whether a piece at this map position stands inside the room it is placed in: the plot's room outside, turned
+    // and placed as HousingMap places it, or the house's own room inside, as HouseInteriorMap places it. Needs the
+    // state lock held.
+    HousingResult CheckDecorInsideRoom(ObjectGuid roomGuid, float x, float y, float z) const;
 
     Player* _owner;
     std::shared_ptr<PersistentState> _state;

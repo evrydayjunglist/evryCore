@@ -758,7 +758,10 @@ void HousingBlueprintMgr::Evaluate(HousingBlueprint const& blueprint, Housing co
     {
         uint32 const componentId = FixtureComponentId(fixture);
         totals.Fixtures.push_back(componentId);
-        if (!sExteriorComponentStore.LookupEntry(componentId))
+        // A piece the account may not use counts as missing, like one the client data does not have. The server keeps
+        // no record of unlocked pieces yet, so a usable piece is one usable without unlocking.
+        ExteriorComponentEntry const* component = sExteriorComponentStore.LookupEntry(componentId);
+        if (!component || !HousingMgr::IsExteriorComponentUnlockedByDefault(*component))
         {
             evaluation.Missing.Fixtures.push_back(componentId);
             evaluation.UnmetRequirementFlags |= HOUSING_BLUEPRINT_UNMET_MISSING_FIXTURE;
@@ -770,18 +773,17 @@ void HousingBlueprintMgr::Evaluate(HousingBlueprint const& blueprint, Housing co
         HouseExteriorWmoData const* wmoData = sHousingMgr.GetHouseExteriorWmoData(content.HouseType);
         if (!wmoData)
             evaluation.UnmetRequirementFlags |= HOUSING_BLUEPRINT_UNMET_MISSING_FIXTURE;
-        else if (target)
+        else
         {
+            // A house style the account may not use yet: one that needs unlocking, as there is no record of unlocks.
+            if (!HousingMgr::IsHouseTypeUnlockedByDefault(*wmoData))
+                evaluation.UnmetRequirementFlags |= HOUSING_BLUEPRINT_UNMET_HOUSE_TYPE_LOCKED;
+
             // HouseExteriorWMOData.Flags limit a house type to Horde and/or Alliance neighborhoods.
-            Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(target->GetNeighborhoodGuid());
-            int32 const faction = neighborhood ? neighborhood->GetFactionRestriction() : NEIGHBORHOOD_FACTION_NONE;
-            uint32 const factionFlags = uint32(wmoData->Flags) & (HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_HORDE_NEIGHBORHOODS | HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_ALLIANCE_NEIGHBORHOODS);
-            if (factionFlags)
+            if (target)
             {
-                bool const allowed = (faction == NEIGHBORHOOD_FACTION_HORDE && (factionFlags & HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_HORDE_NEIGHBORHOODS))
-                    || (faction == NEIGHBORHOOD_FACTION_ALLIANCE && (factionFlags & HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_ALLIANCE_NEIGHBORHOODS))
-                    || faction == NEIGHBORHOOD_FACTION_NONE;
-                if (!allowed)
+                Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(target->GetNeighborhoodGuid());
+                if (!HousingMgr::IsHouseTypeAllowedInNeighborhood(*wmoData, neighborhood ? neighborhood->GetFactionRestriction() : NEIGHBORHOOD_FACTION_NONE))
                     evaluation.UnmetRequirementFlags |= HOUSING_BLUEPRINT_UNMET_MISMATCHED_EXTERIOR_FACTION;
             }
         }
@@ -896,15 +898,21 @@ HousingResult HousingBlueprintMgr::ApplyLayout(Player* player, Housing* housing,
     {
         TakeDecorOut(housing, /*exterior*/ true, pool, result);
 
-        if (content.HouseType && sHousingMgr.GetHouseExteriorWmoData(content.HouseType) && content.HouseType != housing->GetHouseType())
+        // Evaluate refused a locked or wrong-faction style above; this only keeps the apply from ever setting one.
+        HouseExteriorWmoData const* houseType = content.HouseType ? sHousingMgr.GetHouseExteriorWmoData(content.HouseType) : nullptr;
+        Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(housing->GetNeighborhoodGuid());
+        if (houseType && HousingMgr::IsHouseTypeUnlockedByDefault(*houseType)
+            && HousingMgr::IsHouseTypeAllowedInNeighborhood(*houseType, neighborhood ? neighborhood->GetFactionRestriction() : NEIGHBORHOOD_FACTION_NONE)
+            && content.HouseType != housing->GetHouseType())
             housing->SetHouseType(content.HouseType);
         if (content.HouseSize >= HOUSING_FIXTURE_SIZE_ANY && content.HouseSize <= HOUSING_FIXTURE_SIZE_LARGE && content.HouseSize != housing->GetHouseSize())
             housing->SetHouseSize(content.HouseSize);
 
         std::vector<Housing::Fixture> fixtures;
         for (HousingBlueprintFixture const& fixture : content.Fixtures)
-            if (sExteriorComponentStore.LookupEntry(FixtureComponentId(fixture)))
-                fixtures.push_back({ fixture.FixturePointId, fixture.OptionId });
+            if (ExteriorComponentEntry const* component = sExteriorComponentStore.LookupEntry(FixtureComponentId(fixture)))
+                if (HousingMgr::IsExteriorComponentUnlockedByDefault(*component))
+                    fixtures.push_back({ fixture.FixturePointId, fixture.OptionId });
         housing->ReplaceFixtures(fixtures);
 
         if (content.HasHousePosition)

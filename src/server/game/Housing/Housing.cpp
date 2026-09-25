@@ -31,6 +31,7 @@
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "SpellAuraEffects.h"
 #include <algorithm>
 #include "RealmList.h"
 #include "WorldSession.h"
@@ -745,7 +746,13 @@ void Housing::DeleteFromDB(ObjectGuid::LowType houseDatabaseId, CharacterDatabas
 
 void Housing::SetEditorMode(HousingEditorMode mode)
 {
+    HousingEditorMode const previous = _editorMode;
     _editorMode = mode;
+
+    // Whatever ends an edit, the Done button, the door, a hearthstone or a map change, takes off what entering it put
+    // on her. Entering a mode puts its own restrictions back on after this.
+    if (previous != HOUSING_EDITOR_MODE_NONE && previous != mode && _owner)
+        RestoreEditModeRestrictions(_owner);
 
     // Sniff-verified: retail sends EditorMode via UPDATE_OBJECT alongside
     // UNIT_FLAG_PACIFIED, UNIT_FLAG2_NO_ACTIONS and SilencedSchoolMask=127.
@@ -755,6 +762,69 @@ void Housing::SetEditorMode(HousingEditorMode mode)
     if (_owner)
         _owner->SetHousingEditorModeUpdateField(mode == HOUSING_EDITOR_MODE_EXTERIOR_CUSTOMIZATION
             ? HOUSING_EDITOR_MODE_FIELD_FIXTURE_EDIT : static_cast<uint8>(mode));
+}
+
+/*static*/ void Housing::RestoreEditModeRestrictions(Player* player)
+{
+    if (!player)
+        return;
+
+    // The same rebuild the aura handlers do when one of these auras ends (AuraEffect::HandleAuraModPacify,
+    // HandleAuraModNoActions and HandleAuraModSilence).
+    if (!player->HasAuraType(SPELL_AURA_MOD_PACIFY) && !player->HasAuraType(SPELL_AURA_MOD_PACIFY_SILENCE))
+        player->RemoveUnitFlag(UNIT_FLAG_PACIFIED);
+
+    if (!player->HasAuraType(SPELL_AURA_MOD_NO_ACTIONS))
+        player->RemoveUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
+
+    int32 silencedSchoolMask = 0;
+    for (AuraEffect const* auraEffect : player->GetAuraEffectsByType(SPELL_AURA_MOD_SILENCE))
+        silencedSchoolMask |= auraEffect->GetMiscValue();
+    for (AuraEffect const* auraEffect : player->GetAuraEffectsByType(SPELL_AURA_MOD_PACIFY_SILENCE))
+        silencedSchoolMask |= auraEffect->GetMiscValue();
+    player->ReplaceAllSilencedSchoolMask(SpellSchoolMask(silencedSchoolMask));
+}
+
+HousingResult Housing::CheckDecorInsideRoom(ObjectGuid roomGuid, float x, float y, float z) const
+{
+    Position const point(x, y, z);
+    Position roomPos;
+    Position min, max;
+
+    if (IsExteriorDecorPlacement(roomGuid))
+    {
+        // Outside: the plot's room, which stands at the plot's room anchor (HousingMap::SpawnRoomForPlot).
+        Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(_state->NeighborhoodGuid);
+        if (!neighborhood || !sHousingMgr.GetPlotRoomAnchor(neighborhood->GetNeighborhoodMapID(), _state->PlotIndex, roomPos))
+            return HOUSING_RESULT_BOUNDS_FAILURE_PLOT;
+
+        sHousingMgr.GetRoomGeobox(sHousingMgr.GetBaseRoomEntryId(), min, max);
+        return HousingMgr::IsInsideRoomGeobox(roomPos, min, max, point, HOUSING_DECOR_BOUNDS_MARGIN)
+            ? HOUSING_RESULT_SUCCESS : HOUSING_RESULT_BOUNDS_FAILURE_PLOT;
+    }
+
+    // Inside: the room stands at the interior's origin plus its grid offset, a floor height per floor, turned a
+    // quarter turn per orientation step (HouseInteriorMap::SpawnRoomMeshObjects).
+    auto roomItr = _state->Rooms.find(roomGuid);
+    if (roomItr == _state->Rooms.end())
+        return HOUSING_RESULT_ROOM_NOT_FOUND;
+
+    Room const& room = roomItr->second;
+    float originX = HOUSE_INTERIOR_ARRIVAL_X;
+    float originY = HOUSE_INTERIOR_ARRIVAL_Y;
+    float originZ = HOUSE_INTERIOR_ARRIVAL_Z;
+    if (NeighborhoodMapData const* interior = sHousingMgr.GetNeighborhoodMapDataForWorldMap(HOUSE_INTERIOR_MAP_ID))
+    {
+        originX = interior->Origin[0];
+        originY = interior->Origin[1];
+        originZ = interior->Origin[2];
+    }
+
+    roomPos.Relocate(originX + float(room.GridX), originY + float(room.GridY),
+        originZ + float(room.FloorIndex) * HOUSE_INTERIOR_FLOOR_HEIGHT, float(room.Orientation) * float(M_PI / 2.0));
+    sHousingMgr.GetRoomGeobox(room.RoomEntryId, min, max);
+    return HousingMgr::IsInsideRoomGeobox(roomPos, min, max, point, HOUSING_DECOR_BOUNDS_MARGIN)
+        ? HOUSING_RESULT_SUCCESS : HOUSING_RESULT_BOUNDS_FAILURE_ROOM;
 }
 
 HousingResult Housing::Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount)
@@ -1139,6 +1209,10 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, float x, float y
     if (validationResult != HOUSING_RESULT_SUCCESS)
         return validationResult;
 
+    // The piece has to stand inside the room it is placed in: the plot's room outside, the house's room inside.
+    if (HousingResult bounds = CheckDecorInsideRoom(roomGuid, x, y, z); bounds != HOUSING_RESULT_SUCCESS)
+        return bounds;
+
     // The placed decor limit is the level's decor budget, checked below by weight: the client shows it as "Total Decor
     // Limit: used/budget" and says to "Level up your House to increase your Placement Budget" (GlobalStrings
     // HOUSING_DECOR_BUDGET_TOOLTIP_INDOOR). There is no separate count of pieces per level.
@@ -1400,11 +1474,13 @@ HousingResult Housing::MoveDecor(ObjectGuid decorGuid, float x, float y, float z
     if (itr == _state->PlacedDecorByGuid.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
-    // Route the move target through the same room/plot AABB check as placement so a
-    // moved item cannot be flung to arbitrary coordinates.
+    // A moved piece stays inside the room it was placed in, as a placement must be.
     HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(itr->second.DecorEntryId, Position(x, y, z), _state->Level);
     if (validationResult != HOUSING_RESULT_SUCCESS)
         return validationResult;
+
+    if (HousingResult bounds = CheckDecorInsideRoom(itr->second.RoomGuid, x, y, z); bounds != HOUSING_RESULT_SUCCESS)
+        return bounds;
 
     // A moved light must also honour the "two lights cannot overlap" rule.
     // Exclude the decor being moved so an in-place nudge never collides with itself.

@@ -69,7 +69,9 @@ class spell_housing_enter_house : public SpellScript
 {
     SpellCastResult CheckCast()
     {
-        Player* player = GetCaster()->ToPlayer();
+        // A door cast from the door itself has no unit caster; only a character walks in.
+        Unit* caster = GetCaster();
+        Player* player = caster ? caster->ToPlayer() : nullptr;
         if (!player)
             return SPELL_FAILED_DONT_REPORT;
 

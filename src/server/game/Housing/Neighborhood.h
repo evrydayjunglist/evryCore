@@ -175,6 +175,9 @@ public:
 
     // Management
     void SetName(std::string const& name);
+    // When the neighborhood's name was last changed by a player, for the rename cooldown. Kept in memory only.
+    time_t GetLastRenameTime() const { return _lastRenameTime; }
+    void SetLastRenameTime(time_t renameTime) { _lastRenameTime = renameTime; }
     void SetPublic(bool isPublic);
     HousingResult AddManager(ObjectGuid playerGuid);
     HousingResult RemoveManager(ObjectGuid playerGuid);
@@ -299,6 +302,7 @@ private:
     bool _isPublic = false;
     uint32 _createTime = 0;
     uint32 _guildId = 0;
+    time_t _lastRenameTime = 0;
 
     std::vector<Member> _members;
     std::array<PlotInfo, MAX_NEIGHBORHOOD_PLOTS> _plots{};

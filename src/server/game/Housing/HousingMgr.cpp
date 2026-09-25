@@ -953,19 +953,10 @@ HousingResult HousingMgr::ValidateDecorPlacement(uint32 decorId, Position const&
     if (!decorEntry)
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
-    // Validate position is finite / not obviously corrupt.
+    // Validate position is finite / not obviously corrupt. The client sends map coordinates, so whether the piece
+    // stands inside its room is checked by the house, which knows where its rooms stand.
     if (!pos.IsPositionValid())
         return HOUSING_RESULT_BOUNDS_FAILURE_ROOM;
-
-    // Reject placements outside the plausible room/plot AABB. Decor
-    // coordinates are local-space (room- or plot-relative), so a legitimate
-    // target is always close to the origin; anything beyond HOUSING_MAX_DECOR_
-    // LOCAL_EXTENT on any axis is arbitrary-coordinate GameObject spam and is
-    // refused with a bounds-failure the client renders as "out of bounds".
-    if (std::fabs(pos.GetPositionX()) > HOUSING_MAX_DECOR_LOCAL_EXTENT ||
-        std::fabs(pos.GetPositionY()) > HOUSING_MAX_DECOR_LOCAL_EXTENT ||
-        std::fabs(pos.GetPositionZ()) > HOUSING_MAX_DECOR_LOCAL_EXTENT)
-        return HOUSING_RESULT_BOUNDS_FAILURE_PLOT;
 
     // Validate house level meets decor requirements (if any level restriction exists)
     // For now, all decor is available at any level; future DB2 fields may add restrictions
@@ -980,6 +971,100 @@ HousingResult HousingMgr::ValidateDecorPlacement(uint32 decorId, Position const&
     // HouseDecor.Flags is not checked here.
 
     return HOUSING_RESULT_SUCCESS;
+}
+
+void HousingMgr::GetRoomGeobox(uint32 roomEntryId, Position& min, Position& max) const
+{
+    HouseRoomEntry const* room = sHouseRoomStore.LookupEntry(roomEntryId);
+    RoomWmoDataEntry const* wmoData = room && room->RoomWmoDataID ? sRoomWmoDataStore.LookupEntry(room->RoomWmoDataID) : nullptr;
+    if (wmoData)
+    {
+        min.Relocate(wmoData->BoundingBoxMinX, wmoData->BoundingBoxMinY, wmoData->BoundingBoxMinZ);
+        max.Relocate(wmoData->BoundingBoxMaxX, wmoData->BoundingBoxMaxY, wmoData->BoundingBoxMaxZ);
+        return;
+    }
+
+    min.Relocate(HOUSING_ROOM_FALLBACK_GEOBOX_MIN_X, HOUSING_ROOM_FALLBACK_GEOBOX_MIN_Y, HOUSING_ROOM_FALLBACK_GEOBOX_MIN_Z);
+    max.Relocate(HOUSING_ROOM_FALLBACK_GEOBOX_MAX_X, HOUSING_ROOM_FALLBACK_GEOBOX_MAX_Y, HOUSING_ROOM_FALLBACK_GEOBOX_MAX_Z);
+}
+
+/*static*/ bool HousingMgr::IsInsideRoomGeobox(Position const& room, Position const& min, Position const& max, Position const& point, float margin)
+{
+    if (!point.IsPositionValid())
+        return false;
+
+    // The point as the room sees it: moved to the room's origin and turned back by the room's facing.
+    float const dx = point.GetPositionX() - room.GetPositionX();
+    float const dy = point.GetPositionY() - room.GetPositionY();
+    float const c = std::cos(room.GetOrientation());
+    float const s = std::sin(room.GetOrientation());
+    float const localX = c * dx + s * dy;
+    float const localY = -s * dx + c * dy;
+    float const localZ = point.GetPositionZ() - room.GetPositionZ();
+
+    return localX >= min.GetPositionX() - margin && localX <= max.GetPositionX() + margin
+        && localY >= min.GetPositionY() - margin && localY <= max.GetPositionY() + margin
+        && localZ >= min.GetPositionZ() - margin && localZ <= max.GetPositionZ() + margin;
+}
+
+/*static*/ bool HousingMgr::IsHouseTypeUnlockedByDefault(HouseExteriorWmoData const& houseType)
+{
+    return (uint32(houseType.Flags) & HOUSE_EXTERIOR_WMO_FLAG_UNLOCKED_BY_DEFAULT) != 0;
+}
+
+/*static*/ bool HousingMgr::IsHouseTypeAllowedInNeighborhood(HouseExteriorWmoData const& houseType, int32 factionRestriction)
+{
+    uint32 const factionFlags = uint32(houseType.Flags)
+        & (HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_HORDE_NEIGHBORHOODS | HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_ALLIANCE_NEIGHBORHOODS);
+    if (!factionFlags)
+        return true;
+
+    switch (factionRestriction)
+    {
+        case NEIGHBORHOOD_FACTION_HORDE:
+            return (factionFlags & HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_HORDE_NEIGHBORHOODS) != 0;
+        case NEIGHBORHOOD_FACTION_ALLIANCE:
+            return (factionFlags & HOUSE_EXTERIOR_WMO_FLAG_ALLOWED_IN_ALLIANCE_NEIGHBORHOODS) != 0;
+        default:
+            return true;
+    }
+}
+
+/*static*/ bool HousingMgr::IsExteriorComponentUnlockedByDefault(ExteriorComponentEntry const& component)
+{
+    return (uint32(component.Flags) & HOUSING_FIXTURE_FLAG_UNLOCKED_BY_DEFAULT) != 0;
+}
+
+HousingResult HousingMgr::CheckNeighborhoodFoundingMap(uint32 neighborhoodMapId, uint32 team) const
+{
+    NeighborhoodMapData const* mapData = GetNeighborhoodMapData(neighborhoodMapId);
+    if (!mapData)
+        return HOUSING_RESULT_INVALID_MAP;
+
+    MapEntry const* worldMap = sMapStore.LookupEntry(uint32(mapData->MapID));
+    return CheckNeighborhoodFoundingFlags(worldMap && worldMap->IsNeighborhood(), mapData->Flags, team);
+}
+
+/*static*/ HousingResult HousingMgr::CheckNeighborhoodFoundingFlags(bool isDistrict, int32 neighborhoodMapFlags, uint32 team)
+{
+    if (!isDistrict)
+        return HOUSING_RESULT_INVALID_MAP;
+
+    uint32 const needed = team == HORDE ? NEIGHBORHOOD_MAP_FLAG_HORDE_PURCHASABLE
+        : team == ALLIANCE ? NEIGHBORHOOD_MAP_FLAG_ALLIANCE_PURCHASABLE : 0;
+    if (!needed || !(uint32(neighborhoodMapFlags) & needed))
+        return HOUSING_RESULT_INCORRECT_FACTION;
+
+    return HOUSING_RESULT_SUCCESS;
+}
+
+/*static*/ int32 HousingMgr::GetNeighborhoodFactionForTeam(uint32 team)
+{
+    if (team == HORDE)
+        return NEIGHBORHOOD_FACTION_HORDE;
+    if (team == ALLIANCE)
+        return NEIGHBORHOOD_FACTION_ALLIANCE;
+    return NEIGHBORHOOD_FACTION_NONE;
 }
 
 // --- 7 new DB2 Load functions ---

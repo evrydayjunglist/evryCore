@@ -556,132 +556,99 @@ void WorldSession::HandleHouseInteriorLeaveHouse(WorldPackets::Housing::HouseInt
     if (!player)
         return;
 
-    // A visitor may not own a house of their own, and this handler still has
-    // to let them leave. The character's own housing is used only to clear the
-    // editor mode and the interior state, and to give the fallback plot for the
-    // way out. Where the character comes out is taken from the HouseInteriorMap's stored
-    // source fields.
+    // The Leave House button takes her out of the house she stands in, and nowhere else: from outside an interior
+    // the request is refused, as Exit House is (spell_housing_exit_house). No capture shows the client sending it.
     HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(player->GetMap());
-    // The house being left, when the character's account owns it; a visitor has none here.
-    Housing* housing = interiorMap ? player->GetHousingByGuid(interiorMap->GetHouseGuid()) : player->GetHousing();
-    bool isVisit = interiorMap && !interiorMap->IsHouseOwner(player);
+    if (!interiorMap)
+    {
+        TC_LOG_DEBUG("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: {} is not inside a house", player->GetGUID().ToString());
+        return;
+    }
 
-    // Clear editing mode and interior state — only own housing carries that
-    // state (visitors can't be in edit mode in someone else's house anyway).
-    if (housing)
+    ObjectGuid const houseGuid = interiorMap->GetHouseGuid();
+
+    // Where she comes out: the plot of the house she is leaving, in that house's neighborhood. The interior remembers
+    // the plot it was entered from; the house's own plot is the fallback.
+    uint32 worldMapId = interiorMap->GetSourceNeighborhoodMapId();
+    uint8 plotIndex = interiorMap->GetSourcePlotIndex();
+    Neighborhood const* houseNeighborhood = nullptr;
+    for (Neighborhood const* candidate : sNeighborhoodMgr.GetAllNeighborhoods())
+    {
+        if (Neighborhood::PlotInfo const* plot = candidate->GetPlotInfoByHouse(houseGuid))
+        {
+            houseNeighborhood = candidate;
+            if (worldMapId == 0 || plotIndex == INVALID_PLOT_INDEX)
+            {
+                worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(candidate->GetNeighborhoodMapID());
+                plotIndex = plot->PlotIndex;
+            }
+            break;
+        }
+    }
+
+    if (worldMapId == 0)
+    {
+        TC_LOG_ERROR("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: house {} that {} is leaving is on no known neighborhood map",
+            houseGuid.ToString(), player->GetGUID().ToString());
+        return;
+    }
+
+    uint32 const neighborhoodMapId = sHousingMgr.GetNeighborhoodMapIdByWorldMap(worldMapId);
+
+    // The plot's arrival point, NeighborhoodPlot.TeleportPosition facing the cornerstone, which is where retail put
+    // her after Exit House (hbcd3 1456426), the same spot as after Teleport Home. Without plot data she comes out at
+    // the district's own entry point.
+    WorldLocation exit;
+    if (!sHousingMgr.GetPlotArrival(neighborhoodMapId, plotIndex, exit))
+    {
+        NeighborhoodMapData const* mapData = sHousingMgr.GetNeighborhoodMapData(neighborhoodMapId);
+        if (!mapData)
+        {
+            TC_LOG_ERROR("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: map {} of house {} has no neighborhood data, so {} stays inside",
+                worldMapId, houseGuid.ToString(), player->GetGUID().ToString());
+            return;
+        }
+
+        exit.WorldRelocate(worldMapId, mapData->Origin[0], mapData->Origin[1], mapData->Origin[2], 0.0f);
+        TC_LOG_WARN("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: no arrival point for plot {} on map {}, using the district's entry point",
+            plotIndex, worldMapId);
+    }
+
+    // Into the neighborhood instance where the house stands, as Exit House does, so she comes out beside the house and
+    // not on the same plot of another neighborhood.
+    Optional<uint32> instanceId;
+    if (houseNeighborhood && sHousingMgr.GetWorldMapIdByNeighborhoodMapId(houseNeighborhood->GetNeighborhoodMapID()) == worldMapId)
+    {
+        uint32 const neighborhoodInstanceId = uint32(houseNeighborhood->GetGuid().GetCounter());
+        if (sMapMgr->FindMap(worldMapId, neighborhoodInstanceId))
+            instanceId = neighborhoodInstanceId;
+    }
+
+    // No house status goes out here: retail sends it only in answer to the client's own request (every status
+    // reply in the captures follows a CMSG_HOUSING_HOUSE_STATUS).
+
+    // A refused teleport leaves her inside, so her house state stays as it is.
+    if (!player->TeleportTo(exit, TELE_TO_NONE, instanceId))
+    {
+        TC_LOG_ERROR("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: the teleport of {} out of house {} to map {} was refused",
+            player->GetGUID().ToString(), houseGuid.ToString(), worldMapId);
+        return;
+    }
+
+    // Her own editor state for this house, when her account owns it; a visitor has none. Leaving the map clears it
+    // too (HouseInteriorMap::RemovePlayerFromMap); this covers a teleport that waits for the end of her update.
+    if (Housing* housing = player->GetHousingByGuid(houseGuid))
     {
         housing->SetEditorMode(HOUSING_EDITOR_MODE_NONE);
         housing->SetInInterior(false);
     }
 
-    // 12.0.5: SMSG_HOUSE_INTERIOR_LEAVE_HOUSE_RESPONSE no longer exists.
-    // The client reacts to the PlayerHouseInfoComponent.CurrentHouse field being
-    // cleared via UPDATE_OBJECT on the player (SetCurrentHouse(Empty) elsewhere).
-    if (Player* p = GetPlayer())
-        p->SetCurrentHouse(ObjectGuid::Empty);
-
-    // No house status goes out here: retail sends it only in answer to the client's own request (every status
-    // reply in the captures follows a CMSG_HOUSING_HOUSE_STATUS).
-
-    // Teleport player back to the neighborhood map at the plot's visitor landing point.
-    // Try to use the HouseInteriorMap's stored source info first (most reliable),
-    // then fall back to resolving from the Housing object's neighborhood.
-    uint32 worldMapId = 0;
-    uint8 plotIndex = housing ? housing->GetPlotIndex() : INVALID_PLOT_INDEX;
-    uint32 neighborhoodMapId = 0;
-
-    // Preferred path: get the source neighborhood from the HouseInteriorMap itself
-    if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(player->GetMap()))
-    {
-        worldMapId = interiorMap->GetSourceNeighborhoodMapId();
-        plotIndex = interiorMap->GetSourcePlotIndex();
-    }
-
-    // The exit route belongs to the house being LEFT, which for a visitor is the
-    // host's house, not their own. `housing` is null for a player who owns none
-    // (Player::GetHousing returns nullptr on an empty _housings), so every use
-    // below has to tolerate that — resolving it here keeps the null in one place.
-    Housing const* exitHousing = housing;
-    if (isVisit && interiorMap)
-        exitHousing = interiorMap->GetOwnerHousing();
-
-    // Fallback: resolve from the Housing object's neighborhood GUID
-    if (worldMapId == 0 && exitHousing)
-    {
-        Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(exitHousing->GetNeighborhoodGuid(), player);
-        if (neighborhood)
-        {
-            neighborhoodMapId = neighborhood->GetNeighborhoodMapID();
-            worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhoodMapId);
-        }
-    }
-
-    // Last resort fallback
-    if (worldMapId == 0)
-    {
-        worldMapId = 2735; // Alliance Founder's Point default
-        TC_LOG_ERROR("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: Could not resolve neighborhood world map, "
-            "falling back to {}", worldMapId);
-    }
-
-    // Resolve the NeighborhoodMapId for the world map to look up plot data
-    if (neighborhoodMapId == 0)
-        neighborhoodMapId = sHousingMgr.GetNeighborhoodMapIdByWorldMap(worldMapId);
-
-    // Where she comes out: the plot's arrival point, NeighborhoodPlot.TeleportPosition facing the cornerstone, which is
-    // where retail put her after Exit House (hbcd3 1456426), the same spot as after Teleport Home.
-    float exitX = 0.0f, exitY = 0.0f, exitZ = 0.0f, exitO = 0.0f;
-    bool foundExitPoint = false;
-
-    if (neighborhoodMapId != 0 && plotIndex != INVALID_PLOT_INDEX)
-    {
-        if (NeighborhoodPlotData const* plot = sHousingMgr.GetPlot(neighborhoodMapId, plotIndex))
-        {
-            WorldLocation const arrival = HousingMgr::MakePlotArrival(*plot, worldMapId);
-            exitX = arrival.GetPositionX();
-            exitY = arrival.GetPositionY();
-            exitZ = arrival.GetPositionZ();
-            exitO = arrival.GetOrientation();
-            foundExitPoint = true;
-        }
-    }
-
-    if (!foundExitPoint)
-    {
-        // Last resort: use neighborhood center
-        NeighborhoodMapData const* mapData = sHousingMgr.GetNeighborhoodMapData(neighborhoodMapId);
-        if (mapData)
-        {
-            exitX = mapData->Origin[0];
-            exitY = mapData->Origin[1];
-            exitZ = mapData->Origin[2];
-        }
-        TC_LOG_WARN("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: No exit point for plotIndex {}, "
-            "using neighborhood center", plotIndex);
-    }
-
-    // Into the neighborhood instance where the house stands, as Exit House does (spell_housing_exit_house), so she
-    // comes out beside the house and not on the same plot of another neighborhood.
-    Optional<uint32> instanceId;
-    if (interiorMap)
-    {
-        for (Neighborhood const* candidate : sNeighborhoodMgr.GetAllNeighborhoods())
-        {
-            if (!candidate->GetPlotInfoByHouse(interiorMap->GetHouseGuid()))
-                continue;
-
-            uint32 const neighborhoodInstanceId = uint32(candidate->GetGuid().GetCounter());
-            if (sHousingMgr.GetWorldMapIdByNeighborhoodMapId(candidate->GetNeighborhoodMapID()) == worldMapId
-                && sMapMgr->FindMap(worldMapId, neighborhoodInstanceId))
-                instanceId = neighborhoodInstanceId;
-            break;
-        }
-    }
-
-    player->TeleportTo(worldMapId, exitX, exitY, exitZ, exitO, TELE_TO_NONE, instanceId);
+    // 12.0.5: SMSG_HOUSE_INTERIOR_LEAVE_HOUSE_RESPONSE no longer exists. The client reacts to
+    // PlayerHouseInfoComponent.CurrentHouse being cleared on her update.
+    player->SetCurrentHouse(ObjectGuid::Empty);
 
     TC_LOG_DEBUG("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: Player {} teleporting back to map {} at ({:.1f}, {:.1f}, {:.1f})",
-        player->GetGUID().ToString(), worldMapId, exitX, exitY, exitZ);
+        player->GetGUID().ToString(), worldMapId, exit.GetPositionX(), exit.GetPositionY(), exit.GetPositionZ());
 }
 
 // ============================================================
@@ -734,6 +701,22 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
         WorldPackets::Housing::HousingDecorSetEditModeResponse response;
         response.Result = HOUSING_RESULT_NOT_ON_OWNED_PLOT;
         SendPacket(response.Write());
+        return;
+    }
+
+    // Leaving an edit she is not in changes nothing on her: the flags she carries then belong to her auras, and an
+    // enemy's silence or pacify stays in force. Her own edit-mode aura may outlast an edit a map change ended.
+    if (!housingDecorSetEditMode.Active && housing->GetEditorMode() == HOUSING_EDITOR_MODE_NONE)
+    {
+        player->RemoveAurasDueToSpell(SPELL_HOUSING_EDIT_MODE_AURA);
+
+        WorldPackets::Housing::HousingDecorSetEditModeResponse response;
+        response.HouseGuid = housing->GetHouseGuid();
+        response.BNetAccountGuid = GetBattlenetAccountGUID();
+        response.Result = HOUSING_RESULT_SUCCESS;
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleHousingDecorSetEditMode: {} left decor edit mode without being in it", player->GetGUID().ToString());
         return;
     }
 
@@ -1021,10 +1004,8 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
             player->SendDirectMessage(auraUpdate.Write());
         }
 
-        // 2. Clear unit flags set during edit mode enter
-        player->RemoveUnitFlag(UNIT_FLAG_PACIFIED);
-        player->RemoveUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
-        player->ReplaceAllSilencedSchoolMask(SpellSchoolMask(0));
+        // 2. The unit flags entering set came off with the editor mode above (Housing::SetEditorMode), leaving any
+        // her auras still need.
 
         // 3. Send the edit mode response (empty AllowedEditor = exit)
         WorldPacket const* exitModePkt = response.Write();
@@ -1125,8 +1106,9 @@ void WorldSession::HandleHousingDecorPlace(WorldPackets::Housing::HousingDecorPl
 
     // On the interior map, if the client sends empty RoomGuid, assign to the first
     // visual room so the decor is tracked as interior and SpawnSingleInteriorDecor works.
+    bool const insideHouse = dynamic_cast<HouseInteriorMap*>(player->GetMap()) != nullptr;
     ObjectGuid roomGuid = housingDecorPlace.RoomGuid;
-    if (roomGuid.IsEmpty() && dynamic_cast<HouseInteriorMap*>(player->GetMap()))
+    if (roomGuid.IsEmpty() && insideHouse)
     {
         for (Housing::Room const* room : housing->GetRooms())
         {
@@ -1139,6 +1121,23 @@ void WorldSession::HandleHousingDecorPlace(WorldPackets::Housing::HousingDecorPl
         }
     }
 
+    // The room decides which budget pays for the piece and where it is checked, so it has to be a room of where she
+    // stands: on the plot, the plot's own room, whose GUID counter is the plot (hled1 791438 places on plot 13 in
+    // HouseRoomID 18 with counter 13); inside, one of this house's rooms.
+    bool const roomMatchesWhereSheIs = insideHouse
+        ? !Housing::IsExteriorDecorPlacement(roomGuid) && housing->GetRoom(roomGuid) != nullptr
+        : Housing::IsExteriorDecorPlacement(roomGuid) && (roomGuid.IsEmpty() || roomGuid.GetCounter() == housing->GetPlotIndex());
+    if (!roomMatchesWhereSheIs)
+    {
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_DECOR_PLACE: room {} is not a room {} can place in {}", roomGuid.ToString(),
+            player->GetGUID().ToString(), insideHouse ? "inside this house" : "on this plot");
+        WorldPackets::Housing::HousingDecorPlaceResponse response;
+        response.PlayerGuid = player->GetGUID();
+        response.DecorGuid = housingDecorPlace.DecorGuid;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_PLACEMENT_TARGET_INVALID);
+        SendPacket(response.Write());
+        return;
+    }
 
     HousingResult result = housing->PlaceDecorWithGuid(housingDecorPlace.DecorGuid,
         posX, posY, posZ, rotX, rotY, rotZ, rotW, roomGuid);
@@ -1230,8 +1229,17 @@ void WorldSession::HandleHousingDecorMove(WorldPackets::Housing::HousingDecorMov
 
     float scale = housingDecorMove.Scale;
 
-    HousingResult result = housing->MoveDecor(housingDecorMove.DecorGuid,
-        posX, posY, posZ, rotX, rotY, rotZ, rotW, scale);
+    // A piece moves where it stands: yard decor from the plot, a room's decor from inside the house. Its budget and its
+    // bounds are those of the room it was placed in.
+    HousingResult result = HOUSING_RESULT_DECOR_NOT_FOUND;
+    if (Housing::PlacedDecor const* placed = housing->GetPlacedDecor(housingDecorMove.DecorGuid))
+    {
+        bool const insideHouse = dynamic_cast<HouseInteriorMap*>(player->GetMap()) != nullptr;
+        if (Housing::IsExteriorDecorPlacement(placed->RoomGuid) == insideHouse)
+            result = HOUSING_RESULT_PLACEMENT_TARGET_INVALID;
+        else
+            result = housing->MoveDecor(housingDecorMove.DecorGuid, posX, posY, posZ, rotX, rotY, rotZ, rotW, scale);
+    }
 
     // Update decor MeshObject position + scale on the map
     if (result == HOUSING_RESULT_SUCCESS)
@@ -1945,6 +1953,18 @@ void WorldSession::HandleHousingFixtureSetCoreFixture(WorldPackets::Housing::Hou
         componentEntry->Type, componentEntry->Size, componentEntry->Flags,
         componentEntry->ParentComponentID, componentEntry->HouseExteriorWmoDataID);
 
+    // Only a piece the account may use. The server keeps no record of unlocked pieces yet, so that is a piece usable
+    // without unlocking (ExteriorComponent.Flags).
+    if (!HousingMgr::IsExteriorComponentUnlockedByDefault(*componentEntry))
+    {
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_SET_CORE_FIXTURE: {} has not unlocked exterior component {}",
+            player->GetGUID().ToString(), componentID);
+        WorldPackets::Housing::HousingFixtureSetCoreFixtureResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_UNCOLLECTED_EXTERIOR_FIXTURE);
+        SendPacket(response.Write());
+        return;
+    }
+
     std::vector<uint32> removedHookIDs;
     HousingResult result = housing->SelectFixtureOption(componentID, 0, &removedHookIDs);
 
@@ -1952,12 +1972,9 @@ void WorldSession::HandleHousingFixtureSetCoreFixture(WorldPackets::Housing::Hou
     response.Result = static_cast<uint8>(result);
     SendPacket(response.Write());
 
+    // Using a piece does not add it to the account's collection: no capture shows a collection update after an edit.
     if (result == HOUSING_RESULT_SUCCESS)
     {
-        WorldPackets::Housing::AccountExteriorFixtureCollectionUpdate collectionUpdate;
-        collectionUpdate.AddSingle(componentID);
-        SendPacket(collectionUpdate.Write());
-
         // Respawn house visuals so the new fixture is visible immediately.
         // DespawnHouseForPlot removes ALL MeshObjects (house + decor), so we
         // must also respawn decor after rebuilding the house structure.
@@ -2016,6 +2033,14 @@ void WorldSession::HandleHousingFixtureCreateFixture(WorldPackets::Housing::Hous
     {
         TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: hook {} or component {} is not in the client data", hookID, componentID);
         return reply(HOUSING_RESULT_FIXTURE_NOT_FOUND);
+    }
+
+    // Only a piece the account may use; see HandleHousingFixtureSetCoreFixture.
+    if (!HousingMgr::IsExteriorComponentUnlockedByDefault(*compEntry))
+    {
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_CREATE_FIXTURE: {} has not unlocked exterior component {}",
+            player->GetGUID().ToString(), componentID);
+        return reply(HOUSING_RESULT_UNCOLLECTED_EXTERIOR_FIXTURE);
     }
 
     // The exterior's pieces stand on the neighborhood map, and the piece the client names must be the one of this
@@ -2310,6 +2335,33 @@ void WorldSession::HandleHousingFixtureSetHouseType(WorldPackets::Housing::Housi
         return;
     }
 
+    // Only a style the account may use: the server keeps no record of unlocked styles yet, so a style usable without
+    // unlocking (HouseExteriorWmoData.Flags; the two treehouses and two Westfall barns need unlocking in 12.1).
+    if (!HousingMgr::IsHouseTypeUnlockedByDefault(*wmoData))
+    {
+        WorldPackets::Housing::HousingFixtureSetHouseTypeResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_UNCOLLECTED_HOUSE_TYPE);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_SET_HOUSE_TYPE HouseGuid: {}, WmoDataID: {} REJECTED (not unlocked)",
+            housingFixtureSetHouseType.HouseGuid.ToString(), wmoDataID);
+        return;
+    }
+
+    // And one this neighborhood's faction allows ("This House Exterior Type isn't allowed in the current
+    // Neighborhood", GlobalStrings ERR_HOUSING_RESULT_EXTERIOR_TYPE_NEIGHBORHOOD_MISMATCH).
+    Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(housing->GetNeighborhoodGuid());
+    if (!HousingMgr::IsHouseTypeAllowedInNeighborhood(*wmoData, neighborhood ? neighborhood->GetFactionRestriction() : NEIGHBORHOOD_FACTION_NONE))
+    {
+        WorldPackets::Housing::HousingFixtureSetHouseTypeResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_EXTERIOR_TYPE_NEIGHBORHOOD_MISMATCH);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_SET_HOUSE_TYPE HouseGuid: {}, WmoDataID: {} REJECTED (not allowed in this neighborhood)",
+            housingFixtureSetHouseType.HouseGuid.ToString(), wmoDataID);
+        return;
+    }
+
     // Reject if already that type
     if (wmoDataID == housing->GetHouseType())
     {
@@ -2349,10 +2401,7 @@ void WorldSession::HandleHousingFixtureSetHouseType(WorldPackets::Housing::Housi
     response.HouseExteriorTypeID = wmoDataID;
     SendPacket(response.Write());
 
-    // Notify account of house type collection update
-    WorldPackets::Housing::AccountHouseTypeCollectionUpdate collectionUpdate;
-    collectionUpdate.AddSingle(wmoDataID);
-    SendPacket(collectionUpdate.Write());
+    // Using a style does not add it to the account's collection: no capture shows a collection update after an edit.
 
     // Sniff-verified: UPDATE_OBJECT follows the response, carrying updated MeshObject
     // data for the new house type. Send inline so client gets it immediately.
@@ -2390,23 +2439,22 @@ void WorldSession::HandleHousingRoomSetLayoutEditMode(WorldPackets::Housing::Hou
         return;
     }
 
+    // Leaving layout edit only undoes what layout edit did: out of it, the flags belong to her auras and stay.
+    bool const wasInLayoutEdit = housing->GetEditorMode() == HOUSING_EDITOR_MODE_LAYOUT;
     housing->SetEditorMode(housingRoomSetLayoutEditMode.Active ? HOUSING_EDITOR_MODE_LAYOUT : HOUSING_EDITOR_MODE_NONE);
 
     // Sniff-verified: retail sets UNIT_FLAG_PACIFIED, UNIT_FLAG2_NO_ACTIONS,
     // and SilencedSchoolMask=127 during layout edit mode. These prevent casting/actions
-    // and are included in the same UpdateObject that carries EditorMode.
+    // and are included in the same UpdateObject that carries EditorMode. Leaving takes them off in
+    // Housing::SetEditorMode, keeping whatever her auras still need.
     if (housingRoomSetLayoutEditMode.Active)
     {
         player->SetUnitFlag(UNIT_FLAG_PACIFIED);
         player->SetUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
         player->ReplaceAllSilencedSchoolMask(SPELL_SCHOOL_MASK_ALL);
     }
-    else
-    {
-        player->RemoveUnitFlag(UNIT_FLAG_PACIFIED);
-        player->RemoveUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
-        player->ReplaceAllSilencedSchoolMask(SpellSchoolMask(0));
-    }
+    else if (!wasInLayoutEdit)
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_ROOM_SET_LAYOUT_EDIT_MODE: {} left layout edit without being in it", player->GetGUID().ToString());
 
     // Play/remove the plot boundary spell visual on the player's plot AT.
     // Sniff-verified: the glowing border decal is visible in ALL edit modes (decor, fixture, room).
@@ -3307,6 +3355,24 @@ void WorldSession::HandleHousingSvcsGuildCreateNeighborhood(WorldPackets::Housin
         return;
     }
 
+    // A guild has one neighborhood; a new guild master does not get a second one.
+    if (sNeighborhoodMgr.GetNeighborhoodByGuildId(guild->GetId()))
+    {
+        refuse(HOUSING_RESULT_GENERIC_FAILURE);
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_GUILD_CREATE_NEIGHBORHOOD: guild {} already has a neighborhood", guild->GetId());
+        return;
+    }
+
+    // The client names the district; only one the guild master's faction may found a neighborhood in is taken.
+    if (HousingResult mapCheck = sHousingMgr.CheckNeighborhoodFoundingMap(housingSvcsGuildCreateNeighborhood.NeighborhoodTypeID, player->GetTeam());
+        mapCheck != HOUSING_RESULT_SUCCESS)
+    {
+        refuse(mapCheck);
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_GUILD_CREATE_NEIGHBORHOOD: {} may not found a neighborhood on NeighborhoodMap {} (result {})",
+            player->GetGUID().ToString(), housingSvcsGuildCreateNeighborhood.NeighborhoodTypeID, uint32(mapCheck));
+        return;
+    }
+
     // The client also refuses a guild over a size limit ("You exceed the maximum guild member limit. Please create a
     // Private Neighborhood.", GlobalStrings HOUSING_CREATENEIGHBORHOOD_ERROR_OVERSIZED_GUILD); no source gives the
     // number, so no limit is applied here.
@@ -3607,7 +3673,14 @@ void WorldSession::HandleHousingSvcsPlayerViewHousesByBnetAccount(WorldPackets::
         return;
 
     // Find all neighborhoods where the queried BNet account has a plot (owns a house)
-    std::vector<Neighborhood*> neighborhoods = sNeighborhoodMgr.GetNeighborhoodsByBnetAccount(housingSvcsPlayerViewHousesByBnetAccount.BnetAccountGuid);
+    ObjectGuid const queriedAccount = housingSvcsPlayerViewHousesByBnetAccount.BnetAccountGuid;
+    std::vector<Neighborhood*> neighborhoods = sNeighborhoodMgr.GetNeighborhoodsByBnetAccount(queriedAccount);
+
+    // An account's houses name its characters, so they are shown only to the account itself and to a friend of one
+    // of those characters, the same friendship the friends' neighborhoods list uses. Anyone else learns nothing,
+    // which is also what an account without a house gives: Battle.net account GUIDs are numbers that can be counted.
+    PlayerSocial* social = player->GetSocial();
+    bool allowed = queriedAccount == GetBattlenetAccountGUID();
 
     WorldPackets::Housing::HousingSvcsPlayerViewHousesResponse response;
     response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
@@ -3618,11 +3691,20 @@ void WorldSession::HandleHousingSvcsPlayerViewHousesByBnetAccount(WorldPackets::
             // Only the queried account's own houses. Without the second condition this would return every occupied
             // plot in every neighborhood that account lives in: the full roster of its neighbours, house GUID and
             // owner GUID included.
-            if (!plot.IsOccupied() || plot.OwnerBnetGuid != housingSvcsPlayerViewHousesByBnetAccount.BnetAccountGuid)
+            if (!plot.IsOccupied() || plot.OwnerBnetGuid != queriedAccount)
                 continue;
+            if (social && !plot.OwnerGuid.IsEmpty() && social->HasFriend(plot.OwnerGuid))
+                allowed = true;
             WorldPackets::Housing::JamCliHouse& house = response.Houses.emplace_back();
             neighborhood->FillPlotHouseEntry(plot, house);
         }
+    }
+
+    if (!allowed)
+    {
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_PLAYER_VIEW_HOUSES_BY_BNET_ACCOUNT: {} is not a friend of account {}",
+            player->GetGUID().ToString(), queriedAccount.ToString());
+        response.Houses.clear();
     }
     SendPacket(response.Write());
 
@@ -4196,8 +4278,41 @@ void WorldSession::HandleHousingSvcsGetHouseFinderNeighborhood(WorldPackets::Hou
         return;
 
     Neighborhood const* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(housingSvcsGetHouseFinderNeighborhood.NeighborhoodGuid, player);
-    if (!neighborhood)
+
+    // A neighborhood's houses and residents are shown to anyone for a public neighborhood, and for a private one only
+    // to who already knows it: its members, a member of the guild it belongs to, a character invited to it, one whose
+    // account has a house there, a friend of a resident (the friends' neighborhoods list shows those), or a character
+    // standing in it. A private neighborhood's GUID is a counter, so without this anyone could list every one of
+    // them. A refused request gets the same answer as a neighborhood that does not exist.
+    auto mayView = [&](Neighborhood const& candidate)
     {
+        if (candidate.IsPublic() || candidate.IsMember(player->GetGUID()) || candidate.HasPendingInvite(player->GetGUID()))
+            return true;
+
+        // A guild's neighborhood is known to that guild's members.
+        if (candidate.GetGuildId() != 0 && player->GetGuildId() == candidate.GetGuildId())
+            return true;
+
+        if (HousingMap const* housingMap = dynamic_cast<HousingMap const*>(player->GetMap()))
+            if (housingMap->GetNeighborhood() == &candidate)
+                return true;
+
+        PlayerSocial* social = player->GetSocial();
+        for (auto const& plot : candidate.GetPlots())
+        {
+            if (plot.IsOwnedByAccount(GetBattlenetAccountGUID()))
+                return true;
+            if (social && plot.IsOccupied() && !plot.OwnerGuid.IsEmpty() && social->HasFriend(plot.OwnerGuid))
+                return true;
+        }
+        return false;
+    };
+
+    if (!neighborhood || !mayView(*neighborhood))
+    {
+        if (neighborhood)
+            TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_GET_HOUSE_FINDER_NEIGHBORHOOD: {} may not view private neighborhood {}",
+                player->GetGUID().ToString(), neighborhood->GetGuid().ToString());
         WorldPackets::Housing::HousingSvcsGetHouseFinderNeighborhoodResponse response;
         response.Result = static_cast<uint8>(HOUSING_RESULT_NEIGHBORHOOD_NOT_FOUND);
         SendPacket(response.Write());
@@ -5087,8 +5202,20 @@ void WorldSession::HandleBulkRefund(WorldPackets::Housing::BulkRefund const& bul
     TC_LOG_DEBUG("housing", "CMSG_BULK_REFUND Player: {} DecorGUIDs: {}",
         player->GetGUID().ToString(), bulkRefund.DecorGUIDs.size());
 
-    Housing* housing = player->GetAccountCatalogHousing();
-    if (!housing)
+    // The house she stands in or on, as for every other decor edit, and only from where she may edit it: a refund
+    // takes placed pieces out of the house.
+    Housing* housing = player->GetHousing();
+    if (!housing || !PlayerCanEditHousing(player, housing))
+    {
+        TC_LOG_DEBUG("housing", "CMSG_BULK_REFUND: {} is not in or on a house of her account", player->GetGUID().ToString());
+        WorldPackets::Housing::BulkRefundResponse response;
+        response.Result = static_cast<uint8>(BULK_REFUND_RESULT_INVALID_REQUEST);
+        SendPacket(response.Write());
+        return;
+    }
+
+    // Too many decor edits from this session too quickly are refused, as for a place or a move.
+    if (!CheckHousingDecorThrottle())
     {
         WorldPackets::Housing::BulkRefundResponse response;
         response.Result = static_cast<uint8>(BULK_REFUND_RESULT_INVALID_REQUEST);
@@ -5134,8 +5261,10 @@ void WorldSession::HandleBulkRefund(WorldPackets::Housing::BulkRefund const& bul
 
     // All GUIDs validated — proceed with refund.
     // Each decor is removed and returned to catalog (same as individual RemoveDecor).
-    uint8 plotIndex = housing->GetPlotIndex();
-    uint32 refundedCount = 0;
+    uint8 const plotIndex = housing->GetPlotIndex();
+    ObjectGuid const houseGuid = housing->GetHouseGuid();
+    ObjectGuid const neighborhoodGuid = housing->GetNeighborhoodGuid();
+    std::vector<ObjectGuid> refunded;
 
     for (ObjectGuid const& decorGuid : bulkRefund.DecorGUIDs)
     {
@@ -5147,14 +5276,32 @@ void WorldSession::HandleBulkRefund(WorldPackets::Housing::BulkRefund const& bul
             continue;
         }
 
-        // Despawn the decor entity from the map
-        if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-            housingMap->DespawnDecorItem(plotIndex, decorGuid);
-        else if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(player->GetMap()))
-            interiorMap->DespawnDecorItem(decorGuid);
-
-        ++refundedCount;
+        refunded.push_back(decorGuid);
     }
+
+    // Take the pieces down from every loaded copy of the house, not only the map she stands on: the plot is on a
+    // neighborhood map others are watching, and the interior instance may hold visitors. Session packets are handled
+    // between map updates, so touching another map here is safe.
+    if (!refunded.empty())
+    {
+        sMapMgr->DoForAllMaps([&](Map* map)
+        {
+            if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(map))
+            {
+                if (interiorMap->GetHouseGuid() == houseGuid)
+                    for (ObjectGuid const& decorGuid : refunded)
+                        interiorMap->DespawnDecorItem(decorGuid);
+                return;
+            }
+
+            if (HousingMap* housingMap = dynamic_cast<HousingMap*>(map))
+                if (housingMap->GetNeighborhood() && housingMap->GetNeighborhood()->GetGuid() == neighborhoodGuid)
+                    for (ObjectGuid const& decorGuid : refunded)
+                        housingMap->DespawnDecorItem(plotIndex, decorGuid);
+        });
+    }
+
+    uint32 const refundedCount = uint32(refunded.size());
 
     // Send single batch update to client after all removals
     if (refundedCount > 0 && GetBattlenetAccount().IsHousingDecorStorageSent())

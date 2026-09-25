@@ -1301,6 +1301,10 @@ bool HouseInteriorMap::IsExitDoorDecor(Housing::PlacedDecor const& decor)
 
 void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& decor, ObjectGuid houseGuid)
 {
+    // A piece stands in the house once: a copy still standing from before goes first.
+    if (_decorGuidToObjGuid.contains(decor.Guid))
+        DespawnDecorItem(decor.Guid);
+
     // If RoomGuid is empty, the decor was placed without room association.
     // This can happen when placed via the interior editor before room entities existed.
     // Skip truly exterior decor, but allow interior-placed decor through.
@@ -1310,10 +1314,6 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
             decor.Guid.ToString());
         return;
     }
-
-    // Already spawned?
-    if (_decorGuidToObjGuid.count(decor.Guid))
-        return;
 
     // The exit door's piece is the door's own decor entity, which the exit door code places.
     if (IsExitDoorDecor(decor))
@@ -1590,14 +1590,10 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
     if (preloadHousing && IsHouseOwner(player))
     {
-        // Clear exterior fixture edit mode that persists across map transfer
+        // An edit mode carried across the map transfer ends here. Ending it takes off only what the edit put on her
+        // (Housing::SetEditorMode), so a silence or pacify she brings in stays.
         if (preloadHousing->GetEditorMode() != HOUSING_EDITOR_MODE_NONE)
-        {
             preloadHousing->SetEditorMode(HOUSING_EDITOR_MODE_NONE);
-            player->RemoveUnitFlag(UNIT_FLAG_PACIFIED);
-            player->RemoveUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
-            player->ReplaceAllSilencedSchoolMask(SpellSchoolMask(0));
-        }
 
         preloadHousing->SetInInterior(true);
 

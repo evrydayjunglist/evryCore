@@ -16,6 +16,7 @@
  */
 
 #include "tc_catch2.h"
+#include "DB2Structure.h"
 #include "Housing.h"
 #include "HousingDefines.h"
 #include "HousingMgr.h"
@@ -220,5 +221,82 @@ TEST_CASE("Who may buy a plot in a neighborhood", "[Housing][Neighborhood]")
         REQUIRE(Neighborhood::IsFactionAllowed(true, NEIGHBORHOOD_FACTION_HORDE, HORDE));
         REQUIRE_FALSE(Neighborhood::IsFactionAllowed(true, NEIGHBORHOOD_FACTION_HORDE, ALLIANCE));
         REQUIRE_FALSE(Neighborhood::IsFactionAllowed(true, NEIGHBORHOOD_FACTION_ALLIANCE, HORDE));
+    }
+}
+
+TEST_CASE("House styles and exterior pieces a house may use", "[Housing][Fixtures]")
+{
+    auto makeHouseType = [](uint32 id, int32 flags)
+    {
+        HouseExteriorWmoData houseType;
+        houseType.ID = id;
+        houseType.Flags = flags;
+        return houseType;
+    };
+
+    // HouseExteriorWmoData.Flags in the 12.1 client: Human House 5, Orc House 3, the two treehouses and the two
+    // Westfall barns 14.
+    HouseExteriorWmoData const human = makeHouseType(9, 5);
+    HouseExteriorWmoData const orc = makeHouseType(87, 3);
+    HouseExteriorWmoData const treehouse = makeHouseType(166, 14);
+
+    SECTION("Styles that need unlocking are refused while the server keeps no record of unlocks")
+    {
+        REQUIRE(HousingMgr::IsHouseTypeUnlockedByDefault(human));
+        REQUIRE(HousingMgr::IsHouseTypeUnlockedByDefault(orc));
+        REQUIRE_FALSE(HousingMgr::IsHouseTypeUnlockedByDefault(treehouse));
+    }
+
+    SECTION("A style stands only in the neighborhoods its faction bits allow")
+    {
+        REQUIRE(HousingMgr::IsHouseTypeAllowedInNeighborhood(orc, NEIGHBORHOOD_FACTION_HORDE));
+        REQUIRE_FALSE(HousingMgr::IsHouseTypeAllowedInNeighborhood(orc, NEIGHBORHOOD_FACTION_ALLIANCE));
+        REQUIRE(HousingMgr::IsHouseTypeAllowedInNeighborhood(human, NEIGHBORHOOD_FACTION_ALLIANCE));
+        REQUIRE_FALSE(HousingMgr::IsHouseTypeAllowedInNeighborhood(human, NEIGHBORHOOD_FACTION_HORDE));
+        // The treehouse carries both bits, and a neighborhood without a restriction takes any style.
+        REQUIRE(HousingMgr::IsHouseTypeAllowedInNeighborhood(treehouse, NEIGHBORHOOD_FACTION_HORDE));
+        REQUIRE(HousingMgr::IsHouseTypeAllowedInNeighborhood(human, NEIGHBORHOOD_FACTION_NONE));
+    }
+
+    SECTION("An exterior piece is usable when it is unlocked by default")
+    {
+        // ExteriorComponent.Flags in the 12.1 client: Stucco 141 is 3 and Stonework 142 is 2; 7254, a default part of
+        // the Autumnal Westfall Barn Facade, is 1.
+        ExteriorComponentEntry stucco{};
+        stucco.ID = 141;
+        stucco.Flags = 3;
+        ExteriorComponentEntry stonework{};
+        stonework.ID = 142;
+        stonework.Flags = 2;
+        ExteriorComponentEntry barnPart{};
+        barnPart.ID = 7254;
+        barnPart.Flags = 1;
+        REQUIRE(HousingMgr::IsExteriorComponentUnlockedByDefault(stucco));
+        REQUIRE(HousingMgr::IsExteriorComponentUnlockedByDefault(stonework));
+        REQUIRE_FALSE(HousingMgr::IsExteriorComponentUnlockedByDefault(barnPart));
+    }
+}
+
+TEST_CASE("Who may found a neighborhood in which district", "[Housing][Neighborhood]")
+{
+    // NeighborhoodMap.Flags in the 12.1 client: Founder's Point 5, Razorwind Shores 6, the house interior 3.
+    SECTION("A district takes the faction its flags let buy there")
+    {
+        REQUIRE(HousingMgr::CheckNeighborhoodFoundingFlags(true, 6, HORDE) == HOUSING_RESULT_SUCCESS);
+        REQUIRE(HousingMgr::CheckNeighborhoodFoundingFlags(true, 6, ALLIANCE) == HOUSING_RESULT_INCORRECT_FACTION);
+        REQUIRE(HousingMgr::CheckNeighborhoodFoundingFlags(true, 5, ALLIANCE) == HOUSING_RESULT_SUCCESS);
+        REQUIRE(HousingMgr::CheckNeighborhoodFoundingFlags(true, 5, HORDE) == HOUSING_RESULT_INCORRECT_FACTION);
+    }
+
+    SECTION("A row that is not a district is refused whatever its flags")
+    {
+        REQUIRE(HousingMgr::CheckNeighborhoodFoundingFlags(false, 3, HORDE) == HOUSING_RESULT_INVALID_MAP);
+        REQUIRE(HousingMgr::CheckNeighborhoodFoundingFlags(false, 3, ALLIANCE) == HOUSING_RESULT_INVALID_MAP);
+    }
+
+    SECTION("The neighborhood takes its founder's faction")
+    {
+        REQUIRE(HousingMgr::GetNeighborhoodFactionForTeam(HORDE) == NEIGHBORHOOD_FACTION_HORDE);
+        REQUIRE(HousingMgr::GetNeighborhoodFactionForTeam(ALLIANCE) == NEIGHBORHOOD_FACTION_ALLIANCE);
     }
 }

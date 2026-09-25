@@ -968,10 +968,9 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                         p->ClearUpdateMask(false);
                     }
 
-                    // "OFF" push: clear them and flush again.
-                    p->RemoveUnitFlag(UNIT_FLAG_PACIFIED);
-                    p->RemoveUnitFlag2(UNIT_FLAG2_NO_ACTIONS);
-                    p->ReplaceAllSilencedSchoolMask(SpellSchoolMask(0));
+                    // "OFF" push: put the three back to what her auras need and flush again. A silence, pacify or
+                    // stun she brought onto the plot keeps working.
+                    Housing::RestoreEditModeRestrictions(p);
                     p->BuildUpdateChangesMask();
                     {
                         UpdateData offUpdate(p->GetMapId());
@@ -2913,6 +2912,14 @@ GameObject* HousingMap::FindHouseDoorInReach(Player const* player, uint32 goober
 
 bool HousingMap::SpawnDecorItem(uint8 plotIndex, Housing::PlacedDecor const& decor, ObjectGuid houseGuid)
 {
+    // A piece stands on the map once: a copy still standing from before, which a missed take-down would leave behind,
+    // goes first.
+    if (_decorGuidToGoGuid.contains(decor.Guid))
+    {
+        auto plotItr = _decorGuidToPlotIndex.find(decor.Guid);
+        DespawnDecorItem(plotItr != _decorGuidToPlotIndex.end() ? plotItr->second : plotIndex, decor.Guid);
+    }
+
     HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decor.DecorEntryId);
     if (!decorData)
     {

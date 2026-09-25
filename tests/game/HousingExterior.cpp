@@ -186,3 +186,77 @@ TEST_CASE("A dragged house's placement is checked against its room and turns the
     REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(std::nanf(""), 0.0f, 0.0f, 0.0f)));
     REQUIRE_FALSE(HousingMgr::IsRootPlacementInRoom(Position(0.0f, 0.0f, std::numeric_limits<float>::infinity(), 0.0f)));
 }
+
+TEST_CASE("Decor has to stand inside its room's geobox where the room stands on the map", "[Housing][Exterior][Decor]")
+{
+    // The box retail sends for a plot's room, which the client checks placements against.
+    Position const min(HOUSING_ROOM_FALLBACK_GEOBOX_MIN_X, HOUSING_ROOM_FALLBACK_GEOBOX_MIN_Y, HOUSING_ROOM_FALLBACK_GEOBOX_MIN_Z);
+    Position const max(HOUSING_ROOM_FALLBACK_GEOBOX_MAX_X, HOUSING_ROOM_FALLBACK_GEOBOX_MAX_Y, HOUSING_ROOM_FALLBACK_GEOBOX_MAX_Z);
+
+    SECTION("Yard decor retail accepted on plot 13 of Razorwind Shores is inside the plot's room")
+    {
+        GameObjectsEntry const row = MakeRazorwindPlot13Row();
+        Position room;
+        QuaternionData roomRot;
+        REQUIRE(HousingMgr::GetRoomAnchor(&row, 2736, room, roomRot));
+
+        // hled1 791438, 805424 and 810989: three places in map coordinates, each answered with success.
+        REQUIRE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(908.2863f, -567.74677f, 1.4373517f), HOUSING_DECOR_BOUNDS_MARGIN));
+        REQUIRE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(878.77026f, -595.11035f, 7.2617664f), HOUSING_DECOR_BOUNDS_MARGIN));
+        REQUIRE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(887.4449f, -593.4711f, 1.4373479f), HOUSING_DECOR_BOUNDS_MARGIN));
+
+        // Forty yards along the road, high in the air, or back at the map's origin is off the plot.
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(926.4f, -577.7f, 1.4f), HOUSING_DECOR_BOUNDS_MARGIN));
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(886.4f, -577.7f, 130.0f), HOUSING_DECOR_BOUNDS_MARGIN));
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(0.0f, 0.0f, 0.0f), HOUSING_DECOR_BOUNDS_MARGIN));
+    }
+
+    SECTION("A plot far from the map's origin takes decor too")
+    {
+        // GameObjects.db2 row 581971: "Plot - Plot 0" of Founder's Point, more than 1024 yards from the origin.
+        GameObjectsEntry row{};
+        row.ID = 581971;
+        row.OwnerID = 2735;
+        row.Pos.X = 2987.019f;
+        row.Pos.Y = -224.60591f;
+        row.Pos.Z = 113.10083f;
+        row.Rot = { 0.0f, 0.0f, 0.90258533f, 0.43051097f };
+        Position room;
+        QuaternionData roomRot;
+        REQUIRE(HousingMgr::GetRoomAnchor(&row, 2735, room, roomRot));
+
+        REQUIRE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(2995.0f, -220.0f, 114.0f), HOUSING_DECOR_BOUNDS_MARGIN));
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(room, min, max, Position(3060.0f, -224.6f, 113.1f), HOUSING_DECOR_BOUNDS_MARGIN));
+    }
+
+    SECTION("Inside, the room turns with its orientation")
+    {
+        // hbcd3 1443057: retail accepted a piece in the house's first room, "Square Room (Small)" (HouseRoom 1), which
+        // stood at (-985, -1000, 0.1) facing 0 (hbcd3 1403035). Its box is RoomWmoData row 5 from the client's data.
+        Position const smallRoom(-985.0f, -1000.0f, 0.1f, 0.0f);
+        Position const smallRoomMin(-11.505f, -11.5052f, -0.00030000001f);
+        Position const smallRoomMax(11.5052f, 11.5051f, 11.0f);
+        REQUIRE(HousingMgr::IsInsideRoomGeobox(smallRoom, smallRoomMin, smallRoomMax, Position(-979.10394f, -993.3236f, 0.03240151f), HOUSING_DECOR_BOUNDS_MARGIN));
+        // The same piece fifteen yards farther along x is past that small room's wall.
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(smallRoom, smallRoomMin, smallRoomMax, Position(-964.10394f, -993.3236f, 0.03240151f), HOUSING_DECOR_BOUNDS_MARGIN));
+
+        // The rest uses the plot room's larger box on a room standing at the interior's origin.
+        Position const hall(-1000.0f, -1000.0f, 0.1f, 0.0f);
+
+        // Thirty-four yards along y fits the box's 35 along x only once the room is turned a quarter turn.
+        Position const point(-1000.0f, -966.0f, 0.1f);
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(hall, min, max, point, HOUSING_DECOR_BOUNDS_MARGIN));
+        Position const turned(-1000.0f, -1000.0f, 0.1f, float(M_PI / 2.0));
+        REQUIRE(HousingMgr::IsInsideRoomGeobox(turned, min, max, point, HOUSING_DECOR_BOUNDS_MARGIN));
+
+        // A room on a floor higher up does not take a piece on the ground floor.
+        Position const upstairs(-1000.0f, -1000.0f, 0.1f + 2.0f * HOUSE_INTERIOR_FLOOR_HEIGHT, 0.0f);
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(upstairs, min, max, Position(-990.0f, -1000.0f, 0.1f), HOUSING_DECOR_BOUNDS_MARGIN));
+    }
+
+    SECTION("A position that is not a number is nowhere")
+    {
+        Position const hall(-1000.0f, -1000.0f, 0.1f, 0.0f);
+        REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(hall, min, max, Position(std::nanf(""), -1000.0f, 0.1f), HOUSING_DECOR_BOUNDS_MARGIN));
+    }
+}

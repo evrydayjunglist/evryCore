@@ -804,15 +804,24 @@ enum HouseLevelRewardValueType : uint8
 };
 
 // Constants
-// How far from its origin a decor placement may be. Decor positions are stored in local space
-// (relative to the room origin for interior placements, relative to the plot
-// origin for exterior). Legitimate placements sit well within a couple of dozen
-// units of the origin on every axis (a plot/interior is only a few tens of yards
-// across); the sniff-verified starter decor is all within ~15. This half-extent
-// is intentionally generous so it can never reject a legitimate placement, while
-// still slamming the door on arbitrary-coordinate GameObject spam that the old
-// Position::IsPositionValid() check (|coord| < ~64000) let straight through.
-static constexpr float HOUSING_MAX_DECOR_LOCAL_EXTENT  = 1024.0f;
+// Decor positions are the map coordinates the client sends: neighborhood map coordinates for a piece outside
+// (hled1 791438 places one at 908.2863, -567.74677 on plot 13 of Razorwind Shores) and interior map coordinates for a
+// piece inside (hbcd3 1443057 places one at -979.10394, -993.3236). A piece has to stand inside the geobox of its room,
+// the plot's room outside and the house's own room inside, turned and placed as that room stands on the map. The
+// client checks the same boxes before it sends a placement; this margin only absorbs rounding.
+static constexpr float HOUSING_DECOR_BOUNDS_MARGIN = 1.0f;
+// The geobox retail sends for a plot's room (-35, -30, -1.01) to (35, 30, 125.01), used for a room whose RoomWmoData
+// row is missing.
+static constexpr float HOUSING_ROOM_FALLBACK_GEOBOX_MIN_X = -35.0f;
+static constexpr float HOUSING_ROOM_FALLBACK_GEOBOX_MIN_Y = -30.0f;
+static constexpr float HOUSING_ROOM_FALLBACK_GEOBOX_MIN_Z = -1.01f;
+static constexpr float HOUSING_ROOM_FALLBACK_GEOBOX_MAX_X = 35.0f;
+static constexpr float HOUSING_ROOM_FALLBACK_GEOBOX_MAX_Y = 30.0f;
+static constexpr float HOUSING_ROOM_FALLBACK_GEOBOX_MAX_Z = 125.01f;
+// A neighborhood's name can be changed once in this many seconds. Every rename tells its members and the players on
+// its map to forget the old name, so a client sending renames without pause would otherwise make the server send
+// those packets without pause. Retail's own limit is not known; this is a server guard, not a retail rule.
+static constexpr uint32 HOUSING_NEIGHBORHOOD_RENAME_COOLDOWN = 60;
 // Outdoor lighting (12.0.7): DecorCategory.db2 id 4 "Lighting" (subcategories
 // 16-21: Large/Wall/Ceiling/Small/Misc Lights). 12.0.7 lets Lighting decor be
 // placed outdoors on the plot; the placement path classifies a decor as Lighting

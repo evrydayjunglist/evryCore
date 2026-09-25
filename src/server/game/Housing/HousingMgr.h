@@ -442,7 +442,33 @@ public:
     bool CanVisitorExportBlueprint(Player const* visitor, ObjectGuid ownerGuid, uint32 settingsFlags) const;
 
     // Validation
+    // The piece exists and the position is a real place. Where the piece may stand is the house's own business
+    // (Housing::PlaceDecorWithGuid and Housing::MoveDecor check it against the room it stands in).
     HousingResult ValidateDecorPlacement(uint32 decorId, Position const& pos, uint32 houseLevel) const;
+
+    // A room's geobox, relative to where the room stands: RoomWmoData's bounding box for the room's HouseRoom row, or
+    // the box retail sends for a plot's room when that row is missing. The client checks decor against this box.
+    void GetRoomGeobox(uint32 roomEntryId, Position& min, Position& max) const;
+    // Whether a map position lies inside a geobox around a room that stands at `room` and turns about the vertical
+    // axis by its orientation, give or take `margin` yards on every side.
+    static bool IsInsideRoomGeobox(Position const& room, Position const& min, Position const& max, Position const& point, float margin);
+
+    // HouseExteriorWmoData.Flags: whether a house type needs unlocking first, and whether it may stand in a
+    // neighborhood with this faction restriction (the Horde and Alliance bits; a type with neither bit, or a
+    // neighborhood with no restriction, allows it).
+    static bool IsHouseTypeUnlockedByDefault(HouseExteriorWmoData const& houseType);
+    static bool IsHouseTypeAllowedInNeighborhood(HouseExteriorWmoData const& houseType, int32 factionRestriction);
+    // ExteriorComponent.Flags: whether an exterior piece is usable without unlocking it first. In the 12.1 client every
+    // piece except six parts of the two Westfall barn house types and one hook marker has this bit.
+    static bool IsExteriorComponentUnlockedByDefault(ExteriorComponentEntry const& component);
+
+    // Whether a character of this team may found a neighborhood from a NeighborhoodMap row: the row belongs to a
+    // neighborhood district (Map.db2 instance type 8, so not the house interior), and its Flags let that team buy
+    // there (1 Alliance, 2 Horde). INVALID_MAP for a row that is not a district, INCORRECT_FACTION for the other team's.
+    HousingResult CheckNeighborhoodFoundingMap(uint32 neighborhoodMapId, uint32 team) const;
+    static HousingResult CheckNeighborhoodFoundingFlags(bool isDistrict, int32 neighborhoodMapFlags, uint32 team);
+    // The faction restriction a neighborhood founded by a character of this team gets.
+    static int32 GetNeighborhoodFactionForTeam(uint32 team);
 
     // House-finder per-player ignore list (CMSG_HOUSING_SVCS_HOUSE_FINDER_IGNORE_NEIGHBORHOOD).
     // Lazily loaded from character_housing_ignored_neighborhood, cached in memory, write-through

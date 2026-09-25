@@ -31,6 +31,8 @@
 #include "HousingMgr.h"
 #include "HousingPackets.h"
 #include "Log.h"
+#include "Map.h"
+#include "MapManager.h"
 #include "InitiativeManager.h"
 #include "Neighborhood.h"
 #include "NeighborhoodCharter.h"
@@ -41,6 +43,7 @@
 #include "GameTime.h"
 #include "UpdateData.h"
 #include "World.h"
+#include <unordered_set>
 
 namespace
 {
@@ -244,12 +247,26 @@ void WorldSession::HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::N
         return;
     }
 
+    // The client names the district, and only one her faction may found a neighborhood in is taken. The neighborhood's
+    // faction is hers; the client's faction flags are not kept, as what the client sends there was never captured.
+    if (HousingResult mapCheck = sHousingMgr.CheckNeighborhoodFoundingMap(neighborhoodCharterCreate.NeighborhoodMapID, player->GetTeam());
+        mapCheck != HOUSING_RESULT_SUCCESS)
+    {
+        WorldPackets::Neighborhood::NeighborhoodCharterUpdateResponse response;
+        response.Result = static_cast<uint8>(mapCheck);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterCreate: {} may not found a neighborhood on NeighborhoodMap {} (result {})",
+            player->GetGUID().ToString(), neighborhoodCharterCreate.NeighborhoodMapID, uint32(mapCheck));
+        return;
+    }
+
     // Create charter object. The creator's Battle.net account may not sign it.
     uint64 charterId = static_cast<uint64>(player->GetGUID().GetCounter());
     NeighborhoodCharter charter(charterId, player->GetGUID(), GetBattlenetAccountId());
     charter.SetName(neighborhoodCharterCreate.Name);
     charter.SetNeighborhoodMapID(neighborhoodCharterCreate.NeighborhoodMapID);
-    charter.SetFactionFlags(neighborhoodCharterCreate.FactionFlags);
+    charter.SetFactionFlags(uint32(HousingMgr::GetNeighborhoodFactionForTeam(player->GetTeam())));
     charter.SetIsGuild(false);
 
     // The creator does not count toward MIN_CHARTER_SIGNATURES; whether retail counts her is not known.
@@ -324,6 +341,21 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
         return;
     }
 
+    // The same district check as a new charter; the faction stays hers.
+    if (HousingResult mapCheck = sHousingMgr.CheckNeighborhoodFoundingMap(neighborhoodCharterEdit.NeighborhoodMapID, player->GetTeam());
+        mapCheck != HOUSING_RESULT_SUCCESS)
+    {
+        WorldPackets::Neighborhood::NeighborhoodCharterUpdateResponse response;
+        response.Result = static_cast<uint8>(mapCheck);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterEdit: {} may not found a neighborhood on NeighborhoodMap {} (result {})",
+            player->GetGUID().ToString(), neighborhoodCharterEdit.NeighborhoodMapID, uint32(mapCheck));
+        return;
+    }
+
+    uint32 const factionRestriction = uint32(HousingMgr::GetNeighborhoodFactionForTeam(player->GetTeam()));
+
     // Edit updates the charter with new parameters (same charter ID, re-saved)
     uint64 charterId = static_cast<uint64>(player->GetGUID().GetCounter());
     ObjectGuid charterGuid = ObjectGuid::Create<HighGuid::Housing>(0, 0, 0, charterId);
@@ -334,7 +366,7 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
     NeighborhoodCharter charter(charterId, player->GetGUID(), GetBattlenetAccountId());
     charter.SetName(neighborhoodCharterEdit.Name);
     charter.SetNeighborhoodMapID(neighborhoodCharterEdit.NeighborhoodMapID);
-    charter.SetFactionFlags(neighborhoodCharterEdit.FactionFlags);
+    charter.SetFactionFlags(factionRestriction);
     charter.SetIsGuild(false);
 
     std::vector<ObjectGuid> droppedSigners;
@@ -351,7 +383,7 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
             NeighborhoodCharter oldCharter(charterId, ObjectGuid::Empty);
             if (oldCharter.LoadFromDB(oldCharterResult, oldSigResult))
             {
-                if (oldCharter.HasSameSettings(neighborhoodCharterEdit.Name, neighborhoodCharterEdit.NeighborhoodMapID, neighborhoodCharterEdit.FactionFlags))
+                if (oldCharter.HasSameSettings(neighborhoodCharterEdit.Name, neighborhoodCharterEdit.NeighborhoodMapID, factionRestriction))
                     charter.CopySignaturesFrom(oldCharter);
                 else
                     droppedSigners = oldCharter.GetSignatures();
@@ -456,12 +488,26 @@ void WorldSession::HandleNeighborhoodCharterFinalize(WorldPackets::Neighborhood:
         return;
     }
 
+    // The district is checked again for her faction, which may have changed since the charter was written, and the
+    // neighborhood takes her faction.
+    if (HousingResult mapCheck = sHousingMgr.CheckNeighborhoodFoundingMap(charter.GetNeighborhoodMapID(), player->GetTeam());
+        mapCheck != HOUSING_RESULT_SUCCESS)
+    {
+        WorldPackets::Neighborhood::NeighborhoodCharterUpdateResponse response;
+        response.Result = static_cast<uint8>(mapCheck);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterFinalize: {} may not found a neighborhood on NeighborhoodMap {} (result {})",
+            player->GetGUID().ToString(), charter.GetNeighborhoodMapID(), uint32(mapCheck));
+        return;
+    }
+
     // Create neighborhood from charter data
     Neighborhood* neighborhood = sNeighborhoodMgr.CreateNeighborhood(
         player->GetGUID(),
         charter.GetName(),
         charter.GetNeighborhoodMapID(),
-        charter.GetFactionFlags()
+        HousingMgr::GetNeighborhoodFactionForTeam(player->GetTeam())
     );
 
     if (neighborhood)
@@ -716,13 +762,40 @@ void WorldSession::HandleNeighborhoodUpdateName(WorldPackets::Neighborhood::Neig
         return;
     }
 
+    // One rename per neighborhood in HOUSING_NEIGHBORHOOD_RENAME_COOLDOWN seconds, so renames cannot keep the server
+    // sending the packets below to everyone who knows the neighborhood.
+    time_t const now = GameTime::GetGameTime();
+    if (neighborhood->GetLastRenameTime() && now < neighborhood->GetLastRenameTime() + time_t(HOUSING_NEIGHBORHOOD_RENAME_COOLDOWN))
+    {
+        WorldPackets::Neighborhood::NeighborhoodUpdateNameResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_TOO_MANY_REQUESTS);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodUpdateName: neighborhood {} was renamed less than {} seconds ago",
+            neighborhoodGuid.ToString(), HOUSING_NEIGHBORHOOD_RENAME_COOLDOWN);
+        return;
+    }
+
     neighborhood->SetName(neighborhoodUpdateName.NewName);
+    neighborhood->SetLastRenameTime(now);
+
+    // SMSG_INVALIDATE_NEIGHBORHOOD (0x5F0008) is the neighborhood twin of SMSG_INVALIDATE_PLAYER (0x5F0007): the
+    // 12.0.7 dispatcher reads one PackedGUID and drops the client's cached record for it. It goes to the players who
+    // hold that record because they belong to the neighborhood or stand in it, not to the whole realm; anyone else
+    // asks for the name the next time they need it (HandleQueryNeighborhoodInfo).
+    WorldPackets::Housing::InvalidateNeighborhood invalidateRecord;
+    invalidateRecord.NeighborhoodGuid = neighborhoodGuid;
+    WorldPacket const* invalidatePacket = invalidateRecord.Write();
+    std::unordered_set<ObjectGuid> invalidated;
 
     // Broadcast name invalidation and update notification to ALL neighborhood members
     for (auto const& member : neighborhood->GetMembers())
     {
         if (Player* memberPlayer = ObjectAccessor::FindPlayer(member.PlayerGuid))
         {
+            if (invalidated.insert(memberPlayer->GetGUID()).second)
+                memberPlayer->SendDirectMessage(invalidatePacket);
+
             WorldPackets::Housing::InvalidateNeighborhoodName invalidate;
             invalidate.NeighborhoodGuid = neighborhoodGuid;
             memberPlayer->SendDirectMessage(invalidate.Write());
@@ -737,25 +810,20 @@ void WorldSession::HandleNeighborhoodUpdateName(WorldPackets::Neighborhood::Neig
         }
     }
 
-    // SMSG_INVALIDATE_NEIGHBORHOOD (0x5F0008) is the neighborhood twin of SMSG_INVALIDATE_PLAYER
-    // (0x5F0007): the 12.0.7 dispatcher handles both in the same switch with the same shape —
-    // read one PackedGUID, then call a registered nullary C++ callback (no Lua event). It is a
-    // pure "drop your cached record for this GUID" signal, so it must reach cache holders who are
-    // NOT members (house-finder browsers, visitors), not just the members handled above.
-    // Sent realm-wide exactly as CharacterCache::UpdateCharacterData sends InvalidatePlayer on a
-    // character rename; the client's follow-up CMSG_QUERY_NEIGHBORHOOD_INFO is already answered
-    // by HandleQueryNeighborhoodInfo. Renames are rare and explicitly operator-driven, so this
-    // does not put the realm-wide send on a hot path.
-    WorldPackets::Housing::InvalidateNeighborhood invalidateRecord;
-    invalidateRecord.NeighborhoodGuid = neighborhoodGuid;
-    sWorld->SendGlobalMessage(invalidateRecord.Write());
+    // Visitors standing in the neighborhood hold its name too.
+    uint32 const worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID());
+    if (Map* neighborhoodMap = sMapMgr->FindMap(worldMapId, uint32(neighborhoodGuid.GetCounter())))
+        for (MapReference const& ref : neighborhoodMap->GetPlayers())
+            if (Player* visitor = ref.GetSource())
+                if (invalidated.insert(visitor->GetGUID()).second)
+                    visitor->SendDirectMessage(invalidatePacket);
 
     WorldPackets::Neighborhood::NeighborhoodUpdateNameResponse response;
     response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
     SendPacket(response.Write());
 
-    // Send guild rename notification if player is in a guild
-    if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
+    // The guild's rename notification, when this is the guild's neighborhood.
+    if (Guild* guild = neighborhood->GetGuildId() ? sGuildMgr->GetGuildById(neighborhood->GetGuildId()) : nullptr)
     {
         WorldPackets::Housing::HousingSvcsGuildRenameNeighborhoodNotification guildNotification;
         guildNotification.NewName = neighborhoodUpdateName.NewName;

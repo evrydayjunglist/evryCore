@@ -1041,6 +1041,7 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES,
     PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR_ENTRIES,
     PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH,
+    PLAYER_LOGIN_QUERY_LOAD_HOUSING_ACTIVE_NEIGHBORHOOD,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -2991,6 +2992,16 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
     public:
         void UpdateInitiativeFavor(uint32 favor);
 
+        // The neighborhood of her active endeavor: the one she chose on the dashboard while her account has a house
+        // there, else the neighborhood of the account's first standing house, else none. A second character of an
+        // account that never chose one still has it set (hf1 949830), and a character whose account has no house has
+        // none (hbcd3 419313).
+        ObjectGuid GetHousingActiveNeighborhood() const;
+        // Stores her choice (CMSG_INITIATIVE_UPDATE_ACTIVE_NEIGHBORHOOD) and refreshes the endeavor fields.
+        void SetHousingActiveNeighborhood(ObjectGuid neighborhoodGuid);
+        // PlayerInitiativeComponent: the active neighborhood and its endeavor.
+        void UpdateInitiativeComponent();
+
         // 12.0.5 plot-entry mechanism: writes PlayerHouseInfoComponentData.CurrentHouse to
         // the given house GUID (or ObjectGuid::Empty on plot-leave). Client tracks plot
         // occupancy by observing this field's UPDATE_OBJECT changes — it replaces the
@@ -3567,6 +3578,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         std::unique_ptr<Garrison> _garrison;
         std::vector<std::unique_ptr<Housing>> _housings;
         std::shared_ptr<HousingDecorStore> _housingDecorStore;
+        // The neighborhood (its counter) she chose for her active endeavor, 0 when she has not chosen one.
+        uint64 _housingChosenNeighborhood = 0;
 
         bool _advancedCombatLoggingEnabled;
 

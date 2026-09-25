@@ -323,7 +323,7 @@ namespace
     {
         uint32 warnings = HOUSING_WARNING_NONE;
 
-        // Check expansion access — housing requires The War Within (expansion 10)
+        // Check expansion access: housing needs Midnight
         if (player->GetSession()->GetExpansion() < HOUSING_REQUIRED_EXPANSION)
             warnings |= HOUSING_WARNING_EXPANSION_REQUIRED;
 
@@ -332,6 +332,129 @@ namespace
             warnings |= HOUSING_WARNING_LEVEL_TOO_LOW;
 
         return warnings;
+    }
+
+    // After a house's settings change, anyone the new settings no longer let in is removed, as Blizzard's preview
+    // describes ("it will remove anyone whose permissions are no longer valid", https://worldofwarcraft.blizzard.com/en-us/news/24221516;
+    // a July 2025 preview of work in progress, so the best rule found rather than confirmed live behaviour). A visitor
+    // inside the house is put out at the plot's arrival point in the house's neighborhood, where Exit House puts her.
+    // A visitor on the plot is taken off it the way a refused plot entry leaves her: no longer counted as on the plot.
+    // World thread only, because it touches characters on other maps.
+    void RemoveVisitorsWithoutAccess(Housing const& housing)
+    {
+        Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(housing.GetNeighborhoodGuid());
+        if (!neighborhood || housing.IsPacked())
+            return;
+
+        uint8 const plotIndex = housing.GetPlotIndex();
+        if (!neighborhood->GetPlotInfo(plotIndex))
+            return;
+
+        uint32 const worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID());
+
+        if (housing.GetDatabaseId() <= std::numeric_limits<uint32>::max())
+        {
+            if (HouseInteriorMap* interior = dynamic_cast<HouseInteriorMap*>(sMapMgr->FindMap(HOUSE_INTERIOR_MAP_ID, uint32(housing.GetDatabaseId()))))
+            {
+                WorldLocation arrival;
+                bool const hasArrival = sHousingMgr.GetPlotArrival(neighborhood->GetNeighborhoodMapID(), plotIndex, arrival);
+                // The house's own neighborhood instance, as in Exit House (spell_housing_exit_house).
+                Optional<uint32> instanceId;
+                uint32 const neighborhoodInstanceId = uint32(neighborhood->GetGuid().GetCounter());
+                if (hasArrival && sMapMgr->FindMap(arrival.GetMapId(), neighborhoodInstanceId))
+                    instanceId = neighborhoodInstanceId;
+                std::vector<Player*> removed;
+                for (MapReference const& ref : interior->GetPlayers())
+                {
+                    Player* visitor = ref.GetSource();
+                    if (visitor && !neighborhood->CheckHouseEntry(visitor, plotIndex, true).Allowed)
+                        removed.push_back(visitor);
+                }
+
+                for (Player* visitor : removed)
+                {
+                    if (!hasArrival || !visitor->TeleportTo(arrival, TELE_TO_SPELL, instanceId))
+                        TC_LOG_ERROR("housing", "RemoveVisitorsWithoutAccess: {} lost access to house {} but could not be put out of it",
+                            visitor->GetGUID().ToString(), housing.GetHouseGuid().ToString());
+                    else
+                        TC_LOG_DEBUG("housing", "RemoveVisitorsWithoutAccess: {} lost access to house {} and was put out on plot {}",
+                            visitor->GetGUID().ToString(), housing.GetHouseGuid().ToString(), plotIndex);
+                }
+            }
+        }
+
+        if (HousingMap* housingMap = dynamic_cast<HousingMap*>(sMapMgr->FindMap(worldMapId, uint32(neighborhood->GetGuid().GetCounter()))))
+        {
+            for (MapReference const& ref : housingMap->GetPlayers())
+            {
+                Player* visitor = ref.GetSource();
+                if (!visitor || housingMap->GetPlayerCurrentPlot(visitor->GetGUID()) != int8(plotIndex))
+                    continue;
+
+                if (neighborhood->CheckHouseEntry(visitor, plotIndex, false).Allowed)
+                    continue;
+
+                housingMap->SendPlotLeaveAuraRemoval(visitor);
+                housingMap->ClearPlayerCurrentPlot(visitor->GetGUID());
+                visitor->SetCurrentHouse(ObjectGuid::Empty);
+
+                TC_LOG_DEBUG("housing", "RemoveVisitorsWithoutAccess: {} lost access to plot {} of house {}",
+                    visitor->GetGUID().ToString(), plotIndex, housing.GetHouseGuid().ToString());
+            }
+        }
+    }
+
+    // Counts the distinct Battle.net accounts among a guild's members, and those with a member active in the last
+    // GUILD_NEIGHBORHOOD_ACTIVE_DAYS days (online now, or logged out since then).
+    struct GuildAccountCounts
+    {
+        uint32 Accounts = 0;
+        uint32 ActiveAccounts = 0;
+    };
+
+    GuildAccountCounts CountGuildBattlenetAccounts(Guild const& guild)
+    {
+        time_t const activeSince = GameTime::GetGameTime() - time_t(GUILD_NEIGHBORHOOD_ACTIVE_DAYS) * DAY;
+        std::unordered_map<uint32 /*gameAccountId*/, bool /*active*/> gameAccounts;
+        for (auto const& [guid, member] : guild.GetMembers())
+        {
+            bool const active = member.IsOnline() || time_t(member.GetLogoutTime()) >= activeSince;
+            bool& entry = gameAccounts[member.GetAccountId()];
+            entry = entry || active;
+        }
+
+        std::vector<Housing::GuildMemberAccount> members;
+        if (!gameAccounts.empty())
+        {
+            std::string ids;
+            for (auto const& [gameAccountId, active] : gameAccounts)
+            {
+                if (!ids.empty())
+                    ids += ',';
+                ids += std::to_string(gameAccountId);
+            }
+
+            // The game accounts' Battle.net accounts, in one query; the ids are numbers read from the guild.
+            std::unordered_map<uint32, uint32> bnetByGameAccount;
+            if (QueryResult result = LoginDatabase.Query(Trinity::StringFormat("SELECT id, battlenet_account FROM account WHERE id IN ({})", ids).c_str()))
+            {
+                do
+                {
+                    Field* fields = result->Fetch();
+                    bnetByGameAccount[fields[0].GetUInt32()] = fields[1].GetUInt32();
+                } while (result->NextRow());
+            }
+
+            for (auto const& [gameAccountId, active] : gameAccounts)
+            {
+                auto bnet = bnetByGameAccount.find(gameAccountId);
+                members.push_back({ bnet != bnetByGameAccount.end() ? bnet->second : 0, active });
+            }
+        }
+
+        GuildAccountCounts counts;
+        Housing::CountBattlenetAccounts(members, counts.Accounts, counts.ActiveAccounts);
+        return counts;
     }
 }
 
@@ -564,7 +687,25 @@ void WorldSession::HandleHouseInteriorLeaveHouse(WorldPackets::Housing::HouseInt
             "using neighborhood center", plotIndex);
     }
 
-    player->TeleportTo(worldMapId, exitX, exitY, exitZ, exitO);
+    // Into the neighborhood instance where the house stands, as Exit House does (spell_housing_exit_house), so she
+    // comes out beside the house and not on the same plot of another neighborhood.
+    Optional<uint32> instanceId;
+    if (interiorMap)
+    {
+        for (Neighborhood const* candidate : sNeighborhoodMgr.GetAllNeighborhoods())
+        {
+            if (!candidate->GetPlotInfoByHouse(interiorMap->GetHouseGuid()))
+                continue;
+
+            uint32 const neighborhoodInstanceId = uint32(candidate->GetGuid().GetCounter());
+            if (sHousingMgr.GetWorldMapIdByNeighborhoodMapId(candidate->GetNeighborhoodMapID()) == worldMapId
+                && sMapMgr->FindMap(worldMapId, neighborhoodInstanceId))
+                instanceId = neighborhoodInstanceId;
+            break;
+        }
+    }
+
+    player->TeleportTo(worldMapId, exitX, exitY, exitZ, exitO, TELE_TO_NONE, instanceId);
 
     TC_LOG_INFO("housing", "CMSG_HOUSE_INTERIOR_LEAVE_HOUSE: Player {} teleporting back to map {} at ({:.1f}, {:.1f}, {:.1f})",
         player->GetGUID().ToString(), worldMapId, exitX, exitY, exitZ);
@@ -3182,38 +3323,51 @@ void WorldSession::HandleHousingSvcsGuildCreateNeighborhood(WorldPackets::Housin
         return;
     }
 
-    // Validate guild membership and size
+    // Only the guild master creates the guild's neighborhood (the wiki's Housing page: "The guild leader can create the
+    // neighborhood"; Icy Veins: the guild master talks to the housing steward).
     Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId());
+    auto refuse = [&](HousingResult result)
+    {
+        WorldPackets::Housing::HousingSvcsCreateCharterNeighborhoodResponse response;
+        response.TrailingResult = static_cast<uint8>(result);
+        SendPacket(response.Write());
+    };
+
     if (!guild)
     {
-        WorldPackets::Housing::HousingSvcsCreateCharterNeighborhoodResponse response;
-        response.TrailingResult = static_cast<uint8>(HOUSING_RESULT_GENERIC_FAILURE);
-        SendPacket(response.Write());
+        refuse(HOUSING_RESULT_INVALID_GUILD);
         return;
     }
 
-    static constexpr uint32 MIN_GUILD_SIZE_FOR_NEIGHBORHOOD = 3;
-    static constexpr uint32 MAX_GUILD_SIZE_FOR_NEIGHBORHOOD = 1000;
-
-    if (guild->GetMembersCount() < MIN_GUILD_SIZE_FOR_NEIGHBORHOOD)
+    if (guild->GetLeaderGUID() != player->GetGUID())
     {
-        WorldPackets::Housing::HousingSvcsCreateCharterNeighborhoodResponse response;
-        response.TrailingResult = static_cast<uint8>(HOUSING_RESULT_GENERIC_FAILURE);
-        SendPacket(response.Write());
-        TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_GUILD_CREATE_NEIGHBORHOOD: Guild too small ({} < {})",
-            guild->GetMembersCount(), MIN_GUILD_SIZE_FOR_NEIGHBORHOOD);
+        refuse(HOUSING_RESULT_PERMISSION_DENIED);
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_GUILD_CREATE_NEIGHBORHOOD: {} is not the master of guild {}",
+            player->GetGUID().ToString(), guild->GetId());
         return;
     }
 
-    if (guild->GetMembersCount() > MAX_GUILD_SIZE_FOR_NEIGHBORHOOD)
+    // At least 10 Battle.net accounts among the members, and 10 of them active.
+    GuildAccountCounts const counts = CountGuildBattlenetAccounts(*guild);
+    if (counts.Accounts < GUILD_NEIGHBORHOOD_MIN_ACCOUNTS)
     {
-        WorldPackets::Housing::HousingSvcsCreateCharterNeighborhoodResponse response;
-        response.TrailingResult = static_cast<uint8>(HOUSING_RESULT_GENERIC_FAILURE);
-        SendPacket(response.Write());
-        TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_GUILD_CREATE_NEIGHBORHOOD: Guild too large ({} > {})",
-            guild->GetMembersCount(), MAX_GUILD_SIZE_FOR_NEIGHBORHOOD);
+        refuse(HOUSING_RESULT_GUILD_MORE_ACCOUNTS_NEEDED);
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_GUILD_CREATE_NEIGHBORHOOD: guild {} has {} Battle.net accounts, {} needed",
+            guild->GetId(), counts.Accounts, GUILD_NEIGHBORHOOD_MIN_ACCOUNTS);
         return;
     }
+
+    if (counts.ActiveAccounts < GUILD_NEIGHBORHOOD_MIN_ACTIVE_ACCOUNTS)
+    {
+        refuse(HOUSING_RESULT_GUILD_MORE_ACTIVE_PLAYERS_NEEDED);
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_GUILD_CREATE_NEIGHBORHOOD: guild {} has {} active Battle.net accounts, {} needed",
+            guild->GetId(), counts.ActiveAccounts, GUILD_NEIGHBORHOOD_MIN_ACTIVE_ACCOUNTS);
+        return;
+    }
+
+    // The client also refuses a guild over a size limit ("You exceed the maximum guild member limit. Please create a
+    // Private Neighborhood.", GlobalStrings HOUSING_CREATENEIGHBORHOOD_ERROR_OVERSIZED_GUILD); no source gives the
+    // number, so no limit is applied here.
 
     // Per binary RE (see HousingPackets.h), the second numeric field on the wire is
     // SecondaryID (likely HouseStyle/Theme ID) and not a faction ID. Derive the
@@ -3386,6 +3540,9 @@ void WorldSession::HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::Housi
     if (neighborhood)
         neighborhood->RefreshMirrorDataForOnlineMembers();
 
+    // With the house packed, her active endeavor moves to the account's other house, or to none.
+    player->UpdateInitiativeComponent();
+
     SendGuildRemoveHouseNotification(player, houseGuid, cosmeticOwnerGuid);
 
     WorldPackets::Housing::HousingSvcsRelinquishHouseResponse response;
@@ -3446,11 +3603,17 @@ void WorldSession::HandleHousingSvcsUpdateHouseSettings(WorldPackets::Housing::H
             neighborhood->RefreshMirrorDataForOnlineMembers();
     }
 
+    bool settingsChanged = false;
     if (housingSvcsUpdateHouseSettings.PlotSettingsID)
     {
         uint32 newFlags = *housingSvcsUpdateHouseSettings.PlotSettingsID & HOUSE_SETTING_VALID_MASK;
+        settingsChanged = newFlags != housing->GetSettingsFlags();
         housing->SaveSettings(newFlags);
     }
+
+    // Visitors the new settings no longer let in are removed.
+    if (settingsChanged)
+        RemoveVisitorsWithoutAccess(*housing);
 
     WorldPackets::Housing::HousingSvcsUpdateHouseSettingsResponse response;
     response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
@@ -3661,9 +3824,10 @@ void WorldSession::HandleHousingSvcsStartTutorial(WorldPackets::Housing::Housing
         return;
     }
 
-    // The district needs a neighborhood for its map instance. This does not make her a member; buying a plot does.
-    // It is looked up here, because this handler runs on the world thread and finding one can create one; the
-    // Warband query below answers on whichever thread updates her session, which can be a map's.
+    // The district needs a public neighborhood for her to arrive in. This does not make her a member; buying a plot
+    // does. It is made sure of here, because this handler runs on the world thread and finding one can create one;
+    // the Warband query below answers on whichever thread updates her session, which can be a map's. Which
+    // neighborhood she lands in is picked when she arrives (MapManager::CreateMap), not here.
     Neighborhood* neighborhood = sNeighborhoodMgr.FindOrCreatePublicNeighborhood(player->GetTeam());
     if (!neighborhood)
     {
@@ -3731,7 +3895,8 @@ void WorldSession::StartHousingTutorial(bool warbandCompletedMyFirstHome, Object
 
     SpellCastResult result = player->CastSpell(player, spellId);
 
-    TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: {} ({}) casts {} for neighborhood '{}' ({}): result {}",
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: {} ({}) casts {} towards her district, where public "
+        "neighborhood '{}' ({}) is ready; the neighborhood she arrives in is picked on arrival: result {}",
         player->GetGUID().ToString(), player->GetTeam() == HORDE ? "Horde" : "Alliance", spellId, neighborhoodName,
         neighborhoodGuid.ToString(), uint32(result));
 }
@@ -3933,7 +4098,9 @@ void WorldSession::HandleHousingSvcsGetPotentialHouseOwners(WorldPackets::Housin
     uint32 guildId = 0;
     if (Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(housing->GetNeighborhoodGuid()))
     {
-        factionRestriction = neighborhood->GetFactionRestriction();
+        // Only the server's public neighborhoods keep to one faction; guild and charter ones take both.
+        if (neighborhood->IsServerPublic())
+            factionRestriction = neighborhood->GetFactionRestriction();
         guildId = neighborhood->GetGuildId();
     }
 
@@ -4031,14 +4198,10 @@ void WorldSession::HandleHousingSvcsGetHouseFinderInfo(WorldPackets::Housing::Ho
     response.Entries.reserve(publicNeighborhoods.size());
     for (Neighborhood* neighborhood : publicNeighborhoods)
     {
-        // Faction filter: skip neighborhoods that don't match the player's faction
-        int32 factionRestriction = neighborhood->GetFactionRestriction();
-        if (factionRestriction != NEIGHBORHOOD_FACTION_NONE)
-        {
-            if ((factionRestriction == NEIGHBORHOOD_FACTION_HORDE && playerTeam != HORDE) ||
-                (factionRestriction == NEIGHBORHOOD_FACTION_ALLIANCE && playerTeam != ALLIANCE))
-                continue;
-        }
+        // Faction filter: the server's public neighborhoods show only to their own faction; a charter neighborhood
+        // opened to the public takes both factions and shows to both.
+        if (!Neighborhood::IsFactionAllowed(neighborhood->IsServerPublic(), neighborhood->GetFactionRestriction(), playerTeam))
+            continue;
 
         // Ignore filter: skip neighborhoods the player hid via the house finder
         // (CMSG_HOUSING_SVCS_HOUSE_FINDER_IGNORE_NEIGHBORHOOD).

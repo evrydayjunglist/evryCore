@@ -63,11 +63,16 @@ struct ActiveInitiative
     // Milestones reached (MilestoneIndex -> reached)
     std::unordered_map<uint32, bool> MilestonesReached;
 
-    // Per-player contribution tracking: playerGuid -> taskId -> amount
-    std::unordered_map<uint64, std::unordered_map<uint32, uint32>> PlayerContributions;
+    // Contributions by Battle.net account: tasks and their progress are shared by the Warband (Wowhead's endeavors
+    // guide: "The Tasks available to your character are Warband-wide, as is progress on those Tasks").
+    // bnetAccountId -> taskId -> amount
+    std::unordered_map<uint32, std::unordered_map<uint32, uint32>> AccountContributions;
+    // The character of each account that contributed last, which the activity log names beside the account.
+    std::unordered_map<uint32, ObjectGuid::LowType> ContributorCharacters;
 
-    // Per-player reward claims: milestoneIndex -> set of playerGuids who claimed
-    std::unordered_map<uint32, std::set<uint64>> RewardClaims;
+    // Coffer claims by Battle.net account, "once per Warband" (Wowhead's endeavors guide):
+    // milestoneIndex -> accounts that claimed it
+    std::unordered_map<uint32, std::set<uint32>> RewardClaims;
 };
 
 // Cached DB2 data for an initiative's tasks
@@ -127,12 +132,12 @@ public:
     void OnCriteriaProgress(Player* player, uint32 criteriaId);
 
     // Reward queries and distribution
-    bool HasUnclaimedRewards(uint64 neighborhoodGuid, uint32 initiativeID, uint64 playerGuid) const;
+    bool HasUnclaimedRewards(uint64 neighborhoodGuid, uint32 initiativeID, uint32 bnetAccountId) const;
     bool ClaimMilestoneReward(uint64 neighborhoodGuid, uint32 initiativeID, uint32 milestoneIndex, Player* player);
 
-    // Per-player contribution queries
-    uint32 GetPlayerContribution(uint64 neighborhoodGuid, uint32 initiativeID, uint64 playerGuid) const;
-    std::vector<std::pair<uint64, uint32>> GetTopContributors(uint64 neighborhoodGuid, uint32 initiativeID, uint32 limit) const;
+    // Contribution queries, by Battle.net account
+    uint32 GetAccountContribution(uint64 neighborhoodGuid, uint32 initiativeID, uint32 bnetAccountId) const;
+    std::vector<std::pair<uint32, uint32>> GetTopContributors(uint64 neighborhoodGuid, uint32 initiativeID, uint32 limit) const;
     void UpdatePlayerInitiativeFavor(Player* player, uint64 neighborhoodGuid);
 
     // Send packets to a session
@@ -152,7 +157,8 @@ public:
     // is reset to zero, otherwise the client keeps rendering the pre-reset bars.
     void BroadcastClearTaskCriteriaProgress(Neighborhood* neighborhood, std::vector<uint64> const& criteriaIDs) const;
 
-    // Auto-start initiatives for neighborhoods that don't have one
+    // Starts an endeavor in each public neighborhood that has none. Guild and charter neighborhoods wait for one of
+    // their managers to pick one at the Steward.
     void CheckAndStartInitiatives();
     // Retired 2026-05-11: SendInitiativeUpdateStatus / SendInitiativePointsUpdate /
     // SendInitiativeMilestoneUpdate (speculative SMSGs the retail client drops).
@@ -164,10 +170,10 @@ private:
     void PersistTaskProgress(ActiveInitiative const& initiative);
     void PersistSingleTaskProgress(uint64 initiativeDbId, uint32 taskId, uint32 progress, uint8 status);
     void PersistMilestoneReached(uint64 initiativeDbId, uint32 milestoneIndex, uint32 reachedTime);
-    void PersistRewardClaim(uint64 initiativeDbId, uint32 milestoneIndex, uint64 playerGuid);
-    void PersistContribution(uint64 initiativeDbId, uint64 playerGuid, uint32 taskId, uint32 amount);
+    void PersistRewardClaim(uint64 initiativeDbId, uint32 milestoneIndex, uint32 bnetAccountId);
+    void PersistContribution(uint64 initiativeDbId, uint32 bnetAccountId, ObjectGuid::LowType characterGuid, uint32 taskId, uint32 amount);
     void CheckMilestones(ActiveInitiative& initiative, Neighborhood* neighborhood);
-    void GrantMilestoneRewards(Player* player, uint32 milestoneID);
+    void GrantMilestoneRewards(Player* player, uint64 neighborhoodGuid, uint32 milestoneID);
 
     // How many criteria hits finish this task. This is the task's CriteriaTree root Amount — NOT
     // InitiativeTask.ProgressContributionAmount, which is the contribution weight one completion is
@@ -179,10 +185,10 @@ private:
     // points, so a missing curve can never zero a contribution out.
     static float GetRepetitionDampening(InitiativeTaskEntry const* taskEntry, float alreadyContributed);
 
-    // Pays House XP ("Favor") for an endeavor task contribution, capped per cycle by
-    // InitiativeCycle.HouseXPCap. Takes the player's before/after contribution totals so the cap can
-    // be applied without any extra persisted state.
-    void GrantInitiativeTaskFavor(Player* player, uint32 initiativeID, uint32 contributionBefore, uint32 contributionAfter) const;
+    // Pays House XP ("Favor") for an endeavor task contribution to the account's house in the endeavor's neighborhood,
+    // capped per cycle by InitiativeCycle.HouseXPCap (2250 in every 12.1 row). Takes the account's before and after
+    // contribution totals so the cap can be applied without any extra persisted state.
+    void GrantInitiativeTaskFavor(Player* player, uint64 neighborhoodGuid, uint32 initiativeID, uint32 contributionBefore, uint32 contributionAfter) const;
     uint32 SelectWeightedCycle(uint32 initiativeID) const;
     uint32 CalculateMaxPoints(uint32 initiativeID) const;
     void BuildCriteriaIndex();

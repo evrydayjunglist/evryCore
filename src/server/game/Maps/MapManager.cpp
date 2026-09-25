@@ -63,7 +63,10 @@ namespace
     }
 
     // The neighborhood instance a character goes to on a neighborhood map: the one where a house of her
-    // Battle.net account stands, else one where she is a member of the roster.
+    // Battle.net account stands; else her guild's neighborhood; else one she is on the roster of or invited to, which
+    // is how a charter neighborhood takes her; else nothing, and CreateMap sends her back where she was or picks a
+    // public one for her. That order, guild then charter then public, is the order Wowhead's neighborhoods guide
+    // describes.
     Neighborhood* FindAccountNeighborhoodForMap(Player const* player, uint32 neighborhoodMapId)
     {
         for (Housing const* housing : player->GetAllHousings())
@@ -71,9 +74,38 @@ namespace
                 if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId)
                     return neighborhood;
 
+        if (player->GetGuildId())
+            if (Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhoodByGuildId(player->GetGuildId()))
+                if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId)
+                    return neighborhood;
+
         for (Neighborhood* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForAccount(player))
             if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId)
                 return neighborhood;
+
+        for (Neighborhood* neighborhood : sNeighborhoodMgr.GetAllNeighborhoods())
+            if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId && neighborhood->HasPendingInvite(player->GetGUID()))
+                return neighborhood;
+
+        return nullptr;
+    }
+
+    // Where a character with no neighborhood of her own on this map goes back to: the neighborhood of the house she
+    // is leaving, so a visitor comes out beside the house she was in; else the public neighborhood she last stood in
+    // on this map since she logged in (HousingMap::AddPlayerToMap records it), so she is not sent to another one each
+    // time she enters. Nothing when neither is known or that neighborhood is gone.
+    Neighborhood* FindReturnNeighborhoodForMap(Player const* player, uint32 worldMapId, uint32 neighborhoodMapId)
+    {
+        // During a map change the character is still on the map she is leaving.
+        if (HouseInteriorMap const* interior = dynamic_cast<HouseInteriorMap const*>(player->FindMap()))
+            if (Neighborhood* neighborhood = FindPlotByHouse(interior->GetHouseGuid()).first)
+                if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId)
+                    return neighborhood;
+
+        if (uint32 lastInstanceId = player->GetRecentInstanceId(worldMapId))
+            if (Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(lastInstanceId))
+                if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId && neighborhood->IsPublic())
+                    return neighborhood;
 
         return nullptr;
     }
@@ -531,14 +563,20 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
         // The neighborhood of the account's house on this map first, then the character's own memberships.
         Neighborhood* neighborhood = FindAccountNeighborhoodForMap(player, neighborhoodMapId);
 
-        // If the player isn't a member of any neighborhood on this map,
-        // find an existing public neighborhood for map rendering only.
-        // Do NOT auto-add the player as a member — membership is only
-        // granted through the tutorial flow, buying a plot, or being invited.
+        // Without one, the neighborhood of the house she is leaving or the one she was last in on this map.
+        if (!neighborhood)
+            neighborhood = FindReturnNeighborhoodForMap(player, mapId, neighborhoodMapId);
+
+        // Otherwise this is her first visit this session. She is not made a member here; membership comes from
+        // buying a plot or an invitation.
         if (!neighborhood)
         {
             TC_LOG_DEBUG("housing", "MapManager::CreateMap: No existing membership, finding public neighborhood for viewing");
-            neighborhood = sNeighborhoodMgr.FindPublicNeighborhoodForMap(neighborhoodMapId);
+            // A random public neighborhood with a free plot (the wiki's Housing page: "randomly placed within a public
+            // neighborhood with available plots"), or the least full one when every plot is taken.
+            neighborhood = sNeighborhoodMgr.FindRandomServerPublicNeighborhoodWithFreePlot(neighborhoodMapId);
+            if (!neighborhood)
+                neighborhood = sNeighborhoodMgr.FindPublicNeighborhoodForMap(neighborhoodMapId);
         }
 
         if (!neighborhood)
@@ -642,6 +680,8 @@ uint32 MapManager::FindInstanceIdForPlayer(uint32 mapId, Player const* player) c
     {
         uint32 neighborhoodMapId = sHousingMgr.GetNeighborhoodMapIdByWorldMap(mapId);
         if (Neighborhood const* neighborhood = FindAccountNeighborhoodForMap(player, neighborhoodMapId))
+            return static_cast<uint32>(neighborhood->GetGuid().GetCounter());
+        if (Neighborhood const* neighborhood = FindReturnNeighborhoodForMap(player, mapId, neighborhoodMapId))
             return static_cast<uint32>(neighborhood->GetGuid().GetCounter());
         return 0;
     }

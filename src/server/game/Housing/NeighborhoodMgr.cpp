@@ -16,6 +16,7 @@
  */
 
 #include "NeighborhoodMgr.h"
+#include "Containers.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "GameTime.h"
@@ -532,6 +533,20 @@ Neighborhood* NeighborhoodMgr::FindPublicNeighborhoodForMap(uint32 neighborhoodM
         }
     }
     return best;
+}
+
+Neighborhood* NeighborhoodMgr::FindRandomServerPublicNeighborhoodWithFreePlot(uint32 neighborhoodMapId) const
+{
+    std::vector<Neighborhood*> candidates;
+    for (auto const& [guid, neighborhood] : _neighborhoods)
+        if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId && neighborhood->IsServerPublic()
+            && neighborhood->GetOccupiedPlotCount() < MAX_NEIGHBORHOOD_PLOTS)
+            candidates.push_back(neighborhood.get());
+
+    if (candidates.empty())
+        return nullptr;
+
+    return Trinity::Containers::SelectRandomContainerElement(candidates);
 }
 
 void NeighborhoodMgr::VerifyNeighborhoodFactions()

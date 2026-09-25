@@ -71,6 +71,8 @@ public:
 
     // Find a public neighborhood on the given map (for visitors, no membership change)
     Neighborhood* FindPublicNeighborhoodForMap(uint32 neighborhoodMapId) const;
+    // One of the server's public neighborhoods on the map with at least one plot nobody owns, picked at random.
+    Neighborhood* FindRandomServerPublicNeighborhoodWithFreePlot(uint32 neighborhoodMapId) const;
 
     // Resolve by the counter that is persisted in the DB (neighborhoods.guid and every FK to it).
     Neighborhood* GetNeighborhoodByCounter(uint64 counter) const;

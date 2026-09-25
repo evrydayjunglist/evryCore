@@ -412,6 +412,11 @@ bool LoginQueryHolder::Initialize()
     stmt->setUInt32(0, m_bnetAccountId);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH, stmt);
 
+    // The neighborhood this character chose for her active endeavor.
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD);
+    stmt->setUInt64(0, lowGuid);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_HOUSING_ACTIVE_NEIGHBORHOOD, stmt);
+
     return res;
 }
 

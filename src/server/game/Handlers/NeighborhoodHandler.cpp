@@ -244,21 +244,15 @@ void WorldSession::HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::N
         return;
     }
 
-    // Create charter object
+    // Create charter object. The creator's Battle.net account may not sign it.
     uint64 charterId = static_cast<uint64>(player->GetGUID().GetCounter());
-    NeighborhoodCharter charter(charterId, player->GetGUID());
+    NeighborhoodCharter charter(charterId, player->GetGUID(), GetBattlenetAccountId());
     charter.SetName(neighborhoodCharterCreate.Name);
     charter.SetNeighborhoodMapID(neighborhoodCharterCreate.NeighborhoodMapID);
     charter.SetFactionFlags(neighborhoodCharterCreate.FactionFlags);
     charter.SetIsGuild(false);
 
-    // H-17: the creator does NOT count toward MIN_CHARTER_SIGNATURES. This used to
-    // call AddSignature(player->GetGUID()) under a "Creator auto-signs" comment, but
-    // AddSignature opens with a self-sign guard and returns false, so the call always
-    // failed and its result was discarded - the comment described behaviour that never
-    // happened. Stating the rule instead of pretending; whether the creator should
-    // count is a design decision, and the code now matches whichever way it is read
-    // today rather than claiming the opposite.
+    // The creator does not count toward MIN_CHARTER_SIGNATURES; whether retail counts her is not known.
 
     // Persist to DB
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
@@ -334,10 +328,15 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
     uint64 charterId = static_cast<uint64>(player->GetGUID().GetCounter());
     ObjectGuid charterGuid = ObjectGuid::Create<HighGuid::Housing>(0, 0, 0, charterId);
 
-    // Capture the signatures the edit is about to discard. DeleteFromDB drops every signature
-    // row and the re-save only re-adds the creator's, so every co-signer silently loses their
-    // signature here. Their clients still believe they have signed this charter until told
-    // otherwise — that notification is SMSG_NEIGHBORHOOD_CHARTER_SIGNATURE_REMOVED (0x5B0005).
+    // Changing the charter's settings removes its signatures (GlobalStrings HOUSING_CREATENEIGHBORHOOD_SETTINGS_WARNING);
+    // an edit that changes nothing keeps them. Each signer whose signature is dropped is told with
+    // SMSG_NEIGHBORHOOD_CHARTER_SIGNATURE_REMOVED, so her charter panel does not keep a stale "signed" state.
+    NeighborhoodCharter charter(charterId, player->GetGUID(), GetBattlenetAccountId());
+    charter.SetName(neighborhoodCharterEdit.Name);
+    charter.SetNeighborhoodMapID(neighborhoodCharterEdit.NeighborhoodMapID);
+    charter.SetFactionFlags(neighborhoodCharterEdit.FactionFlags);
+    charter.SetIsGuild(false);
+
     std::vector<ObjectGuid> droppedSigners;
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER);
@@ -352,34 +351,20 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
             NeighborhoodCharter oldCharter(charterId, ObjectGuid::Empty);
             if (oldCharter.LoadFromDB(oldCharterResult, oldSigResult))
             {
-                for (ObjectGuid const& signer : oldCharter.GetSignatures())
-                {
-                    if (signer != player->GetGUID())
-                        droppedSigners.push_back(signer);
-                }
+                if (oldCharter.HasSameSettings(neighborhoodCharterEdit.Name, neighborhoodCharterEdit.NeighborhoodMapID, neighborhoodCharterEdit.FactionFlags))
+                    charter.CopySignaturesFrom(oldCharter);
+                else
+                    droppedSigners = oldCharter.GetSignatures();
             }
         }
     }
 
-    NeighborhoodCharter charter(charterId, player->GetGUID());
-    charter.SetName(neighborhoodCharterEdit.Name);
-    charter.SetNeighborhoodMapID(neighborhoodCharterEdit.NeighborhoodMapID);
-    charter.SetFactionFlags(neighborhoodCharterEdit.FactionFlags);
-    charter.SetIsGuild(false);
-
-    // H-17: the creator does NOT count toward MIN_CHARTER_SIGNATURES. This used to
-    // call AddSignature(player->GetGUID()) under a "Creator auto-signs" comment, but
-    // AddSignature opens with a self-sign guard and returns false, so the call always
-    // failed and its result was discarded - the comment described behaviour that never
-    // happened. Stating the rule instead of pretending; whether the creator should
-    // count is a design decision, and the code now matches whichever way it is read
-    // today rather than claiming the opposite.
-
-    // Re-persist
+    // Re-persist. Saved before the next packet is handled, as NeighborhoodCharter::AddSignature saves a signature:
+    // a queued save could run after a signature added in between and delete it without telling the signer.
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     NeighborhoodCharter::DeleteFromDB(charterId, trans);
     charter.SaveToDB(trans);
-    CharacterDatabase.CommitTransaction(trans);
+    CharacterDatabase.DirectCommitTransaction(trans);
 
     // Tell every co-signer whose signature the edit just wiped, so their charter panel drops
     // the stale "signed" state instead of holding it until relog.
@@ -481,10 +466,11 @@ void WorldSession::HandleNeighborhoodCharterFinalize(WorldPackets::Neighborhood:
 
     if (neighborhood)
     {
-        // Clean up charter from DB
+        // Clean up charter from DB, straight away for the same reason as the edit: its signers are free to sign
+        // another charter as soon as this one is gone.
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
         NeighborhoodCharter::DeleteFromDB(charterId, trans);
-        CharacterDatabase.CommitTransaction(trans);
+        CharacterDatabase.DirectCommitTransaction(trans);
 
         WorldPackets::Neighborhood::NeighborhoodCharterUpdateResponse response;
         response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
@@ -571,15 +557,30 @@ void WorldSession::HandleNeighborhoodCharterAddSignature(WorldPackets::Neighborh
         return;
     }
 
-    // Add player's signature (validates not already signed, not creator)
-    if (!charter.AddSignature(player->GetGUID()))
+    // One signature per Battle.net account, never the creator's, and one open charter per account.
+    bool signedAnotherCharter = false;
+    {
+        CharacterDatabasePreparedStatement* signedStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER_SIGNED_BY_ACCOUNT);
+        signedStmt->setUInt32(0, GetBattlenetAccountId());
+        if (PreparedQueryResult signedResult = CharacterDatabase.Query(signedStmt))
+        {
+            do
+            {
+                if (signedResult->Fetch()[0].GetUInt64() != charterId)
+                    signedAnotherCharter = true;
+            } while (signedResult->NextRow());
+        }
+    }
+
+    HousingResult signResult = charter.AddSignature(player->GetGUID(), GetBattlenetAccountId(), signedAnotherCharter);
+    if (signResult != HOUSING_RESULT_SUCCESS)
     {
         WorldPackets::Neighborhood::NeighborhoodCharterAddSignatureResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_DUPLICATE_CHARTER_SIGNATURE);
+        response.Result = static_cast<uint8>(signResult);
         SendPacket(response.Write());
 
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterAddSignature: Player {} could not sign charter {}",
-            player->GetGUID().ToString(), charterId);
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterAddSignature: Player {} could not sign charter {} (result {})",
+            player->GetGUID().ToString(), charterId, uint32(signResult));
         return;
     }
 
@@ -1344,36 +1345,17 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     bool const joinAsResident = !neighborhood->IsMember(player->GetGUID());
     if (joinAsResident)
     {
-        int32 faction = neighborhood->GetFactionRestriction();
-        if (faction != NEIGHBORHOOD_FACTION_NONE)
-        {
-            uint32 team = player->GetTeam();
-            if ((faction == NEIGHBORHOOD_FACTION_HORDE && team != HORDE) ||
-                (faction == NEIGHBORHOOD_FACTION_ALLIANCE && team != ALLIANCE))
-            {
-                WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-                response.Result = static_cast<uint8>(HOUSING_RESULT_INCORRECT_FACTION);
-                SendPacket(response.Write());
-
-                TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} faction mismatch for neighborhood '{}'",
-                    player->GetGUID().ToString(), neighborhood->GetName());
-                return;
-            }
-        }
-
-        // Private (non-public) neighborhoods require a matching pending invite,
-        // unless the player is already an owner/manager of that neighborhood.
-        if (!neighborhood->IsPublic()
-            && !neighborhood->HasPendingInvite(player->GetGUID())
-            && !neighborhood->IsManager(player->GetGUID())
-            && !neighborhood->IsOwner(player->GetGUID()))
+        HousingResult const joinResult = Neighborhood::CheckResidentJoin(neighborhood->IsServerPublic(), neighborhood->IsPublic(),
+            neighborhood->GetFactionRestriction(), neighborhood->GetGuildId(), player->GetTeam(), player->GetGuildId(),
+            neighborhood->HasPendingInvite(player->GetGUID()) || neighborhood->IsManager(player->GetGUID()) || neighborhood->IsOwner(player->GetGUID()));
+        if (joinResult != HOUSING_RESULT_SUCCESS)
         {
             WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-            response.Result = static_cast<uint8>(HOUSING_RESULT_MISSING_PRIVATE_NEIGHBORHOOD_INVITE);
+            response.Result = static_cast<uint8>(joinResult);
             SendPacket(response.Write());
 
-            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} has no pending invite to private neighborhood '{}'",
-                player->GetGUID().ToString(), neighborhood->GetName());
+            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} may not join neighborhood '{}' (result {})",
+                player->GetGUID().ToString(), neighborhood->GetName(), uint32(joinResult));
             return;
         }
     }
@@ -1575,6 +1557,10 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         GetBattlenetAccount().ClearUpdateMask(true);
         houseEntity.ClearUpdateMask(true);
     }
+
+    // Her first house makes its neighborhood her active one (hbcd3 1305140: NeighborhoodGUID and the endeavor there
+    // are set right after the purchase).
+    player->UpdateInitiativeComponent();
 
     TC_LOG_INFO("housing", "Player {} {} a house on plot {} in neighborhood '{}' for {} copper",
         player->GetGUID().ToString(), packedHouse ? "unpacked" : "bought", resolvedPlotIndex, neighborhood->GetName(), price);
@@ -2279,6 +2265,16 @@ void WorldSession::HandleInitiativeUpdateActiveNeighborhood(WorldPackets::Neighb
 
     ObjectGuid nhObjGuid = neighborhood->GetGuid();
     uint64 nhGuid = nhObjGuid.GetCounter();
+
+    // A character has one active endeavor, in a neighborhood where her account has a house (Wowhead's endeavors guide).
+    // The choice is kept for her, and her deeds and the house experience they give go there from now on. A neighborhood
+    // without a house of the account is only answered with its endeavor, as before.
+    Housing const* house = player->GetHousingForNeighborhood(nhObjGuid);
+    if (house && !house->IsPacked())
+        player->SetHousingActiveNeighborhood(nhObjGuid);
+    else
+        TC_LOG_DEBUG("housing", "CMSG_INITIATIVE_UPDATE_ACTIVE_NEIGHBORHOOD: {}'s account has no house in neighborhood {}; the active one is unchanged",
+            player->GetGUID().ToString(), nhObjGuid.ToString());
 
     // Send initiative service status to confirm the service is active
     sInitiativeManager.SendInitiativeServiceStatus(this, true);

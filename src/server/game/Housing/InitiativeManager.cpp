@@ -16,8 +16,6 @@
  */
 
 #include "InitiativeManager.h"
-#include "BattlenetAccountMgr.h"
-#include "CharacterCache.h"
 #include "CharacterDatabase.h"
 #include "CriteriaHandler.h"
 #include "Housing.h"
@@ -261,14 +259,16 @@ void InitiativeManager::LoadFromDB()
                 do
                 {
                     Field* f = contribResult->Fetch();
-                    uint64 playerGuid = f[0].GetUInt64();
-                    uint32 taskId     = f[1].GetUInt32();
-                    uint32 amount     = f[2].GetUInt32();
-                    initiative->PlayerContributions[playerGuid][taskId] = amount;
+                    uint32 bnetAccountId = f[0].GetUInt32();
+                    ObjectGuid::LowType characterGuid = f[1].GetUInt64();
+                    uint32 taskId     = f[2].GetUInt32();
+                    uint32 amount     = f[3].GetUInt32();
+                    initiative->AccountContributions[bnetAccountId][taskId] = amount;
+                    initiative->ContributorCharacters[bnetAccountId] = characterGuid;
                 } while (contribResult->NextRow());
             }
 
-            // Load per-player reward claims
+            // Load the coffer claims, one per Battle.net account
             CharacterDatabasePreparedStatement* claimStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_INITIATIVE_REWARD_CLAIMS);
             claimStmt->setUInt64(0, initiative->DbId);
             PreparedQueryResult claimResult = CharacterDatabase.Query(claimStmt);
@@ -278,15 +278,15 @@ void InitiativeManager::LoadFromDB()
                 {
                     Field* f = claimResult->Fetch();
                     uint32 milestoneIdx = f[0].GetUInt32();
-                    uint64 claimPlayer  = f[1].GetUInt64();
-                    initiative->RewardClaims[milestoneIdx].insert(claimPlayer);
+                    uint32 claimAccount = f[1].GetUInt32();
+                    initiative->RewardClaims[milestoneIdx].insert(claimAccount);
                 } while (claimResult->NextRow());
             }
         }
 
         TC_LOG_DEBUG("housing", "InitiativeManager::LoadFromDB: Loaded initiative {} (DB2 ID {}) for neighborhood {} - progress={:.2f} completed={} contributors={}",
             initiative->DbId, initiative->InitiativeID, initiative->NeighborhoodGuid,
-            initiative->Progress, initiative->Completed, uint32(initiative->PlayerContributions.size()));
+            initiative->Progress, initiative->Completed, uint32(initiative->AccountContributions.size()));
 
         uint64 nhGuid = initiative->NeighborhoodGuid;
         _activeInitiatives[nhGuid].push_back(std::move(initiative));
@@ -554,15 +554,16 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
     // Contribution points this update is worth, before dampening.
     float contribution = float(contributionWeight) * float(progressDelta);
 
-    uint64 contribGuid = contributor ? contributor->GetGUID().GetCounter() : UI64LIT(0);
-    if (contributor)
+    // Contributions belong to the contributor's Battle.net account, shared by every character of it.
+    uint32 const contribAccount = contributor && contributor->GetSession() ? contributor->GetSession()->GetBattlenetAccountId() : 0;
+    if (contribAccount)
     {
-        // Repeat contributions to the same task by the same player are worth progressively less —
+        // Repeat contributions to the same task by the same account are worth progressively less —
         // that is exactly what InitiativeTask.RepetitionContributionDampeningCurve is for. The curve
-        // is sampled at the contribution this player has already banked on this task.
+        // is sampled at the contribution this account has already banked on this task.
         uint32 alreadyOnTask = 0;
-        auto playerItr = initiative->PlayerContributions.find(contribGuid);
-        if (playerItr != initiative->PlayerContributions.end())
+        auto playerItr = initiative->AccountContributions.find(contribAccount);
+        if (playerItr != initiative->AccountContributions.end())
         {
             auto perTaskItr = playerItr->second.find(taskID);
             if (perTaskItr != playerItr->second.end())
@@ -574,18 +575,19 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
 
     uint32 award = static_cast<uint32>(std::lround(contribution));
 
-    // Track per-player contribution
-    if (contributor && award)
+    // Track the account's contribution
+    if (contribAccount && award)
     {
-        uint32 totalBefore = GetPlayerContribution(neighborhoodGuid, initiativeID, contribGuid);
+        uint32 totalBefore = GetAccountContribution(neighborhoodGuid, initiativeID, contribAccount);
 
-        initiative->PlayerContributions[contribGuid][taskID] += award;
-        PersistContribution(initiative->DbId, contribGuid, taskID, award);
+        initiative->AccountContributions[contribAccount][taskID] += award;
+        initiative->ContributorCharacters[contribAccount] = contributor->GetGUID().GetCounter();
+        PersistContribution(initiative->DbId, contribAccount, contributor->GetGUID().GetCounter(), taskID, award);
         UpdatePlayerInitiativeFavor(contributor, neighborhoodGuid);
 
         // Endeavor task contributions pay House XP. This is the only producer of
         // HOUSING_FAVOR_SOURCE_INITIATIVE_TASK.
-        GrantInitiativeTaskFavor(contributor, initiativeID, totalBefore, totalBefore + award);
+        GrantInitiativeTaskFavor(contributor, neighborhoodGuid, initiativeID, totalBefore, totalBefore + award);
 
         // Float the "+Neighborly" world text the retail client shows for a neighborhood deed. In the
         // build-68275 housing capture this lands immediately before the SMSG_CRITERIA_UPDATE batch
@@ -754,12 +756,9 @@ void InitiativeManager::OnCriteriaProgress(Player* player, uint32 criteriaId)
     if (itr == _criteriaToTasks.end())
         return;
 
-    // Player must have housing with a neighborhood
-    Housing* housing = player->GetHousing();
-    if (!housing)
-        return;
-
-    ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
+    // Deeds count for the character's active endeavor: the neighborhood she chose on the dashboard, where her account
+    // has a house (Player::GetHousingActiveNeighborhood).
+    ObjectGuid neighborhoodGuid = player->GetHousingActiveNeighborhood();
     if (neighborhoodGuid.IsEmpty())
         return;
 
@@ -794,7 +793,7 @@ void InitiativeManager::OnCriteriaProgress(Player* player, uint32 criteriaId)
     }
 }
 
-bool InitiativeManager::HasUnclaimedRewards(uint64 neighborhoodGuid, uint32 initiativeID, uint64 playerGuid) const
+bool InitiativeManager::HasUnclaimedRewards(uint64 neighborhoodGuid, uint32 initiativeID, uint32 bnetAccountId) const
 {
     auto itr = _activeInitiatives.find(neighborhoodGuid);
     if (itr == _activeInitiatives.end())
@@ -811,10 +810,10 @@ bool InitiativeManager::HasUnclaimedRewards(uint64 neighborhoodGuid, uint32 init
             if (!reached)
                 continue;
 
-            // Check if this player already claimed this milestone
+            // Check if this account already claimed this milestone
             auto claimItr = initiative->RewardClaims.find(index);
-            if (claimItr == initiative->RewardClaims.end() || claimItr->second.find(playerGuid) == claimItr->second.end())
-                return true; // Reached but not claimed by this player
+            if (claimItr == initiative->RewardClaims.end() || claimItr->second.find(bnetAccountId) == claimItr->second.end())
+                return true; // Reached but not claimed by this account
         }
     }
     return false;
@@ -822,10 +821,10 @@ bool InitiativeManager::HasUnclaimedRewards(uint64 neighborhoodGuid, uint32 init
 
 bool InitiativeManager::ClaimMilestoneReward(uint64 neighborhoodGuid, uint32 initiativeID, uint32 milestoneIndex, Player* player)
 {
-    if (!player)
+    if (!player || !player->GetSession())
         return false;
 
-    uint64 playerGuid = player->GetGUID().GetCounter();
+    uint32 const bnetAccountId = player->GetSession()->GetBattlenetAccountId();
 
     auto itr = _activeInitiatives.find(neighborhoodGuid);
     if (itr == _activeInitiatives.end())
@@ -841,13 +840,13 @@ bool InitiativeManager::ClaimMilestoneReward(uint64 neighborhoodGuid, uint32 ini
         if (msItr == initiative->MilestonesReached.end() || !msItr->second)
             return false;
 
-        // Check not already claimed
-        if (initiative->RewardClaims[milestoneIndex].count(playerGuid))
+        // Check not already claimed by the account
+        if (initiative->RewardClaims[milestoneIndex].count(bnetAccountId))
             return false;
 
         // Record the claim
-        initiative->RewardClaims[milestoneIndex].insert(playerGuid);
-        PersistRewardClaim(initiative->DbId, milestoneIndex, playerGuid);
+        initiative->RewardClaims[milestoneIndex].insert(bnetAccountId);
+        PersistRewardClaim(initiative->DbId, milestoneIndex, bnetAccountId);
 
         // Find the milestone DB2 entry to look up rewards
         uint32 cycleID = GetActiveCycleForInitiative(initiativeID);
@@ -858,7 +857,7 @@ bool InitiativeManager::ClaimMilestoneReward(uint64 neighborhoodGuid, uint32 ini
             {
                 if (static_cast<uint32>(ms.MilestoneOrderIndex) == milestoneIndex)
                 {
-                    GrantMilestoneRewards(player, ms.MilestoneID);
+                    GrantMilestoneRewards(player, neighborhoodGuid, ms.MilestoneID);
                     break;
                 }
             }
@@ -888,7 +887,7 @@ void InitiativeManager::SendRewardsAvailable(Player* player) const
     // Retail answers the login's CMSG_NEIGHBORHOOD_INITIATIVE_SERVICE_STATUS_CHECK with SMSG_INITIATIVE_REWARD_AVAILABLE for
     // every house whose neighborhood has a reached milestone this player has not claimed yet.
     WorldPackets::Housing::InitiativeRewardAvailable packet;
-    uint64 const playerCounter = player->GetGUID().GetCounter();
+    uint32 const bnetAccountId = player->GetSession()->GetBattlenetAccountId();
     for (Housing const* housing : player->GetAllHousings())
     {
         auto itr = _activeInitiatives.find(housing->GetNeighborhoodGuid().GetCounter());
@@ -903,7 +902,7 @@ void InitiativeManager::SendRewardsAvailable(Player* player) const
                 if (!reached)
                     continue;
                 auto claims = initiative->RewardClaims.find(index);
-                if (claims == initiative->RewardClaims.end() || !claims->second.count(playerCounter))
+                if (claims == initiative->RewardClaims.end() || !claims->second.count(bnetAccountId))
                 {
                     unclaimed = true;
                     break;
@@ -980,10 +979,8 @@ void InitiativeManager::SendPlayerInitiativeInfo(WorldSession* session, ObjectGu
             }
         }
 
-        float playerContribution = 0.0f;
-        if (session->GetPlayer())
-            playerContribution = static_cast<float>(
-                GetPlayerContribution(neighborhoodLowGuid, active->InitiativeID, session->GetPlayer()->GetGUID().GetCounter()));
+        float playerContribution = static_cast<float>(
+            GetAccountContribution(neighborhoodLowGuid, active->InitiativeID, session->GetBattlenetAccountId()));
 
         result.RemainingDuration = remainingDuration;
         result.CurrentInitiativeID = static_cast<int32>(active->InitiativeID);
@@ -1010,27 +1007,10 @@ void InitiativeManager::SendPlayerInitiativeInfo(WorldSession* session, ObjectGu
 
 void InitiativeManager::SendActivityLog(WorldSession* session, ObjectGuid const& neighborhoodGuid, uint64 neighborhoodLowGuid) const
 {
-    // Each entry names the contributor's Battle.net account and character, as retail's do (hbcd3 1305730).
+    // Each entry names the contributor's Battle.net account and character, as retail's do (hbcd3 1305730). The
+    // character is the one of that account that contributed last.
     WorldPackets::Housing::GetInitiativeActivityLogResult result;
     result.NeighborhoodGuid = neighborhoodGuid;
-
-    std::unordered_map<uint64, ObjectGuid> bnetAccountByCharacter;
-    auto getBnetAccountGuid = [&bnetAccountByCharacter](ObjectGuid playerGuid)
-    {
-        auto [itr, inserted] = bnetAccountByCharacter.try_emplace(playerGuid.GetCounter());
-        if (inserted)
-        {
-            uint32 bnetAccountId = 0;
-            if (Player* contributor = ObjectAccessor::FindConnectedPlayer(playerGuid))
-                bnetAccountId = contributor->GetSession()->GetBattlenetAccountId();
-            else if (uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(playerGuid))
-                bnetAccountId = Battlenet::AccountMgr::GetIdByGameAccount(accountId);
-
-            if (bnetAccountId)
-                itr->second = ObjectGuid::Create<HighGuid::BNetAccount>(bnetAccountId);
-        }
-        return itr->second;
-    };
 
     // Populate with completed initiatives as log entries
     auto itr = _activeInitiatives.find(neighborhoodLowGuid);
@@ -1043,16 +1023,18 @@ void InitiativeManager::SendActivityLog(WorldSession* session, ObjectGuid const&
 
             for (auto const& [taskId, taskProgress] : initiative->TaskProgress)
             {
-                // If we have per-player contribution data, emit one entry per contributor
+                // One entry per contributing account when there are any
                 bool hasContributors = false;
-                for (auto const& [playerGuid, taskContribs] : initiative->PlayerContributions)
+                for (auto const& [bnetAccountId, taskContribs] : initiative->AccountContributions)
                 {
                     auto taskContribItr = taskContribs.find(taskId);
                     if (taskContribItr != taskContribs.end() && taskContribItr->second > 0)
                     {
                         WorldPackets::Housing::NICompletedTasksEntry entry;
-                        entry.PlayerGuid = ObjectGuid::Create<HighGuid::Player>(playerGuid);
-                        entry.BnetAccountGuid = getBnetAccountGuid(entry.PlayerGuid);
+                        auto character = initiative->ContributorCharacters.find(bnetAccountId);
+                        if (character != initiative->ContributorCharacters.end() && character->second)
+                            entry.PlayerGuid = ObjectGuid::Create<HighGuid::Player>(character->second);
+                        entry.BnetAccountGuid = ObjectGuid::Create<HighGuid::BNetAccount>(bnetAccountId);
                         entry.ContributionAmount = float(taskContribItr->second);
                         entry.CompletionTime = initiative->StartTime;
                         entry.TaskID = taskId;
@@ -1061,7 +1043,7 @@ void InitiativeManager::SendActivityLog(WorldSession* session, ObjectGuid const&
                     }
                 }
 
-                // Fallback: if no per-player data, emit aggregate entry with empty PlayerGuid
+                // Fallback: if no per-account data, emit aggregate entry with empty PlayerGuid
                 if (!hasContributors)
                 {
                     WorldPackets::Housing::NICompletedTasksEntry entry;
@@ -1255,10 +1237,13 @@ void InitiativeManager::CheckAndStartInitiatives()
         });
     }
 
-    // For each neighborhood that doesn't have an active initiative, start one
+    // Public neighborhoods get their endeavor from the server ("For Public Neighborhoods, Endeavors are set by the
+    // server", Wowhead's endeavors guide). In guild and charter neighborhoods a manager starts one at the Steward
+    // ("Neighborhood Managers can start an Endeavor by talking to the Steward", GlobalStrings
+    // HOUSING_DASHBOARD_NO_ACTIVE_INITIATIVE), and until then none is active. That pick is not built yet.
     for (Neighborhood* neighborhood : sNeighborhoodMgr.GetAllNeighborhoods())
     {
-        if (!neighborhood)
+        if (!neighborhood || !neighborhood->IsServerPublic())
             continue;
 
         uint64 nhGuid = neighborhood->GetGuid().GetCounter();
@@ -1395,7 +1380,7 @@ void InitiativeManager::PersistMilestoneReached(uint64 initiativeDbId, uint32 mi
     CharacterDatabase.Execute(stmt);
 }
 
-void InitiativeManager::PersistRewardClaim(uint64 initiativeDbId, uint32 milestoneIndex, uint64 playerGuid)
+void InitiativeManager::PersistRewardClaim(uint64 initiativeDbId, uint32 milestoneIndex, uint32 bnetAccountId)
 {
     if (initiativeDbId == 0)
         return;
@@ -1404,12 +1389,12 @@ void InitiativeManager::PersistRewardClaim(uint64 initiativeDbId, uint32 milesto
     uint8 index = 0;
     stmt->setUInt64(index++, initiativeDbId);
     stmt->setUInt32(index++, milestoneIndex);
-    stmt->setUInt64(index++, playerGuid);
+    stmt->setUInt32(index++, bnetAccountId);
     stmt->setUInt32(index++, static_cast<uint32>(GameTime::GetGameTime()));
     CharacterDatabase.Execute(stmt);
 }
 
-void InitiativeManager::GrantMilestoneRewards(Player* player, uint32 milestoneID)
+void InitiativeManager::GrantMilestoneRewards(Player* player, uint64 neighborhoodGuid, uint32 milestoneID)
 {
     if (!player)
         return;
@@ -1448,10 +1433,12 @@ void InitiativeManager::GrantMilestoneRewards(Player* player, uint32 milestoneID
             }
         }
 
-        // Grant favor if set
+        // Grant favor if set, to the account's house in the endeavor's neighborhood
         if (reward->Favor > 0)
         {
-            if (Housing* housing = player->GetHousing())
+            Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(neighborhoodGuid);
+            Housing* housing = neighborhood ? player->GetHousingForNeighborhood(neighborhood->GetGuid()) : nullptr;
+            if (housing && !housing->IsPacked())
             {
                 housing->AddFavor(static_cast<uint64>(reward->Favor), HOUSING_FAVOR_SOURCE_INITIATIVE_CHEST);
                 TC_LOG_DEBUG("housing", "InitiativeManager::GrantMilestoneRewards: Granted {} favor to player {}",
@@ -1484,7 +1471,7 @@ void InitiativeManager::GrantMilestoneRewards(Player* player, uint32 milestoneID
     }
 }
 
-void InitiativeManager::PersistContribution(uint64 initiativeDbId, uint64 playerGuid, uint32 taskId, uint32 amount)
+void InitiativeManager::PersistContribution(uint64 initiativeDbId, uint32 bnetAccountId, ObjectGuid::LowType characterGuid, uint32 taskId, uint32 amount)
 {
     if (initiativeDbId == 0)
         return; // Not yet persisted (just inserted, will get ID on next load)
@@ -1492,14 +1479,15 @@ void InitiativeManager::PersistContribution(uint64 initiativeDbId, uint64 player
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_INITIATIVE_CONTRIBUTION);
     uint8 index = 0;
     stmt->setUInt64(index++, initiativeDbId);
-    stmt->setUInt64(index++, playerGuid);
+    stmt->setUInt32(index++, bnetAccountId);
+    stmt->setUInt64(index++, characterGuid);
     stmt->setUInt32(index++, taskId);
     stmt->setUInt32(index++, amount);
     stmt->setUInt32(index++, static_cast<uint32>(GameTime::GetGameTime()));
     CharacterDatabase.Execute(stmt);
 }
 
-uint32 InitiativeManager::GetPlayerContribution(uint64 neighborhoodGuid, uint32 initiativeID, uint64 playerGuid) const
+uint32 InitiativeManager::GetAccountContribution(uint64 neighborhoodGuid, uint32 initiativeID, uint32 bnetAccountId) const
 {
     auto nhItr = _activeInitiatives.find(neighborhoodGuid);
     if (nhItr == _activeInitiatives.end())
@@ -1510,8 +1498,8 @@ uint32 InitiativeManager::GetPlayerContribution(uint64 neighborhoodGuid, uint32 
         if (initiative->InitiativeID != initiativeID)
             continue;
 
-        auto playerItr = initiative->PlayerContributions.find(playerGuid);
-        if (playerItr == initiative->PlayerContributions.end())
+        auto playerItr = initiative->AccountContributions.find(bnetAccountId);
+        if (playerItr == initiative->AccountContributions.end())
             return 0;
 
         uint32 total = 0;
@@ -1522,10 +1510,10 @@ uint32 InitiativeManager::GetPlayerContribution(uint64 neighborhoodGuid, uint32 
     return 0;
 }
 
-std::vector<std::pair<uint64, uint32>> InitiativeManager::GetTopContributors(
+std::vector<std::pair<uint32, uint32>> InitiativeManager::GetTopContributors(
     uint64 neighborhoodGuid, uint32 initiativeID, uint32 limit) const
 {
-    std::vector<std::pair<uint64, uint32>> result;
+    std::vector<std::pair<uint32, uint32>> result;
 
     auto nhItr = _activeInitiatives.find(neighborhoodGuid);
     if (nhItr == _activeInitiatives.end())
@@ -1536,14 +1524,14 @@ std::vector<std::pair<uint64, uint32>> InitiativeManager::GetTopContributors(
         if (initiative->InitiativeID != initiativeID)
             continue;
 
-        // Aggregate per-player totals
-        for (auto const& [playerGuid, taskContribs] : initiative->PlayerContributions)
+        // Aggregate per-account totals
+        for (auto const& [bnetAccountId, taskContribs] : initiative->AccountContributions)
         {
             uint32 total = 0;
             for (auto const& [taskId, amount] : taskContribs)
                 total += amount;
             if (total > 0)
-                result.emplace_back(playerGuid, total);
+                result.emplace_back(bnetAccountId, total);
         }
         break;
     }
@@ -1569,7 +1557,7 @@ void InitiativeManager::UpdatePlayerInitiativeFavor(Player* player, uint64 neigh
     if (!active)
         return;
 
-    uint32 totalFavor = GetPlayerContribution(neighborhoodGuid, active->InitiativeID, player->GetGUID().GetCounter());
+    uint32 totalFavor = GetAccountContribution(neighborhoodGuid, active->InitiativeID, player->GetSession()->GetBattlenetAccountId());
     player->UpdateInitiativeFavor(totalFavor);
 }
 
@@ -1606,20 +1594,23 @@ float InitiativeManager::GetRepetitionDampening(InitiativeTaskEntry const* taskE
     return std::min(value, 1.0f);
 }
 
-void InitiativeManager::GrantInitiativeTaskFavor(Player* player, uint32 initiativeID, uint32 contributionBefore, uint32 contributionAfter) const
+void InitiativeManager::GrantInitiativeTaskFavor(Player* player, uint64 neighborhoodGuid, uint32 initiativeID, uint32 contributionBefore, uint32 contributionAfter) const
 {
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
-    if (!housing)
+    // The experience goes to the house of the account in the endeavor's neighborhood (Wowhead's house guide: endeavor
+    // experience applies to the house "for which the character ... has the Endeavor active").
+    Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(neighborhoodGuid);
+    Housing* housing = neighborhood ? player->GetHousingForNeighborhood(neighborhood->GetGuid()) : nullptr;
+    if (!housing || housing->IsPacked())
         return;
 
     // "Favor" is House XP: HouseFavorBar.lua drives an XP status bar off HOUSE_LEVEL_FAVOR_UPDATED,
     // measuring houseFavor between C_Housing.GetHouseLevelFavorForLevel(level) and (level + 1).
     // InitiativeCycle.HouseXPCap is the ceiling on how much House XP one player may take out of a
     // single endeavor cycle — the dashboard shows the remainder via
-    // C_NeighborhoodInitiative.GetAvailableHouseXP(). Applying the cap to the player's cumulative
+    // C_NeighborhoodInitiative.GetAvailableHouseXP(). Applying the cap to the account's cumulative
     // contribution (which is already persisted) keeps this stateless: no new column, no migration.
     uint32 cap = 0;
     if (uint32 cycleID = GetActiveCycleForInitiative(initiativeID))

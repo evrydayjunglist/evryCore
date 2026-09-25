@@ -955,11 +955,12 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_DEL_NEIGHBORHOOD_INVITE, "DELETE FROM neighborhood_invites WHERE neighborhoodGuid = ? AND inviteeGuid = ?", CONNECTION_ASYNC);
 
     // Neighborhood Charters
-    PrepareStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER, "SELECT id, creatorGuid, name, neighborhoodMapId, factionFlags, isGuild, createTime FROM neighborhood_charters WHERE id = ?", CONNECTION_SYNCH);
-    PrepareStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER_SIGNATURES, "SELECT signerGuid FROM neighborhood_charter_signatures WHERE charterId = ?", CONNECTION_SYNCH);
-    PrepareStatement(CHAR_REP_NEIGHBORHOOD_CHARTER, "REPLACE INTO neighborhood_charters (id, creatorGuid, name, neighborhoodMapId, factionFlags, isGuild, createTime) VALUES (?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER, "SELECT id, creatorGuid, name, neighborhoodMapId, factionFlags, isGuild, createTime, creatorBnetAccountId FROM neighborhood_charters WHERE id = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER_SIGNATURES, "SELECT signerGuid, signerBnetAccountId FROM neighborhood_charter_signatures WHERE charterId = ?", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_REP_NEIGHBORHOOD_CHARTER, "REPLACE INTO neighborhood_charters (id, creatorGuid, name, neighborhoodMapId, factionFlags, isGuild, createTime, creatorBnetAccountId) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_NEIGHBORHOOD_CHARTER, "DELETE FROM neighborhood_charters WHERE id = ?", CONNECTION_ASYNC);
-    PrepareStatement(CHAR_INS_NEIGHBORHOOD_CHARTER_SIGNATURE, "INSERT INTO neighborhood_charter_signatures (charterId, signerGuid, signTime) VALUES (?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_NEIGHBORHOOD_CHARTER_SIGNATURE, "INSERT INTO neighborhood_charter_signatures (charterId, signerGuid, signerBnetAccountId, signTime) VALUES (?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_NEIGHBORHOOD_CHARTER_SIGNED_BY_ACCOUNT, "SELECT charterId FROM neighborhood_charter_signatures WHERE signerBnetAccountId = ?", CONNECTION_SYNCH);
     PrepareStatement(CHAR_DEL_NEIGHBORHOOD_CHARTER_SIGNATURES, "DELETE FROM neighborhood_charter_signatures WHERE charterId = ?", CONNECTION_ASYNC);
 
     // Neighborhood Initiatives
@@ -986,28 +987,34 @@ void CharacterDatabaseConnection::DoPrepareStatements()
         "REPLACE INTO neighborhood_initiative_milestones (initiativeDbId, milestoneIndex, reached, reachedTime) VALUES (?, ?, ?, ?)",
         CONNECTION_ASYNC);
 
-    // Neighborhood Initiative Reward Claims (per-player, per-milestone)
+    // Neighborhood Initiative Reward Claims (per Battle.net account, per milestone)
     PrepareStatement(CHAR_SEL_INITIATIVE_REWARD_CLAIMS,
-        "SELECT milestoneIndex, playerGuid, claimTime FROM neighborhood_initiative_reward_claims WHERE initiativeDbId = ?",
+        "SELECT milestoneIndex, bnetAccountId, claimTime FROM neighborhood_initiative_reward_claims WHERE initiativeDbId = ?",
         CONNECTION_SYNCH);
     PrepareStatement(CHAR_SEL_INITIATIVE_REWARD_CLAIM_PLAYER,
-        "SELECT milestoneIndex FROM neighborhood_initiative_reward_claims WHERE initiativeDbId = ? AND playerGuid = ?",
+        "SELECT milestoneIndex FROM neighborhood_initiative_reward_claims WHERE initiativeDbId = ? AND bnetAccountId = ?",
         CONNECTION_SYNCH);
     PrepareStatement(CHAR_INS_INITIATIVE_REWARD_CLAIM,
-        "INSERT IGNORE INTO neighborhood_initiative_reward_claims (initiativeDbId, milestoneIndex, playerGuid, claimTime) VALUES (?, ?, ?, ?)",
+        "INSERT IGNORE INTO neighborhood_initiative_reward_claims (initiativeDbId, milestoneIndex, bnetAccountId, claimTime) VALUES (?, ?, ?, ?)",
         CONNECTION_ASYNC);
 
-    // Neighborhood Initiative Contributions (per-player tracking)
+    // Neighborhood Initiative Contributions (per Battle.net account, with the character that contributed last)
     PrepareStatement(CHAR_INS_INITIATIVE_CONTRIBUTION,
-        "INSERT INTO neighborhood_initiative_contributions (initiativeDbId, playerGuid, taskId, amount, lastUpdated) "
-        "VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE amount = amount + VALUES(amount), lastUpdated = VALUES(lastUpdated)",
+        "INSERT INTO neighborhood_initiative_contributions (initiativeDbId, bnetAccountId, playerGuid, taskId, amount, lastUpdated) "
+        "VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE amount = amount + VALUES(amount), playerGuid = VALUES(playerGuid), lastUpdated = VALUES(lastUpdated)",
         CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_INITIATIVE_CONTRIBUTIONS,
-        "SELECT playerGuid, taskId, amount, lastUpdated FROM neighborhood_initiative_contributions WHERE initiativeDbId = ?",
+        "SELECT bnetAccountId, playerGuid, taskId, amount, lastUpdated FROM neighborhood_initiative_contributions WHERE initiativeDbId = ?",
         CONNECTION_SYNCH);
     PrepareStatement(CHAR_SEL_PLAYER_INITIATIVE_FAVOR,
-        "SELECT COALESCE(SUM(amount), 0) FROM neighborhood_initiative_contributions WHERE initiativeDbId = ? AND playerGuid = ?",
+        "SELECT COALESCE(SUM(amount), 0) FROM neighborhood_initiative_contributions WHERE initiativeDbId = ? AND bnetAccountId = ?",
         CONNECTION_SYNCH);
+
+    // The neighborhood each character chose for her active endeavor
+    PrepareStatement(CHAR_SEL_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD,
+        "SELECT neighborhoodGuid FROM character_housing_active_neighborhood WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_REP_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD,
+        "REPLACE INTO character_housing_active_neighborhood (guid, neighborhoodGuid) VALUES (?, ?)", CONNECTION_ASYNC);
 }
 
 CharacterDatabaseConnection::CharacterDatabaseConnection(MySQLConnectionInfo& connInfo, ConnectionFlags connectionFlags) : MySQLConnection(connInfo, connectionFlags)

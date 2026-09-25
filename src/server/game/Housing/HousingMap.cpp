@@ -752,6 +752,10 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     if (!Map::AddPlayerToMap(player, initPlayer))
         return false;
 
+    // The neighborhood she is in, so that a later entry to this map without a neighborhood of her own brings her back
+    // here instead of to another public one (MapManager::CreateMap). It lasts until she logs out.
+    player->SetRecentInstance(GetId(), GetInstanceId());
+
     // Force immediate visibility update so all MeshObjects (house pieces, decor) get
     // CREATE_OBJECT sent to the player NOW, not deferred to the next map tick.
     // Map::AddPlayerToMap calls UpdateObjectVisibility(false) which only sets

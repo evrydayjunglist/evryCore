@@ -40,6 +40,7 @@
 #include "Timer.h"
 #include "World.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_set>
 
@@ -198,39 +199,25 @@ void HousingMgr::LoadHouseDecorData()
 
 void HousingMgr::LoadHouseLevelData()
 {
+    // HouseLevelData.db2 has one row per level with its reward quest; the row IDs are not the levels (level 1 is row
+    // 35 in 12.1), so rows are found by their Level. The budgets and the experience needed are not in the file.
+    uint32 highestLevel = 0;
     for (HouseLevelDataEntry const* entry : sHouseLevelDataStore)
     {
         HouseLevelData& data = _houseLevelDataStore[entry->ID];
         data.ID = entry->ID;
         data.Level = entry->Level;
         data.QuestID = entry->QuestID;
-        // Budget values will be populated from HouseLevelRewardInfo DB2 (RewardType 38-41)
-        // after LoadHouseLevelRewardInfoData(). Initialize to 0 here; fallbacks applied later.
-        data.InteriorDecorPlacementBudget = 0;
-        data.ExteriorDecorPlacementBudget = 0;
-        data.RoomPlacementBudget = 0;
-        data.ExteriorFixtureBudget = 0;
-    }
-
-    // Fallback defaults if no DB2 data available
-    if (_houseLevelDataStore.empty())
-    {
-        for (uint32 level = 1; level <= 10; ++level)
-        {
-            HouseLevelData& data = _houseLevelDataStore[level];
-            data.ID = level;
-            data.Level = static_cast<int32>(level);
-            data.QuestID = 0;
-            data.InteriorDecorPlacementBudget = 0;
-            data.ExteriorDecorPlacementBudget = 0;
-            data.RoomPlacementBudget = 0;
-            data.ExteriorFixtureBudget = 0;
-        }
+        highestLevel = std::max<uint32>(highestLevel, uint32(std::max<int32>(entry->Level, 0)));
     }
 
     // Build level lookup index (indexed by Level value, not by DB2 row ID)
     for (auto& [id, entry] : _houseLevelDataStore)
         _levelDataByLevel[entry.Level] = &entry;
+
+    if (highestLevel != MAX_HOUSE_LEVEL)
+        TC_LOG_ERROR("server.loading", "HousingMgr::LoadHouseLevelData: HouseLevelData.db2 goes up to level {}, but houses are capped at level {}",
+            highestLevel, MAX_HOUSE_LEVEL);
 
     TC_LOG_DEBUG("housing", "HousingMgr::LoadHouseLevelData: Loaded {} HouseLevelData entries", uint32(_houseLevelDataStore.size()));
 }
@@ -740,12 +727,6 @@ std::string HousingMgr::GenerateNeighborhoodName(uint32 neighborhoodMapId) const
     return Trinity::StringFormat("{}-{}-{}", id1, id2, id3);
 }
 
-uint32 HousingMgr::GetMaxDecorForLevel(uint32 level) const
-{
-    // MaxDecorCount not in HouseLevelData DB2; use fallback formula
-    return level * 25;
-}
-
 uint32 HousingMgr::GetQuestForLevel(uint32 level) const
 {
     HouseLevelData const* levelData = GetLevelData(level);
@@ -755,121 +736,71 @@ uint32 HousingMgr::GetQuestForLevel(uint32 level) const
     return 0;
 }
 
-// Retail-verified cumulative favor thresholds to REACH each level.
-// Captured by running /script print(C_Housing.GetHouseLevelFavorForLevel(N))
-// for N=2..9 on a live retail 12.0.1.66838 client. These values are NOT in
-// any DB2 and NOT sent over the wire — the client keeps them in a C++
-// binary-search table initialized at startup.
-//
-// Lua UI semantics (verified from Blizzard_HousingDashboardHouseUpgrade.lua):
-//   - houseFavor stored on the Housing/3 entity is CUMULATIVE lifetime favor
-//   - GetHouseLevelFavorForLevel(N) = cumulative favor needed to UNLOCK level N
-//   - Progress bar = (currentFavor - threshold[level]) / (threshold[level+1] - threshold[level])
-//   - CanUpgrade(level) = currentFavor >= threshold[level]
-//
-// Level-up gating is server-side and not client-callable — there is no
-// C_Housing.UpgradeHouse API. For levels 2..6 the HouseLevelData DB2 has a
-// QuestID, so the NPC most likely offers that quest once favor crosses the
-// threshold (not yet verified from sniff). Levels 7..9 have QuestID=0 —
-// gate unknown. Store-only for now; do NOT use to trigger level-up until
-// the NPC/auto-level mechanism is sniff-verified.
-uint32 HousingMgr::GetFavorThresholdForLevel(uint32 level) const
+// Total house experience ("favor") a house needs for each level. The client keeps this table itself
+// (C_Housing.GetHouseLevelFavorForLevel); nothing sends it. Levels 2 to 9 agree in every source (the wiki's Housing page,
+// Wowhead's house guide, WoWDB and the earlier C_Housing reads). For levels 10 to 12 the wiki gives 15700, 18700 and
+// 21900, while Wowhead (updated 15 August 2026) and WoWDB give 15750, 18850 and 22200; Wowhead's are used until a 12.1
+// capture of a level-up shows which is right.
+/*static*/ uint32 HousingMgr::GetFavorThresholdForLevel(uint32 level)
 {
-    //               L1  L2     L3     L4     L5     L6     L7      L8       L9
-    static constexpr uint32 Thresholds[] = {
-        /* L1 */ 0,     // starter — no favor needed
-        /* L2 */ 10,
-        /* L3 */ 1200,
-        /* L4 */ 2400,
-        /* L5 */ 3700,
-        /* L6 */ 5700,
-        /* L7 */ 7900,
-        /* L8 */ 10300,
-        /* L9 */ 12900,
+    static constexpr std::array<uint32, MAX_HOUSE_LEVEL + 1> Thresholds =
+    {
+        0,      // no level 0
+        0,      // level 1: every house starts here
+        10, 1200, 2400, 3700, 5700, 7900, 10300, 12900,
+        15750, 18850, 22200,
     };
-    constexpr uint32 MaxLevel = sizeof(Thresholds) / sizeof(Thresholds[0]) - 1;  // 9
-    if (level <= MaxLevel)
-        return Thresholds[level];
-    // Above the verified range, hold at L9 — extrapolation would be a guess.
-    return Thresholds[MaxLevel];
+    return Thresholds[std::min(level, MAX_HOUSE_LEVEL)];
 }
 
-// Retail-verified budget tables for levels 1..7, decoded from every Housing/3
-// CREATE block in dump_12.0.1.66838_2026-04-15_09-35-59 idx 9984 (n=47).
-// Every block at a given level has the same 4 values — zero variance.
-//   L1: Interior=910   Exterior=200  Room=1000  Fixture=19
-//   L2: Interior=1155  Exterior=200  Room=2000  Fixture=24
-//   L3: Interior=1450  Exterior=250  Room=3000  Fixture=30
-//   L4: Interior=1745  Exterior=250  Room=4000  Fixture=36
-//   L5: Interior=2050  Exterior=250  Room=5000  Fixture=43
-//   L6: Interior=2360  Exterior=250  Room=5000  Fixture=50
-//   L7: Interior=3180  Exterior=250  Room=5000  Fixture=68
-// Levels above 7 extrapolated linearly until a sniff covers higher tiers.
-// The HouseLevelData DB2 (hotfixes.house_level_data) only carries
-// ID/Level/QuestID — no budget columns — so this fallback is the hot path.
-//
-// #16 Outdoor Lighting (A3): 12.0.7 raised the EXTERIOR decor limit alongside
-// outdoor light placement — houses level 5-6 -> 300, levels 7+ -> 350 (per the
-// small-activities blueprint; the 66838 dump predates 12.0.7 so these two tiers
-// are DOCUMENTED-not-DB2-confirmed and flagged CAPTURE-BLOCKED until a 12.0.7
-// CREATE block is sniffed). Interior/room/fixture values are unchanged. The
-// exterior budget is now genuinely CHARGED on placement (see Housing.cpp M2), so
-// these caps are enforced rather than cosmetic.
-namespace {
-    struct RetailBudget { uint32 interior, exterior, room, fixture; };
-    static constexpr RetailBudget RetailBudgetByLevel[] = {
-        /* 0 */ {   0,   0,    0,  0 },  // unused
-        /* 1 */ { 910, 200, 1000, 19 },
-        /* 2 */ {1155, 200, 2000, 24 },
-        /* 3 */ {1450, 250, 3000, 30 },
-        /* 4 */ {1745, 250, 4000, 36 },
-        /* 5 */ {2050, 300, 5000, 43 },  // exterior 250->300 (12.0.7 #16, DOCUMENTED)
-        /* 6 */ {2360, 300, 5000, 50 },  // exterior 250->300 (12.0.7 #16, DOCUMENTED)
-        /* 7 */ {3180, 350, 5000, 68 },  // exterior 250->350 (12.0.7 #16, DOCUMENTED)
-    };
-    constexpr uint32 MAX_VERIFIED_LEVEL = 7;
-
-    RetailBudget RetailBudgetFor(uint32 level)
-    {
-        if (level >= 1 && level <= MAX_VERIFIED_LEVEL)
-            return RetailBudgetByLevel[level];
-        if (level == 0)
-            return RetailBudgetByLevel[1];
-        // Above verified tier: hold at L7 values (conservative — bump once sniffed)
-        return RetailBudgetByLevel[MAX_VERIFIED_LEVEL];
-    }
+// The four maximums of each house level, in the order the house entity sends them. Levels 1, 2, 3, 5, 7 and 9 are as
+// every retail capture sends them (a level 2 and a level 9 house at hbcd3 457768-457810, levels 1, 5 and 7 in the
+// others). The other levels come from four online sources that agree (the wiki's Housing page, Wowhead's house guide,
+// WoWDB and Icy Veins) for the interior, exterior and room placement budgets. No 12.0.7 capture and no online source
+// gives the exterior fixture budget of the other levels. Level 4 takes 4000 and level 6 takes 5000, the values an
+// earlier 12.0.1 capture gave (dump_12.0.1.66838, recorded in the imported port's budget table, which agrees with the
+// 12.0.7 captures at levels 1, 2, 3, 5 and 7). Level 8 takes 5000, the captured value on both sides, and levels 10 to
+// 12 take 5000 as well, which no capture has shown.
+/*static*/ HouseLevelBudgets HousingMgr::GetBudgetsForLevel(uint32 level)
+{
+    static constexpr std::array<HouseLevelBudgets, MAX_HOUSE_LEVEL + 1> Budgets =
+    {{
+        //   interior  exterior  room placement  exterior fixture
+        {        0,       0,           0,            0 },   // no level 0
+        {      910,     200,          19,         1000 },   // level 1 (captured)
+        {     1155,     200,          24,         2000 },   // level 2 (captured)
+        {     1450,     250,          30,         3000 },   // level 3 (captured)
+        {     1745,     250,          36,         4000 },   // level 4 (fixture budget from the 12.0.1 capture)
+        {     2050,     300,          43,         5000 },   // level 5 (captured)
+        {     2360,     300,          50,         5000 },   // level 6 (fixture budget from the 12.0.1 capture)
+        {     3180,     350,          68,         5000 },   // level 7 (captured)
+        {     3500,     350,          76,         5000 },   // level 8 (fixture budget not captured)
+        {     4340,     350,          95,         5000 },   // level 9 (captured)
+        {     4675,     350,         104,         5000 },   // level 10 (fixture budget not captured)
+        {     5545,     350,         124,         5000 },   // level 11 (fixture budget not captured)
+        {     5975,     350,         134,         5000 },   // level 12 (fixture budget not captured)
+    }};
+    return Budgets[std::clamp<uint32>(level, 1, MAX_HOUSE_LEVEL)];
 }
 
 uint32 HousingMgr::GetInteriorDecorBudgetForLevel(uint32 level) const
 {
-    HouseLevelData const* levelData = GetLevelData(level);
-    if (levelData && levelData->InteriorDecorPlacementBudget > 0)
-        return static_cast<uint32>(levelData->InteriorDecorPlacementBudget);
-    return RetailBudgetFor(level).interior;
+    return GetBudgetsForLevel(level).InteriorDecor;
 }
 
 uint32 HousingMgr::GetExteriorDecorBudgetForLevel(uint32 level) const
 {
-    HouseLevelData const* levelData = GetLevelData(level);
-    if (levelData && levelData->ExteriorDecorPlacementBudget > 0)
-        return static_cast<uint32>(levelData->ExteriorDecorPlacementBudget);
-    return RetailBudgetFor(level).exterior;
+    return GetBudgetsForLevel(level).ExteriorDecor;
 }
 
 uint32 HousingMgr::GetRoomBudgetForLevel(uint32 level) const
 {
-    HouseLevelData const* levelData = GetLevelData(level);
-    if (levelData && levelData->RoomPlacementBudget > 0)
-        return static_cast<uint32>(levelData->RoomPlacementBudget);
-    return RetailBudgetFor(level).room;
+    return GetBudgetsForLevel(level).RoomPlacement;
 }
 
 uint32 HousingMgr::GetFixtureBudgetForLevel(uint32 level) const
 {
-    HouseLevelData const* levelData = GetLevelData(level);
-    if (levelData && levelData->ExteriorFixtureBudget > 0)
-        return static_cast<uint32>(levelData->ExteriorFixtureBudget);
-    return RetailBudgetFor(level).fixture;
+    return GetBudgetsForLevel(level).ExteriorFixture;
 }
 
 uint32 HousingMgr::GetDecorWeightCost(uint32 decorEntryId) const
@@ -893,9 +824,11 @@ uint32 HousingMgr::GetRoomWeightCost(uint32 roomEntryId) const
     if (roomEntryId == STAIRWELL_EMPTY_ROOM_ID)
         return 0;
 
+    // A room costs its HouseRoom WeightCost against the room placement budget (19 at level 1). The entry room and the
+    // base plot cost 0 in HouseRoom.db2, and cost nothing here.
     HouseRoomData const* roomData = GetHouseRoomData(roomEntryId);
     if (roomData)
-        return static_cast<uint32>(std::max<int32>(roomData->WeightCost, 1));
+        return static_cast<uint32>(std::max<int32>(roomData->WeightCost, 0));
 
     return 1;
 }
@@ -911,67 +844,72 @@ uint32 HousingMgr::GetDecorIdForItem(uint32 itemId) const
     return 0;
 }
 
-bool HousingMgr::CanVisitorAccessPlot(Player const* visitor, ObjectGuid ownerGuid, uint32 settingsFlags, bool isInterior) const
+/*static*/ bool HousingMgr::AccessSettingsAllow(uint32 settingsFlags, bool isInterior, HouseVisitorRelation const& relation)
 {
-    if (!visitor || ownerGuid.IsEmpty())
+    uint32 const anyoneFlag    = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_ANYONE    : HOUSE_SETTING_PLOT_ACCESS_ANYONE;
+    uint32 const neighborsFlag = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_NEIGHBORS : HOUSE_SETTING_PLOT_ACCESS_NEIGHBORS;
+    uint32 const guildFlag     = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_GUILD     : HOUSE_SETTING_PLOT_ACCESS_GUILD;
+    uint32 const friendsFlag   = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_FRIENDS   : HOUSE_SETTING_PLOT_ACCESS_FRIENDS;
+    uint32 const partyFlag     = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_PARTY     : HOUSE_SETTING_PLOT_ACCESS_PARTY;
+
+    // No access bit means no one but the owner: the client shows a plot or house setting with none of its bits as
+    // "No One" (HouseSettingsAccessOptionsMixin:SetSelectedSettings, Blizzard_HousingHouseSettings.lua). So the
+    // default 0x20 lets anyone onto the plot and no visitor into the house.
+    return (settingsFlags & anyoneFlag)
+        || ((settingsFlags & neighborsFlag) && relation.Neighbor)
+        || ((settingsFlags & guildFlag) && relation.Guild)
+        || ((settingsFlags & friendsFlag) && relation.Friend)
+        || ((settingsFlags & partyFlag) && relation.Party);
+}
+
+bool HousingMgr::CanVisitorAccessPlot(Player const* visitor, ObjectGuid ownerBnetGuid, ObjectGuid shownOwnerGuid,
+    Neighborhood const* neighborhood, uint32 settingsFlags, bool isInterior) const
+{
+    if (!visitor || !visitor->GetSession() || ownerBnetGuid.IsEmpty())
         return false;
 
-    if (visitor->GetGUID() == ownerGuid)
+    // The house belongs to a Battle.net account; every character of it is the owner.
+    if (visitor->GetSession()->GetBattlenetAccountGUID() == ownerBnetGuid)
         return true;
 
-    uint32 anyoneFlag    = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_ANYONE    : HOUSE_SETTING_PLOT_ACCESS_ANYONE;
-    uint32 neighborsFlag = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_NEIGHBORS : HOUSE_SETTING_PLOT_ACCESS_NEIGHBORS;
-    uint32 guildFlag     = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_GUILD     : HOUSE_SETTING_PLOT_ACCESS_GUILD;
-    uint32 friendsFlag   = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_FRIENDS   : HOUSE_SETTING_PLOT_ACCESS_FRIENDS;
-    uint32 partyFlag     = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_PARTY     : HOUSE_SETTING_PLOT_ACCESS_PARTY;
+    uint32 const neighborsFlag = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_NEIGHBORS : HOUSE_SETTING_PLOT_ACCESS_NEIGHBORS;
+    uint32 const guildFlag     = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_GUILD     : HOUSE_SETTING_PLOT_ACCESS_GUILD;
+    uint32 const friendsFlag   = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_FRIENDS   : HOUSE_SETTING_PLOT_ACCESS_FRIENDS;
+    uint32 const partyFlag     = isInterior ? HOUSE_SETTING_HOUSE_ACCESS_PARTY     : HOUSE_SETTING_PLOT_ACCESS_PARTY;
 
-    uint32 accessMask = isInterior
-        ? (HOUSE_SETTING_HOUSE_ACCESS_ANYONE | HOUSE_SETTING_HOUSE_ACCESS_NEIGHBORS |
-           HOUSE_SETTING_HOUSE_ACCESS_GUILD | HOUSE_SETTING_HOUSE_ACCESS_FRIENDS | HOUSE_SETTING_HOUSE_ACCESS_PARTY)
-        : (HOUSE_SETTING_PLOT_ACCESS_ANYONE | HOUSE_SETTING_PLOT_ACCESS_NEIGHBORS |
-           HOUSE_SETTING_PLOT_ACCESS_GUILD | HOUSE_SETTING_PLOT_ACCESS_FRIENDS | HOUSE_SETTING_PLOT_ACCESS_PARTY);
+    // Only the relations the settings ask about are looked up.
+    HouseVisitorRelation relation;
 
-    if ((settingsFlags & accessMask) == 0)
-        return true; // No restrictions configured — open to all
+    // Neighbors: a member of the neighborhood the house stands in, or a character whose account has a house there.
+    if ((settingsFlags & neighborsFlag) && neighborhood)
+    {
+        relation.Neighbor = neighborhood->IsMember(visitor->GetGUID());
+        if (!relation.Neighbor)
+            for (Neighborhood::PlotInfo const& plot : neighborhood->GetPlots())
+                if (plot.IsOwnedByAccount(visitor->GetSession()->GetBattlenetAccountGUID()))
+                    relation.Neighbor = true;
+    }
 
-    if (settingsFlags & anyoneFlag)
-        return true;
+    // Guild: the guild of the character shown as the owner, whether or not she is online.
+    if ((settingsFlags & guildFlag) && !shownOwnerGuid.IsEmpty())
+    {
+        Player const* shownOwner = ObjectAccessor::FindConnectedPlayer(shownOwnerGuid);
+        ObjectGuid::LowType ownerGuildId = shownOwner ? shownOwner->GetGuildId() : sCharacterCache->GetCharacterGuildIdByGuid(shownOwnerGuid);
+        relation.Guild = ownerGuildId != 0 && visitor->GetGuildId() == ownerGuildId;
+    }
 
-    Player* ownerPlayer = ObjectAccessor::FindPlayer(ownerGuid);
+    // Friends: the visitor has the character shown as the owner on her friends list.
+    if ((settingsFlags & friendsFlag) && !shownOwnerGuid.IsEmpty())
+        relation.Friend = visitor->GetSocial() && visitor->GetSocial()->HasFriend(shownOwnerGuid);
 
+    // Party: a character of the owner's account is in the visitor's group.
     if (settingsFlags & partyFlag)
-    {
-        // Party requires both online — same Group instance.
-        if (ownerPlayer && visitor->GetGroup() && visitor->GetGroup() == ownerPlayer->GetGroup())
-            return true;
-    }
+        if (Group const* group = visitor->GetGroup())
+            for (GroupReference const& member : group->GetMembers())
+                if (member.GetSource()->GetSession() && member.GetSource()->GetSession()->GetBattlenetAccountGUID() == ownerBnetGuid)
+                    relation.Party = true;
 
-    if (settingsFlags & guildFlag)
-    {
-        ObjectGuid::LowType ownerGuildId = ownerPlayer
-            ? ownerPlayer->GetGuildId()
-            : sCharacterCache->GetCharacterGuildIdByGuid(ownerGuid);
-        if (ownerGuildId != 0 && visitor->GetGuildId() == ownerGuildId)
-            return true;
-    }
-
-    if (settingsFlags & friendsFlag)
-    {
-        // Friends are mutual on retail — visitor's social manager has the same record.
-        if (visitor->GetSocial() && visitor->GetSocial()->HasFriend(ownerGuid))
-            return true;
-    }
-
-    if (settingsFlags & neighborsFlag)
-    {
-        // Both are residents of the same neighborhood. Works offline because
-        // neighborhood membership is stored on Neighborhood objects, not Player.
-        for (Neighborhood const* nbh : sNeighborhoodMgr.GetNeighborhoodsForPlayer(ownerGuid))
-            if (nbh->IsMember(visitor->GetGUID()))
-                return true;
-    }
-
-    return false;
+    return AccessSettingsAllow(settingsFlags, isInterior, relation);
 }
 
 bool HousingMgr::CanVisitorExportBlueprint(Player const* visitor, ObjectGuid ownerGuid, uint32 settingsFlags) const
@@ -1096,48 +1034,10 @@ void HousingMgr::LoadHouseLevelRewardInfoData()
     for (auto const& [id, reward] : _houseLevelRewardInfoStore)
         _rewardsByLevel[reward.HouseLevelDataID].push_back(&reward);
 
-    // HouseLevelRewardInfo DB2 fields verified from runtime data + IDA:
-    //   Field_4 = HouseLevelRewardType enum: Value(0) or Object(1)
-    //   IconFileDataID = actual FileData icon reference (values: 135769, 4217590, 7252953, 7487068)
-    //   DB2 does NOT contain budget type (ExteriorDecor/InteriorDecor/Rooms/Fixtures) or budget values.
-    //   Budget capacities come entirely from the hardcoded fallback table below.
-    //   Client enum HouseLevelRewardValueType(0-3) is used in Lua UI, not stored in this DB2.
-    uint32 budgetWired = 0;
-
-    // Historical note: a load-time fallback here used to pre-fill every
-    // HouseLevelData.{Interior,Exterior,Room,Fixture}Budget field with
-    // hardcoded values when DB2 had 0. Those values had Room/Fixture
-    // swapped (Room=19, Fixture=1000 for L1 — retail is Room=1000,
-    // Fixture=19) and Interior L4 off-by-5 (1750 vs retail 1745).
-    //
-    // Because GetXxxBudgetForLevel() checks `levelData->XxxBudget > 0`
-    // FIRST, the load-time fallback masked the per-call RetailBudgetFor()
-    // table. Sniff-verified against dump_12.0.1.66838_2026-04-22_21-23-22
-    // idx 298: server emitted Room=19, Fixture=1000 despite
-    // commit 352ec7e3df fixing the per-call fallback.
-    //
-    // Removed: the per-call fallback in GetInteriorDecorBudgetForLevel /
-    // GetExteriorDecorBudgetForLevel / GetRoomBudgetForLevel /
-    // GetFixtureBudgetForLevel already handles zero/missing DB2 values
-    // with the retail-verified RetailBudgetByLevel table.
-
-    TC_LOG_INFO("housing", "HousingMgr::LoadHouseLevelRewardInfoData: Loaded {} HouseLevelRewardInfo entries, wired {} budget values from DB2",
-        uint32(_houseLevelRewardInfoStore.size()), budgetWired);
-
-    // Log final budget values per level for verification. When DB2 has no
-    // budget rows, the fields here are 0 and the per-call GetXxxBudgetForLevel
-    // fallback supplies the retail-verified values.
-    for (auto const& [id, levelData] : _houseLevelDataStore)
-    {
-        TC_LOG_INFO("housing", "  Level {} (ID {}): DB2 Interior={} Exterior={} Room={} Fixture={} (resolved via GetXxxBudgetForLevel: {} {} {} {})",
-            levelData.Level, id,
-            levelData.InteriorDecorPlacementBudget, levelData.ExteriorDecorPlacementBudget,
-            levelData.RoomPlacementBudget, levelData.ExteriorFixtureBudget,
-            GetInteriorDecorBudgetForLevel(levelData.Level),
-            GetExteriorDecorBudgetForLevel(levelData.Level),
-            GetRoomBudgetForLevel(levelData.Level),
-            GetFixtureBudgetForLevel(levelData.Level));
-    }
+    // HouseLevelRewardInfo holds only each level's reward names, icons and a value-or-object type. The budgets are not
+    // in it; they come from HousingMgr::GetBudgetsForLevel.
+    TC_LOG_DEBUG("housing", "HousingMgr::LoadHouseLevelRewardInfoData: Loaded {} HouseLevelRewardInfo entries",
+        uint32(_houseLevelRewardInfoStore.size()));
 }
 
 void HousingMgr::LoadNeighborhoodInitiativeData()

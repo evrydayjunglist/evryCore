@@ -15903,7 +15903,8 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
     sScriptMgr->OnQuestStatusChange(this, quest_id);
     sScriptMgr->OnQuestStatusChange(this, quest, oldStatus, QUEST_STATUS_REWARDED);
 
-    // Housing level progression: quest-based level-up
+    // Housing level progression by HouseLevelData's quests. With two houses and away from a housing map no house is
+    // named, and nothing is leveled.
     if (Housing* housing = GetHousing())
         housing->OnQuestCompleted(quest_id);
 
@@ -19153,6 +19154,9 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH));
     }
 
+    if (PreparedQueryResult activeNeighborhood = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOUSING_ACTIVE_NEIGHBORHOOD))
+        _housingChosenNeighborhood = activeNeighborhood->Fetch()[0].GetUInt64();
+
     // A house another game account of the same Battle.net account bought while this login was being read is held by
     // that character but may be missing from the rows.
     if (GetSession()->GetBattlenetAccountId())
@@ -19557,123 +19561,9 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         if (h)
             AddPlayerMirrorHouse(*h);
 
-    // Register PlayerInitiativeComponent_C fragment (FragmentID 37) on the Player entity.
-    // The client's C_NeighborhoodInitiative Lua API reads initiative state from this fragment.
-    // Without it, GetNeighborhoodInitiativeInfo() returns nil and the initiative/endeavor UI
-    // never appears. Sniff-verified: all neighborhood players have this fragment.
-    if (!m_playerInitiativeComponentData.has_value())
-    {
-        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-            .ModifyValue(&UF::PlayerInitiativeComponentData::NeighborhoodGUID), ObjectGuid::Empty);
-        m_entityFragments.Add(WowCS::EntityFragment::PlayerInitiativeComponent_C, false,
-            WowCS::GetRawFragmentData(m_playerInitiativeComponentData));
-    }
-
-    // Populate initiative data for the player's neighborhood
-    // Try housing first, then fall back to neighborhood membership
-    ObjectGuid initNhGuid;
-    if (!_housings.empty() && _housings[0] && !_housings[0]->GetNeighborhoodGuid().IsEmpty())
-        initNhGuid = _housings[0]->GetNeighborhoodGuid();
-    else
-    {
-        auto neighborhoods = sNeighborhoodMgr.GetNeighborhoodsForPlayer(GetGUID());
-        if (!neighborhoods.empty())
-            initNhGuid = neighborhoods[0]->GetGuid();
-    }
-
-    if (!initNhGuid.IsEmpty())
-    {
-        ObjectGuid nhGuid = initNhGuid;
-        uint64 nhLowGuid = nhGuid.GetCounter();
-        ActiveInitiative* activeInit = sInitiativeManager.GetActiveInitiative(nhLowGuid);
-
-        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-            .ModifyValue(&UF::PlayerInitiativeComponentData::NeighborhoodGUID), nhGuid);
-
-        if (activeInit)
-        {
-            NeighborhoodInitiativeEntry const* initEntry = sNeighborhoodInitiativeStore.LookupEntry(activeInit->InitiativeID);
-            uint32 cycleID = sInitiativeManager.GetActiveCycleForInitiative(activeInit->InitiativeID);
-
-            // Calculate remaining duration from start time + DB2 duration.
-            // Check both NeighborhoodInitiative.Duration and InitiativeCycle.Duration.
-            // If neither provides a duration, use a 7-day default so the client shows
-            // the endeavor as active rather than expired (Duration=0 → hidden).
-            // DB2 Duration is already in seconds (NOT days).
-            // Sniff-verified: RemainingDuration is in seconds (sniff value 972957 ≈ 11.25 days).
-            // Duration comes from NeighborhoodInitiative DB2 (not InitiativeCycle — that has HouseXPCap)
-            int64 durationSec = 0;
-            if (initEntry && initEntry->Duration > 0)
-                durationSec = static_cast<int64>(initEntry->Duration);
-            if (durationSec <= 0)
-                durationSec = 7 * DAY; // 7-day fallback
-
-            int64 elapsed = static_cast<int64>(GameTime::GetGameTime()) - static_cast<int64>(activeInit->StartTime);
-            int64 remainingDuration = durationSec - elapsed;
-            // If expired, reset start time so the initiative stays active
-            if (remainingDuration <= 0)
-            {
-                activeInit->StartTime = static_cast<uint32>(GameTime::GetGameTime());
-                remainingDuration = durationSec;
-            }
-
-            // Calculate progress in the 0-1000 scale (sniff: ProgressRequired=1000)
-            float progressRequired = INITIATIVE_PROGRESS_REQUIRED;
-            float currentProgress = activeInit->Progress * progressRequired;
-
-            // Find current milestone. RequiredContributionAmount is a percentage (DB2: 25/50/75/100)
-            // while Progress is a 0..1 fraction, so it has to be scaled before comparing — comparing
-            // them raw pinned CurrentMilestoneID to the first milestone forever.
-            int32 currentMilestoneID = -1;
-            auto milestones = sInitiativeManager.GetMilestonesForCycle(cycleID);
-            for (auto const& m : milestones)
-            {
-                if (activeInit->Progress * INITIATIVE_MILESTONE_SCALE < m.RequiredContributionAmount)
-                {
-                    currentMilestoneID = static_cast<int32>(m.MilestoneID);
-                    break;
-                }
-            }
-
-            float playerContribution = static_cast<float>(
-                sInitiativeManager.GetPlayerContribution(nhLowGuid, activeInit->InitiativeID, GetGUID().GetCounter()));
-
-            SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                .ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo)
-                .ModifyValue(&UF::PlayerInitiativeInfo::RemainingDuration), remainingDuration);
-            SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                .ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo)
-                .ModifyValue(&UF::PlayerInitiativeInfo::CurrentInitiativeID), static_cast<int32>(activeInit->InitiativeID));
-            SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                .ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo)
-                .ModifyValue(&UF::PlayerInitiativeInfo::CurrentMilestoneID), currentMilestoneID);
-            SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                .ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo)
-                .ModifyValue(&UF::PlayerInitiativeInfo::CurrentCycleID), static_cast<int32>(cycleID));
-            SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                .ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo)
-                .ModifyValue(&UF::PlayerInitiativeInfo::ProgressRequired), progressRequired);
-            SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                .ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo)
-                .ModifyValue(&UF::PlayerInitiativeInfo::CurrentProgress), currentProgress);
-            SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                .ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo)
-                .ModifyValue(&UF::PlayerInitiativeInfo::PlayerTotalContribution), playerContribution);
-
-            // Add house GUIDs to the Houses set
-            for (auto const& h : _housings)
-            {
-                if (h && !h->IsPacked() && !h->GetHouseGuid().IsEmpty())
-                    InsertSetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
-                        .ModifyValue(&UF::PlayerInitiativeComponentData::Houses), h->GetHouseGuid());
-            }
-
-            TC_LOG_DEBUG("housing", "Player::LoadFromDB: Populated PlayerInitiativeComponentData: "
-                "InitiativeID={} CycleID={} Progress={:.1f}/{:.0f} Milestone={} Duration={}",
-                activeInit->InitiativeID, cycleID, currentProgress, progressRequired,
-                currentMilestoneID, remainingDuration);
-        }
-    }
+    // The endeavor of her active neighborhood. Retail sends the create with no neighborhood and fills it in a moment
+    // later (hf1 211469, then 223043); here it is in the create.
+    UpdateInitiativeComponent();
 
     // Pre-populate Housing/4 (NeighborhoodMirrorEntity) and Housing/3 (HousingPlayerHouseEntity)
     // BEFORE BuildCreateUpdateBlockForPlayer runs. The CREATE block must include the full Houses
@@ -32092,7 +31982,7 @@ void Player::AddPlayerMirrorHouse(Housing const& housing)
     // only InitiativeFavor remains).
     uint64 nhGuid = housing.GetNeighborhoodGuid().GetCounter();
     if (ActiveInitiative* activeInit = sInitiativeManager.GetActiveInitiative(nhGuid))
-        mirrorHouse.InitiativeFavor = sInitiativeManager.GetPlayerContribution(nhGuid, activeInit->InitiativeID, GetGUID().GetCounter());
+        mirrorHouse.InitiativeFavor = sInitiativeManager.GetAccountContribution(nhGuid, activeInit->InitiativeID, GetSession()->GetBattlenetAccountId());
 
     TC_LOG_DEBUG("housing", "Player::AddPlayerMirrorHouse: HouseGuid={} NeighborhoodGuid={} PlotID={} Level={} MapID={} Favor={}",
         housing.GetHouseGuid().ToString(), housing.GetNeighborhoodGuid().ToString(), mirrorHouse.PlotID, mirrorHouse.Level,
@@ -32284,6 +32174,135 @@ void Player::SetCurrentHouse(ObjectGuid houseGuid)
 
     TC_LOG_DEBUG("housing", "Player::SetCurrentHouse: player={} currentHouse={}",
         GetGUID().ToString(), houseGuid.IsEmpty() ? "<empty>" : houseGuid.ToString());
+}
+
+ObjectGuid Player::GetHousingActiveNeighborhood() const
+{
+    Housing const* first = nullptr;
+    for (auto const& h : _housings)
+    {
+        if (!h || h->IsPacked() || h->GetNeighborhoodGuid().IsEmpty())
+            continue;
+
+        if (_housingChosenNeighborhood && h->GetNeighborhoodGuid().GetCounter() == _housingChosenNeighborhood)
+            return h->GetNeighborhoodGuid();
+
+        if (!first || h->GetSlot() < first->GetSlot())
+            first = h.get();
+    }
+
+    return first ? first->GetNeighborhoodGuid() : ObjectGuid::Empty;
+}
+
+void Player::SetHousingActiveNeighborhood(ObjectGuid neighborhoodGuid)
+{
+    _housingChosenNeighborhood = neighborhoodGuid.GetCounter();
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD);
+    stmt->setUInt64(0, GetGUID().GetCounter());
+    stmt->setUInt64(1, _housingChosenNeighborhood);
+    CharacterDatabase.Execute(stmt);
+
+    UpdateInitiativeComponent();
+}
+
+void Player::UpdateInitiativeComponent()
+{
+    // Register PlayerInitiativeComponent_C fragment (FragmentID 37) on the Player entity. The client's
+    // C_NeighborhoodInitiative Lua API reads initiative state from this fragment; every character in the captures has it.
+    if (!m_playerInitiativeComponentData.has_value())
+    {
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
+            .ModifyValue(&UF::PlayerInitiativeComponentData::NeighborhoodGUID), ObjectGuid::Empty);
+        m_entityFragments.Add(WowCS::EntityFragment::PlayerInitiativeComponent_C, IsInWorld(),
+            WowCS::GetRawFragmentData(m_playerInitiativeComponentData));
+    }
+
+    auto component = m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0);
+    ObjectGuid const nhGuid = GetHousingActiveNeighborhood();
+    SetUpdateFieldValue(component.ModifyValue(&UF::PlayerInitiativeComponentData::NeighborhoodGUID), nhGuid);
+
+    // The account's standing houses, with or without an endeavor; a house packed or given up since the last refresh
+    // leaves the set.
+    std::unordered_set<ObjectGuid> standing;
+    for (auto const& h : _housings)
+        if (h && !h->IsPacked() && !h->GetHouseGuid().IsEmpty())
+            standing.insert(h->GetHouseGuid());
+
+    std::vector<ObjectGuid> stale;
+    for (auto const& [houseGuid, state] : m_playerInitiativeComponentData->Houses)
+        if (!standing.contains(houseGuid))
+            stale.push_back(houseGuid);
+    for (ObjectGuid const& houseGuid : stale)
+        RemoveSetUpdateFieldValue(component.ModifyValue(&UF::PlayerInitiativeComponentData::Houses), houseGuid);
+    for (ObjectGuid const& houseGuid : standing)
+        InsertSetUpdateFieldValue(component.ModifyValue(&UF::PlayerInitiativeComponentData::Houses), houseGuid);
+
+    auto info = component.ModifyValue(&UF::PlayerInitiativeComponentData::InitiativeInfo);
+    ActiveInitiative* activeInit = nhGuid.IsEmpty() ? nullptr : sInitiativeManager.GetActiveInitiative(nhGuid.GetCounter());
+    if (!activeInit)
+    {
+        // No neighborhood, or no endeavor in it: every endeavor field is 0 in the captures (hbcd3 419313-419320).
+        SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::RemainingDuration), int64(0));
+        SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentInitiativeID), int32(0));
+        SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentMilestoneID), int32(0));
+        SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentCycleID), int32(0));
+        SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::ProgressRequired), 0.0f);
+        SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentProgress), 0.0f);
+        SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::PlayerTotalContribution), 0.0f);
+        return;
+    }
+
+    NeighborhoodInitiativeEntry const* initEntry = sNeighborhoodInitiativeStore.LookupEntry(activeInit->InitiativeID);
+    uint32 cycleID = sInitiativeManager.GetActiveCycleForInitiative(activeInit->InitiativeID);
+
+    // RemainingDuration is in seconds (sniff value 972957, about 11.25 days); the duration comes from
+    // NeighborhoodInitiative. With none, 7 days is used so the client does not treat the endeavor as expired.
+    int64 durationSec = 0;
+    if (initEntry && initEntry->Duration > 0)
+        durationSec = static_cast<int64>(initEntry->Duration);
+    if (durationSec <= 0)
+        durationSec = 7 * DAY;
+
+    int64 elapsed = static_cast<int64>(GameTime::GetGameTime()) - static_cast<int64>(activeInit->StartTime);
+    int64 remainingDuration = durationSec - elapsed;
+    // If expired, reset start time so the initiative stays active
+    if (remainingDuration <= 0)
+    {
+        activeInit->StartTime = static_cast<uint32>(GameTime::GetGameTime());
+        remainingDuration = durationSec;
+    }
+
+    // Progress on the 0 to 1000 scale the captures show (ProgressRequired 1000).
+    float progressRequired = INITIATIVE_PROGRESS_REQUIRED;
+    float currentProgress = activeInit->Progress * progressRequired;
+
+    // Current milestone: the first one not reached yet. RequiredContributionAmount is a percentage (25/50/75/100)
+    // while Progress is a 0..1 fraction.
+    int32 currentMilestoneID = -1;
+    for (auto const& m : sInitiativeManager.GetMilestonesForCycle(cycleID))
+    {
+        if (activeInit->Progress * INITIATIVE_MILESTONE_SCALE < m.RequiredContributionAmount)
+        {
+            currentMilestoneID = static_cast<int32>(m.MilestoneID);
+            break;
+        }
+    }
+
+    float playerContribution = static_cast<float>(
+        sInitiativeManager.GetAccountContribution(nhGuid.GetCounter(), activeInit->InitiativeID, GetSession()->GetBattlenetAccountId()));
+
+    SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::RemainingDuration), remainingDuration);
+    SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentInitiativeID), static_cast<int32>(activeInit->InitiativeID));
+    SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentMilestoneID), currentMilestoneID);
+    SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentCycleID), static_cast<int32>(cycleID));
+    SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::ProgressRequired), progressRequired);
+    SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentProgress), currentProgress);
+    SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::PlayerTotalContribution), playerContribution);
+
+    TC_LOG_DEBUG("housing", "Player::UpdateInitiativeComponent: {} neighborhood {} InitiativeID={} CycleID={} Progress={:.1f}/{:.0f} Milestone={} Duration={}",
+        GetGUID().ToString(), nhGuid.ToString(), activeInit->InitiativeID, cycleID, currentProgress, progressRequired,
+        currentMilestoneID, remainingDuration);
 }
 
 void Player::UpdateInitiativeFavor(uint32 favor)

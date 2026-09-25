@@ -162,6 +162,21 @@ uint64 Housing::GetPurchasePrice(std::size_t accountHouseCount, uint64 plotCost)
     return accountHouseCount ? plotCost : 0;
 }
 
+void Housing::CountBattlenetAccounts(std::vector<GuildMemberAccount> const& members, uint32& accounts, uint32& activeAccounts)
+{
+    std::unordered_map<uint32, bool> active;
+    for (GuildMemberAccount const& member : members)
+    {
+        if (!member.BnetAccountId)
+            continue;
+        bool& accountActive = active[member.BnetAccountId];
+        accountActive = accountActive || member.Active;
+    }
+
+    accounts = uint32(active.size());
+    activeAccounts = uint32(std::count_if(active.begin(), active.end(), [](auto const& account) { return account.second; }));
+}
+
 int32 Housing::ChoosePackedHouseToUnpack(std::vector<int32> const& packedHouseWorldMapIds, int32 districtWorldMapId, bool atHouseCap)
 {
     for (std::size_t i = 0; i < packedHouseWorldMapIds.size(); ++i)
@@ -1031,17 +1046,38 @@ void Housing::OnDecorAcquired(Player* player, uint32 decorEntryId, bool firstOwn
     if (!player)
         return;
 
-    // An entry's first piece gives its FirstAcquisitionBonus as house experience (hbcd3 2106253: +10 for decor 1482).
-    // Retail's favor update there names only the Battle.net account; which house the experience goes to is not
-    // captured, so it goes to the house she is in or on, or her only standing house, and to none otherwise.
+    // An entry's first piece gives its FirstAcquisitionBonus as house experience to every house of the account: the
+    // client's upgrade frame notes that "decor acquisition bonuses update all owned houses at once"
+    // (Blizzard_HousingDashboardHouseUpgrade.lua), and retail's update for it (hbcd3 2106253, Number 25462) has one
+    // entry naming only the Battle.net account, with level -1, +10 favor, source 1 and the decor, 1482.
     if (firstOwned)
     {
-        if (HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId); decorData && decorData->FirstAcquisitionBonus > 0)
+        HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
+        if (decorData && decorData->FirstAcquisitionBonus > 0)
         {
-            if (Housing* housing = player->GetHousing())
-                housing->AddFavor(uint64(decorData->FirstAcquisitionBonus), HOUSING_FAVOR_SOURCE_DECOR_COLLECTION, /*emitUpdate*/ false);
+            uint64 const bonus = uint64(decorData->FirstAcquisitionBonus);
+            std::vector<Housing const*> const houses = player->GetAllHousings(/*includePacked*/ true);
+            for (Housing const* house : houses)
+                if (Housing* housing = player->GetHousingByGuid(house->GetHouseGuid()))
+                    housing->AddFavor(bonus, HOUSING_FAVOR_SOURCE_DECOR_COLLECTION, /*emitUpdate*/ false);
+
+            if (!houses.empty())
+            {
+                WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor update;
+                update.Result = 0;
+                update.ChangeAmount = uint32(-1);
+                update.Reason = uint32(-1);
+                WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor::HouseLevelFavor& account = update.Houses.emplace_back();
+                account.BnetAccount = player->GetSession()->GetBattlenetAccountGUID();
+                account.HouseLevel = -1;
+                account.FavorValue = decorData->FirstAcquisitionBonus;
+                account.UpdateSource = uint8(HOUSING_FAVOR_SOURCE_DECOR_COLLECTION);
+                account.SourceDataDecorID = decorEntryId;
+                account.IsAdditive = true;
+                player->SendDirectMessage(update.Write());
+            }
             else
-                TC_LOG_DEBUG("housing", "Housing::OnDecorAcquired: {} first owned decor {}, but has no house to take its {} experience",
+                TC_LOG_DEBUG("housing", "Housing::OnDecorAcquired: {} first owned decor {}, but the account has no house to take its {} experience",
                     player->GetGUID().ToString(), decorEntryId, decorData->FirstAcquisitionBonus);
         }
     }
@@ -1074,9 +1110,9 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, float x, float y
     if (validationResult != HOUSING_RESULT_SUCCESS)
         return validationResult;
 
-    uint32 maxDecor = GetMaxDecorCount();
-    if (GetDecorCount() >= maxDecor)
-        return HOUSING_RESULT_MAX_PLACED_DECOR_REACHED;
+    // The placed decor limit is the level's decor budget, checked below by weight: the client shows it as "Total Decor
+    // Limit: used/budget" and says to "Level up your House to increase your Placement Budget" (GlobalStrings
+    // HOUSING_DECOR_BUDGET_TOOLTIP_INDOOR). There is no separate count of pieces per level.
 
     // Retail semantics (verified via sniff build 66263, both alliance + horde):
     // the client ALWAYS sends a non-Empty RoomGuid in CMSG_HOUSING_DECOR_PLACE.
@@ -2422,21 +2458,7 @@ void Housing::AddLevel(uint32 amount)
 
     RecalculateBudgets();
     SyncUpdateFields();
-
-    // Broadcast level/favor update to the owner.
-    // Wire format: header (Type, ChangeAmount, Reason, Count) + per-entry
-    // (EntryFlags, EntryTimestamp, HouseGUID, NewFavorTotal, Reserved, Terminator).
-    if (_owner && _owner->GetSession())
-    {
-        WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor levelUpdate;
-        levelUpdate.Result = 0;
-        levelUpdate.ChangeAmount = _state->Favor;
-        levelUpdate.Reason = _state->Level;
-        auto& fav = levelUpdate.Houses.emplace_back();
-        fav.HouseGUID = _state->HouseGuid;
-        fav.HouseLevel = static_cast<int32>(_state->Favor);
-        _owner->SendDirectMessage(levelUpdate.Write());
-    }
+    SendLevelFavorUpdate(int32(_state->Level), 0, HOUSING_FAVOR_SOURCE_UNKNOWN);
 }
 
 void Housing::AddFavor(uint64 amount, HousingFavorUpdateSource source /*= HOUSING_FAVOR_SOURCE_UNKNOWN*/, bool emitUpdate /*= true*/)
@@ -2455,67 +2477,64 @@ void Housing::AddFavor(uint64 amount, HousingFavorUpdateSource source /*= HOUSIN
     stmt->setUInt64(2, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
-    SyncUpdateFields();
+    // A packed house has no house entity on the client; it keeps the favor for when it is unpacked.
+    if (!_state->Packed)
+        SyncUpdateFields();
 
-    // Broadcast level/favor update to the owner.
-    // Type field carries the favor source enum (matches retail's "change reason" semantic).
-    // Skipped when the caller sends its own level and favor packets.
-    if (emitUpdate && _owner && _owner->GetSession())
-    {
-        WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor favorUpdate;
-        favorUpdate.Result = static_cast<uint8>(source);
-        favorUpdate.ChangeAmount = _state->Favor;
-        favorUpdate.Reason = _state->Level;
-        auto& fav = favorUpdate.Houses.emplace_back();
-        fav.HouseGUID = _state->HouseGuid;
-        fav.HouseLevel = static_cast<int32>(_state->Favor);
-        _owner->SendDirectMessage(favorUpdate.Write());
-    }
+    // Skipped when the caller sends its own level and favor packet.
+    if (emitUpdate)
+        SendLevelFavorUpdate(-1, static_cast<int32>(std::min<uint64>(amount, std::numeric_limits<int32>::max())), source);
+}
+
+void Housing::SendLevelFavorUpdate(int32 newLevel, int32 favorGained, HousingFavorUpdateSource source) const
+{
+    if (!_owner || !_owner->GetSession())
+        return;
+
+    // Retail's update for one house (hbcd3 1299772, Number 13869): change and reason -1, then one entry naming only the
+    // house, its level as -1 when the level did not change, and the favor gained, flagged as added to the house's own.
+    // No capture shows a level change; it is sent as the new level with no favor gained.
+    WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor update;
+    update.Result = 0;
+    update.ChangeAmount = uint32(-1);
+    update.Reason = uint32(-1);
+    WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor::HouseLevelFavor& house = update.Houses.emplace_back();
+    house.HouseGUID = _state->HouseGuid;
+    house.HouseLevel = newLevel;
+    house.FavorValue = favorGained;
+    house.UpdateSource = uint8(source);
+    house.IsAdditive = true;
+    _owner->SendDirectMessage(update.Write());
 }
 
 void Housing::OnQuestCompleted(uint32 questId)
 {
     auto guard = LockState();
-    // QuestID-based level progression
-    // Check if this quest matches the next HouseLevelData entry
+    // The house takes the next level when the quest HouseLevelData lists for that level is completed. Those quests
+    // are "[DNT] House Level N Room Award" (levels 2 to 6), whose reward spells grant the level's room or decor, so
+    // retail probably completes them when the house reaches the level rather than the other way round. Nothing on
+    // this server gives them yet.
+    if (_state->Level >= MAX_HOUSE_LEVEL)
+        return;
+
     uint32 nextLevelQuestId = sHousingMgr.GetQuestForLevel(_state->Level + 1);
-    if (nextLevelQuestId > 0 && nextLevelQuestId == questId)
-    {
-        uint32 previousLevel = _state->Level;
-        _state->Level++;
-        TC_LOG_DEBUG("housing", "Housing::OnQuestCompleted: Player {} house leveled up to {} (quest {}) in house {}",
-            _owner->GetName(), _state->Level, questId, _state->HouseGuid.ToString());
+    if (nextLevelQuestId == 0 || nextLevelQuestId != questId)
+        return;
 
-        // Persist level change and recalculate budgets
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_LEVEL_FAVOR);
-        stmt->setUInt32(0, _state->Level);
-        stmt->setUInt32(1, _state->Favor);
-        stmt->setUInt64(2, GetDatabaseId());
-        CharacterDatabase.Execute(stmt);
+    _state->Level++;
+    TC_LOG_DEBUG("housing", "Housing::OnQuestCompleted: Player {} house leveled up to {} (quest {}) in house {}",
+        _owner->GetName(), _state->Level, questId, _state->HouseGuid.ToString());
 
-        RecalculateBudgets();
-        SyncUpdateFields();
+    // Persist level change and recalculate budgets
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_LEVEL_FAVOR);
+    stmt->setUInt32(0, _state->Level);
+    stmt->setUInt32(1, _state->Favor);
+    stmt->setUInt64(2, GetDatabaseId());
+    CharacterDatabase.Execute(stmt);
 
-        // Broadcast level/favor update to the owner.
-        // Wire format: header (Type, ChangeAmount, Reason, Count) + per-entry
-        // (EntryFlags, EntryTimestamp, HouseGUID, NewFavorTotal, Reserved, Terminator).
-        if (_owner && _owner->GetSession())
-        {
-            WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor levelUpdate;
-            levelUpdate.Result = 0;
-            levelUpdate.ChangeAmount = _state->Favor;
-            levelUpdate.Reason = _state->Level;
-            auto& fav = levelUpdate.Houses.emplace_back();
-            fav.HouseGUID = _state->HouseGuid;
-            fav.HouseLevel = static_cast<int32>(_state->Favor);
-            _owner->SendDirectMessage(levelUpdate.Write());
-        }
-    }
-}
-
-uint32 Housing::GetMaxDecorCount() const
-{
-    return sHousingMgr.GetMaxDecorForLevel(_state->Level);
+    RecalculateBudgets();
+    SyncUpdateFields();
+    SendLevelFavorUpdate(int32(_state->Level), 0, HOUSING_FAVOR_SOURCE_QUEST);
 }
 
 uint32 Housing::GetMaxInteriorDecorBudget() const

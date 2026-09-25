@@ -49,6 +49,7 @@
 #include "Guild.h"
 #include "Housing.h"
 #include "HousingDecorStore.h"
+#include "HousingMap.h"
 #include "HousingMgr.h"
 #include "HousingPackets.h"
 #include "InstanceScript.h"
@@ -6408,16 +6409,20 @@ void Spell::EffectGiveHouseLevel()
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
-    if (!housing)
-        return;
-
+    // The only 12.1 spell with this effect is 1252051 "[DNT] Test Level Up Houses", so every standing house of the
+    // account takes the levels.
     uint32 levelsToAdd = std::max(GetEffectValueAsInt(), 1);
+    for (Housing const* house : player->GetAllHousings())
+    {
+        Housing* housing = player->GetHousingByGuid(house->GetHouseGuid());
+        if (!housing)
+            continue;
 
-    TC_LOG_DEBUG("spells", "Spell::EffectGiveHouseLevel: Adding {} level(s) to house for player {} (house {}, current level {})",
-        levelsToAdd, player->GetName(), housing->GetHouseGuid().ToString(), housing->GetLevel());
+        TC_LOG_DEBUG("spells", "Spell::EffectGiveHouseLevel: Adding {} level(s) to house for player {} (house {}, current level {})",
+            levelsToAdd, player->GetName(), housing->GetHouseGuid().ToString(), housing->GetLevel());
 
-    housing->AddLevel(levelsToAdd);
+        housing->AddLevel(levelsToAdd);
+    }
 }
 
 void Spell::EffectCollectHousingDecor()
@@ -6621,10 +6626,6 @@ void Spell::EffectSetNeighborhoodInitiative()
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
-    if (!housing)
-        return;
-
     uint32 initiativeId = effectInfo->MiscValue;
     if (!initiativeId)
         return;
@@ -6637,8 +6638,11 @@ void Spell::EffectSetNeighborhoodInitiative()
         return;
     }
 
-    // Resolve the player's neighborhood
-    ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
+    // The neighborhood she stands in, where the Steward is, else her active one. Starting the endeavor from a manager's
+    // pick is not built yet; this only checks and logs.
+    ObjectGuid neighborhoodGuid = player->GetHousingActiveNeighborhood();
+    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()); housingMap && housingMap->GetNeighborhood())
+        neighborhoodGuid = housingMap->GetNeighborhood()->GetGuid();
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
     if (!neighborhood)
     {

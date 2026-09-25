@@ -145,9 +145,12 @@ CREATE TABLE IF NOT EXISTS `neighborhood_invites` (
     PRIMARY KEY (`neighborhoodGuid`, `inviteeGuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- A charter is signed once per Battle.net account, never by the creator's account, and an account signs one open
+-- charter at a time.
 CREATE TABLE IF NOT EXISTS `neighborhood_charters` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `creatorGuid` BIGINT UNSIGNED NOT NULL,
+    `creatorBnetAccountId` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Battle.net account of the creator, which may not sign',
     `name` VARCHAR(64) NOT NULL,
     `neighborhoodMapId` INT UNSIGNED NOT NULL,
     `factionFlags` INT UNSIGNED NOT NULL DEFAULT 0,
@@ -159,9 +162,11 @@ CREATE TABLE IF NOT EXISTS `neighborhood_charters` (
 
 CREATE TABLE IF NOT EXISTS `neighborhood_charter_signatures` (
     `charterId` BIGINT UNSIGNED NOT NULL,
-    `signerGuid` BIGINT UNSIGNED NOT NULL,
+    `signerGuid` BIGINT UNSIGNED NOT NULL COMMENT 'Character that signed',
+    `signerBnetAccountId` INT UNSIGNED NOT NULL COMMENT 'Battle.net account of that character',
     `signTime` INT UNSIGNED NOT NULL DEFAULT 0,
-    PRIMARY KEY (`charterId`, `signerGuid`)
+    PRIMARY KEY (`charterId`, `signerGuid`),
+    UNIQUE KEY `idx_signer_account` (`signerBnetAccountId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `neighborhood_initiatives` (
@@ -191,25 +196,34 @@ CREATE TABLE IF NOT EXISTS `neighborhood_initiative_milestones` (
     PRIMARY KEY (`initiativeDbId`, `milestoneIndex`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Endeavor contributions and coffer claims belong to the Battle.net account: tasks, their progress and the coffer
+-- are shared by the Warband.
 CREATE TABLE IF NOT EXISTS `neighborhood_initiative_reward_claims` (
     `initiativeDbId` BIGINT UNSIGNED NOT NULL,
     `milestoneIndex` INT UNSIGNED NOT NULL,
-    `playerGuid` BIGINT UNSIGNED NOT NULL,
+    `bnetAccountId` INT UNSIGNED NOT NULL,
     `claimTime` INT UNSIGNED NOT NULL DEFAULT 0,
-    PRIMARY KEY (`initiativeDbId`, `milestoneIndex`, `playerGuid`),
-    INDEX `idx_player` (`playerGuid`)
+    PRIMARY KEY (`initiativeDbId`, `milestoneIndex`, `bnetAccountId`),
+    INDEX `idx_account` (`bnetAccountId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `neighborhood_initiative_contributions` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `initiativeDbId` BIGINT UNSIGNED NOT NULL,
-    `playerGuid` BIGINT UNSIGNED NOT NULL,
+    `bnetAccountId` INT UNSIGNED NOT NULL,
+    `playerGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'The character of the account that contributed last, named in the activity log',
     `taskId` INT UNSIGNED NOT NULL,
     `amount` INT UNSIGNED NOT NULL DEFAULT 0,
     `lastUpdated` INT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
-    UNIQUE INDEX `idx_initiative_player_task` (`initiativeDbId`, `playerGuid`, `taskId`),
-    INDEX `idx_player` (`playerGuid`)
+    UNIQUE INDEX `idx_initiative_account_task` (`initiativeDbId`, `bnetAccountId`, `taskId`),
+    INDEX `idx_account` (`bnetAccountId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `character_housing_active_neighborhood` (
+    `guid` BIGINT UNSIGNED NOT NULL COMMENT 'Character',
+    `neighborhoodGuid` BIGINT UNSIGNED NOT NULL COMMENT 'The neighborhood she chose for her active endeavor',
+    PRIMARY KEY (`guid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `character_housing_ignored_neighborhood` (

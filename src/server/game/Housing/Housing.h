@@ -129,6 +129,16 @@ public:
     // standing or packed.
     static uint64 GetPurchasePrice(std::size_t accountHouseCount, uint64 plotCost);
 
+    // A guild member's Battle.net account (0 when not known) and whether that member played in the last
+    // GUILD_NEIGHBORHOOD_ACTIVE_DAYS days.
+    struct GuildMemberAccount
+    {
+        uint32 BnetAccountId = 0;
+        bool Active = false;
+    };
+    // How many distinct Battle.net accounts the members have, and how many of them have an active member.
+    static void CountBattlenetAccounts(std::vector<GuildMemberAccount> const& members, uint32& accounts, uint32& activeAccounts);
+
     // Which packed house a purchase in a district unpacks, as an index into packedHouseWorldMapIds (the world map of
     // the district each packed house last stood in), or -1 to build a new house. The packed house from the same
     // district is unpacked; when the account may not have another house, any packed house is.
@@ -320,8 +330,10 @@ public:
     // House level and favor
     void AddLevel(uint32 amount);
     void AddFavor(uint64 amount, HousingFavorUpdateSource source = HOUSING_FAVOR_SOURCE_UNKNOWN, bool emitUpdate = true);
+    // SMSG_HOUSING_SVCS_UPDATE_HOUSES_LEVEL_FAVOR for this house: its new level, or -1 when the level did not change,
+    // and the favor it gained.
+    void SendLevelFavorUpdate(int32 newLevel, int32 favorGained, HousingFavorUpdateSource source) const;
     uint64 GetFavor64() const { return _state->Favor64; }
-    uint32 GetMaxDecorCount() const;
 
     // Budget tracking (WeightCost-based)
     uint32 GetInteriorDecorWeightUsed() const { return _state->InteriorDecorWeightUsed; }
@@ -334,7 +346,7 @@ public:
     uint32 GetMaxFixtureBudget() const;
     void RecalculateBudgets();
 
-    // Level progression (QuestID-based)
+    // Level progression by the quest HouseLevelData lists for the next level
     void OnQuestCompleted(uint32 questId);
 
     // UpdateField synchronization

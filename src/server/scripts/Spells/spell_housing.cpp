@@ -23,6 +23,7 @@
 #include "HousingMap.h"
 #include "HousingMgr.h"
 #include "Log.h"
+#include "MapManager.h"
 #include "Neighborhood.h"
 #include "NeighborhoodMgr.h"
 #include "Player.h"
@@ -144,8 +145,8 @@ class spell_housing_enter_house : public SpellScript
 // Retail: the client casts Opening (1271364) on the door inside the house, the door opens, and the character casts
 // Exit House on herself, instantly; then TRANSFER_PENDING and NEW_WORLD put her at her plot's arrival point,
 // 902.6711, -542.7863, 1.9622 facing 4.5902157 for plot 13 (hbcd3 1455919-1456426). A visitor comes out on the plot
-// of the house she visited. Its only effect, 343, does nothing in the core, and what it does for other spells is not
-// known, so this script does the move for this spell alone.
+// of the house she visited, in that house's neighborhood. Its only effect, 343, does nothing in the core, and what it
+// does for other spells is not known, so this script does the move for this spell alone.
 class spell_housing_exit_house : public SpellScript
 {
     // SPELL_START for Exit House carries cast time 0 (hbcd3 1456142), though its record gives it one.
@@ -188,7 +189,16 @@ class spell_housing_exit_house : public SpellScript
             return;
         }
 
-        if (!player->TeleportTo(arrival, TELE_TO_SPELL))
+        // Into that neighborhood's instance of the district, so she comes out beside the house and not on the same plot
+        // of whichever neighborhood she would otherwise be sent to. Neighborhood maps are loaded at startup and never
+        // unloaded, and one made since is loaded once someone has entered it; when it is not loaded, the map change
+        // picks the neighborhood as it does for any arrival, starting with the house she is leaving.
+        Optional<uint32> instanceId;
+        uint32 const neighborhoodInstanceId = uint32(neighborhood->GetGuid().GetCounter());
+        if (sMapMgr->FindMap(arrival.GetMapId(), neighborhoodInstanceId))
+            instanceId = neighborhoodInstanceId;
+
+        if (!player->TeleportTo(arrival, TELE_TO_SPELL, instanceId))
         {
             TC_LOG_ERROR("housing", "spell_housing_exit_house: the teleport of {} out of house {} to plot {} on map {} was refused",
                 player->GetGUID().ToString(), houseGuid.ToString(), plot->PlotIndex, arrival.GetMapId());

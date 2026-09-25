@@ -19,6 +19,7 @@
 #define TRINITYCORE_HOUSING_DEFINES_H
 
 #include "Define.h"
+#include "SharedDefines.h"
 
 // HousingResult enum - 12.1.0.69587 client values (Enum.HousingResult, 112 values). 12.1 inserted AccountBanned and the
 // Blueprint* results near the top, shifting every later value; the client's blueprint system itself returns 3, 7, 8,
@@ -826,10 +827,23 @@ static constexpr uint32 MAX_HOUSING_DYE_SLOTS           = 3;
 static constexpr uint32 MAX_NEIGHBORHOOD_PLOTS          = 55;
 static constexpr uint32 MAX_NEIGHBORHOOD_MANAGERS       = 5;
 static constexpr uint32 MAX_PENDING_INVITES             = 20;
-static constexpr uint32 MIN_CHARTER_SIGNATURES          = 4;
+// A charter needs the signatures of 10 Battle.net accounts, one per account and none from the creator's account: the
+// wiki's Housing page asks for "ten separate player accounts (not characters)", and the client draws as many signature
+// slots as the server says are needed. Whether the creator counts as one of the ten is not known.
+static constexpr uint32 MIN_CHARTER_SIGNATURES          = 10;
 static constexpr uint8  INVALID_PLOT_INDEX              = 255;
 static constexpr uint32 HOUSING_MAX_NAME_LENGTH         = 64;
-static constexpr uint32 MAX_HOUSE_LEVEL                 = 20;
+// Houses reach level 12 in 12.1 (Blizzard's 12.1 notes, https://news.blizzard.com/en-us/article/24293281), and
+// HouseLevelData.db2 holds levels 1 to 12.
+static constexpr uint32 MAX_HOUSE_LEVEL                 = 12;
+
+// A guild neighborhood is created by the guild master of a guild with at least 10 Battle.net accounts among its
+// members, 10 of them active (the client's errors GuildMoreAccountsNeeded and GuildMoreActivePlayersNeeded say "at
+// least 10 unique Battle.net accounts" and "10 active Battle.net accounts"). Icy Veins counts a member as active when
+// they played in the last 30 days.
+static constexpr uint32 GUILD_NEIGHBORHOOD_MIN_ACCOUNTS        = 10;
+static constexpr uint32 GUILD_NEIGHBORHOOD_MIN_ACTIVE_ACCOUNTS = 10;
+static constexpr uint32 GUILD_NEIGHBORHOOD_ACTIVE_DAYS         = 30;
 
 // Starter favor granted on house purchase (sniff: ChangeAmount=910, NewFavorTotal=910 in the
 // post-purchase HousingSvcsUpdateHousesLevelFavor pair).
@@ -1030,8 +1044,9 @@ enum HousingWarningFlag : uint32
 // Minimum player level to access housing features
 static constexpr uint32 HOUSING_MIN_PLAYER_LEVEL = 10;
 
-// Required expansion for housing access (The War Within = 10)
-static constexpr uint32 HOUSING_REQUIRED_EXPANSION = 10;
+// Housing needs the Midnight expansion (Wowhead's housing overview; the wiki's Housing page). Below it the client is
+// only shown the housing warning.
+static constexpr uint32 HOUSING_REQUIRED_EXPANSION = EXPANSION_MIDNIGHT;
 
 // Kill credit that completes QUEST_HOUSING_TUTORIAL_COMPLETE. Packet-attested in the retail
 // Horde starter capture: creature "[DNT] Kill Credit: Housing - Tutorial - 01 - House Entered"
@@ -1112,16 +1127,10 @@ static constexpr uint32 HOUSING_BLUEPRINTS_MAX_BACKUPS_PER_BNET_ACCOUNT = 10;
 static constexpr uint32 HOUSING_BLUEPRINT_NAME_MIN_CHARACTERS           = 3;
 static constexpr uint32 HOUSING_BLUEPRINT_NAME_MAX_CHARACTERS           = 50;
 
-// Pet beds (12.1): decor items with their own placement budget. Caps come from client
-// config globals housingMaxPetBedsInterior@0x127F60 / housingMaxPetBedsExterior@0x127FD0
-// [BIN symbols]. Default caps are placeholders until a value capture/DB confirms. [INF]
-static constexpr uint32 HOUSING_MAX_PET_BEDS_INTERIOR = 6;
-static constexpr uint32 HOUSING_MAX_PET_BEDS_EXTERIOR = 6;
-
-// 12.1 raised the displayed house level cap to 12 (patch notes). MAX_HOUSE_LEVEL above is
-// already 20 (headroom); levels 11-12 are HouseLevelData.db2 rows + larger budgets +
-// large-exterior unlock — a DATA change, not a code cap. [data]
-static constexpr uint32 HOUSING_DISPLAY_LEVEL_CAP_12_1 = 12;
+// Pet beds (12.1) have their own placement limit: up to 100 inside a house and 25 outside (Blizzard's 12.1 notes,
+// https://news.blizzard.com/en-us/article/24293281, and https://news.blizzard.com/en-us/article/24295382).
+static constexpr uint32 HOUSING_MAX_PET_BEDS_INTERIOR = 100;
+static constexpr uint32 HOUSING_MAX_PET_BEDS_EXTERIOR = 25;
 
 // The three post-tutorial auras (slots 8, 9, 50) are re-sent whenever the player enters either
 // housing map, so the sequence lives in one place instead of being carried by both map classes.

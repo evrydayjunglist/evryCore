@@ -21,8 +21,8 @@
 #include "Log.h"
 #include <algorithm>
 
-NeighborhoodCharter::NeighborhoodCharter(uint64 id, ObjectGuid creatorGuid)
-    : _id(id), _creatorGuid(creatorGuid), _createTime(static_cast<uint32>(GameTime::GetGameTime()))
+NeighborhoodCharter::NeighborhoodCharter(uint64 id, ObjectGuid creatorGuid, uint32 creatorBnetAccountId /*= 0*/)
+    : _id(id), _creatorGuid(creatorGuid), _creatorBnetAccountId(creatorBnetAccountId), _createTime(static_cast<uint32>(GameTime::GetGameTime()))
 {
 }
 
@@ -33,8 +33,8 @@ bool NeighborhoodCharter::LoadFromDB(PreparedQueryResult charter, PreparedQueryR
 
     Field* fields = charter->Fetch();
 
-    //          0    1            2       3                4             5        6
-    // SELECT id, creatorGuid, name, neighborhoodMapID, factionFlags, isGuild, createTime
+    //          0    1            2       3                4             5        6           7
+    // SELECT id, creatorGuid, name, neighborhoodMapID, factionFlags, isGuild, createTime, creatorBnetAccountId
     //        FROM neighborhood_charters WHERE id = ?
 
     _id                 = fields[0].GetUInt64();
@@ -44,12 +44,14 @@ bool NeighborhoodCharter::LoadFromDB(PreparedQueryResult charter, PreparedQueryR
     _factionFlags       = fields[4].GetUInt32();
     _isGuild            = fields[5].GetBool();
     _createTime         = fields[6].GetUInt32();
+    _creatorBnetAccountId = fields[7].GetUInt32();
 
     TC_LOG_DEBUG("housing", "NeighborhoodCharter::LoadFromDB: Loaded charter {} '{}' by {}",
         _id, _name, _creatorGuid.ToString());
 
     // Load signatures
     _signatures.clear();
+    _signerBnetAccountIds.clear();
 
     if (signatures)
     {
@@ -57,11 +59,12 @@ bool NeighborhoodCharter::LoadFromDB(PreparedQueryResult charter, PreparedQueryR
         {
             Field* sigFields = signatures->Fetch();
 
-            //          0
-            // SELECT signerGuid FROM neighborhood_charter_signatures WHERE charterId = ?
+            //          0           1
+            // SELECT signerGuid, signerBnetAccountId FROM neighborhood_charter_signatures WHERE charterId = ?
 
             ObjectGuid signerGuid = ObjectGuid::Create<HighGuid::Player>(sigFields[0].GetUInt64());
             _signatures.push_back(signerGuid);
+            _signerBnetAccountIds.push_back(sigFields[1].GetUInt32());
         } while (signatures->NextRow());
     }
 
@@ -83,6 +86,7 @@ void NeighborhoodCharter::SaveToDB(CharacterDatabaseTransaction trans)
     stmt->setUInt32(index++, _factionFlags);
     stmt->setBool(index++, _isGuild);
     stmt->setUInt32(index++, _createTime);
+    stmt->setUInt32(index++, _creatorBnetAccountId);
     trans->Append(stmt);
 
     // Delete all existing signatures and re-insert
@@ -90,12 +94,13 @@ void NeighborhoodCharter::SaveToDB(CharacterDatabaseTransaction trans)
     stmt->setUInt64(0, _id);
     trans->Append(stmt);
 
-    for (ObjectGuid const& signerGuid : _signatures)
+    for (std::size_t i = 0; i < _signatures.size(); ++i)
     {
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_NEIGHBORHOOD_CHARTER_SIGNATURE);
         index = 0;
         stmt->setUInt64(index++, _id);
-        stmt->setUInt64(index++, signerGuid.GetCounter());
+        stmt->setUInt64(index++, _signatures[i].GetCounter());
+        stmt->setUInt32(index++, _signerBnetAccountIds[i]);
         stmt->setUInt32(index++, _createTime);
         trans->Append(stmt);
     }
@@ -119,40 +124,61 @@ void NeighborhoodCharter::SaveToDB(CharacterDatabaseTransaction trans)
     TC_LOG_DEBUG("housing", "NeighborhoodCharter::DeleteFromDB: Deleted charter {}", id);
 }
 
-bool NeighborhoodCharter::AddSignature(ObjectGuid signerGuid)
+/*static*/ HousingResult NeighborhoodCharter::CheckSignature(uint32 signerBnetAccountId, uint32 creatorBnetAccountId,
+    std::vector<uint32> const& signerBnetAccountIds, bool signedAnotherCharter)
 {
-    // Cannot sign your own charter
-    if (signerGuid == _creatorGuid)
-    {
-        TC_LOG_DEBUG("housing", "NeighborhoodCharter::AddSignature: Player {} cannot sign their own charter {}",
-            signerGuid.ToString(), _id);
-        return false;
-    }
+    if (!signerBnetAccountId || signerBnetAccountId == creatorBnetAccountId)
+        return HOUSING_RESULT_PERMISSION_DENIED;
 
-    // Cannot sign twice
-    if (HasSigned(signerGuid))
+    if (std::find(signerBnetAccountIds.begin(), signerBnetAccountIds.end(), signerBnetAccountId) != signerBnetAccountIds.end())
+        return HOUSING_RESULT_DUPLICATE_CHARTER_SIGNATURE;
+
+    if (signedAnotherCharter)
+        return HOUSING_RESULT_DUPLICATE_CHARTER_SIGNATURE;
+
+    return HOUSING_RESULT_SUCCESS;
+}
+
+HousingResult NeighborhoodCharter::AddSignature(ObjectGuid signerGuid, uint32 signerBnetAccountId, bool signedAnotherCharter)
+{
+    HousingResult result = CheckSignature(signerBnetAccountId, _creatorBnetAccountId, _signerBnetAccountIds, signedAnotherCharter);
+    if (result != HOUSING_RESULT_SUCCESS)
     {
-        TC_LOG_DEBUG("housing", "NeighborhoodCharter::AddSignature: Player {} has already signed charter {}",
-            signerGuid.ToString(), _id);
-        return false;
+        TC_LOG_DEBUG("housing", "NeighborhoodCharter::AddSignature: {} (Battle.net account {}) may not sign charter {} (result {})",
+            signerGuid.ToString(), signerBnetAccountId, _id, uint32(result));
+        return result;
     }
 
     _signatures.push_back(signerGuid);
+    _signerBnetAccountIds.push_back(signerBnetAccountId);
 
-    // Persist the new signature immediately
+    // Saved before the handler returns: the next signature, perhaps from another game account of the same Battle.net
+    // account, reads the signatures back from the database to enforce one charter per account.
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_NEIGHBORHOOD_CHARTER_SIGNATURE);
     uint8 index = 0;
     stmt->setUInt64(index++, _id);
     stmt->setUInt64(index++, signerGuid.GetCounter());
+    stmt->setUInt32(index++, signerBnetAccountId);
     stmt->setUInt32(index++, static_cast<uint32>(GameTime::GetGameTime()));
     trans->Append(stmt);
-    CharacterDatabase.CommitTransaction(trans);
+    CharacterDatabase.DirectCommitTransaction(trans);
 
     TC_LOG_DEBUG("housing", "NeighborhoodCharter::AddSignature: Player {} signed charter {} ({}/{} signatures)",
         signerGuid.ToString(), _id, _signatures.size(), MIN_CHARTER_SIGNATURES);
 
-    return true;
+    return HOUSING_RESULT_SUCCESS;
+}
+
+bool NeighborhoodCharter::HasSameSettings(std::string const& name, uint32 neighborhoodMapID, uint32 factionFlags) const
+{
+    return _name == name && _neighborhoodMapID == neighborhoodMapID && _factionFlags == factionFlags;
+}
+
+void NeighborhoodCharter::CopySignaturesFrom(NeighborhoodCharter const& other)
+{
+    _signatures = other._signatures;
+    _signerBnetAccountIds = other._signerBnetAccountIds;
 }
 
 bool NeighborhoodCharter::HasSigned(ObjectGuid signerGuid) const

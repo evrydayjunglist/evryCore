@@ -61,12 +61,25 @@ struct HouseLevelData
 {
     uint32 ID = 0;
     int32 Level = 0;
-    int32 QuestID = 0;
-    // Budget fields populated from fallback defaults (not in HouseLevelData DB2)
-    int32 InteriorDecorPlacementBudget = 0;
-    int32 ExteriorDecorPlacementBudget = 0;
-    int32 RoomPlacementBudget = 0;
-    int32 ExteriorFixtureBudget = 0;
+    int32 QuestID = 0;                  // the level's reward quest, "[DNT] House Level N Room Award" for levels 2 to 6
+};
+
+// How a visitor is related to a house's owner, for the house's access settings.
+struct HouseVisitorRelation
+{
+    bool Neighbor = false;
+    bool Guild = false;
+    bool Friend = false;
+    bool Party = false;
+};
+
+// The four maximums a house level gives, named as the house entity sends them (FHousingPlayerHouse_C).
+struct HouseLevelBudgets
+{
+    uint32 InteriorDecor = 0;
+    uint32 ExteriorDecor = 0;
+    uint32 RoomPlacement = 0;
+    uint32 ExteriorFixture = 0;
 };
 
 struct HouseRoomData
@@ -342,16 +355,13 @@ public:
     std::string GenerateNeighborhoodName(uint32 neighborhoodMapId) const;
 
     // Level-based limits
-    uint32 GetMaxDecorForLevel(uint32 level) const;
-
-    // Budget accessors (WeightCost-based)
     uint32 GetQuestForLevel(uint32 level) const;
-    // Cumulative lifetime Favor needed to unlock `level`. Values extracted
-    // from the retail client via C_Housing.GetHouseLevelFavorForLevel on
-    // build 12.0.1.66838. See implementation for the full table and
-    // semantics. Does not currently gate level-up (needs NPC/auto mechanism
-    // verified first).
-    uint32 GetFavorThresholdForLevel(uint32 level) const;
+    // Total house experience a house needs to reach a level (the client's C_Housing.GetHouseLevelFavorForLevel).
+    // Nothing levels a house from it yet: the client says to "Visit the General Contractor in your Neighborhood to level up
+    // your House" (GlobalStrings HOUSING_DASHBOARD_VISIT_NPC), and no capture shows that visit.
+    static uint32 GetFavorThresholdForLevel(uint32 level);
+    // A level's maximums; a level above the cap takes the cap's.
+    static HouseLevelBudgets GetBudgetsForLevel(uint32 level);
     uint32 GetInteriorDecorBudgetForLevel(uint32 level) const;
     uint32 GetExteriorDecorBudgetForLevel(uint32 level) const;
     uint32 GetRoomBudgetForLevel(uint32 level) const;
@@ -419,18 +429,14 @@ public:
     // The HouseDecor row whose ItemID is the item, or 0. Spell 1256487 names no decor; its item 253493 is decor 1163.
     uint32 GetDecorIdForItem(uint32 itemId) const;
 
-    // Access control — checks if visitor can access a plot/house based on owner's settings
-    // accessMask = HOUSE_SETTING_HOUSE_ACCESS_* for interior, HOUSE_SETTING_PLOT_ACCESS_* for exterior
-    // CanVisitorAccess(visitor, owner, ...) was removed (H-11): it returned false
-    // whenever `owner` was null, so every caller silently changed behaviour when the
-    // owner logged out - the door refused all visits, the plot AreaTrigger allowed
-    // all of them, and the permissions handler reported no access. Use
-    // CanVisitorAccessPlot, which answers the same question with the owner offline.
-
-    // Same as CanVisitorAccess but works when owner is offline — uses CharacterCache + the
-    // visitor's own social/group/guild/neighborhood data to resolve friend/party/guild/neighbor
-    // relationships symmetrically. Settings come from the persisted plotInfo->HouseSettingsFlags.
-    bool CanVisitorAccessPlot(Player const* visitor, ObjectGuid ownerGuid, uint32 settingsFlags, bool isInterior) const;
+    // Whether a house's settings let someone onto its plot (isInterior false) or into the house (isInterior true). Any
+    // character of the owning Battle.net account is let in; anyone else is checked against the settings, which work
+    // while the owner is offline: the guild and friends checks use the character shown as the owner, the neighbors check
+    // the neighborhood the house stands in, and the party check any character of the owning account in the group.
+    bool CanVisitorAccessPlot(Player const* visitor, ObjectGuid ownerBnetGuid, ObjectGuid shownOwnerGuid,
+        Neighborhood const* neighborhood, uint32 settingsFlags, bool isInterior) const;
+    // The settings check alone, for a visitor whose relations to the owner are known.
+    static bool AccessSettingsAllow(uint32 settingsFlags, bool isInterior, HouseVisitorRelation const& relation);
     // HouseSettingFlags BlueprintExport*: may this visitor save the house as a blueprint. Nobody but the owner unless the
     // owner opted in.
     bool CanVisitorExportBlueprint(Player const* visitor, ObjectGuid ownerGuid, uint32 settingsFlags) const;

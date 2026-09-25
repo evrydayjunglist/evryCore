@@ -155,6 +155,8 @@ public:
     int32 GetFactionRestriction() const { return _factionRestriction; }
     void SetFactionRestriction(int32 faction) { _factionRestriction = faction; }
     bool IsPublic() const { return _isPublic; }
+    // A public neighborhood the server made, which no player owns. Guild and charter neighborhoods have a player owner.
+    bool IsServerPublic() const { return _isPublic && _ownerGuid.IsEmpty() && !_guildId; }
     uint32 GetCreateTime() const { return _createTime; }
 
     // Guild association
@@ -240,6 +242,18 @@ public:
 
     std::array<PlotInfo, MAX_NEIGHBORHOOD_PLOTS> const& GetPlots() const { return _plots; }
     uint32 GetOccupiedPlotCount() const;
+
+    // Whether a character may join a neighborhood by buying a plot in it. A public neighborhood the server made takes
+    // only its own faction. Guild and charter neighborhoods take both factions ("Both Alliance and Horde characters can
+    // purchase a Plot", GlobalStrings HOUSING_CREATENEIGHBORHOOD_GUILD_INFODESCRIPTION and _CHARTER_INFODESCRIPTION). A
+    // guild neighborhood takes its guild's members and no one else ("Only players who are a part of your guild can
+    // purchase a Plot"). A charter neighborhood needs an invitation, unless it has been opened to the public or she
+    // already runs it.
+    static HousingResult CheckResidentJoin(bool serverPublic, bool isPublic, int32 factionRestriction, uint32 neighborhoodGuildId,
+        uint32 team, uint32 playerGuildId, bool invitedOrRunsIt);
+
+    // Whether her faction may join or be invited: only the server's public neighborhoods keep to one faction.
+    static bool IsFactionAllowed(bool serverPublic, int32 factionRestriction, uint32 team);
 
     // Members
     HousingResult AddResident(ObjectGuid playerGuid);

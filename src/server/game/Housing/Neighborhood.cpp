@@ -547,20 +547,15 @@ HousingResult Neighborhood::InviteResident(ObjectGuid inviterGuid, ObjectGuid in
         }
     }
 
-    // Check faction restriction
-    if (_factionRestriction != NEIGHBORHOOD_FACTION_NONE)
+    // Only the server's public neighborhoods keep to one faction; a charter or guild neighborhood takes both, so an
+    // invitation to one is not refused for her faction (the same rule as CheckResidentJoin).
+    if (Player* invitee = ObjectAccessor::FindPlayer(inviteeGuid))
     {
-        Player* invitee = ObjectAccessor::FindPlayer(inviteeGuid);
-        if (invitee)
+        if (!IsFactionAllowed(IsServerPublic(), _factionRestriction, invitee->GetTeam()))
         {
-            uint32 team = invitee->GetTeam();
-            if ((_factionRestriction == NEIGHBORHOOD_FACTION_HORDE && team != HORDE) ||
-                (_factionRestriction == NEIGHBORHOOD_FACTION_ALLIANCE && team != ALLIANCE))
-            {
-                TC_LOG_DEBUG("housing", "Neighborhood::InviteResident: Player {} faction mismatch for neighborhood '{}'",
-                    inviteeGuid.ToString(), _name);
-                return HOUSING_RESULT_INCORRECT_FACTION;
-            }
+            TC_LOG_DEBUG("housing", "Neighborhood::InviteResident: Player {} faction mismatch for neighborhood '{}'",
+                inviteeGuid.ToString(), _name);
+            return HOUSING_RESULT_INCORRECT_FACTION;
         }
     }
 
@@ -1260,6 +1255,32 @@ uint32 Neighborhood::GetHouseSettingsFlags(PlotInfo const& plot) const
     return plot.HouseSettingsFlags;
 }
 
+/*static*/ bool Neighborhood::IsFactionAllowed(bool serverPublic, int32 factionRestriction, uint32 team)
+{
+    if (!serverPublic)
+        return true;
+
+    return !((factionRestriction == NEIGHBORHOOD_FACTION_HORDE && team != HORDE)
+        || (factionRestriction == NEIGHBORHOOD_FACTION_ALLIANCE && team != ALLIANCE));
+}
+
+/*static*/ HousingResult Neighborhood::CheckResidentJoin(bool serverPublic, bool isPublic, int32 factionRestriction,
+    uint32 neighborhoodGuildId, uint32 team, uint32 playerGuildId, bool invitedOrRunsIt)
+{
+    if (serverPublic)
+        return IsFactionAllowed(serverPublic, factionRestriction, team) ? HOUSING_RESULT_SUCCESS : HOUSING_RESULT_INCORRECT_FACTION;
+
+    // The guild roster decides who lives in a guild neighborhood ("For guilds, this is via the Guild roster", Blizzard's
+    // preview https://worldofwarcraft.blizzard.com/en-us/news/24221516).
+    if (neighborhoodGuildId)
+        return playerGuildId == neighborhoodGuildId ? HOUSING_RESULT_SUCCESS : HOUSING_RESULT_INVALID_GUILD;
+
+    if (!isPublic && !invitedOrRunsIt)
+        return HOUSING_RESULT_MISSING_PRIVATE_NEIGHBORHOOD_INVITE;
+
+    return HOUSING_RESULT_SUCCESS;
+}
+
 Neighborhood::HouseEntry Neighborhood::CheckHouseEntry(Player const* player, uint8 plotIndex, bool interior) const
 {
     HouseEntry entry;
@@ -1274,7 +1295,7 @@ Neighborhood::HouseEntry Neighborhood::CheckHouseEntry(Player const* player, uin
     else
         entry.SettingsFlags = GetHouseSettingsFlags(*plot);
 
-    entry.Allowed = entry.IsOwner || sHousingMgr.CanVisitorAccessPlot(player, plot->OwnerGuid, entry.SettingsFlags, interior);
+    entry.Allowed = entry.IsOwner || sHousingMgr.CanVisitorAccessPlot(player, plot->OwnerBnetGuid, plot->OwnerGuid, this, entry.SettingsFlags, interior);
     return entry;
 }
 

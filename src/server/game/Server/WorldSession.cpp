@@ -124,7 +124,6 @@ WorldSession::WorldSession(uint32 id, std::string&& name, uint32 battlenetAccoun
     _accountId(id),
     _accountName(std::move(name)),
     _battlenetAccount(new Battlenet::Account(this, ObjectGuid::Create<HighGuid::BNetAccount>(battlenetAccountId), std::move(battlenetAccountEmail))),
-    _housingPlayerHouseEntity(new HousingPlayerHouseEntity(this, ObjectGuid::Create<HighGuid::Housing>(/*subType*/3, /*arg1*/sRealmList->GetCurrentRealmId().Realm, /*arg2*/7, /*arg3*/battlenetAccountId))),
     _housingNeighborhoodMirrorEntity(new HousingNeighborhoodMirrorEntity(this, ObjectGuid::Create<HighGuid::Housing>(/*subType*/4, /*arg1*/sRealmList->GetCurrentRealmId().Realm, /*arg2*/0, /*arg3*/battlenetAccountId))),
     m_accountExpansion(expansion),
     m_expansion(std::min<uint8>(expansion, sWorld->getIntConfig(CONFIG_EXPANSION))),
@@ -213,6 +212,19 @@ uint32 WorldSession::GetBattlenetAccountId() const
 ObjectGuid WorldSession::GetBattlenetAccountGUID() const
 {
     return _battlenetAccount->GetGUID();
+}
+
+HousingPlayerHouseEntity& WorldSession::GetHousingPlayerHouseEntity(ObjectGuid houseGuid)
+{
+    auto itr = _housingPlayerHouseEntities.find(houseGuid);
+    if (itr == _housingPlayerHouseEntities.end())
+    {
+        itr = _housingPlayerHouseEntities.emplace(houseGuid, std::make_unique<HousingPlayerHouseEntity>(this, houseGuid)).first;
+        if (_player && _player->IsInWorld())
+            itr->second->AddToWorld();
+    }
+
+    return *itr->second;
 }
 
 std::string const & WorldSession::GetPlayerName() const
@@ -701,7 +713,7 @@ void WorldSession::LogoutPlayer(bool save)
         sScriptMgr->OnPlayerLogout(_player);
 
         // ... and offline again.
-        for (Neighborhood const* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForPlayer(_player->GetGUID()))
+        for (Neighborhood const* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForAccount(_player))
             neighborhood->BroadcastMemberStatus(_player->GetGUID(), false);
 
         TC_METRIC_EVENT("player_events", "Logout", _player->GetName());
@@ -720,6 +732,9 @@ void WorldSession::LogoutPlayer(bool save)
             _map->RemovePlayerFromMap(_player, true);
 
         SetPlayer(nullptr); //! Pointer already deleted during RemovePlayerFromMap
+
+        // The house entities belong to that character's view of the account's houses; the next character builds its own.
+        _housingPlayerHouseEntities.clear();
 
         //! Send the 'logout complete' packet to the client
         //! Client will respond by sending 3x CMSG_CANCEL_TRADE, which we currently dont handle

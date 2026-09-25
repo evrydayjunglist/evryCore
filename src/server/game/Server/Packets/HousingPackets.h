@@ -685,7 +685,10 @@ namespace WorldPackets::Housing
 
         ObjectGuid HouseGuid;
         Optional<uint32> PlotSettingsID;
-        Optional<ObjectGuid> VisitorPermissionGuid;
+        // The character chosen as the house's new cosmetic owner. Blizzard's 12.1 House Settings frame passes the
+        // chosen character's GUID with the access flags to C_Housing.SaveHouseSettings (Blizzard_HousingHouseSettings.lua
+        // OnSaveClicked); this is the only GUID after the house GUID. No capture of the packet exists.
+        Optional<ObjectGuid> NewOwnerGuid;
     };
 
     class HousingSvcsPlayerViewHousesByPlayer final : public ClientPacket
@@ -770,7 +773,8 @@ namespace WorldPackets::Housing
 
         void Read() override;
 
-        ObjectGuid NeighborhoodGuid;
+        // hled1 699937: the house whose owner is being chosen.
+        ObjectGuid HouseGuid;
     };
 
     class HousingSvcsGetHouseFinderInfo final : public ClientPacket

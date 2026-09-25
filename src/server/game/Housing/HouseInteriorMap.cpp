@@ -93,13 +93,24 @@ void HouseInteriorMap::LoadGridObjects(NGridType* grid)
     // No static spawns exist on the interior map template.
 }
 
+bool HouseInteriorMap::IsHouseOwner(Player const* player) const
+{
+    // Every character of the house's Battle.net account is an owner here, not only the one shown as owner.
+    return player && player->GetHousingByGuid(_houseGuid) != nullptr;
+}
+
 Housing* HouseInteriorMap::GetOwnerHousing()
 {
     if (_loadingPlayer)
-        return _loadingPlayer->GetHousing();
+        if (Housing* housing = _loadingPlayer->GetHousingByGuid(_houseGuid))
+            return housing;
+
+    for (auto const& reference : GetPlayers())
+        if (Housing* housing = reference.GetSource()->GetHousingByGuid(_houseGuid))
+            return housing;
 
     if (Player* owner = ObjectAccessor::FindConnectedPlayer(_owner))
-        return owner->GetHousing();
+        return owner->GetHousingByGuid(_houseGuid);
 
     return nullptr;
 }
@@ -1501,10 +1512,10 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
     TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: ENTER player={} owner={} isOwner={} "
         "_roomsSpawned={} map={} instanceId={} this={}",
         player->GetGUID().ToString(), _owner.ToString(),
-        player->GetGUID() == _owner, _roomsSpawned,
+        IsHouseOwner(player), _roomsSpawned,
         GetId(), GetInstanceId(), (void*)this);
 
-    if (player->GetGUID() == _owner)
+    if (IsHouseOwner(player))
         _loadingPlayer = player;
 
     // === PRE-SPAWN: Populate ALL housing entities BEFORE Map::AddPlayerToMap ===
@@ -1517,21 +1528,13 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
     // isn't the map's owner. Spawn rooms/decor from PlotInfo (mirrored from
     // the DB) so visitors see the owner's actual layout without needing the
     // owner online.
-    Housing* preloadHousing = player->GetHousing();
-    bool visitingOfflineOwner = !_roomsSpawned && player->GetGUID() != _owner;
+    Housing* preloadHousing = player->GetHousingByGuid(_houseGuid);
+    bool visitingOfflineOwner = !_roomsSpawned && !IsHouseOwner(player);
     if (visitingOfflineOwner)
     {
-        for (Neighborhood* nbh : sNeighborhoodMgr.GetNeighborhoodsForPlayer(_owner))
+        for (Neighborhood* nbh : sNeighborhoodMgr.GetAllNeighborhoods())
         {
-            Neighborhood::PlotInfo const* ownerPlot = nullptr;
-            for (Neighborhood::PlotInfo const& plot : nbh->GetPlots())
-            {
-                if (plot.OwnerGuid == _owner && plot.IsOccupied())
-                {
-                    ownerPlot = &plot;
-                    break;
-                }
-            }
+            Neighborhood::PlotInfo const* ownerPlot = nbh->GetPlotInfoByHouse(_houseGuid);
             if (!ownerPlot)
                 continue;
 
@@ -1563,7 +1566,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
         }
     }
 
-    if (preloadHousing && player->GetGUID() == _owner)
+    if (preloadHousing && IsHouseOwner(player))
     {
         // Clear exterior fixture edit mode that persists across map transfer
         if (preloadHousing->GetEditorMode() != HOUSING_EDITOR_MODE_NONE)
@@ -1617,7 +1620,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
     bool result = Map::AddPlayerToMap(player, initPlayer);
 
-    if (player->GetGUID() == _owner)
+    if (IsHouseOwner(player))
         _loadingPlayer = nullptr;
 
     TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: Map::AddPlayerToMap returned {} for player={}",
@@ -1625,7 +1628,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
     if (result)
     {
-        Housing* housing = player->GetHousing();
+        Housing* housing = player->GetHousingByGuid(_houseGuid);
         TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: housing={} for player={}",
             housing ? "VALID" : "NULL", player->GetGUID().ToString());
 
@@ -1641,7 +1644,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
             housing->SetInInterior(true);
 
             // Spawn room meshes on first entry
-            if (player->GetGUID() == _owner)
+            if (IsHouseOwner(player))
             {
                 // Always force a fresh spawn on login — old entities from a previous binary/session
                 // may have stale fragment formats (e.g., root MeshObjects with FHousingRoom_C that
@@ -1745,7 +1748,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     if (!p || !p->IsInWorld())
                         return;
 
-                    Housing* housing = p->GetHousing();
+                    Housing* housing = p->GetHousingByGuid(_houseGuid);
                     if (!housing)
                         return;
 
@@ -1784,12 +1787,13 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         session->GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
                         p->m_clientGUIDs.insert(session->GetBattlenetAccount().GetGUID());
 
-                        if (p->HaveAtClient(&session->GetHousingPlayerHouseEntity()))
-                            session->GetHousingPlayerHouseEntity().BuildValuesUpdateBlockForPlayer(&storageUpdate, p);
+                        HousingPlayerHouseEntity& houseEntity = session->GetHousingPlayerHouseEntity(_houseGuid);
+                        if (p->HaveAtClient(&houseEntity))
+                            houseEntity.BuildValuesUpdateBlockForPlayer(&storageUpdate, p);
                         else
                         {
-                            session->GetHousingPlayerHouseEntity().BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
-                            p->m_clientGUIDs.insert(session->GetHousingPlayerHouseEntity().GetGUID());
+                            houseEntity.BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
+                            p->m_clientGUIDs.insert(houseEntity.GetGUID());
                         }
 
                         // Decor and HousingRoomEntity CREATEs are sent by the map visibility
@@ -1801,7 +1805,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         p->SendDirectMessage(&storagePacket);
 
                         session->GetBattlenetAccount().ClearUpdateMask(true);
-                        session->GetHousingPlayerHouseEntity().ClearUpdateMask(true);
+                        houseEntity.ClearUpdateMask(true);
 
                         TC_LOG_ERROR("housing", "HouseInteriorMap deferred: Sent Account+budget for {}",
                             playerGuid.ToString());
@@ -1943,12 +1947,9 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         TC_LOG_INFO("housing", "InteriorDoor: Starting blizzlike door spawn for player {} (map owner={})",
                             playerGuid.ToString(), _owner.ToString());
 
-                        // The interior map is instanced per-HOUSE, not per-visitor.
-                        // Guests can enter the owner's house — p->GetHousing() is the VISITOR's house,
-                        // not the one being visited. Always resolve the OWNER's housing for door context.
-                        Housing* ownerHousing = nullptr;
-                        if (Player* ownerPlayer = ObjectAccessor::FindPlayer(_owner))
-                            ownerHousing = ownerPlayer->GetHousing();
+                        // The interior map is instanced per house, not per visitor: the door context is
+                        // always the house of this map, taken from any character of its account.
+                        Housing* ownerHousing = GetOwnerHousing();
 
                         if (!ownerHousing)
                         {
@@ -2147,7 +2148,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
 void HouseInteriorMap::RemovePlayerFromMap(Player* player, bool remove)
 {
-    Housing* housing = player->GetHousing();
+    Housing* housing = player->GetHousingByGuid(_houseGuid);
     if (housing)
         housing->SetInInterior(false);
 

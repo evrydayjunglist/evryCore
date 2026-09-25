@@ -1256,9 +1256,12 @@ class TC_GAME_API WorldSession
         uint32 GetBattlenetAccountId() const;
         ObjectGuid GetBattlenetAccountGUID() const;
         Battlenet::Account& GetBattlenetAccount() const { return *_battlenetAccount; }
-        bool HasHousingPlayerHouseEntity() const { return _housingPlayerHouseEntity != nullptr; }
+        // One FHousingPlayerHouse_C entity per house the account owns, created the first time it is needed. Retail sends
+        // none before the account has a house (hbcd3: the own 0xDC60...354769D entity first appears after the purchase).
+        bool HasHousingPlayerHouseEntity(ObjectGuid houseGuid) const { return _housingPlayerHouseEntities.contains(houseGuid); }
         bool HasHousingNeighborhoodMirrorEntity() const { return _housingNeighborhoodMirrorEntity != nullptr; }
-        HousingPlayerHouseEntity& GetHousingPlayerHouseEntity() const { return *_housingPlayerHouseEntity; }
+        HousingPlayerHouseEntity& GetHousingPlayerHouseEntity(ObjectGuid houseGuid);
+        std::unordered_map<ObjectGuid, std::unique_ptr<HousingPlayerHouseEntity>> const& GetHousingPlayerHouseEntities() const { return _housingPlayerHouseEntities; }
         HousingNeighborhoodMirrorEntity& GetHousingNeighborhoodMirrorEntity() const { return *_housingNeighborhoodMirrorEntity; }
         Player* GetPlayer() const { return _player; }
         std::string const& GetPlayerName() const;
@@ -1802,6 +1805,8 @@ class TC_GAME_API WorldSession
         void HandleHousingSvcsAcceptNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsAcceptNeighborhoodOwnership const& housingSvcsAcceptNeighborhoodOwnership);
         void HandleHousingSvcsRejectNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsRejectNeighborhoodOwnership const& housingSvcsRejectNeighborhoodOwnership);
         void HandleHousingSvcsGetPotentialHouseOwners(WorldPackets::Housing::HousingSvcsGetPotentialHouseOwners const& housingSvcsGetPotentialHouseOwners);
+        // Builds and sends the potential-owners reply once the account's characters are read.
+        void SendHousingPotentialHouseOwners(ObjectGuid houseGuid, int32 factionRestriction, uint32 guildId, QueryResult characters);
         void HandleHousingSvcsGetHouseFinderInfo(WorldPackets::Housing::HousingSvcsGetHouseFinderInfo const& housingSvcsGetHouseFinderInfo);
         void HandleHousingSvcsGetHouseFinderNeighborhood(WorldPackets::Housing::HousingSvcsGetHouseFinderNeighborhood const& housingSvcsGetHouseFinderNeighborhood);
         void HandleHousingSvcsHouseFinderIgnoreNeighborhood(WorldPackets::Housing::HousingSvcsHouseFinderIgnoreNeighborhood const& housingSvcsHouseFinderIgnoreNeighborhood);
@@ -2451,7 +2456,7 @@ class TC_GAME_API WorldSession
         uint32 _accountId;
         std::string _accountName;
         std::unique_ptr<Battlenet::Account> _battlenetAccount;
-        std::unique_ptr<HousingPlayerHouseEntity> _housingPlayerHouseEntity;
+        std::unordered_map<ObjectGuid, std::unique_ptr<HousingPlayerHouseEntity>> _housingPlayerHouseEntities;
         std::unique_ptr<HousingNeighborhoodMirrorEntity> _housingNeighborhoodMirrorEntity;
         uint8 m_accountExpansion;
         uint8 m_expansion;
@@ -2520,6 +2525,11 @@ class TC_GAME_API WorldSession
         // The client's PlotIndex may differ from our DB2 PlotIndex values.
         uint32 _lastClientPlotIndex = 0;
         ObjectGuid _lastCornerstoneGuid;
+
+        // The characters the last potential-owners reply listed for a house, with the HouseOwnerError each was sent.
+        // House Settings may only name one of them that had no error as the house's new cosmetic owner.
+        ObjectGuid _housingPotentialOwnersHouse;
+        std::unordered_map<ObjectGuid, uint8 /*HouseOwnerError*/> _housingPotentialOwners;
 
         // m3/A6 per-session decoration throttle. Each decor place/move/remove is
         // an AddToMap + synchronous DB write; without a limit a scripted client

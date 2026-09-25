@@ -6428,7 +6428,8 @@ void Spell::EffectCollectHousingDecor()
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
     if (!housing)
         return;
 
@@ -6464,10 +6465,10 @@ void Spell::EffectCollectHousingDecor()
     // decor list refreshes without requiring a relog or mode toggle.
     if (housing->IsStoragePopulated())
     {
-        Housing::CatalogEntry const* catEntry = nullptr;
-        for (Housing::CatalogEntry const* entry : housing->GetCatalogEntries())
+        Optional<Housing::CatalogEntry> catEntry;
+        for (Housing::CatalogEntry const& entry : housing->GetCatalogEntries())
         {
-            if (entry->DecorEntryId == decorEntryId)
+            if (entry.DecorEntryId == decorEntryId)
             {
                 catEntry = entry;
                 break;
@@ -6505,7 +6506,8 @@ void Spell::EffectLearnHouseRoom()
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
     if (!housing)
         return;
 
@@ -6539,7 +6541,8 @@ void Spell::EffectLearnHouseExteriorComponent()
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
     if (!housing)
         return;
 
@@ -6565,7 +6568,8 @@ void Spell::EffectLearnHouseTheme()
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
     if (!housing)
         return;
 
@@ -6599,7 +6603,8 @@ void Spell::EffectLearnHouseRoomComponentTexture()
     if (!player)
         return;
 
-    Housing* housing = player->GetHousing();
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
     if (!housing)
         return;
 

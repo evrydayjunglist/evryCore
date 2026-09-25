@@ -41,11 +41,15 @@ public:
     void RemovePlayerFromMap(Player* player, bool remove) override;
 
     ObjectGuid GetOwnerGuid() const { return _owner; }
+    // The house this interior belongs to. One instance per house; every character of its account owns it.
+    ObjectGuid GetHouseGuid() const { return _houseGuid; }
+    void SetHouseGuid(ObjectGuid houseGuid) { _houseGuid = houseGuid; }
+    bool IsHouseOwner(Player const* player) const;
     float GetOriginX() const { return _originX; }
     float GetOriginY() const { return _originY; }
     float GetOriginZ() const { return _originZ; }
 
-    /// Get the Housing data for the owner (needed for room/decor state).
+    /// The live Housing of this map's house, from any online character of its account.
     Housing* GetOwnerHousing();
 
     /// The neighborhood map ID the owner came from (for exit teleport).
@@ -131,6 +135,7 @@ public:
 
 private:
     ObjectGuid _owner;
+    ObjectGuid _houseGuid;
     Player* _loadingPlayer; ///< @workaround Player not in ObjectAccessor during login
     uint32 _sourceNeighborhoodMapId;
     uint8 _sourcePlotIndex;

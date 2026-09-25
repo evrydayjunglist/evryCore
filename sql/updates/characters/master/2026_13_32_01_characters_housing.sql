@@ -1,11 +1,18 @@
 -- Housing and neighborhood tables, folded from the source branch's schema file and its later changes.
 -- Nothing here drops, alters or fills an existing table.
+--
+-- A house belongs to a Battle.net account, not to a character: every character of the account sees and
+-- edits it, and the character who bought it is only shown as its owner. character_housing.guid is the
+-- house's own database id; the decor, room and fixture rows point at it through houseGuid, and the decor
+-- catalog is kept per Battle.net account.
 
 CREATE TABLE IF NOT EXISTS `character_housing` (
-    `guid` BIGINT UNSIGNED NOT NULL,
-    `houseId` INT UNSIGNED NOT NULL DEFAULT 0,
+    `guid` BIGINT UNSIGNED NOT NULL COMMENT 'House database id',
+    `bnetAccountId` INT UNSIGNED NOT NULL COMMENT 'Battle.net account that owns the house',
+    `slot` TINYINT UNSIGNED NOT NULL COMMENT 'Which of the account''s houses this is: 1 for the first, 2 for the second',
+    `cosmeticOwnerGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Character shown as the owner',
     `neighborhoodGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0,
-    `plotIndex` TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `plotIndex` TINYINT UNSIGNED NOT NULL DEFAULT 255,
     `houseLevel` INT UNSIGNED NOT NULL DEFAULT 1,
     `favor` INT UNSIGNED NOT NULL DEFAULT 0,
     `settingsFlags` INT UNSIGNED NOT NULL DEFAULT 0,
@@ -19,11 +26,16 @@ CREATE TABLE IF NOT EXISTS `character_housing` (
     `facing` FLOAT NOT NULL DEFAULT 0,
     `houseName` VARCHAR(64) NOT NULL DEFAULT '',
     `houseDescription` VARCHAR(256) NOT NULL DEFAULT '',
-    PRIMARY KEY (`guid`)
+    `packed` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '1 while the house is packed up and stands on no plot',
+    `activeNeighborhoodGuid` BIGINT UNSIGNED AS (IF(`packed` = 0, `neighborhoodGuid`, NULL)) STORED COMMENT 'The neighborhood while the house stands on a plot, NULL while it is packed',
+    PRIMARY KEY (`guid`),
+    UNIQUE KEY `idx_account_slot` (`bnetAccountId`, `slot`),
+    UNIQUE KEY `idx_neighborhood_plot` (`activeNeighborhoodGuid`, `plotIndex`),
+    KEY `idx_neighborhood` (`neighborhoodGuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `character_housing_decor` (
-    `ownerGuid` BIGINT UNSIGNED NOT NULL,
+    `houseGuid` BIGINT UNSIGNED NOT NULL COMMENT 'character_housing.guid',
     `id` BIGINT UNSIGNED NOT NULL,
     `houseDecorId` INT UNSIGNED NOT NULL,
     `posX` FLOAT NOT NULL DEFAULT 0,
@@ -44,11 +56,11 @@ CREATE TABLE IF NOT EXISTS `character_housing_decor` (
     `sourceValue` VARCHAR(128) NOT NULL DEFAULT '',
     `petGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `petFlag` TINYINT UNSIGNED NOT NULL DEFAULT 0,
-    PRIMARY KEY (`ownerGuid`, `id`)
+    PRIMARY KEY (`houseGuid`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `character_housing_rooms` (
-    `ownerGuid` BIGINT UNSIGNED NOT NULL,
+    `houseGuid` BIGINT UNSIGNED NOT NULL COMMENT 'character_housing.guid',
     `id` BIGINT UNSIGNED NOT NULL,
     `houseRoomId` INT UNSIGNED NOT NULL,
     `slotIndex` INT UNSIGNED NOT NULL DEFAULT 0,
@@ -69,26 +81,26 @@ CREATE TABLE IF NOT EXISTS `character_housing_rooms` (
     `wallThemeId` INT UNSIGNED NOT NULL DEFAULT 0,
     `floorThemeId` INT UNSIGNED NOT NULL DEFAULT 0,
     `ceilingThemeId` INT UNSIGNED NOT NULL DEFAULT 0,
-    PRIMARY KEY (`ownerGuid`, `id`)
+    PRIMARY KEY (`houseGuid`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `character_housing_fixtures` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `ownerGuid` BIGINT UNSIGNED NOT NULL,
+    `houseGuid` BIGINT UNSIGNED NOT NULL COMMENT 'character_housing.guid',
     `fixturePointId` INT UNSIGNED NOT NULL,
     `fixtureOptionId` INT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
-    INDEX `idx_owner` (`ownerGuid`)
+    INDEX `idx_house` (`houseGuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `character_housing_catalog` (
-    `ownerGuid` BIGINT UNSIGNED NOT NULL,
+    `bnetAccountId` INT UNSIGNED NOT NULL COMMENT 'Battle.net account that owns the decor',
     `houseDecorId` INT UNSIGNED NOT NULL,
     `quantity` INT UNSIGNED NOT NULL DEFAULT 1,
     `acquiredTime` INT UNSIGNED NOT NULL DEFAULT 0,
     `sourceType` TINYINT UNSIGNED NOT NULL DEFAULT 0,
     `sourceValue` VARCHAR(128) NOT NULL DEFAULT '',
-    PRIMARY KEY (`ownerGuid`, `houseDecorId`)
+    PRIMARY KEY (`bnetAccountId`, `houseDecorId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `neighborhoods` (

@@ -31,6 +31,7 @@
 #include "StringFormat.h"
 #include "Timer.h"
 #include "World.h"
+#include "WorldSession.h"
 
 NeighborhoodMgr& NeighborhoodMgr::Instance()
 {
@@ -105,7 +106,12 @@ void NeighborhoodMgr::LoadFromDB()
         inviteStmt->setUInt64(0, guidLow);
         PreparedQueryResult inviteResult = CharacterDatabase.Query(inviteStmt);
 
-        // Load per-member exterior/interior state needed to render every
+        // The houses standing in this neighborhood, which fill its plots.
+        CharacterDatabasePreparedStatement* houseStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_NEIGHBORHOOD_HOUSES);
+        houseStmt->setUInt64(0, guidLow);
+        PreparedQueryResult houseResult = CharacterDatabase.Query(houseStmt);
+
+        // Load per-house exterior/interior state needed to render every
         // occupied plot's house without requiring the owner to be online.
         CharacterDatabasePreparedStatement* fixStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_NEIGHBORHOOD_MEMBER_FIXTURES);
         fixStmt->setUInt64(0, guidLow);
@@ -127,7 +133,7 @@ void NeighborhoodMgr::LoadFromDB()
         neighborhoodStmt->setUInt64(0, guidLow);
         PreparedQueryResult neighborhoodResult = CharacterDatabase.Query(neighborhoodStmt);
 
-        if (!neighborhood->LoadFromDB(neighborhoodResult, memberResult, inviteResult, fixtureResult, decorResult, roomResult))
+        if (!neighborhood->LoadFromDB(neighborhoodResult, memberResult, inviteResult, houseResult, fixtureResult, decorResult, roomResult))
         {
             TC_LOG_ERROR("housing", "NeighborhoodMgr::LoadFromDB: Failed to load neighborhood guid {}. Skipping.", guidLow);
             continue;
@@ -381,6 +387,33 @@ std::vector<Neighborhood*> NeighborhoodMgr::GetNeighborhoodsForPlayer(ObjectGuid
     {
         if (neighborhood->IsMember(playerGuid))
             result.push_back(neighborhood.get());
+    }
+    return result;
+}
+
+std::vector<Neighborhood*> NeighborhoodMgr::GetNeighborhoodsForAccount(Player const* player) const
+{
+    std::vector<Neighborhood*> result;
+    if (!player)
+        return result;
+
+    ObjectGuid const bnetAccountGuid = player->GetSession() ? player->GetSession()->GetBattlenetAccountGUID() : ObjectGuid::Empty;
+    for (auto const& [guid, neighborhood] : _neighborhoods)
+    {
+        if (neighborhood->IsMember(player->GetGUID()))
+        {
+            result.push_back(neighborhood.get());
+            continue;
+        }
+
+        for (Neighborhood::PlotInfo const& plot : neighborhood->GetPlots())
+        {
+            if (plot.IsOwnedByAccount(bnetAccountGuid))
+            {
+                result.push_back(neighborhood.get());
+                break;
+            }
+        }
     }
     return result;
 }
@@ -741,10 +774,11 @@ void NeighborhoodMgr::MigrateWrongFactionResidents()
             std::set<uint8>& usedPlots = (correctNbLow == allianceNbLow) ? usedPlotsInAlliance : usedPlotsInHorde;
             uint8 newPlotIndex = m.PlotIndex;
 
-            // Check if character_housing already points to the correct neighborhood
-            // (e.g., player bought a new house there before migration ran)
+            // Check if the house this character is shown as owning already points to the correct neighborhood
+            // (e.g., player bought a new house there before migration ran). character_housing.guid is the
+            // house's own id; the character is its cosmeticOwnerGuid.
             QueryResult housingResult = CharacterDatabase.Query(
-                Trinity::StringFormat("SELECT plotIndex FROM character_housing WHERE guid = {} AND neighborhoodGuid = {}",
+                Trinity::StringFormat("SELECT plotIndex FROM character_housing WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {}",
                     m.PlayerGuidLow, correctNbLow).c_str());
             if (housingResult)
                 newPlotIndex = housingResult->Fetch()[0].GetUInt8();
@@ -778,7 +812,7 @@ void NeighborhoodMgr::MigrateWrongFactionResidents()
 
             // Update character_housing to point to correct neighborhood (only if it still references the old one)
             CharacterDatabase.DirectExecute(
-                Trinity::StringFormat("UPDATE character_housing SET neighborhoodGuid = {}, plotIndex = {} WHERE guid = {} AND neighborhoodGuid = {}",
+                Trinity::StringFormat("UPDATE character_housing SET neighborhoodGuid = {}, plotIndex = {} WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {}",
                     correctNbLow, newPlotIndex, m.PlayerGuidLow, m.NbGuidLow).c_str());
 
             TC_LOG_INFO("server.loading", ">> Migrated player {} from neighborhood {} to {} (plot {} -> {})",

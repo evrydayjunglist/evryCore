@@ -1034,11 +1034,11 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_RESEARCH_SITES,
     PLAYER_LOGIN_QUERY_LOAD_RESEARCH_PROJECTS,
     PLAYER_LOGIN_QUERY_LOAD_RESEARCH_HISTORY,
-    PLAYER_LOGIN_QUERY_LOAD_HOUSING,
-    PLAYER_LOGIN_QUERY_LOAD_HOUSING_DECOR,
-    PLAYER_LOGIN_QUERY_LOAD_HOUSING_ROOMS,
-    PLAYER_LOGIN_QUERY_LOAD_HOUSING_FIXTURES,
-    PLAYER_LOGIN_QUERY_LOAD_HOUSING_CATALOG,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_ROOMS,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -2924,19 +2924,45 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void CreateGarrison(uint32 garrSiteId);
         void DeleteGarrison();
         Garrison* GetGarrison() const { return _garrison.get(); }
-        // House-visit teleport target: set by the door GO script, read+cleared by MapManager so a visitor is
-        // routed to the OWNER's HouseInteriorMap instance. Empty = enter own interior (per feature/housing-system).
-        void SetHouseVisitTarget(ObjectGuid ownerGuid) { _houseVisitTargetOwner = ownerGuid; }
-        ObjectGuid GetHouseVisitTarget() const { return _houseVisitTargetOwner; }
-        void ClearHouseVisitTarget() { _houseVisitTargetOwner = ObjectGuid::Empty; }
+        // The house whose interior the next teleport enters: set by the front door to the plot's house GUID, owner or
+        // visitor alike, and read and cleared by MapManager when it picks that house's interior instance.
+        void SetHouseVisitTarget(ObjectGuid houseGuid) { _houseVisitTarget = houseGuid; }
+        ObjectGuid GetHouseVisitTarget() const { return _houseVisitTarget; }
+        void ClearHouseVisitTarget() { _houseVisitTarget = ObjectGuid::Empty; }
 
-        void CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex);
-        void DeleteHousing(ObjectGuid neighborhoodGuid);
+        // Buys a new house for this character's Battle.net account; the character becomes its shown owner. The
+        // account's other online characters are given the house too. Runs on the world thread, as the purchase
+        // handler does, because it changes those other characters.
+        Housing* CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex);
+        // Deletes one of the account's houses, and takes it away from the account's other online characters.
+        // World thread only, for the same reason.
+        void DeleteHousing(ObjectGuid houseGuid);
+        // The house the character is standing in or on: the interior's house, or the account's house in the
+        // neighborhood of the current housing map. Anywhere else it is the account's only house, and nothing when
+        // the account owns two, because nothing says which one is meant.
         Housing* GetHousing() const;
+        // A house through which to reach the account's decor catalog and collections, which every house of the
+        // account shares: the one GetHousing names, otherwise any house of the account. Nothing when it has none.
+        Housing* GetAccountCatalogHousing() const;
+        // One of the account's houses by its GUID, or nothing when the account does not own that house.
+        Housing* GetHousingByGuid(ObjectGuid houseGuid) const;
         Housing* GetHousingForNeighborhood(ObjectGuid neighborhoodGuid) const;
         std::vector<Housing const*> GetAllHousings() const;
+        // Refreshes the house entity of the account's other online characters after a change they must see, such as
+        // a new cosmetic owner. World thread only, because it touches characters on other maps.
+        void SyncAccountHouseOnOtherCharacters(ObjectGuid houseGuid);
         void SetHousingEditorModeUpdateField(uint8 mode);
-        void UpdateHousingMapId(ObjectGuid houseGuid, int32 mapId);
+    private:
+        // The account's houses as seen by another of its characters: take a house another character holds, or let
+        // go of one another character deleted.
+        void AddAccountHousing(uint64 houseDatabaseId);
+        void ForgetHousing(ObjectGuid houseGuid);
+        void ForgetHousingOnMap(Housing const* housing);
+        void AddPlayerMirrorHouse(Housing const& housing);
+        void RemovePlayerMirrorHouse(ObjectGuid houseGuid);
+        // Every other character of this Battle.net account that is logged in, on any of its game accounts.
+        std::vector<Player*> GetOtherOnlineAccountCharacters() const;
+    public:
         void UpdateInitiativeFavor(uint32 favor);
 
         // 12.0.5 plot-entry mechanism: writes PlayerHouseInfoComponentData.CurrentHouse to
@@ -3507,11 +3533,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         };
         Optional<PendingArchaeologyFind> _pendingArchaeologyFind;
         std::unordered_map<uint32 /*researchSiteId*/, std::pair<float, float>> _researchSiteFindLocations;
-        // Owner of the house this player is currently teleporting to visit.
-        // Empty for "enter my own interior". Set by the door GO script and
-        // consumed by MapManager when it creates/finds the HouseInteriorMap
-        // instance. Not persisted.
-        ObjectGuid _houseVisitTargetOwner;
+        // The house whose interior the pending teleport enters. Not persisted.
+        ObjectGuid _houseVisitTarget;
 
         uint32 _activeCheats;
 

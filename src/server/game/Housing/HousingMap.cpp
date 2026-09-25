@@ -469,7 +469,7 @@ void HousingMap::SpawnPlotGameObjects()
         // only used for fields that Housing computes at runtime (custom position,
         // root-type overrides derived from fixture selection). When null, we fall
         // back to PlotInfo fields mirrored from the DB.
-        Housing* housing = GetHousingForPlayer(plotInfo->OwnerGuid);
+        Housing* housing = GetHousingForHouse(plotInfo->HouseGuid);
 
         int32 exteriorComponentID = 0;
         int32 houseExteriorWmoDataID = 0;
@@ -714,9 +714,9 @@ void HousingMap::SetPlotOwnershipState(uint8 plotIndex, bool owned)
     }
 }
 
-Housing* HousingMap::GetHousingForPlayer(ObjectGuid playerGuid) const
+Housing* HousingMap::GetHousingForHouse(ObjectGuid houseGuid) const
 {
-    auto itr = _playerHousings.find(playerGuid);
+    auto itr = _playerHousings.find(houseGuid);
     if (itr != _playerHousings.end())
         return itr->second;
 
@@ -761,45 +761,18 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     // Auto-adding causes the client to resolve neighborhoodOwnerType as
     // Self instead of None, which prevents the "For Sale" Cornerstone UI.
 
-    // Track player housing if they own a house in this neighborhood.
-    // First try exact GUID match, then fall back to checking all housings
-    // (handles legacy data where neighborhood GUID counter was from client's DB2 ID
-    // instead of the server's canonical counter).
+    // Track the house of the player's Battle.net account in this neighborhood, if it has one. Only a house whose
+    // neighborhood is this one counts: a house's plot index alone says nothing about which neighborhood it is in.
     TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Looking up housing for player {} in neighborhood '{}' (guid={})",
         player->GetGUID().ToString(), _neighborhood->GetName(), _neighborhood->GetGuid().ToString());
 
     Housing* housing = player->GetHousingForNeighborhood(_neighborhood->GetGuid());
-    if (!housing)
-    {
-        TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: No housing found via GetHousingForNeighborhood. Checking fallback (allHousings count: {})",
-            uint32(player->GetAllHousings().size()));
-
-        // Fallback: check if any of the player's housings has a plot in this neighborhood
-        for (Housing const* h : player->GetAllHousings())
-        {
-            TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Fallback check: housing plotIndex={} neighborhoodGuid={} houseGuid={}",
-                h ? h->GetPlotIndex() : 255,
-                h ? h->GetNeighborhoodGuid().ToString() : "null",
-                h ? h->GetHouseGuid().ToString() : "null");
-
-            if (h && _neighborhood->GetPlotInfo(h->GetPlotIndex()))
-            {
-                housing = const_cast<Housing*>(h);
-                TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Fixed neighborhood GUID mismatch for player {} (stored={}, canonical={})",
-                    player->GetGUID().ToString(), h->GetNeighborhoodGuid().ToString(), _neighborhood->GetGuid().ToString());
-                // Fix the stored GUID so future lookups work
-                housing->SetNeighborhoodGuid(_neighborhood->GetGuid());
-                break;
-            }
-        }
-    }
-
     if (housing)
     {
         TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Player {} has housing: plotIndex={} houseType={} houseGuid={}",
             player->GetGUID().ToString(), housing->GetPlotIndex(), housing->GetHouseType(), housing->GetHouseGuid().ToString());
 
-        AddPlayerHousing(player->GetGUID(), housing);
+        AddPlayerHousing(housing);
 
         // Ensure the neighborhood PlotInfo has the HouseGuid (may be missing after server restart
         // since LoadFromDB only populates it if character_housing row exists)
@@ -807,16 +780,15 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
         ObjectGuid ownerBnetGuid = player->GetSession() ? player->GetSession()->GetBattlenetAccountGUID() : ObjectGuid::Empty;
         if (!housing->GetHouseGuid().IsEmpty())
         {
-            _neighborhood->UpdatePlotHouseInfo(plotIdx, housing->GetHouseGuid(), ownerBnetGuid);
+            _neighborhood->UpdatePlotHouseInfo(plotIdx, housing->GetHouseGuid(), ownerBnetGuid, housing->GetDatabaseId());
 
             // 12.0.5: per-AT ownership fragment removed. Ownership is propagated via
             // PlayerHouseInfoComponentData.CurrentHouse on the Player at plot entry.
         }
 
-        // Update PlayerMirrorHouse.MapID so the client knows this house is on the current map.
-        // Without this, MapID stays at 0 (set during login) and the client rejects
-        // edit mode with HOUSING_RESULT_ACTION_LOCKED_BY_COMBAT (error 1 = first non-success code).
-        player->UpdateHousingMapId(housing->GetHouseGuid(), static_cast<int32>(GetId()));
+        // PlayerMirrorHouse.MapID stays the house interior's NeighborhoodMap row. Retail sends that value in every
+        // entry, also in the sessions that opened the fixture editor on the plot (hled1 226129, 816931) and the decor
+        // editor in the house (hbcd3 1431555), so the current map is not written into it here.
 
         // Spawn house GO if not already present (handles offline → online transition)
         bool alreadySpawned = _houseGameObjects.find(plotIdx) != _houseGameObjects.end();
@@ -1159,12 +1131,13 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 p->m_clientGUIDs.insert(session->GetBattlenetAccount().GetGUID());
 
                 // HousingPlayerHouseEntity (budgets)
-                if (p->HaveAtClient(&session->GetHousingPlayerHouseEntity()))
-                    session->GetHousingPlayerHouseEntity().BuildValuesUpdateBlockForPlayer(&storageUpdate, p);
+                HousingPlayerHouseEntity& houseEntity = session->GetHousingPlayerHouseEntity(housing->GetHouseGuid());
+                if (p->HaveAtClient(&houseEntity))
+                    houseEntity.BuildValuesUpdateBlockForPlayer(&storageUpdate, p);
                 else
                 {
-                    session->GetHousingPlayerHouseEntity().BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
-                    p->m_clientGUIDs.insert(session->GetHousingPlayerHouseEntity().GetGUID());
+                    houseEntity.BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
+                    p->m_clientGUIDs.insert(houseEntity.GetGUID());
                 }
 
                 // Bundle ALL decor MeshObject CREATEs so the client can correlate
@@ -1185,7 +1158,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 p->SendDirectMessage(&storagePacket);
 
                 session->GetBattlenetAccount().ClearUpdateMask(true);
-                session->GetHousingPlayerHouseEntity().ClearUpdateMask(true);
+                houseEntity.ClearUpdateMask(true);
 
                 // Removed second PlayerHousesInfoResponse emission. The original
                 // rationale ("matching retail step 3 of CMSG_HOUSING_DECOR_REQUEST_STORAGE
@@ -1340,7 +1313,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 void HousingMap::RemovePlayerFromMap(Player* player, bool remove)
 {
     // Remove plot auras before removing housing data.
-    if (Housing const* housing = GetHousingForPlayer(player->GetGUID()))
+    if (Housing const* housing = player->GetHousingForNeighborhood(_neighborhood ? _neighborhood->GetGuid() : ObjectGuid::Empty))
     {
         // Remove all plot enter/presence auras (manual packets — spells not in DB2)
         SendPlotLeaveAuraRemoval(player);
@@ -1353,7 +1326,7 @@ void HousingMap::RemovePlayerFromMap(Player* player, bool remove)
     // go_housing_door fallback on a later visit.
     ClearPlayerCurrentPlot(player->GetGUID());
 
-    RemovePlayerHousing(player->GetGUID());
+    RemovePlayerHousing(player);
 
     TC_LOG_DEBUG("housing", "HousingMap::RemovePlayerFromMap: Player {} leaving housing map {} instanceId {}",
         player->GetGUID().ToString(), GetId(), GetInstanceId());
@@ -1866,35 +1839,75 @@ void HousingMap::SendPerPlayerPlotWorldStates(Player* player)
     (void)player;
 }
 
-void HousingMap::AddPlayerHousing(ObjectGuid playerGuid, Housing* housing)
+void HousingMap::AddPlayerHousing(Housing* housing)
 {
-    if (!housing)
+    if (!housing || housing->GetHouseGuid().IsEmpty())
     {
-        TC_LOG_ERROR("housing", "HousingMap::AddPlayerHousing: Attempted to add null housing for player {} on map {} instanceId {}",
-            playerGuid.ToString(), GetId(), GetInstanceId());
+        TC_LOG_ERROR("housing", "HousingMap::AddPlayerHousing: Attempted to add a house without a GUID on map {} instanceId {}",
+            GetId(), GetInstanceId());
         return;
     }
 
-    _playerHousings[playerGuid] = housing;
+    _playerHousings[housing->GetHouseGuid()] = housing;
 
-    TC_LOG_DEBUG("housing", "HousingMap::AddPlayerHousing: Added housing for player {} on map {} instanceId {} (total: {})",
-        playerGuid.ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
+    TC_LOG_DEBUG("housing", "HousingMap::AddPlayerHousing: Added house {} on map {} instanceId {} (total: {})",
+        housing->GetHouseGuid().ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
 }
 
-void HousingMap::RemovePlayerHousing(ObjectGuid playerGuid)
+void HousingMap::RemovePlayerHousing(Player* player)
 {
-    auto itr = _playerHousings.find(playerGuid);
-    if (itr != _playerHousings.end())
+    for (auto itr = _playerHousings.begin(); itr != _playerHousings.end();)
     {
-        _playerHousings.erase(itr);
+        if (itr->second->GetOwner() != player)
+        {
+            ++itr;
+            continue;
+        }
 
-        TC_LOG_DEBUG("housing", "HousingMap::RemovePlayerHousing: Removed housing for player {} on map {} instanceId {} (remaining: {})",
-            playerGuid.ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
+        // Another character of the same Battle.net account may still be here with the same house open.
+        ObjectGuid houseGuid = itr->first;
+        itr = _playerHousings.erase(itr);
+        HandPlayerHousingToAnotherCharacter(houseGuid, player);
+
+        TC_LOG_DEBUG("housing", "HousingMap::RemovePlayerHousing: Player {} left with house {} on map {} instanceId {} (remaining: {})",
+            player->GetGUID().ToString(), houseGuid.ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
+        // _playerHousings may have been rehashed by the re-add above; start over.
+        itr = _playerHousings.begin();
     }
-    else
+}
+
+void HousingMap::ForgetHousing(Housing const* housing)
+{
+    if (!housing)
+        return;
+
+    // Compare pointers only: the entry is found by the object that is about to go away, never by reading another one.
+    auto itr = std::find_if(_playerHousings.begin(), _playerHousings.end(),
+        [housing](std::pair<ObjectGuid const, Housing*> const& entry) { return entry.second == housing; });
+    if (itr == _playerHousings.end())
+        return;
+
+    ObjectGuid houseGuid = itr->first;
+    _playerHousings.erase(itr);
+    HandPlayerHousingToAnotherCharacter(houseGuid, housing->GetOwner());
+
+    TC_LOG_DEBUG("housing", "HousingMap::ForgetHousing: House {} dropped from map {} instanceId {} (remaining: {})",
+        houseGuid.ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
+}
+
+void HousingMap::HandPlayerHousingToAnotherCharacter(ObjectGuid houseGuid, Player const* leaving)
+{
+    for (auto const& reference : GetPlayers())
     {
-        TC_LOG_DEBUG("housing", "HousingMap::RemovePlayerHousing: No housing found for player {} on map {} instanceId {}",
-            playerGuid.ToString(), GetId(), GetInstanceId());
+        Player* other = reference.GetSource();
+        if (other == leaving)
+            continue;
+
+        if (Housing* otherHousing = other->GetHousingByGuid(houseGuid))
+        {
+            _playerHousings[houseGuid] = otherHousing;
+            return;
+        }
     }
 }
 

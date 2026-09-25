@@ -1249,6 +1249,51 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         return;
     }
 
+    // One house per district: a Battle.net account may own one house in Founder's Point and one in Razorwind Shores,
+    // two in all (Blizzard Watch, https://blizzardwatch.com/2025/12/02/get-house-world-warcraft/; the wiki's Housing
+    // page). A district is a neighborhood world map; guild and charter neighborhoods are on the same two maps.
+    // The rule and the cap below count every house of the account, including one another game account of the same
+    // Battle.net account bought after this character logged in.
+    std::vector<Housing::AccountHouse> const accountHouses = Housing::GetAccountHouses(GetBattlenetAccountId());
+    {
+        auto worldMapOf = [](Neighborhood const* n) -> int32
+        {
+            NeighborhoodMapData const* mapData = n ? sHousingMgr.GetNeighborhoodMapData(n->GetNeighborhoodMapID()) : nullptr;
+            return mapData ? mapData->MapID : 0;
+        };
+
+        std::vector<int32> ownedHouseWorldMapIds;
+        for (Housing::AccountHouse const& owned : accountHouses)
+            ownedHouseWorldMapIds.push_back(worldMapOf(sNeighborhoodMgr.GetNeighborhood(owned.NeighborhoodGuid)));
+
+        if (Housing::AccountOwnsHouseInDistrict(ownedHouseWorldMapIds, worldMapOf(neighborhood)))
+        {
+            WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+            response.Result = static_cast<uint8>(HOUSING_RESULT_MORE_HOUSE_SLOTS_NEEDED);
+            SendPacket(response.Write());
+
+            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {}'s account already owns a house in the district of neighborhood {}",
+                player->GetGUID().ToString(), neighborhood->GetGuid().ToString());
+            return;
+        }
+    }
+
+    // Housing.MaxHousesPerAccount is a safety cap kept under the district rule, which already limits an account to
+    // two houses. 0 = no cap.
+    if (uint32 maxHouses = sWorld->getIntConfig(CONFIG_HOUSING_MAX_HOUSES_PER_ACCOUNT))
+    {
+        if (accountHouses.size() >= maxHouses)
+        {
+            WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+            response.Result = static_cast<uint8>(HOUSING_RESULT_MORE_HOUSE_SLOTS_NEEDED);
+            SendPacket(response.Write());
+
+            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} at the account house cap ({}/{})",
+                player->GetGUID().ToString(), accountHouses.size(), maxHouses);
+            return;
+        }
+    }
+
     // Auto-join neighborhood if not already a member — buying a plot implies joining
     if (!neighborhood->IsMember(player->GetGUID()))
     {
@@ -1304,35 +1349,6 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
             player->GetGUID().ToString(), neighborhood->GetName());
     }
 
-    // Must not already own a house in this neighborhood
-    if (player->GetHousingForNeighborhood(neighborhood->GetGuid()))
-    {
-        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_INVALID_HOUSE);
-        SendPacket(response.Write());
-
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} already has a house in neighborhood {}",
-            player->GetGUID().ToString(), neighborhood->GetGuid().ToString());
-        return;
-    }
-
-    // m2/A5: enforce a configurable global house cap across ALL neighborhoods
-    // (retail allows 2 per account — one Alliance hub, one Horde hub). 0 = no
-    // limit. Prevents plot hoarding across the realm.
-    if (uint32 maxHouses = sWorld->getIntConfig(CONFIG_HOUSING_MAX_HOUSES_PER_ACCOUNT))
-    {
-        if (player->GetAllHousings().size() >= maxHouses)
-        {
-            WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-            response.Result = static_cast<uint8>(HOUSING_RESULT_MORE_HOUSE_SLOTS_NEEDED);
-            SendPacket(response.Write());
-
-            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} at global house cap ({}/{})",
-                player->GetGUID().ToString(), player->GetAllHousings().size(), maxHouses);
-            return;
-        }
-    }
-
     // Deduct gold cost (sniff-verified: 1000g = 10,000,000 copper)
     if (!player->HasEnoughMoney(HOUSE_PURCHASE_COST_COPPER))
     {
@@ -1353,13 +1369,11 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         player->ModifyMoney(-static_cast<int64>(HOUSE_PURCHASE_COST_COPPER));
         // Use the server's canonical neighborhood GUID, NOT the client-supplied GUID.
         // Client may send DB2 NeighborhoodID as counter while server uses internal counter.
-        player->CreateHousing(neighborhood->GetGuid(), resolvedPlotIndex);
-
         // Update the PlotInfo with the newly created HouseGuid and Battle.net account GUID
-        if (Housing const* housing = player->GetHousing())
+        if (Housing const* created = player->CreateHousing(neighborhood->GetGuid(), resolvedPlotIndex))
         {
             neighborhood->UpdatePlotHouseInfo(resolvedPlotIndex,
-                housing->GetHouseGuid(), GetBattlenetAccountGUID());
+                created->GetHouseGuid(), GetBattlenetAccountGUID(), created->GetDatabaseId());
         }
 
         // Grant the kill credit that satisfies quest 91863 objective 17 ("Acquire a house").
@@ -1406,7 +1420,7 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         if (Housing const* h = player->GetHousing())
         {
             response.House.HouseGUID = h->GetHouseGuid();
-            response.House.OwnerGUID = player->GetGUID();
+            response.House.OwnerGUID = h->GetCosmeticOwnerGuid();
             response.House.NeighborhoodGUID = neighborhood->GetGuid();
             response.House.PlotIndex = resolvedPlotIndex;
             response.House.HouseLevel = static_cast<uint8>(h->GetLevel()); // JamCliHouse carries level, not settings flags (RE 0x5c0005)
@@ -1461,7 +1475,7 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
             {
                 WorldPackets::Housing::HousingSvcsGuildAddHouseNotification notification;
                 notification.House.HouseGUID = housing->GetHouseGuid();
-                notification.House.OwnerGUID = player->GetGUID();
+                notification.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
                 notification.House.HouseLevel = static_cast<uint8>(housing->GetLevel());
                 guild->BroadcastPacket(notification.Write());
             }
@@ -1521,8 +1535,9 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
             // Send Account + HousingPlayerHouseEntity together so budget data
             // accompanies storage data for the client's decor count display.
             {
+                HousingPlayerHouseEntity& houseEntity = GetHousingPlayerHouseEntity(h->GetHouseGuid());
                 GetBattlenetAccount().BuildUpdateChangesMask();
-                GetHousingPlayerHouseEntity().BuildUpdateChangesMask();
+                houseEntity.BuildUpdateChangesMask();
 
                 UpdateData updateData(player->GetMapId());
                 WorldPacket updatePacket;
@@ -1535,19 +1550,19 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
                     player->m_clientGUIDs.insert(GetBattlenetAccount().GetGUID());
                 }
 
-                if (player->HaveAtClient(&GetHousingPlayerHouseEntity()))
-                    GetHousingPlayerHouseEntity().BuildValuesUpdateBlockForPlayer(&updateData, player);
+                if (player->HaveAtClient(&houseEntity))
+                    houseEntity.BuildValuesUpdateBlockForPlayer(&updateData, player);
                 else
                 {
-                    GetHousingPlayerHouseEntity().BuildCreateUpdateBlockForPlayer(&updateData, player);
-                    player->m_clientGUIDs.insert(GetHousingPlayerHouseEntity().GetGUID());
+                    houseEntity.BuildCreateUpdateBlockForPlayer(&updateData, player);
+                    player->m_clientGUIDs.insert(houseEntity.GetGUID());
                 }
 
                 updateData.BuildPacket(&updatePacket);
                 player->SendDirectMessage(&updatePacket);
 
                 GetBattlenetAccount().ClearUpdateMask(true);
-                GetHousingPlayerHouseEntity().ClearUpdateMask(true);
+                houseEntity.ClearUpdateMask(true);
             }
 
             TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: Sent proactive STORAGE_RSP + Account + HouseEntity update (CatalogEntries={})",
@@ -1609,10 +1624,10 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
         return;
     }
 
-    // Validate that the HouseGuid in the CMSG matches the player's owned house —
-    // anti-spoof: a malicious client could try to relocate someone else's house.
-    Housing* housing = player->GetHousing();
-    if (!housing || housing->GetHouseGuid() != neighborhoodMoveHouse.HouseGuid)
+    // The house the packet names, when the character's Battle.net account owns it and it stands in this
+    // neighborhood — a client may not relocate another account's house.
+    Housing* housing = player->GetHousingByGuid(neighborhoodMoveHouse.HouseGuid);
+    if (!housing || housing->GetNeighborhoodGuid() != neighborhood->GetGuid())
     {
         WorldPackets::Neighborhood::NeighborhoodMoveHouseResponse response;
         response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_NOT_FOUND);
@@ -1627,9 +1642,8 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
 
     uint8 const targetPlotIndex = uint8(targetPlot->PlotIndex);
 
-    // Reject moving to the same plot the player already occupies (no-op).
-    Neighborhood::Member const* memberInfo = neighborhood->GetMember(player->GetGUID());
-    uint8 oldPlotIndex = memberInfo ? memberInfo->PlotIndex : INVALID_PLOT_INDEX;
+    // Reject moving to the same plot the house already stands on (no-op).
+    uint8 oldPlotIndex = housing->GetPlotIndex();
     if (oldPlotIndex == targetPlotIndex)
     {
         WorldPackets::Neighborhood::NeighborhoodMoveHouseResponse response;
@@ -1665,7 +1679,6 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
 
         // Update Housing::_plotIndex so all subsequent responses (HouseStatus,
         // HouseInfo, SyncUpdateFields, etc.) use the correct DB2 PlotIndex.
-        if (Housing* housing = player->GetHousing())
         {
             housing->SetPlotIndex(targetPlotIndex);
             housing->SyncUpdateFields();
@@ -1676,7 +1689,7 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
             // explicit re-push here, SyncUpdateFields just flips dirty bits and
             // the client's local entity copy stays at the old PlotIndex —
             // the new plot's icon stays "unowned" until the player re-logs.
-            GetHousingPlayerHouseEntity().SendCreateToPlayer(player);
+            GetHousingPlayerHouseEntity(housing->GetHouseGuid()).SendCreateToPlayer(player);
         }
 
         player->ModifyMoney(-static_cast<int64>(HOUSE_MOVE_COST_COPPER));
@@ -1694,7 +1707,7 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
             }
 
             housingMap->SetPlotOwnershipState(targetPlotIndex, true);
-            if (Housing const* h = player->GetHousing())
+            if (Housing const* h = housing)
             {
                 auto fixtureOverrides = h->GetFixtureOverrideMap();
                 housingMap->SpawnHouseForPlot(targetPlotIndex, nullptr,
@@ -1715,10 +1728,9 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
             }
         }
 
-        if (Housing const* housing = player->GetHousing())
         {
             response.House.HouseGUID = housing->GetHouseGuid();
-            response.House.OwnerGUID = player->GetGUID();
+            response.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
             response.House.NeighborhoodGUID = housing->GetNeighborhoodGuid();
             response.House.PlotIndex = housing->GetPlotIndex();
             response.House.HouseLevel = static_cast<uint8>(housing->GetLevel()); // JamCliHouse carries level, not settings flags (RE 0x5c0006)
@@ -1862,7 +1874,7 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
         {
             WorldPackets::Housing::JamCliHouse existingHouse;
             existingHouse.HouseGUID = myHousing->GetHouseGuid();
-            existingHouse.OwnerGUID = player->GetGUID();
+            existingHouse.OwnerGUID = myHousing->GetCosmeticOwnerGuid();
             existingHouse.NeighborhoodGUID = myHousing->GetNeighborhoodGuid();
             existingHouse.PlotIndex = myHousing->GetPlotIndex();
             existingHouse.HouseLevel = static_cast<uint8>(myHousing->GetLevel());
@@ -2112,10 +2124,16 @@ void WorldSession::HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::Neigh
     // Find the plot by index — O(1) direct array access
     ObjectGuid evictedPlayerGuid;
     ObjectGuid plotGuid;
+    ObjectGuid evictedHouseGuid;
+    ObjectGuid evictedBnetAccountGuid;
+    uint64 evictedHouseDatabaseId = 0;
     if (Neighborhood::PlotInfo const* plotInfo = neighborhood->GetPlotInfo(static_cast<uint8>(plotIndex)))
     {
         evictedPlayerGuid = plotInfo->OwnerGuid;
         plotGuid = plotInfo->PlotGuid;
+        evictedHouseGuid = plotInfo->HouseGuid;
+        evictedBnetAccountGuid = plotInfo->OwnerBnetGuid;
+        evictedHouseDatabaseId = plotInfo->HouseDatabaseId;
     }
 
     HousingResult result = neighborhood->EvictPlayer(evictedPlayerGuid);
@@ -2140,35 +2158,46 @@ void WorldSession::HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::Neigh
             housingMap->SetPlotOwnershipState(plotIdx, false);
         }
 
-        // Handle evicted player housing cleanup
+        // The character shown as the owner hears of the eviction when she is online.
         if (!evictedPlayerGuid.IsEmpty())
         {
             if (Player* evictedPlayer = ObjectAccessor::FindPlayer(evictedPlayerGuid))
             {
-                // Online: send eviction notice and delete housing object
                 WorldPackets::Neighborhood::NeighborhoodEvictPlotNotice notice;
                 notice.PlotId = plotIndex;
                 notice.NeighborhoodGuid = neighborhoodEvictPlot.NeighborhoodGuid;
                 notice.PlotGuid = plotGuid;
                 evictedPlayer->SendDirectMessage(notice.Write());
+            }
+        }
 
-                evictedPlayer->DeleteHousing(neighborhoodEvictPlot.NeighborhoodGuid);
-            }
-            else
+        // The house belongs to the account the plot names, and every online character of that account holds it,
+        // not only the one shown as its owner. Delete it through one of them, which marks the shared house deleted
+        // and takes it from the others, so none of them saves it back onto the freed plot. With nobody of the
+        // account online, delete its rows directly: Housing::DeleteFromDB clears the house, its decor, rooms and
+        // fixtures, keyed by the house's own id, which the plot carries.
+        Player* evictedHolder = nullptr;
+        if (!evictedHouseGuid.IsEmpty())
+        {
+            for (auto const& [accountId, session] : sWorld->GetAllSessions())
             {
-                // Offline: delete housing directly from DB.
-                //
-                // H-12: this used to run CHAR_DEL_CHARACTER_HOUSING alone, clearing one
-                // of the five tables and orphaning character_housing_decor, _rooms,
-                // _fixtures and _catalog. Those are selected by ownerGuid, not by house,
-                // so the rows were picked up again by the player's NEXT house - decor at
-                // the old coordinates, against a room layout that no longer existed.
-                // Housing::DeleteFromDB is the same clearing the online branch performs
-                // via DeleteHousing().
-                CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-                Housing::DeleteFromDB(evictedPlayerGuid.GetCounter(), trans);
-                CharacterDatabase.CommitTransaction(trans);
+                if (!session || session->GetBattlenetAccountGUID() != evictedBnetAccountGuid)
+                    continue;
+                if (Player* candidate = session->GetPlayer(); candidate && candidate->GetHousingByGuid(evictedHouseGuid))
+                {
+                    evictedHolder = candidate;
+                    break;
+                }
             }
+        }
+
+        if (evictedHolder)
+            evictedHolder->DeleteHousing(evictedHouseGuid);
+        else if (evictedHouseDatabaseId)
+        {
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            Housing::DeleteFromDB(evictedHouseDatabaseId, trans);
+            CharacterDatabase.CommitTransaction(trans);
         }
 
         // Neighborhood::EvictPlayer already sent the remaining members the new roster.

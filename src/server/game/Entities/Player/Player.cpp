@@ -1593,8 +1593,8 @@ void Player::AddToWorld()
             m_items[i]->AddToWorld();
 
     GetSession()->GetBattlenetAccount().AddToWorld();
-    if (GetSession()->HasHousingPlayerHouseEntity())
-        GetSession()->GetHousingPlayerHouseEntity().AddToWorld();
+    for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
+        houseEntity->AddToWorld();
     if (GetSession()->HasHousingNeighborhoodMirrorEntity())
         GetSession()->GetHousingNeighborhoodMirrorEntity().AddToWorld();
 }
@@ -1618,8 +1618,8 @@ void Player::RemoveFromWorld()
 
     if (GetSession()->HasHousingNeighborhoodMirrorEntity())
         GetSession()->GetHousingNeighborhoodMirrorEntity().RemoveFromWorld();
-    if (GetSession()->HasHousingPlayerHouseEntity())
-        GetSession()->GetHousingPlayerHouseEntity().RemoveFromWorld();
+    for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
+        houseEntity->RemoveFromWorld();
     GetSession()->GetBattlenetAccount().RemoveFromWorld();
 
     // Remove items from world before self - player must be found in Item::RemoveFromObjectUpdate
@@ -3713,21 +3713,14 @@ void Player::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
                 item->BuildCreateUpdateBlockForPlayer(data, target);
 
         GetSession()->GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(data, target);
-        GetSession()->GetHousingPlayerHouseEntity().BuildCreateUpdateBlockForPlayer(data, target);
+        for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
+            houseEntity->BuildCreateUpdateBlockForPlayer(data, target);
         GetSession()->GetHousingNeighborhoodMirrorEntity().BuildCreateUpdateBlockForPlayer(data, target);
 
-        // The own HousingPlayerHouseEntity is sent via the session entity above.
-        // That entity's GUID is constructed by Housing::Create as
-        //   subType=3, arg1=realmId, arg2=7 (hardcoded), counter=bnetAccountId
-        // and is the canonical HouseGuid advertised by the AT, CURRENT_HOUSE_INFO
-        // and CMSG/SMSG_HOUSING_* packets. A previous implementation here emitted a
-        // second "mapHouseEntity" with arg2=neighborhoodMapID, producing a ghost
-        // GUID (Housing-3-<mapID>-<bnet>-1) that the client's world-map icon
-        // picker could never resolve against the AT's HouseGUID field. Retail
-        // sniff dump_12.0.1.66838_2026-04-15_09-35-59 idx 9984 confirms every
-        // Housing/3 CREATE has arg2=7 - no map-ID-keyed variant is ever sent.
-        // The duplicate has been removed; proxy entities for neighbour plots
-        // are bundled below using each plot's real HouseGuid.
+        // The account's own houses are sent through the session entities above, one per house, each on the
+        // house GUID Housing::MakeHouseGuid builds (subtype 3, the account's house slot, NeighborhoodMap row 7,
+        // the Battle.net account id), which is the same GUID the plot area trigger, CURRENT_HOUSE_INFO and the
+        // housing packets carry. Proxy entities for the other plots are bundled below with each plot's HouseGuid.
         if (GetMap() && (GetMap()->IsHouseInterior() || (GetMap()->GetEntry() && GetMap()->GetEntry()->IsNeighborhood())))
         {
             // Bundle HousingPlayerHouse proxy entities for all OTHER occupied plots in
@@ -3737,15 +3730,19 @@ void Player::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
             // resolve each plot's HouseGUID -> entity -> BnetAccount mapping for the
             // "owned / friend / stranger" icon choice and tooltip. Without them every
             // neighbour plot renders as "unowned".
-            uint8 ownPlotIndex = INVALID_PLOT_INDEX;
-            if (Housing const* ownHousing = GetHousing())
-                ownPlotIndex = ownHousing->GetPlotIndex();
-
             uint32 proxyCount = 0;
             uint32 mirrorCount = 0;
             uint32 skipOwn = 0, skipEmpty = 0, skipUnoccupied = 0;
             HousingMap* hmap = dynamic_cast<HousingMap*>(GetMap());
             Neighborhood const* nbh = hmap ? hmap->GetNeighborhood() : nullptr;
+
+            // The account's own plot in this neighborhood is already sent as a session entity.
+            uint8 ownPlotIndex = INVALID_PLOT_INDEX;
+            if (nbh)
+                for (Neighborhood::PlotInfo const& plot : nbh->GetPlots())
+                    if (plot.IsOwnedByAccount(GetSession()->GetBattlenetAccountGUID()))
+                        ownPlotIndex = plot.PlotIndex;
+
             if (nbh)
             {
                 for (Neighborhood::PlotInfo const& plot : nbh->GetPlots())
@@ -3762,6 +3759,7 @@ void Player::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
                     HousingPlayerHouseEntity proxy(GetSession(), plot.HouseGuid);
                     proxy.SetObjectType(TYPEID_HOUSING_ENTITY);
                     proxy.SetBnetAccount(plot.OwnerBnetGuid);
+                    proxy.SetCosmeticOwner(plot.OwnerGuid);
                     proxy.SetPlotIndex(static_cast<int32>(plot.PlotIndex));
                     proxy.SetLevel(plot.HouseLevel);
                     proxy.SetFavor(plot.HouseFavor);
@@ -3810,8 +3808,7 @@ void Player::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
                 proxyCount, mirrorCount, skipOwn, skipEmpty, skipUnoccupied, uint32(ownPlotIndex));
 
             // Also emit the own-plot mirror alongside the session HousingPlayerHouse
-            // entity (the session entity was bundled a few lines above via
-            // GetSession()->GetHousingPlayerHouseEntity().BuildCreateUpdateBlockForPlayer).
+            // entity (the session entities were bundled a few lines above).
             // The session entity's EntityGUID is refreshed to the own mirror in
             // HousingMap::AddPlayerToMap, but the mirror itself needs to ride
             // the initial UPDATE_OBJECT so the client registry has it when it
@@ -19220,6 +19217,65 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         }
     }
 
+    // Houses belong to the Battle.net account: every character of the account loads all of its houses. The login
+    // queries return the account's rows for all houses at once; split the decor, room and fixture rows by house.
+    // This runs before the login map is created, because a character who logged out inside a house interior is put
+    // back into that house's instance, and MapManager picks it from her houses.
+    if (PreparedQueryResult houses = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING); houses && GetSession()->GetBattlenetAccountId())
+    {
+        auto splitByHouse = [](PreparedQueryResult const& result, uint32 houseColumn)
+        {
+            std::unordered_map<uint64, std::vector<Field*>> rowsByHouse;
+            if (result)
+            {
+                do
+                {
+                    Field* fields = result->Fetch();
+                    rowsByHouse[fields[houseColumn].GetUInt64()].push_back(fields);
+                } while (result->NextRow());
+            }
+            return rowsByHouse;
+        };
+
+        // The house column is the last one each of these statements selects.
+        std::unordered_map<uint64, std::vector<Field*>> decorByHouse = splitByHouse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR), 20);
+        std::unordered_map<uint64, std::vector<Field*>> roomsByHouse = splitByHouse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_ROOMS), 20);
+        std::unordered_map<uint64, std::vector<Field*>> fixturesByHouse = splitByHouse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES), 2);
+        PreparedQueryResult catalog = holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG);
+        std::vector<Field*> const noRows;
+        auto rowsOf = [&noRows](std::unordered_map<uint64, std::vector<Field*>> const& rowsByHouse, uint64 houseId) -> std::vector<Field*> const&
+        {
+            auto itr = rowsByHouse.find(houseId);
+            return itr != rowsByHouse.end() ? itr->second : noRows;
+        };
+
+        do
+        {
+            Field* houseFields = houses->Fetch();
+            uint64 houseId = houseFields[0].GetUInt64();
+
+            std::unique_ptr<Housing> housing = std::make_unique<Housing>(this, houseId);
+            if (housing->LoadFromDB(houseFields, rowsOf(decorByHouse, houseId), rowsOf(roomsByHouse, houseId),
+                rowsOf(fixturesByHouse, houseId), catalog))
+                _housings.push_back(std::move(housing));
+        } while (houses->NextRow());
+    }
+
+    // A house another game account of the same Battle.net account bought while this login was being read is held by
+    // that character but may be missing from the rows.
+    if (GetSession()->GetBattlenetAccountId())
+        for (Housing::AccountHouse const& house : Housing::GetAccountHouses(GetSession()->GetBattlenetAccountId()))
+            AddAccountHousing(house.DatabaseId);
+
+    // The house interior's instance id is the house's database id, and it is saved with the character, so a character
+    // who logged out inside one of her account's houses goes back into that house. After a visit to another account's
+    // house nothing is named here, and MapManager falls back to one of her own houses, or, when her account has none,
+    // refuses the interior, which sends her to the go-back trigger or her homebind.
+    if (mapEntry && mapEntry->IsHouseInterior() && instanceId)
+        for (std::unique_ptr<Housing> const& housing : _housings)
+            if (housing && housing->GetDatabaseId() == instanceId)
+                SetHouseVisitTarget(housing->GetHouseGuid());
+
     // NOW player must have valid map
     // load the player's map here if it's not already loaded
     bool isNewMap = false;
@@ -19583,14 +19639,6 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_GARRISON_FOLLOWER_ABILITIES)))
         _garrison = std::move(garrison);
 
-    std::unique_ptr<Housing> housing = std::make_unique<Housing>(this);
-    if (housing->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOUSING),
-        holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOUSING_DECOR),
-        holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOUSING_ROOMS),
-        holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOUSING_FIXTURES),
-        holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOUSING_CATALOG)))
-        _housings.push_back(std::move(housing));
-
     // Always register PlayerHouseInfoComponent_C fragment on the Player entity.
     // The client requires this fragment to resolve housing data from the Player descriptor;
     // without it, C_Housing.StartTutorial() fails pre-flight check with ERR_HOUSING_ACTION_UNAVAILABLE (1215).
@@ -19602,59 +19650,12 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             WowCS::GetRawFragmentData(m_playerHouseInfoComponentData));
     }
 
-    // Populate PlayerHouseInfoComponentData::Houses with the player's owned houses.
-    //
-    // IMPORTANT (analysis-agent narrow-fix 2026-04-23T09:30Z): use the
-    // Neighborhood's plot.HouseGuid rather than h->GetHouseGuid() so the
-    // HouseGuid in PlayerHouseInfoComponent.Houses is BIT-IDENTICAL to the
-    // HouseGuid in mirror.Houses (FNeighborhoodMirrorData_C). Client Self-
-    // check compares Houses[].Guid entries in the two fragments; any drift
-    // (e.g. session->GetBattlenetAccountId() vs AccountMgr::GetIdByGameAccount
-    // producing different bnetAccountId at different times) would cause the
-    // lookup to miss and self's plot renders as ownerType=0 None.
-    //
-    // Iterate through the player's Housing objects. For each, find the
-    // matching plot in the neighborhood (by PlotIndex) and copy plot.HouseGuid
-    // verbatim. Supplemental fields (Level, Favor, MapID) still come from h.
+    // Populate PlayerHouseInfoComponentData::Houses with every house of the account, on every character of it.
+    // The plot's HouseGuid and the house's own GUID are both built by Housing::MakeHouseGuid, so the entry here
+    // matches the neighborhood mirror's Houses[] entry bit for bit.
     for (auto const& h : _housings)
-    {
-        if (!h || h->GetHouseGuid().IsEmpty())
-            continue;
-
-        Neighborhood const* nh = sNeighborhoodMgr.GetNeighborhood(h->GetNeighborhoodGuid());
-        ObjectGuid entryHouseGuid = h->GetHouseGuid();  // fallback when neighborhood lookup fails
-        if (nh)
-        {
-            if (Neighborhood::PlotInfo const* pi = nh->GetPlotInfo(h->GetPlotIndex()))
-                if (!pi->HouseGuid.IsEmpty())
-                    entryHouseGuid = pi->HouseGuid;
-        }
-
-        UF::PlayerMirrorHouse& mirrorHouse = AddDynamicUpdateFieldValue(
-            m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
-                .ModifyValue(&UF::PlayerHouseInfoComponentData::Houses));
-        mirrorHouse.HouseGUID = entryHouseGuid;
-        mirrorHouse.NeighborhoodGUID = h->GetNeighborhoodGuid();
-        mirrorHouse.Level = h->GetLevel();
-        mirrorHouse.Favor = static_cast<uint32>(std::min<uint64>(h->GetFavor64(), std::numeric_limits<uint32>::max()));
-        mirrorHouse.PlotID = h->GetPlotIndex();
-
-        // Resolve MapID from the neighborhood's DB2 data so the dashboard works before
-        // the player enters the neighborhood map.
-        mirrorHouse.MapID = 0;
-        if (nh)
-            if (NeighborhoodMapData const* nmData = sHousingMgr.GetNeighborhoodMapData(nh->GetNeighborhoodMapID()))
-                mirrorHouse.MapID = nmData->MapID;
-
-        TC_LOG_ERROR("network", "Player::LoadFromDB: PlayerMirrorHouse: HouseGuid={} (h->GetHouseGuid={}) NeighborhoodGuid={} PlotID={} Level={} MapID={} Favor={}",
-            entryHouseGuid.ToString(), h->GetHouseGuid().ToString(), h->GetNeighborhoodGuid().ToString(), mirrorHouse.PlotID, mirrorHouse.Level, mirrorHouse.MapID, mirrorHouse.Favor);
-
-        // Initiative mirror field (12.0.5: InitiativeCycleID removed from PlayerMirrorHouse;
-        // only InitiativeFavor remains).
-        uint64 nhGuid = h->GetNeighborhoodGuid().GetCounter();
-        if (ActiveInitiative* activeInit = sInitiativeManager.GetActiveInitiative(nhGuid))
-            mirrorHouse.InitiativeFavor = sInitiativeManager.GetPlayerContribution(nhGuid, activeInit->InitiativeID, GetGUID().GetCounter());
-    }
+        if (h)
+            AddPlayerMirrorHouse(*h);
 
     // Register PlayerInitiativeComponent_C fragment (FragmentID 37) on the Player entity.
     // The client's C_NeighborhoodInitiative Lua API reads initiative state from this fragment.
@@ -19780,32 +19781,39 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     // during SendInitialPacketsAfterAddToMap (after CREATE), the client receives an empty Houses
     // array in CREATE and a DynamicUpdateField UPDATE that grows the array — causing it to map
     // houses to indices 0,1,2 instead of their real PlotIndex values (e.g. 7,9,47,51).
-    if (GetSession() && !_housings.empty() && _housings[0] && !_housings[0]->GetNeighborhoodGuid().IsEmpty())
+    //
+    // Every house of the account primes its own plot, so each plot carries its house GUID and account before any
+    // mirror is read. The neighborhood mirror is built from the house whose neighborhood is on the map the
+    // character logs in on, and from the first house when she logs in anywhere else.
+    Housing* mirrorHousing = nullptr;
+    bool mirrorOnLoginMap = false;
+    if (GetSession())
     {
-        // Priming step (analysis-agent diagnosis 2026-04-23T09:50Z):
-        // HousingMap::AddPlayerToMap line ~671 already calls UpdatePlotHouseInfo
-        // to patch the shared Neighborhood's plot data with the current session's
-        // resolved HouseGuid/BnetGuid. But that runs AFTER Player::LoadFromDB
-        // has already read plot.HouseGuid for mirror population — so a
-        // fresh-server first-login-after-startup sees plot.HouseGuid=Empty
-        // (if Neighborhood::LoadFromDB's bnet resolution failed) and ships
-        // Empty-Empty to the client. Subsequent logins see the primed value.
-        // That's the observed non-determinism.
-        //
-        // Fix: call UpdatePlotHouseInfo up front, before the mirror reads
-        // plot.HouseGuid. Non-shared-state safe because it only writes to
-        // OUR plot, and the write is idempotent (same value on repeat).
-        if (Neighborhood* nh = sNeighborhoodMgr.GetNeighborhood(_housings[0]->GetNeighborhoodGuid()))
+        for (auto const& h : _housings)
         {
-            ObjectGuid bnetGuid = GetSession() ? GetSession()->GetBattlenetAccountGUID() : ObjectGuid::Empty;
-            nh->UpdatePlotHouseInfo(_housings[0]->GetPlotIndex(),
-                                    _housings[0]->GetHouseGuid(),
-                                    bnetGuid);
-            TC_LOG_INFO("housing", "Player::LoadFromDB PRIMING: UpdatePlotHouseInfo plot={} HouseGuid={} BnetGuid={} (before mirror read)",
-                _housings[0]->GetPlotIndex(), _housings[0]->GetHouseGuid().ToString(), bnetGuid.ToString());
-        }
+            if (!h || h->GetNeighborhoodGuid().IsEmpty())
+                continue;
 
-        Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(_housings[0]->GetNeighborhoodGuid());
+            Neighborhood* nh = sNeighborhoodMgr.GetNeighborhood(h->GetNeighborhoodGuid());
+            if (!nh)
+                continue;
+
+            nh->UpdatePlotHouseInfo(h->GetPlotIndex(), h->GetHouseGuid(), GetSession()->GetBattlenetAccountGUID(), h->GetDatabaseId());
+            TC_LOG_INFO("housing", "Player::LoadFromDB PRIMING: UpdatePlotHouseInfo plot={} HouseGuid={} (before mirror read)",
+                h->GetPlotIndex(), h->GetHouseGuid().ToString());
+
+            bool onLoginMap = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(nh->GetNeighborhoodMapID()) == GetMapId();
+            if (!mirrorHousing || (onLoginMap && !mirrorOnLoginMap))
+            {
+                mirrorHousing = h.get();
+                mirrorOnLoginMap = onLoginMap;
+            }
+        }
+    }
+
+    if (mirrorHousing)
+    {
+        Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(mirrorHousing->GetNeighborhoodGuid());
         if (neighborhood)
         {
             // --- Housing/4: NeighborhoodMirrorEntity ---
@@ -19838,14 +19846,14 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             // ships with real Houses data in the FNeighborhoodMirrorData_C
             // fragment on the first frame — correct pins paint on first map
             // open, no interaction required.
-            ObjectGuid const sessionHouse3 = GetSession()->GetHousingPlayerHouseEntity().GetGUID();
+            ObjectGuid const sessionHouse3 = mirrorHousing->GetHouseGuid();
             mirrorEntity.ClearHouses();
             uint8 plotIdx = 0;
             for (auto const& plot : neighborhood->GetPlots())
             {
                 if (plot.IsOccupied())
                 {
-                    bool ownPlot = (plot.OwnerGuid == GetGUID());
+                    bool ownPlot = plot.IsOwnedByAccount(GetSession()->GetBattlenetAccountGUID());
                     bool emptyHouse = plot.HouseGuid.IsEmpty();
                     bool matchesSession = ownPlot && !emptyHouse && plot.HouseGuid == sessionHouse3;
                     TC_LOG_INFO("housing",
@@ -19879,11 +19887,12 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
                 MAX_NEIGHBORHOOD_PLOTS, neighborhood->GetName());
 
             // --- Housing/3: HousingPlayerHouseEntity ---
-            Housing* housing = _housings[0].get();
+            Housing* housing = mirrorHousing;
             if (housing && !housing->GetHouseGuid().IsEmpty())
             {
-                HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity();
+                HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity(housing->GetHouseGuid());
                 houseEntity.SetBnetAccount(GetSession()->GetBattlenetAccountGUID());
+                houseEntity.SetCosmeticOwner(housing->GetCosmeticOwnerGuid());
                 // EntityGUID = HouseGuid (self-reference). Matches what
                 // Housing::SyncUpdateFields does on every post-login re-push
                 // (Housing.cpp:2419). Sniff-verified against our own server:
@@ -26291,7 +26300,8 @@ void Player::SendInitialPacketsAfterAddToMap()
     // (Player::BuildCreateUpdateBlockForPlayer), which was just sent by
     // UpdateVisibilityForPlayer() above.
     m_clientGUIDs.insert(GetSession()->GetBattlenetAccount().GetGUID());
-    m_clientGUIDs.insert(GetSession()->GetHousingPlayerHouseEntity().GetGUID());
+    for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
+        m_clientGUIDs.insert(houseGuid);
     m_clientGUIDs.insert(GetSession()->GetHousingNeighborhoodMirrorEntity().GetGUID());
 
     // HousingRoomEntity GUIDs tracked in deferred callback (not initial UPDATE_OBJECT)
@@ -26440,8 +26450,9 @@ void Player::SendInitialPacketsAfterAddToMap()
             // FHousingPlayerHouse_C on the Housing/3 session entity.
             if (housing)
             {
-                HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity();
+                HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity(housing->GetHouseGuid());
                 houseEntity.SetBnetAccount(GetSession()->GetBattlenetAccountGUID());
+                houseEntity.SetCosmeticOwner(housing->GetCosmeticOwnerGuid());
                 houseEntity.SetEntityGUID(housing->GetHouseGuid());
                 houseEntity.SetPlotIndex(static_cast<int32>(housing->GetPlotIndex()));
                 houseEntity.SetLevel(housing->GetLevel());
@@ -31974,43 +31985,184 @@ void Player::DeleteGarrison()
     }
 }
 
-void Player::CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex)
+Housing* Player::CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex)
 {
-    std::unique_ptr<Housing> housing(new Housing(this));
-    if (housing->Create(neighborhoodGuid, plotIndex) == HOUSING_RESULT_SUCCESS)
+    // A house belongs to a Battle.net account; a session without one cannot own a house.
+    if (!GetSession() || !GetSession()->GetBattlenetAccountId())
+        return nullptr;
+
+    // Each house of the account has its own slot, the first free one counting from 1. A packed house keeps its slot.
+    // The slots come from every house of the account, not only the ones this character loaded at login: another
+    // game account of the same Battle.net account may have bought one since.
+    std::vector<uint8> usedSlots;
+    for (Housing::AccountHouse const& house : Housing::GetAccountHouses(GetSession()->GetBattlenetAccountId()))
+        usedSlots.push_back(house.Slot);
+    for (std::unique_ptr<Housing> const& h : _housings)
+        if (h)
+            usedSlots.push_back(h->GetSlot());
+
+    uint8 const slot = Housing::FindFreeSlot(usedSlots);
+    if (!slot)
+        return nullptr;
+
+    std::unique_ptr<Housing> housing = std::make_unique<Housing>(this, /*databaseId*/ 0, slot);
+    if (housing->Create(neighborhoodGuid, plotIndex) != HOUSING_RESULT_SUCCESS)
+        return nullptr;
+
+    // Immediately persist to DB so housing survives server restarts
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    housing->SaveToDB(trans);
+    CharacterDatabase.CommitTransaction(trans);
+
+    // Update PlayerHouseInfoComponentData::Houses UpdateField so dashboard works mid-session
+    AddPlayerMirrorHouse(*housing);
+
+    Housing* created = housing.get();
+    _housings.push_back(std::move(housing));
+
+    // The house belongs to the account, so the account's other online characters see, enter and edit it at once.
+    for (Player* other : GetOtherOnlineAccountCharacters())
+        other->AddAccountHousing(created->GetDatabaseId());
+
+    return created;
+}
+
+void Player::DeleteHousing(ObjectGuid houseGuid)
+{
+    auto it = std::find_if(_housings.begin(), _housings.end(),
+        [&houseGuid](std::unique_ptr<Housing> const& h) { return h && h->GetHouseGuid() == houseGuid; });
+    if (it == _housings.end())
+        return;
+
+    (*it)->Delete();
+    ForgetHousingOnMap(it->get());
+    _housings.erase(it);
+    RemovePlayerMirrorHouse(houseGuid);
+
+    // The other online characters of the account hold the same house. It is marked deleted, so they no longer save
+    // it, but they must also stop showing it and stop naming it for its old plot.
+    for (Player* other : GetOtherOnlineAccountCharacters())
+        other->ForgetHousing(houseGuid);
+}
+
+void Player::AddAccountHousing(uint64 houseDatabaseId)
+{
+    if (std::any_of(_housings.begin(), _housings.end(), [houseDatabaseId](std::unique_ptr<Housing> const& h) { return h && h->GetDatabaseId() == houseDatabaseId; }))
+        return;
+
+    std::unique_ptr<Housing> housing = std::make_unique<Housing>(this, houseDatabaseId);
+    if (!housing->JoinLoadedState())
+        return;
+
+    // At login the Houses list is filled from every loaded house once the fragment exists; later a new entry is added.
+    if (m_playerHouseInfoComponentData.has_value())
+        AddPlayerMirrorHouse(*housing);
+
+    // A character already in the world was sent her house entities with her own create, so this house's entity is new
+    // to her client. Create it there before any values update for it can go out; at login the character's create
+    // carries it.
+    if (IsInWorld())
     {
-        // Immediately persist to DB so housing survives server restarts
-        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-        housing->SaveToDB(trans);
-        CharacterDatabase.CommitTransaction(trans);
+        HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity(housing->GetHouseGuid());
+        if (!HaveAtClient(&houseEntity))
+        {
+            houseEntity.SendCreateToPlayer(this);
+            m_clientGUIDs.insert(houseEntity.GetGUID());
+        }
+    }
 
-        // Update PlayerHouseInfoComponentData::Houses UpdateField so dashboard works mid-session
-        UF::PlayerMirrorHouse& mirrorHouse = AddDynamicUpdateFieldValue(
-            m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
-                .ModifyValue(&UF::PlayerHouseInfoComponentData::Houses));
-        mirrorHouse.HouseGUID = housing->GetHouseGuid();
-        mirrorHouse.NeighborhoodGUID = housing->GetNeighborhoodGuid();
-        mirrorHouse.Level = housing->GetLevel();
-        mirrorHouse.Favor = 0;
-        mirrorHouse.MapID = static_cast<int32>(GetMapId());
-        mirrorHouse.PlotID = housing->GetPlotIndex();
+    TC_LOG_DEBUG("housing", "Player::AddAccountHousing: {} now holds house {} of her Battle.net account",
+        GetGUID().ToString(), housing->GetHouseGuid().ToString());
 
-        TC_LOG_ERROR("housing", "Player::CreateHousing: PlayerMirrorHouse: HouseGuid={} NeighborhoodGuid={} PlotID={} Level={} MapID={}",
-            housing->GetHouseGuid().ToString(), housing->GetNeighborhoodGuid().ToString(), mirrorHouse.PlotID, mirrorHouse.Level, mirrorHouse.MapID);
+    _housings.push_back(std::move(housing));
+}
 
-        _housings.push_back(std::move(housing));
+void Player::ForgetHousing(ObjectGuid houseGuid)
+{
+    auto it = std::find_if(_housings.begin(), _housings.end(),
+        [&houseGuid](std::unique_ptr<Housing> const& h) { return h && h->GetHouseGuid() == houseGuid; });
+    if (it == _housings.end())
+        return;
+
+    ForgetHousingOnMap(it->get());
+    _housings.erase(it);
+    RemovePlayerMirrorHouse(houseGuid);
+
+    TC_LOG_DEBUG("housing", "Player::ForgetHousing: {} no longer holds deleted house {}",
+        GetGUID().ToString(), houseGuid.ToString());
+}
+
+void Player::AddPlayerMirrorHouse(Housing const& housing)
+{
+    if (housing.GetHouseGuid().IsEmpty())
+        return;
+
+    UF::PlayerMirrorHouse& mirrorHouse = AddDynamicUpdateFieldValue(
+        m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
+            .ModifyValue(&UF::PlayerHouseInfoComponentData::Houses));
+    mirrorHouse.HouseGUID = housing.GetHouseGuid();
+    mirrorHouse.NeighborhoodGUID = housing.GetNeighborhoodGuid();
+    mirrorHouse.Level = housing.GetLevel();
+    mirrorHouse.Favor = static_cast<uint32>(std::min<uint64>(housing.GetFavor64(), std::numeric_limits<uint32>::max()));
+    mirrorHouse.PlotID = housing.GetPlotIndex();
+    // The house interior's NeighborhoodMap row, as retail sent in every entry (hf1 211460, 468253).
+    mirrorHouse.MapID = int32(sHousingMgr.GetHouseInteriorNeighborhoodMapId());
+
+    // Initiative mirror field (12.0.5: InitiativeCycleID removed from PlayerMirrorHouse;
+    // only InitiativeFavor remains).
+    uint64 nhGuid = housing.GetNeighborhoodGuid().GetCounter();
+    if (ActiveInitiative* activeInit = sInitiativeManager.GetActiveInitiative(nhGuid))
+        mirrorHouse.InitiativeFavor = sInitiativeManager.GetPlayerContribution(nhGuid, activeInit->InitiativeID, GetGUID().GetCounter());
+
+    TC_LOG_DEBUG("housing", "Player::AddPlayerMirrorHouse: HouseGuid={} NeighborhoodGuid={} PlotID={} Level={} MapID={} Favor={}",
+        housing.GetHouseGuid().ToString(), housing.GetNeighborhoodGuid().ToString(), mirrorHouse.PlotID, mirrorHouse.Level,
+        mirrorHouse.MapID, mirrorHouse.Favor);
+}
+
+void Player::RemovePlayerMirrorHouse(ObjectGuid houseGuid)
+{
+    if (!m_playerHouseInfoComponentData.has_value())
+        return;
+
+    UF::PlayerHouseInfoComponentData const& data = *m_playerHouseInfoComponentData;
+    for (uint32 i = 0; i < data.Houses.size(); ++i)
+    {
+        if (data.Houses[i].HouseGUID == houseGuid)
+        {
+            RemoveDynamicUpdateFieldValue(m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
+                .ModifyValue(&UF::PlayerHouseInfoComponentData::Houses), i);
+            return;
+        }
     }
 }
 
-void Player::DeleteHousing(ObjectGuid neighborhoodGuid)
+void Player::ForgetHousingOnMap(Housing const* housing)
 {
-    auto it = std::find_if(_housings.begin(), _housings.end(),
-        [&neighborhoodGuid](std::unique_ptr<Housing> const& h) { return h && h->GetNeighborhoodGuid() == neighborhoodGuid; });
-    if (it != _housings.end())
-    {
-        (*it)->Delete();
-        _housings.erase(it);
-    }
+    // The neighborhood map indexes the live houses of the characters on it by pointer; drop this one before it is
+    // destroyed. A character between maps is in no map's index.
+    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(FindMap()))
+        housingMap->ForgetHousing(housing);
+}
+
+void Player::SyncAccountHouseOnOtherCharacters(ObjectGuid houseGuid)
+{
+    for (Player* other : GetOtherOnlineAccountCharacters())
+        if (Housing* housing = other->GetHousingByGuid(houseGuid))
+            housing->SyncUpdateFields();
+}
+
+std::vector<Player*> Player::GetOtherOnlineAccountCharacters() const
+{
+    std::vector<Player*> others;
+    uint32 const bnetAccountId = GetSession() ? GetSession()->GetBattlenetAccountId() : 0;
+    if (!bnetAccountId)
+        return others;
+
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+        if (session && session != GetSession() && session->GetBattlenetAccountId() == bnetAccountId)
+            if (Player* other = session->GetPlayer(); other && other != this)
+                others.push_back(other);
+    return others;
 }
 
 Housing* Player::GetHousing() const
@@ -32018,27 +32170,52 @@ Housing* Player::GetHousing() const
     if (_housings.empty())
         return nullptr;
 
-    // If on a HousingMap, return the housing for that map's neighborhood
     if (IsInWorld())
     {
+        // Inside a house: that house, when the account owns it.
+        if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(GetMap()))
+            return GetHousingByGuid(interiorMap->GetHouseGuid());
+
+        // In a neighborhood: the account's house there, if it has one.
         if (HousingMap* housingMap = dynamic_cast<HousingMap*>(GetMap()))
         {
             if (Neighborhood* neighborhood = housingMap->GetNeighborhood())
-            {
-                ObjectGuid neighborhoodGuid = neighborhood->GetGuid();
-                for (auto const& h : _housings)
-                    if (h && h->GetNeighborhoodGuid() == neighborhoodGuid)
-                        return h.get();
-            }
+                return GetHousingForNeighborhood(neighborhood->GetGuid());
+            return nullptr;
         }
     }
 
-    // Default: return first housing
-    return _housings[0].get();
+    // Anywhere else only an account with a single house has an obvious one.
+    return _housings.size() == 1 ? _housings[0].get() : nullptr;
+}
+
+Housing* Player::GetAccountCatalogHousing() const
+{
+    if (Housing* housing = GetHousing())
+        return housing;
+
+    for (auto const& h : _housings)
+        if (h)
+            return h.get();
+    return nullptr;
+}
+
+Housing* Player::GetHousingByGuid(ObjectGuid houseGuid) const
+{
+    if (houseGuid.IsEmpty())
+        return nullptr;
+
+    for (auto const& h : _housings)
+        if (h && h->GetHouseGuid() == houseGuid)
+            return h.get();
+    return nullptr;
 }
 
 Housing* Player::GetHousingForNeighborhood(ObjectGuid neighborhoodGuid) const
 {
+    if (neighborhoodGuid.IsEmpty())
+        return nullptr;
+
     for (auto const& h : _housings)
         if (h && h->GetNeighborhoodGuid() == neighborhoodGuid)
             return h.get();
@@ -32062,79 +32239,6 @@ void Player::SetHousingEditorModeUpdateField(uint8 mode)
         SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
             .ModifyValue(&UF::PlayerHouseInfoComponentData::EditorMode), mode);
     }
-}
-
-void Player::UpdateHousingMapId(ObjectGuid houseGuid, int32 mapId)
-{
-    if (!m_playerHouseInfoComponentData.has_value())
-        return;
-
-    // DynamicUpdateField nested fields are PublicSet=false, so we snapshot, clear,
-    // and re-add entries with the updated MapID.
-    struct HouseSnapshot
-    {
-        ObjectGuid HouseGUID;
-        ObjectGuid NeighborhoodGUID;
-        uint32 Level;
-        uint32 Favor;
-        uint32 InitiativeFavor;
-        int32 MapID;
-        int32 PlotID;
-    };
-
-    UF::PlayerHouseInfoComponentData const& data = *m_playerHouseInfoComponentData;
-    bool found = false;
-    std::vector<HouseSnapshot> snapshots;
-    snapshots.reserve(data.Houses.size());
-
-    for (uint32 i = 0; i < data.Houses.size(); ++i)
-    {
-        HouseSnapshot s;
-        s.HouseGUID = data.Houses[i].HouseGUID;
-        s.NeighborhoodGUID = data.Houses[i].NeighborhoodGUID;
-        s.Level = data.Houses[i].Level;
-        s.Favor = data.Houses[i].Favor;
-        s.InitiativeFavor = data.Houses[i].InitiativeFavor;
-        s.PlotID = data.Houses[i].PlotID;
-
-        if (data.Houses[i].HouseGUID == houseGuid)
-        {
-            s.MapID = mapId;
-            found = true;
-        }
-        else
-        {
-            s.MapID = data.Houses[i].MapID;
-        }
-        snapshots.push_back(s);
-    }
-
-    if (!found)
-    {
-        TC_LOG_ERROR("housing", "Player::UpdateHousingMapId: House {} not found in PlayerHouseInfoComponentData for player {}",
-            houseGuid.ToString(), GetGUID().ToString());
-        return;
-    }
-
-    ClearDynamicUpdateFieldValues(m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
-        .ModifyValue(&UF::PlayerHouseInfoComponentData::Houses));
-
-    for (auto const& s : snapshots)
-    {
-        UF::PlayerMirrorHouse& h = AddDynamicUpdateFieldValue(
-            m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
-                .ModifyValue(&UF::PlayerHouseInfoComponentData::Houses));
-        h.HouseGUID = s.HouseGUID;
-        h.NeighborhoodGUID = s.NeighborhoodGUID;
-        h.Level = s.Level;
-        h.Favor = s.Favor;
-        h.InitiativeFavor = s.InitiativeFavor;
-        h.MapID = s.MapID;
-        h.PlotID = s.PlotID;
-    }
-
-    TC_LOG_ERROR("housing", "Player::UpdateHousingMapId: Updated house {} MapID to {} for player {}",
-        houseGuid.ToString(), mapId, GetGUID().ToString());
 }
 
 void Player::SetCurrentHouse(ObjectGuid houseGuid)

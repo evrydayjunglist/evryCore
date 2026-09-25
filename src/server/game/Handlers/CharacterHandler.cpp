@@ -79,10 +79,11 @@ class LoginQueryHolder : public CharacterDatabaseQueryHolder
 {
     private:
         uint32 m_accountId;
+        uint32 m_bnetAccountId;
         ObjectGuid m_guid;
     public:
-        LoginQueryHolder(uint32 accountId, ObjectGuid guid)
-            : m_accountId(accountId), m_guid(guid) { }
+        LoginQueryHolder(uint32 accountId, uint32 bnetAccountId, ObjectGuid guid)
+            : m_accountId(accountId), m_bnetAccountId(bnetAccountId), m_guid(guid) { }
         ObjectGuid GetGuid() const { return m_guid; }
         uint32 GetAccountId() const { return m_accountId; }
         bool Initialize();
@@ -385,25 +386,27 @@ bool LoginQueryHolder::Initialize()
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_RESEARCH_HISTORY);
     stmt->setUInt64(0, lowGuid);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_RESEARCH_HISTORY, stmt);
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING);
-    stmt->setUInt64(0, lowGuid);
-    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_HOUSING, stmt);
 
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_DECOR);
-    stmt->setUInt64(0, lowGuid);
-    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_HOUSING_DECOR, stmt);
+    // Houses and the decor catalog belong to the Battle.net account: every character of it loads them all.
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING, stmt);
 
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_ROOMS);
-    stmt->setUInt64(0, lowGuid);
-    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_HOUSING_ROOMS, stmt);
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_DECOR);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR, stmt);
 
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_FIXTURES);
-    stmt->setUInt64(0, lowGuid);
-    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_HOUSING_FIXTURES, stmt);
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_ROOMS);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_ROOMS, stmt);
 
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_CATALOG);
-    stmt->setUInt64(0, lowGuid);
-    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_HOUSING_CATALOG, stmt);
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_FIXTURES);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_CATALOG);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG, stmt);
 
     return res;
 }
@@ -1272,7 +1275,7 @@ void WorldSession::HandleContinuePlayerLogin()
         return;
     }
 
-    std::shared_ptr<LoginQueryHolder> holder = std::make_shared<LoginQueryHolder>(GetAccountId(), m_playerLoading);
+    std::shared_ptr<LoginQueryHolder> holder = std::make_shared<LoginQueryHolder>(GetAccountId(), GetBattlenetAccountId(), m_playerLoading);
     if (!holder->Initialize())
     {
         m_playerLoading.Clear();
@@ -1708,7 +1711,7 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     sScriptMgr->OnPlayerLogin(pCurrChar, firstLogin);
 
     // The other residents' bulletin boards show this player online (NeighborhoodRosterMemberUpdateInfo.isOnline).
-    for (Neighborhood const* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForPlayer(pCurrChar->GetGUID()))
+    for (Neighborhood const* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForAccount(pCurrChar))
         neighborhood->BroadcastMemberStatus(pCurrChar->GetGUID(), true);
 
     TC_METRIC_EVENT("player_events", "Login", pCurrChar->GetName());

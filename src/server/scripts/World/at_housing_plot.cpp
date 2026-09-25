@@ -69,29 +69,19 @@ struct at_housing_plot : AreaTriggerAI
         ObjectGuid ownerGuid = plotInfo ? plotInfo->OwnerGuid : ObjectGuid::Empty;
         ObjectGuid houseGuid = plotInfo ? plotInfo->HouseGuid : ObjectGuid::Empty;
 
-        bool isOwnPlot = !ownerGuid.IsEmpty() && player->GetGUID() == ownerGuid;
-
-        // Visitor access permission check — only matters for plots with an owner.
-        //
-        // H-11: the check used to sit inside `if (Player* owner = FindPlayer(...))`,
-        // so an offline owner meant the check was skipped entirely and access was
-        // GRANTED — the exact opposite of the door script, which refused every visit
-        // while the owner was offline. One setting, two implementations, opposite
-        // answers. Both now use CanVisitorAccessPlot, which handles the offline owner,
-        // and both fall back to the settings mirrored onto PlotInfo at load.
-        if (!isOwnPlot && !ownerGuid.IsEmpty())
+        // Any character of the house's Battle.net account is on its own plot; anyone else is a visitor, checked
+        // against the house's settings. The door uses the same check (Neighborhood::CheckHouseEntry).
+        bool isOwnPlot = false;
+        if (!houseGuid.IsEmpty())
         {
-            uint32 settingsFlags = plotInfo ? plotInfo->HouseSettingsFlags : HOUSE_SETTING_DEFAULT;
-            if (Player* owner = ObjectAccessor::FindPlayer(ownerGuid))
-                if (Housing const* ownerHousing = owner->GetHousing())
-                    settingsFlags = ownerHousing->GetSettingsFlags();
-
-            if (!sHousingMgr.CanVisitorAccessPlot(player, ownerGuid, settingsFlags, false))
+            Neighborhood::HouseEntry entry = nbh->CheckHouseEntry(player, static_cast<uint8>(plotIdx), false);
+            if (!entry.Allowed)
             {
-                TC_LOG_DEBUG("housing", "at_housing_plot: Player {} denied plot access (owner {} flags 0x{:X})",
-                    player->GetGUID().ToString(), ownerGuid.ToString(), settingsFlags);
+                TC_LOG_DEBUG("housing", "at_housing_plot: Player {} denied plot access (house {} flags 0x{:X})",
+                    player->GetGUID().ToString(), houseGuid.ToString(), entry.SettingsFlags);
                 return;
             }
+            isOwnPlot = entry.IsOwner;
         }
 
         // De-dup: HousingMap::AddPlayerToMap may have already pushed the CurrentHouse
@@ -120,17 +110,17 @@ struct at_housing_plot : AreaTriggerAI
         // HouseStatusResponse + Permissions keep the editor-mode gate armed on the client.
         // These opcodes were NOT touched by 12.0.5 — still required after plot entry so the
         // editor-gate check (a1[76] && a1[72]) evaluates true.
-        if (!ownerGuid.IsEmpty())
+        if (!houseGuid.IsEmpty())
         {
             Player* plotOwner = isOwnPlot ? player : ObjectAccessor::FindPlayer(ownerGuid);
-            Housing const* ownerHousing = plotOwner ? plotOwner->GetHousing() : nullptr;
+            Housing const* ownerHousing = plotOwner ? plotOwner->GetHousingByGuid(houseGuid) : nullptr;
 
             if (ownerHousing)
             {
                 WorldPackets::Housing::HousingHouseStatusResponse statusResponse;
                 statusResponse.HouseGuid = ownerHousing->GetHouseGuid();
                 statusResponse.AccountGuid = player->GetSession()->GetBattlenetAccountGUID();
-                statusResponse.OwnerPlayerGuid = ownerGuid;
+                statusResponse.OwnerPlayerGuid = ownerHousing->GetCosmeticOwnerGuid();
                 statusResponse.NeighborhoodGuid = ownerHousing->GetNeighborhoodGuid();
                 statusResponse.Status = 0;
                 statusResponse.PermissionFlags = isOwnPlot ? 0xE0 : 0x40; // owner gets full, visitor gets plot-entry only
@@ -190,9 +180,7 @@ struct at_housing_plot : AreaTriggerAI
         Neighborhood const* nbh = housingMap->GetNeighborhood();
         Neighborhood::PlotInfo const* plotInfo = (nbh && plotIdx >= 0)
             ? nbh->GetPlotInfo(static_cast<uint8>(plotIdx)) : nullptr;
-        ObjectGuid ownerGuid = plotInfo ? plotInfo->OwnerGuid : ObjectGuid::Empty;
-
-        bool isOwnPlot = !ownerGuid.IsEmpty() && player->GetGUID() == ownerGuid;
+        bool isOwnPlot = plotInfo && player->GetSession() && plotInfo->IsOwnedByAccount(player->GetSession()->GetBattlenetAccountGUID());
 
         // Remove plot-auras (manual packets, spells aren't in DB2).
         housingMap->SendPlotLeaveAuraRemoval(player);
@@ -208,14 +196,14 @@ struct at_housing_plot : AreaTriggerAI
         // the interior — the map transfer would erase interior editor state otherwise.
         if (isOwnPlot)
         {
-            if (Housing const* housing = player->GetHousing())
+            if (Housing const* housing = player->GetHousingByGuid(plotInfo->HouseGuid))
             {
                 if (!housing->IsInInterior())
                 {
                     WorldPackets::Housing::HousingHouseStatusResponse statusResponse;
                     statusResponse.HouseGuid = housing->GetHouseGuid();
                     statusResponse.AccountGuid = player->GetSession()->GetBattlenetAccountGUID();
-                    statusResponse.OwnerPlayerGuid = player->GetGUID();
+                    statusResponse.OwnerPlayerGuid = housing->GetCosmeticOwnerGuid();
                     statusResponse.NeighborhoodGuid = housing->GetNeighborhoodGuid();
                     statusResponse.Status = 0;
                     statusResponse.PermissionFlags = 0x00; // leaving plot — clear all permissions

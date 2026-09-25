@@ -59,6 +59,9 @@ public:
     std::vector<Neighborhood*> GetAllNeighborhoods() const;
     std::vector<Neighborhood*> GetPublicNeighborhoods() const;
     std::vector<Neighborhood*> GetNeighborhoodsForPlayer(ObjectGuid playerGuid) const;
+    // The character's own neighborhood memberships plus every neighborhood where a house of its Battle.net account
+    // stands: every character of the account lives in the account's houses, members of the roster or not.
+    std::vector<Neighborhood*> GetNeighborhoodsForAccount(Player const* player) const;
     std::vector<Neighborhood*> GetNeighborhoodsByBnetAccount(ObjectGuid bnetAccountGuid) const;
     std::string GetNeighborhoodName(ObjectGuid neighborhoodGuid) const;
     Neighborhood* FindNeighborhoodWithPendingInvite(ObjectGuid playerGuid);

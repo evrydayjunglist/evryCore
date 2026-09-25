@@ -75,30 +75,13 @@ public:
                 ObjectGuid houseOwner = interiorMap->GetOwnerGuid();
                 Neighborhood* nbh = nullptr;
                 uint8 ownerPlotIndex = INVALID_PLOT_INDEX;
-                for (Neighborhood* cand : sNeighborhoodMgr.GetNeighborhoodsForPlayer(houseOwner))
+                for (Neighborhood* cand : sNeighborhoodMgr.GetAllNeighborhoods())
                 {
-                    for (Neighborhood::PlotInfo const& plot : cand->GetPlots())
+                    if (Neighborhood::PlotInfo const* plot = cand->GetPlotInfoByHouse(interiorMap->GetHouseGuid()))
                     {
-                        if (plot.OwnerGuid == houseOwner && plot.IsOccupied())
-                        {
-                            nbh = cand;
-                            ownerPlotIndex = plot.PlotIndex;
-                            break;
-                        }
-                    }
-                    if (nbh)
+                        nbh = cand;
+                        ownerPlotIndex = plot->PlotIndex;
                         break;
-                }
-
-                // Fall back to the visitor's own housing when the owner lookup
-                // fails (shouldn't happen — the owner exists by construction
-                // since the interior map was created for them).
-                if (!nbh)
-                {
-                    if (Housing* own = player->GetHousing())
-                    {
-                        nbh = sNeighborhoodMgr.GetNeighborhood(own->GetNeighborhoodGuid());
-                        ownerPlotIndex = own->GetPlotIndex();
                     }
                 }
 
@@ -191,40 +174,24 @@ public:
                 return true;
             }
 
-            // Check visitor access permissions if this isn't the player's own plot
-            Neighborhood::PlotInfo const* plotInfo = neighborhood->GetPlotInfo(static_cast<uint8>(plotIndex));
-            bool isVisit = plotInfo && plotInfo->OwnerGuid != player->GetGUID();
-            if (isVisit)
+            // Any character of the house's Battle.net account enters as owner; anyone else is a visitor, checked
+            // against the house's settings (Neighborhood::CheckHouseEntry).
+            Neighborhood::HouseEntry entry = neighborhood->CheckHouseEntry(player, static_cast<uint8>(plotIndex), true);
+            if (entry.HouseGuid.IsEmpty())
             {
-                // Permissions check. Prefer the live Housing object when the owner
-                // is online (the settingsFlags may have changed since the last DB
-                // write); fall back to the value mirrored onto PlotInfo at load.
-                //
-                // H-11: this used CanVisitorAccess, which returns false whenever
-                // `owner` is null - so every interior visit was refused while the
-                // owner was offline, regardless of their settings. CanVisitorAccessPlot
-                // resolves guild membership through CharacterCache and neighborhood
-                // membership through the Neighborhood objects, so it answers the same
-                // question with the owner logged out. It is the same function the
-                // teleport handler uses; the plot AreaTrigger now uses it too.
-                uint32 settingsFlags = plotInfo->HouseSettingsFlags;
-                if (Player* owner = ObjectAccessor::FindPlayer(plotInfo->OwnerGuid))
-                    if (Housing const* oh = owner->GetHousing())
-                        settingsFlags = oh->GetSettingsFlags();
-
-                if (!sHousingMgr.CanVisitorAccessPlot(player, plotInfo->OwnerGuid, settingsFlags, true))
-                {
-                    TC_LOG_DEBUG("housing", "go_housing_door: Player {} denied interior access to plot {} "
-                        "(owner {} flags 0x{:X})",
-                        player->GetGUID().ToString(), plotIndex, plotInfo->OwnerGuid.ToString(),
-                        settingsFlags);
-                    return true;
-                }
-
-                // Route the teleport to the OWNER's interior instance (MapManager
-                // reads this before selecting the HouseInteriorMap instance id).
-                player->SetHouseVisitTarget(plotInfo->OwnerGuid);
+                TC_LOG_DEBUG("housing", "go_housing_door: Plot {} has no house", plotIndex);
+                return true;
             }
+
+            if (!entry.Allowed)
+            {
+                TC_LOG_DEBUG("housing", "go_housing_door: Player {} denied interior access to plot {} (house {} flags 0x{:X})",
+                    player->GetGUID().ToString(), plotIndex, entry.HouseGuid.ToString(), entry.SettingsFlags);
+                return true;
+            }
+
+            // Name the house for MapManager, owner or visitor alike, so it picks this house's interior instance.
+            player->SetHouseVisitTarget(entry.HouseGuid);
 
             // Animate the door
             me->UseDoorOrButton();
@@ -232,7 +199,7 @@ public:
             // Mark interior BEFORE teleport so the AT leave handler (which fires
             // during the async teleport) knows not to send FlagByte=0x00 and
             // erase the interior's editor state.
-            if (Housing* housing = player->GetHousing())
+            if (Housing* housing = player->GetHousingByGuid(entry.HouseGuid))
                 housing->SetInInterior(true);
 
             // Teleport player to the house interior map (Map 2783).

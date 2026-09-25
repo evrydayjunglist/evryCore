@@ -286,6 +286,9 @@ public:
     uint32 GetNeighborhoodMapIdByWorldMap(uint32 mapId) const;
     // Get the world MapID for a NeighborhoodMapID (reverse lookup, returns 0 if not found)
     uint32 GetWorldMapIdByNeighborhoodMapId(uint32 neighborhoodMapId) const;
+    // The NeighborhoodMap row of the house interior map (row 7 for map 2783). Retail puts it in the house GUID and
+    // in every PlayerMirrorHouse.MapID it sends (hf1 211460, 468253).
+    uint32 GetHouseInteriorNeighborhoodMapId() const { return GetNeighborhoodMapIdByWorldMap(HOUSE_INTERIOR_MAP_ID); }
 
     // Name generation
     std::string GenerateNeighborhoodName(uint32 neighborhoodMapId) const;

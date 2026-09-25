@@ -33,6 +33,7 @@
 #include "RealmList.h"
 #include "WorldSession.h"
 #include <cmath>
+#include <limits>
 #include <queue>
 #include <unordered_set>
 
@@ -60,23 +61,131 @@ namespace
 }
 
 // Global DB ID generators — initialized from MAX(id) at server startup
+std::atomic<uint64> Housing::s_nextHouseDbId{1};
 std::atomic<uint64> Housing::s_nextDecorDbId{1};
 std::atomic<uint64> Housing::s_nextRoomDbId{1};
 
-Housing::Housing(Player* owner)
-    : _owner(owner)
-    , _plotIndex(INVALID_PLOT_INDEX)
-    , _level(1)
-    , _favor(0)
-    , _settingsFlags(HOUSE_SETTING_DEFAULT)
-    , _editorMode(HOUSING_EDITOR_MODE_NONE)
+std::mutex Housing::s_sharedStateLock;
+std::unordered_map<uint64, std::weak_ptr<Housing::PersistentState>> Housing::s_houseStates;
+std::unordered_map<uint32, std::weak_ptr<Housing::AccountCatalog>> Housing::s_accountCatalogs;
+
+Housing::Housing(Player* owner, uint64 databaseId, uint8 slot /*= 0*/) : _owner(owner)
 {
+    uint32 const bnetAccountId = owner && owner->GetSession() ? owner->GetSession()->GetBattlenetAccountId() : 0;
+    ASSERT(bnetAccountId, "Housing needs a Battle.net account; the caller must refuse before constructing");
+
+    if (!databaseId)
+        databaseId = s_nextHouseDbId.fetch_add(1);
+
+    std::lock_guard<std::mutex> registryGuard(s_sharedStateLock);
+
+    std::weak_ptr<PersistentState>& sharedState = s_houseStates[databaseId];
+    _state = sharedState.lock();
+    if (!_state)
+    {
+        _state = std::make_shared<PersistentState>();
+        _state->DatabaseId = databaseId;
+        _state->OwnerAccountId = bnetAccountId;
+        _state->Slot = slot;
+        sharedState = _state;
+    }
+
+    std::weak_ptr<AccountCatalog>& sharedCatalog = s_accountCatalogs[bnetAccountId];
+    _catalog = sharedCatalog.lock();
+    if (!_catalog)
+    {
+        _catalog = std::make_shared<AccountCatalog>();
+        sharedCatalog = _catalog;
+    }
+}
+
+Housing::~Housing()
+{
+    std::lock_guard<std::mutex> registryGuard(s_sharedStateLock);
+
+    uint64 const databaseId = _state->DatabaseId;
+    uint32 const bnetAccountId = _state->OwnerAccountId;
+    _state.reset();
+    _catalog.reset();
+
+    // The last Housing object of a house or an account takes its shared entry with it.
+    if (auto itr = s_houseStates.find(databaseId); itr != s_houseStates.end() && itr->second.expired())
+        s_houseStates.erase(itr);
+    if (auto itr = s_accountCatalogs.find(bnetAccountId); itr != s_accountCatalogs.end() && itr->second.expired())
+        s_accountCatalogs.erase(itr);
+}
+
+ObjectGuid Housing::MakeHouseGuid(uint8 slot, uint32 interiorNeighborhoodMapId, uint32 bnetAccountId)
+{
+    return ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 3, /*arg1*/ slot, /*arg2*/ interiorNeighborhoodMapId, uint64(bnetAccountId));
+}
+
+ObjectGuid Housing::MakeHouseGuid(uint8 slot, uint32 bnetAccountId)
+{
+    return MakeHouseGuid(slot, sHousingMgr.GetHouseInteriorNeighborhoodMapId(), bnetAccountId);
+}
+
+bool Housing::AccountOwnsHouseInDistrict(std::vector<int32> const& ownedHouseWorldMapIds, int32 districtWorldMapId)
+{
+    return std::find(ownedHouseWorldMapIds.begin(), ownedHouseWorldMapIds.end(), districtWorldMapId) != ownedHouseWorldMapIds.end();
+}
+
+uint8 Housing::FindFreeSlot(std::vector<uint8> const& usedSlots)
+{
+    for (uint32 slot = 1; slot <= std::numeric_limits<uint8>::max(); ++slot)
+        if (std::find(usedSlots.begin(), usedSlots.end(), uint8(slot)) == usedSlots.end())
+            return uint8(slot);
+    return 0;
+}
+
+std::vector<Housing::AccountHouse> Housing::GetAccountHouses(uint32 bnetAccountId)
+{
+    // Take the states out of the registry first and lock each one after letting the registry go, so this never
+    // holds the registry while it waits on a house.
+    std::vector<std::shared_ptr<PersistentState>> states;
+    {
+        std::lock_guard<std::mutex> registryGuard(s_sharedStateLock);
+        for (auto const& [databaseId, weakState] : s_houseStates)
+            if (std::shared_ptr<PersistentState> state = weakState.lock())
+                if (state->OwnerAccountId == bnetAccountId)
+                    states.push_back(std::move(state));
+    }
+
+    std::vector<AccountHouse> houses;
+    houses.reserve(states.size());
+    for (std::shared_ptr<PersistentState> const& state : states)
+    {
+        std::lock_guard<std::recursive_mutex> stateGuard(state->Lock);
+        if (!state->Loaded || state->Deleted)
+            continue;
+
+        AccountHouse& house = houses.emplace_back();
+        house.DatabaseId = state->DatabaseId;
+        house.Slot = state->Slot;
+        house.HouseGuid = state->HouseGuid;
+        house.NeighborhoodGuid = state->NeighborhoodGuid;
+        house.Packed = state->Packed;
+    }
+    return houses;
+}
+
+bool Housing::IsOwnedBy(Player const* player) const
+{
+    return player && player->GetSession() && !_state->Deleted
+        && player->GetSession()->GetBattlenetAccountId() == _state->OwnerAccountId;
 }
 
 void Housing::InitializeDbIdGenerators()
 {
     // Initialize global ID generators from current MAX(id) in the database.
     // Must be called during server startup before any Housing objects are loaded.
+    {
+        QueryResult result = CharacterDatabase.Query("SELECT COALESCE(MAX(guid), 0) FROM character_housing");
+        uint64 maxHouseId = result ? (*result)[0].GetUInt64() : 0;
+        s_nextHouseDbId.store(maxHouseId + 1);
+        TC_LOG_INFO("housing", "Housing::InitializeDbIdGenerators: House ID generator starting at {} (MAX in DB: {})",
+            maxHouseId + 1, maxHouseId);
+    }
     {
         QueryResult result = CharacterDatabase.Query("SELECT COALESCE(MAX(id), 0) FROM character_housing_decor");
         uint64 maxDecorId = result ? (*result)[0].GetUInt64() : 0;
@@ -93,68 +202,104 @@ void Housing::InitializeDbIdGenerators()
     }
 }
 
-bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
-    PreparedQueryResult rooms, PreparedQueryResult fixtures, PreparedQueryResult catalog)
+bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::vector<Field*> const& rooms,
+    std::vector<Field*> const& fixtures, PreparedQueryResult catalog)
 {
-    if (!housing)
+    if (!house || !IsOwnedBy(_owner))
         return false;
 
-    Field* fields = housing->Fetch();
-    // Expected columns: houseId, neighborhoodGuid, plotIndex, level, favor, settingsFlags, exteriorLocked, houseSize, houseType, ...
-    // fields[0] = houseId (DB2 entry ID) — NOT used as GUID counter.
-    // Housing GUID counter must match HousingPlayerHouseEntity GUID (WorldSession.cpp), which uses battlenetAccountId.
-    uint32 bnetAccountId = _owner->GetSession()->GetBattlenetAccountId();
-    _houseGuid = ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 3, /*arg1*/ sRealmList->GetCurrentRealmId().Realm, /*arg2*/ 7, uint64(bnetAccountId));
+    auto guard = LockStateAndCatalog();
+
+    if (!_catalog->Loaded)
+    {
+        //           0             1        2           3
+        // SELECT houseDecorId, quantity, sourceType, sourceValue
+        // FROM character_housing_catalog WHERE bnetAccountId = ?
+        if (catalog)
+        {
+            do
+            {
+                Field* catalogFields = catalog->Fetch();
+
+                uint32 decorEntryId = catalogFields[0].GetUInt32();
+                CatalogEntry& entry = _catalog->Entries[decorEntryId];
+                entry.DecorEntryId = decorEntryId;
+                entry.Count = catalogFields[1].GetUInt32();
+                entry.SourceType = catalogFields[2].GetUInt8();
+                entry.SourceValue = catalogFields[3].GetString();
+            } while (catalog->NextRow());
+        }
+        _catalog->Loaded = true;
+    }
+
+    // Another character of the account already has this house loaded, and may have changed it after these rows
+    // were read. What it holds is newer than the rows, so the rows are not applied again.
+    if (_state->Loaded)
+    {
+        SyncUpdateFields();
+        return !_state->Deleted;
+    }
+
+    //          0     1           2                   3                 4          5           6       7
+    // SELECT guid, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags,
+    //          8              9          10         11         12    13    14     15        16          17             18
+    //        exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed
+    // FROM character_housing WHERE bnetAccountId = ?
+    Field* fields = house;
+    _state->Slot = fields[1].GetUInt8();
+    _state->HouseGuid = MakeHouseGuid(_state->Slot, _state->OwnerAccountId);
+    if (uint64 cosmeticOwner = fields[2].GetUInt64())
+        _state->CosmeticOwnerGuid = ObjectGuid::Create<HighGuid::Player>(cosmeticOwner);
     // Take the neighborhood's real GUID from the manager rather than rebuilding it: arg1 is its
     // NeighborhoodMapID, and this GUID goes out to the client in house/neighborhood packets, so a wrong arg1
     // reproduces the client-side NeighborhoodMap.db2 miss on the house path too.
-    _neighborhoodGuid.Clear();
-    if (Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(fields[1].GetUInt64()))
-        _neighborhoodGuid = neighborhood->GetGuid();
-    else
+    _state->NeighborhoodGuid.Clear();
+    if (Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(fields[3].GetUInt64()))
+        _state->NeighborhoodGuid = neighborhood->GetGuid();
+    else if (fields[3].GetUInt64())
         TC_LOG_ERROR("housing", "Housing::LoadFromDB: house references neighborhood counter {} which is not loaded",
-            fields[1].GetUInt64());
-    _plotIndex = fields[2].GetUInt8();
-    _level = fields[3].GetUInt32();
-    _favor = fields[4].GetUInt32();
-    _settingsFlags = fields[5].GetUInt32();
-    _exteriorLocked = fields[6].GetUInt8() != 0;
-    _houseSize = fields[7].GetUInt8();
-    _houseType = fields[8].GetUInt32();
-    _createTime = fields[9].GetUInt32();
+            fields[3].GetUInt64());
+    _state->PlotIndex = fields[4].GetUInt8();
+    _state->Level = fields[5].GetUInt32();
+    _state->Favor = fields[6].GetUInt32();
+    _state->SettingsFlags = fields[7].GetUInt32();
+    _state->ExteriorLocked = fields[8].GetUInt8() != 0;
+    _state->HouseSize = fields[9].GetUInt8();
+    _state->HouseType = fields[10].GetUInt32();
+    _state->CreateTime = fields[11].GetUInt32();
 
     TC_LOG_ERROR("housing", "Housing::LoadFromDB: Loaded house HouseGuid={} NeighborhoodGuid={} PlotIndex={} Level={} HouseType={} for player {}",
-        _houseGuid.ToString(), _neighborhoodGuid.ToString(), _plotIndex, _level, _houseType, _owner->GetGUID().ToString());
-    _housePosX = fields[10].GetFloat();
-    _housePosY = fields[11].GetFloat();
-    _housePosZ = fields[12].GetFloat();
-    _houseFacing = fields[13].GetFloat();
-    _hasCustomPosition = (_housePosX != 0.0f || _housePosY != 0.0f || _housePosZ != 0.0f);
-    _houseName = fields[14].GetString();
-    _houseDescription = fields[15].GetString();
+        _state->HouseGuid.ToString(), _state->NeighborhoodGuid.ToString(), _state->PlotIndex, _state->Level, _state->HouseType, _owner->GetGUID().ToString());
+    _state->HousePosX = fields[12].GetFloat();
+    _state->HousePosY = fields[13].GetFloat();
+    _state->HousePosZ = fields[14].GetFloat();
+    _state->HouseFacing = fields[15].GetFloat();
+    _state->HasCustomPosition = (_state->HousePosX != 0.0f || _state->HousePosY != 0.0f || _state->HousePosZ != 0.0f);
+    _state->HouseName = fields[16].GetString();
+    _state->HouseDescription = fields[17].GetString();
+    _state->Packed = fields[18].GetUInt8() != 0;
 
     // Load rooms FIRST so decor can look up roomEntryId for GUID arg2
     //           0         1            2           3       4       5           6            7         8        9              10              11               12             13          14        15              16
     // SELECT roomGuid, roomEntryId, slotIndex, gridX, gridY, floorIndex, orientation, mirrored, themeId, wallTextureId, floorTextureId, ceilingTextureId, colorOverride, doorTypeId, doorSlot, ceilingTypeId, ceilingSlot
-    // FROM character_housing_rooms WHERE ownerGuid = ?
-    if (rooms)
+    // FROM character_housing_rooms, this house's rows
+    for (Field* roomFields : rooms)
     {
-        do
         {
-            fields = rooms->Fetch();
+            fields = roomFields;
 
             uint64 roomDbId = fields[0].GetUInt64();
             uint32 roomEntryId = fields[1].GetUInt32();
 
             // Fix up roomDbId=0 from old saves that used ObjectGuid::Empty (subType=0 produced Empty GUID).
-            // Without this, all rooms get the same GUID key and overwrite each other in _rooms.
+            // Without this, all rooms get the same GUID key and overwrite each other in _state->Rooms.
             if (roomDbId == 0)
                 roomDbId = GenerateRoomDbId();
 
             // arg2=roomEntryId matches retail GUID format (sniff-verified: arg2=HouseRoomID)
             ObjectGuid roomGuid = ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 2, 0, roomEntryId, roomDbId);
 
-            Room& room = _rooms[roomGuid];
+            Room& room = _state->Rooms[roomGuid];
             room.Guid = roomGuid;
             room.RoomEntryId = roomEntryId;
             room.SlotIndex = fields[2].GetUInt32();
@@ -169,7 +314,7 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
             // multiplied by 12 yards at spawn time. Convert legacy multiples-of-12 values.
             if (room.FloorIndex >= 12 && (room.FloorIndex % 12) == 0)
                 room.FloorIndex /= 12;
-            room.Orientation = fields[6].GetUInt32();
+            room.Orientation = fields[6].GetUInt8();
             room.Mirrored = fields[7].GetBool();
             room.ThemeId = fields[8].GetUInt32();
             room.WallTextureId = fields[9].GetUInt32();
@@ -197,7 +342,7 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
             while (roomDbId >= expected && !s_nextRoomDbId.compare_exchange_weak(expected, roomDbId + 1))
                 ;
 
-        } while (rooms->NextRow());
+        }
     }
 
     // Runtime fixup: ensure entry hall room (46) + correct visual room exist.
@@ -211,13 +356,13 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
         uint32 extGeoboxEntry = sHousingMgr.GetBaseRoomEntryId();
         if (entryHallEntry != extGeoboxEntry)
         {
-            for (auto& [guid, room] : _rooms)
+            for (auto& [guid, room] : _state->Rooms)
             {
                 if (room.RoomEntryId == extGeoboxEntry)
                 {
                     TC_LOG_ERROR("housing", "Housing::LoadFromDB: Migrating interior base room {} -> {} "
                         "in slot {} for house {} (entry hall fixup)",
-                        extGeoboxEntry, entryHallEntry, room.SlotIndex, _houseGuid.ToString());
+                        extGeoboxEntry, entryHallEntry, room.SlotIndex, _state->HouseGuid.ToString());
                     room.RoomEntryId = entryHallEntry;
                     break;
                 }
@@ -226,7 +371,7 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
 
         // Step 1: Ensure base room (entry hall) exists
         bool hasBaseRoom = false;
-        for (auto const& [guid, room] : _rooms)
+        for (auto const& [guid, room] : _state->Rooms)
         {
             if (sHousingMgr.IsBaseRoom(room.RoomEntryId))
             {
@@ -241,7 +386,7 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
             HousingResult baseResult = PlaceRoom(entryHallRoomEntry, /*slotIndex*/ 0, /*orientation*/ 0, /*mirrored*/ false);
             TC_LOG_ERROR("housing", "Housing::LoadFromDB: Auto-placed entry hall room (entry {}) in slot 0 "
                 "for house {} (migration fixup, result={})",
-                entryHallRoomEntry, _houseGuid.ToString(), baseResult);
+                entryHallRoomEntry, _state->HouseGuid.ToString(), baseResult);
         }
 
         // Step 2: Ensure correct visual room exists
@@ -249,7 +394,7 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
         bool hasVisualRoom = false;
         ObjectGuid wrongRoomGuid;
 
-        for (auto const& [guid, room] : _rooms)
+        for (auto const& [guid, room] : _state->Rooms)
         {
             if (sHousingMgr.IsBaseRoom(room.RoomEntryId))
                 continue;
@@ -277,7 +422,7 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
         {
             // Find the next free slot (slot 0 is base room)
             uint32 nextSlot = 1;
-            for (auto const& [guid, room] : _rooms)
+            for (auto const& [guid, room] : _state->Rooms)
             {
                 if (room.SlotIndex >= nextSlot)
                     nextSlot = room.SlotIndex + 1;
@@ -286,19 +431,18 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
             HousingResult placeResult = PlaceRoom(correctVisualRoom, nextSlot, /*orientation*/ 0, /*mirrored*/ false);
             TC_LOG_ERROR("housing", "Housing::LoadFromDB: Auto-placed visual room entry {} in slot {} "
                 "for house {} (migration fixup, result={})",
-                correctVisualRoom, nextSlot, _houseGuid.ToString(), placeResult);
+                correctVisualRoom, nextSlot, _state->HouseGuid.ToString(), placeResult);
         }
     }
 
     // Load placed decor (after rooms so RoomGuid can use correct arg2=roomEntryId)
     //           0        1             2     3     4     5          6          7          8          9       10       11       12        13     14              15          16
     // SELECT decorGuid, decorEntryId, posX, posY, posZ, rotationX, rotationY, rotationZ, rotationW, dyeSlot0, dyeSlot1, dyeSlot2, roomGuid, locked, placementTime, sourceType, sourceValue
-    // FROM character_housing_decor WHERE ownerGuid = ?
-    if (decor)
+    // FROM character_housing_decor, this house's rows
+    for (Field* decorFields : decor)
     {
-        do
         {
-            fields = decor->Fetch();
+            fields = decorFields;
 
             uint64 decorDbId = fields[0].GetUInt64();
             uint32 decorEntryId = fields[1].GetUInt32();
@@ -308,7 +452,7 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
                 /*arg2*/ decorEntryId,
                 decorDbId);
 
-            PlacedDecor& placed = _placedDecor[decorGuid];
+            PlacedDecor& placed = _state->PlacedDecorByGuid[decorGuid];
             placed.Guid = decorGuid;
             placed.DecorEntryId = decorEntryId;
             placed.PosX = fields[2].GetFloat();
@@ -326,11 +470,11 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
             uint64 roomDbId = fields[13].GetUInt64();
             if (roomDbId)
             {
-                // Use the room's actual GUID key from _rooms, not a reconstructed one.
+                // Use the room's actual GUID key from _state->Rooms, not a reconstructed one.
                 // Room migration (e.g. entry 18→46) changes RoomEntryId but not the GUID
                 // key's arg2 field. Reconstructing with the migrated RoomEntryId would
                 // produce a GUID that doesn't match the room's key, breaking AttachParentGUID.
-                for (auto const& [rGuid, r] : _rooms)
+                for (auto const& [rGuid, r] : _state->Rooms)
                 {
                     if (rGuid.GetCounter() == roomDbId)
                     {
@@ -351,28 +495,27 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
             while (decorDbId >= expected && !s_nextDecorDbId.compare_exchange_weak(expected, decorDbId + 1))
                 ;
 
-        } while (decor->NextRow());
+        }
     }
 
     // Load fixtures
     //           0               1
     // SELECT fixturePointId, optionId
-    // FROM character_housing_fixtures WHERE ownerGuid = ?
-    if (fixtures)
+    // FROM character_housing_fixtures, this house's rows
+    for (Field* fixtureFields : fixtures)
     {
-        do
         {
-            fields = fixtures->Fetch();
+            fields = fixtureFields;
 
             uint32 fixturePointId = fields[0].GetUInt32();
-            Fixture& fixture = _fixtures[fixturePointId];
+            Fixture& fixture = _state->Fixtures[fixturePointId];
             fixture.FixturePointId = fixturePointId;
             fixture.OptionId = fields[1].GetUInt32();
 
-        } while (fixtures->NextRow());
+        }
 
         // Log all loaded fixtures for debugging
-        for (auto const& [pointId, fix] : _fixtures)
+        for (auto const& [pointId, fix] : _state->Fixtures)
         {
             TC_LOG_INFO("housing", "Housing::LoadFromDB: Fixture pointId={} optionId={}", fix.FixturePointId, fix.OptionId);
         }
@@ -381,14 +524,14 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
     // Migration: populate starter fixtures for houses created before persistence was added.
     // Also handles existing houses that have fixtures but are missing starter roots (Base/Roof) or door.
     bool hasBaseRoot = false, hasRoofRoot = false, hasDoor = false;
-    for (auto const& [pointId, fix] : _fixtures)
+    for (auto const& [pointId, fix] : _state->Fixtures)
     {
         if (fix.OptionId == 0)
         {
             ExteriorComponentEntry const* comp = sExteriorComponentStore.LookupEntry(fix.FixturePointId);
             if (!comp)
                 continue;
-            if (_houseType != 0 && comp->HouseExteriorWmoDataID != static_cast<uint32>(_houseType))
+            if (_state->HouseType != 0 && comp->HouseExteriorWmoDataID != static_cast<uint32>(_state->HouseType))
                 continue;
             if (comp->Type == HOUSING_FIXTURE_TYPE_BASE) hasBaseRoot = true;
             if (comp->Type == HOUSING_FIXTURE_TYPE_ROOF) hasRoofRoot = true;
@@ -401,58 +544,38 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
         }
     }
 
-    if ((!hasBaseRoot || !hasRoofRoot || !hasDoor) && _houseType != 0)
+    if ((!hasBaseRoot || !hasRoofRoot || !hasDoor) && _state->HouseType != 0)
     {
         TC_LOG_INFO("housing", "Housing::LoadFromDB: Missing starter fixtures (base={}, roof={}, door={}) for house {} — populating (migration)",
-            hasBaseRoot, hasRoofRoot, hasDoor, _houseGuid.ToString());
+            hasBaseRoot, hasRoofRoot, hasDoor, _state->HouseGuid.ToString());
         PopulateStarterFixtures();
-    }
-
-    // Load catalog
-    //           0             1        2           3
-    // SELECT houseDecorId, quantity, sourceType, sourceValue
-    // FROM character_housing_catalog WHERE ownerGuid = ?
-    if (catalog)
-    {
-        do
-        {
-            fields = catalog->Fetch();
-
-            uint32 decorEntryId = fields[0].GetUInt32();
-            CatalogEntry& entry = _catalog[decorEntryId];
-            entry.DecorEntryId = decorEntryId;
-            entry.Count = fields[1].GetUInt32();
-            entry.SourceType = fields[2].GetUInt8();
-            entry.SourceValue = fields[3].GetString();
-
-        } while (catalog->NextRow());
     }
 
     // Fixup: if house exists but catalog is empty, populate with starter decor.
     // This handles houses created before the catalog-population fix was added.
-    if (_catalog.empty() && !_houseGuid.IsEmpty() && _owner)
+    if (_catalog->Entries.empty() && !_state->HouseGuid.IsEmpty() && _owner)
     {
         auto starterDecorWithQty = sHousingMgr.GetStarterDecorWithQuantities(_owner->GetTeam());
         if (!starterDecorWithQty.empty())
         {
             for (auto const& [decorId, qty] : starterDecorWithQty)
             {
-                CatalogEntry& entry = _catalog[decorId];
+                CatalogEntry& entry = _catalog->Entries[decorId];
                 entry.DecorEntryId = decorId;
                 entry.Count = qty;
             }
             TC_LOG_ERROR("housing", "Housing::LoadFromDB: Catalog was empty for house {} — auto-populated {} starter decor types for player {}",
-                _houseGuid.ToString(), uint32(starterDecorWithQty.size()), _owner->GetGUID().ToString());
+                _state->HouseGuid.ToString(), uint32(starterDecorWithQty.size()), _owner->GetGUID().ToString());
 
             // Persist the fixup to DB so it only happens once
             if (_owner->GetSession())
             {
                 CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-                for (auto const& [entryId, entry] : _catalog)
+                for (auto const& [entryId, entry] : _catalog->Entries)
                 {
                     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_CATALOG);
                     uint8 idx = 0;
-                    stmt->setUInt64(idx++, _owner->GetGUID().GetCounter());
+                    stmt->setUInt32(idx++, GetOwnerAccountId());
                     stmt->setUInt32(idx++, entry.DecorEntryId);
                     stmt->setUInt32(idx++, entry.Count);
                     stmt->setUInt8(idx++, entry.SourceType);
@@ -466,13 +589,15 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
 
     // Auto-place starter decor for existing houses with catalog but no placed decor.
     // This handles houses created before the starter decor placement was added.
-    if (_placedDecor.empty() && !_catalog.empty() && !_houseGuid.IsEmpty() && _owner)
+    if (_state->PlacedDecorByGuid.empty() && !_catalog->Entries.empty() && !_state->HouseGuid.IsEmpty() && _owner)
     {
         uint32 placed = PlaceStarterDecor();
         if (placed > 0)
             TC_LOG_ERROR("housing", "Housing::LoadFromDB: Auto-placed {} starter decor items for house {} (migration fixup)",
-                placed, _houseGuid.ToString());
+                placed, _state->HouseGuid.ToString());
     }
+
+    _state->Loaded = true;
 
     // Recalculate budget weights from loaded data
     RecalculateBudgets();
@@ -487,12 +612,27 @@ bool Housing::LoadFromDB(PreparedQueryResult housing, PreparedQueryResult decor,
 
     TC_LOG_DEBUG("housing", "Housing::LoadFromDB: Loaded house for player {} (GUID {}): "
         "{} decor, {} rooms, {} fixtures, {} catalog entries (interior budget {}/{}, room budget {}/{})",
-        _owner->GetName(), _owner->GetGUID().GetCounter(),
-        uint32(_placedDecor.size()), uint32(_rooms.size()),
-        uint32(_fixtures.size()), uint32(_catalog.size()),
-        _interiorDecorWeightUsed, GetMaxInteriorDecorBudget(),
-        _roomWeightUsed, GetMaxRoomBudget());
+        _owner->GetName(), GetDatabaseId(),
+        uint32(_state->PlacedDecorByGuid.size()), uint32(_state->Rooms.size()),
+        uint32(_state->Fixtures.size()), uint32(_catalog->Entries.size()),
+        _state->InteriorDecorWeightUsed, GetMaxInteriorDecorBudget(),
+        _state->RoomWeightUsed, GetMaxRoomBudget());
 
+    return true;
+}
+
+bool Housing::JoinLoadedState()
+{
+    if (!IsOwnedBy(_owner))
+        return false;
+
+    {
+        auto guard = LockState();
+        if (!_state->Loaded || _state->Deleted)
+            return false;
+    }
+
+    SyncUpdateFields();
     return true;
 }
 
@@ -529,51 +669,60 @@ static void BindDecorInsert(CharacterDatabasePreparedStatement* stmt, ObjectGuid
 
 void Housing::SaveToDB(CharacterDatabaseTransaction trans)
 {
-    ObjectGuid::LowType ownerGuid = _owner->GetGUID().GetCounter();
+    auto guard = LockStateAndCatalog();
+    if (!_state->Loaded || _state->Deleted)
+        return;
 
-    DeleteFromDB(ownerGuid, trans);
+    ObjectGuid::LowType houseDatabaseId = GetDatabaseId();
+
+    DeleteFromDB(houseDatabaseId, trans);
 
     // Save main housing record
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING);
-    stmt->setUInt64(0, ownerGuid);
-    stmt->setUInt64(1, _houseGuid.GetCounter());
-    stmt->setUInt64(2, _neighborhoodGuid.GetCounter());
-    stmt->setUInt8(3, _plotIndex);
-    stmt->setUInt32(4, _level);
-    stmt->setUInt32(5, _favor);
-    stmt->setUInt32(6, _settingsFlags);
-    stmt->setUInt8(7, _exteriorLocked ? 1 : 0);
-    stmt->setUInt8(8, _houseSize);
-    stmt->setUInt32(9, _houseType);
-    stmt->setFloat(10, _housePosX);
-    stmt->setFloat(11, _housePosY);
-    stmt->setFloat(12, _housePosZ);
-    stmt->setFloat(13, _houseFacing);
-    stmt->setString(14, _houseName);
-    stmt->setString(15, _houseDescription);
+    uint8 houseIndex = 0;
+    stmt->setUInt64(houseIndex++, houseDatabaseId);
+    stmt->setUInt32(houseIndex++, _state->OwnerAccountId);
+    stmt->setUInt8(houseIndex++, _state->Slot);
+    stmt->setUInt64(houseIndex++, _state->CosmeticOwnerGuid.GetCounter());
+    stmt->setUInt64(houseIndex++, _state->NeighborhoodGuid.GetCounter());
+    stmt->setUInt8(houseIndex++, _state->PlotIndex);
+    stmt->setUInt32(houseIndex++, _state->Level);
+    stmt->setUInt32(houseIndex++, _state->Favor);
+    stmt->setUInt32(houseIndex++, _state->SettingsFlags);
+    stmt->setUInt8(houseIndex++, _state->ExteriorLocked ? 1 : 0);
+    stmt->setUInt8(houseIndex++, _state->HouseSize);
+    stmt->setUInt32(houseIndex++, _state->HouseType);
+    stmt->setUInt32(houseIndex++, _state->CreateTime);
+    stmt->setFloat(houseIndex++, _state->HousePosX);
+    stmt->setFloat(houseIndex++, _state->HousePosY);
+    stmt->setFloat(houseIndex++, _state->HousePosZ);
+    stmt->setFloat(houseIndex++, _state->HouseFacing);
+    stmt->setString(houseIndex++, _state->HouseName);
+    stmt->setString(houseIndex++, _state->HouseDescription);
+    stmt->setUInt8(houseIndex++, _state->Packed ? 1 : 0);
     trans->Append(stmt);
 
     // Save placed decor
-    for (auto const& [guid, decor] : _placedDecor)
+    for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
     {
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_DECOR);
-        BindDecorInsert(stmt, ownerGuid, guid, decor);
+        BindDecorInsert(stmt, houseDatabaseId, guid, decor);
         trans->Append(stmt);
     }
 
     // Save rooms
-    for (auto const& [guid, room] : _rooms)
+    for (auto const& [guid, room] : _state->Rooms)
     {
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_ROOMS);
         uint8 index = 0;
-        stmt->setUInt64(index++, ownerGuid);
+        stmt->setUInt64(index++, houseDatabaseId);
         stmt->setUInt64(index++, guid.GetCounter());
         stmt->setUInt32(index++, room.RoomEntryId);
         stmt->setUInt32(index++, room.SlotIndex);
         stmt->setInt32(index++, room.GridX);
         stmt->setInt32(index++, room.GridY);
         stmt->setInt32(index++, room.FloorIndex);
-        stmt->setUInt32(index++, room.Orientation);
+        stmt->setUInt8(index++, uint8(room.Orientation));
         stmt->setBool(index++, room.Mirrored);
         stmt->setUInt32(index++, room.ThemeId);
         stmt->setUInt32(index++, room.WallTextureId);
@@ -591,22 +740,26 @@ void Housing::SaveToDB(CharacterDatabaseTransaction trans)
     }
 
     // Save fixtures
-    for (auto const& [pointId, fixture] : _fixtures)
+    for (auto const& [pointId, fixture] : _state->Fixtures)
     {
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_FIXTURES);
         uint8 index = 0;
-        stmt->setUInt64(index++, ownerGuid);
+        stmt->setUInt64(index++, houseDatabaseId);
         stmt->setUInt32(index++, fixture.FixturePointId);
         stmt->setUInt32(index++, fixture.OptionId);
         trans->Append(stmt);
     }
 
-    // Save catalog
-    for (auto const& [entryId, entry] : _catalog)
+    // The catalog belongs to the account: replace its rows in the same transaction as the house.
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_CATALOG);
+    stmt->setUInt32(0, _state->OwnerAccountId);
+    trans->Append(stmt);
+
+    for (auto const& [entryId, entry] : _catalog->Entries)
     {
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_CATALOG);
         uint8 index = 0;
-        stmt->setUInt64(index++, ownerGuid);
+        stmt->setUInt32(index++, _state->OwnerAccountId);
         stmt->setUInt32(index++, entry.DecorEntryId);
         stmt->setUInt32(index++, entry.Count);
         stmt->setUInt8(index++, entry.SourceType);
@@ -615,26 +768,23 @@ void Housing::SaveToDB(CharacterDatabaseTransaction trans)
     }
 }
 
-void Housing::DeleteFromDB(ObjectGuid::LowType ownerGuid, CharacterDatabaseTransaction trans)
+void Housing::DeleteFromDB(ObjectGuid::LowType houseDatabaseId, CharacterDatabaseTransaction trans)
 {
+    // The house's own rows only; the decor catalog belongs to the account and stays.
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING);
-    stmt->setUInt64(0, ownerGuid);
+    stmt->setUInt64(0, houseDatabaseId);
     trans->Append(stmt);
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_DECOR);
-    stmt->setUInt64(0, ownerGuid);
+    stmt->setUInt64(0, houseDatabaseId);
     trans->Append(stmt);
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_ROOMS);
-    stmt->setUInt64(0, ownerGuid);
+    stmt->setUInt64(0, houseDatabaseId);
     trans->Append(stmt);
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_FIXTURES);
-    stmt->setUInt64(0, ownerGuid);
-    trans->Append(stmt);
-
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_CATALOG);
-    stmt->setUInt64(0, ownerGuid);
+    stmt->setUInt64(0, houseDatabaseId);
     trans->Append(stmt);
 }
 
@@ -653,41 +803,38 @@ void Housing::SetEditorMode(HousingEditorMode mode)
 
 HousingResult Housing::Create(ObjectGuid neighborhoodGuid, uint8 plotIndex)
 {
-    if (!_houseGuid.IsEmpty())
+    if (!IsOwnedBy(_owner))
+        return HOUSING_RESULT_PERMISSION_DENIED;
+
+    auto guard = LockState();
+    if (_state->Loaded || !_state->HouseGuid.IsEmpty() || !_state->Slot)
         return HOUSING_RESULT_INVALID_HOUSE;
 
     if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS)
         return HOUSING_RESULT_PLOT_NOT_FOUND;
 
-    _neighborhoodGuid = neighborhoodGuid;
-    _plotIndex = plotIndex;
-    _level = 1;
-    _favor = 0;
-    _settingsFlags = HOUSE_SETTING_DEFAULT;
+    _state->NeighborhoodGuid = neighborhoodGuid;
+    _state->PlotIndex = plotIndex;
+    _state->Level = 1;
+    _state->Favor = 0;
+    _state->SettingsFlags = HOUSE_SETTING_DEFAULT;
     _editorMode = HOUSING_EDITOR_MODE_NONE;
-    _exteriorLocked = false;
-    _houseSize = HOUSING_FIXTURE_SIZE_SMALL;
+    _state->ExteriorLocked = false;
+    _state->HouseSize = HOUSING_FIXTURE_SIZE_SMALL;
     // Racial house style: Night Elf → 55, Blood Elf → 56, other Alliance → 9, other Horde → 87
-    _houseType = HousingMgr::GetRacialWmoDataID(_owner->GetRace(), _owner->GetTeam());
-    _createTime = static_cast<uint32>(GameTime::GetGameTime());
-    _hasCustomPosition = false;
-    _housePosX = _housePosY = _housePosZ = _houseFacing = 0.0f;
+    _state->HouseType = HousingMgr::GetRacialWmoDataID(_owner->GetRace(), _owner->GetTeam());
+    _state->CreateTime = static_cast<uint32>(GameTime::GetGameTime());
+    _state->HasCustomPosition = false;
+    _state->HousePosX = _state->HousePosY = _state->HousePosZ = _state->HouseFacing = 0.0f;
 
-    // Generate a new house guid using BNetAccountId as the counter.
-    // Retail-verified: HouseGUID.Low always equals BNetAccountGUID.Low (the BNet account ID).
-    // Using player GUID counter produces small values that don't match the retail pattern
-    // and may cause the client's AABB/DB2 lookup to fail during decor placement bounds checks.
-    uint32 bnetAccountId = _owner->GetSession() ? _owner->GetSession()->GetBattlenetAccountId() : 0;
-    if (bnetAccountId == 0)
-    {
-        TC_LOG_ERROR("housing", "Housing::Create: BNetAccountId is 0 for player {} — falling back to player GUID counter",
-            _owner->GetGUID().ToString());
-        bnetAccountId = static_cast<uint32>(_owner->GetGUID().GetCounter());
-    }
-    _houseGuid = ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 3, /*arg1*/ sRealmList->GetCurrentRealmId().Realm, /*arg2*/ 7, uint64(bnetAccountId));
+    _state->Packed = false;
+    _state->HouseGuid = MakeHouseGuid(_state->Slot, _state->OwnerAccountId);
+    // The buyer is shown as the owner until House Settings names another character of the account.
+    _state->CosmeticOwnerGuid = _owner->GetGUID();
+    _state->Loaded = true;
 
     TC_LOG_ERROR("housing", "Housing::Create: Player {} (BNetAcct {}) created house on plot {} in neighborhood {} — HouseGuid={}",
-        _owner->GetName(), bnetAccountId, plotIndex, _neighborhoodGuid.ToString(), _houseGuid.ToString());
+        _owner->GetName(), _state->OwnerAccountId, plotIndex, _state->NeighborhoodGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
 
@@ -734,52 +881,88 @@ ObjectGuid Housing::GetPlotGuid() const
     return ObjectGuid::Create<HighGuid::Housing>(
         /*subType*/ 2,
         /*arg1*/ sRealmList->GetCurrentRealmId().Realm,
-        /*arg2*/ _plotIndex,
-        _neighborhoodGuid.GetCounter());
+        /*arg2*/ _state->PlotIndex,
+        _state->NeighborhoodGuid.GetCounter());
+}
+
+void Housing::SetNeighborhoodGuid(ObjectGuid guid)
+{
+    auto guard = LockState();
+    _state->NeighborhoodGuid = guid;
+}
+
+void Housing::SetPlotIndex(uint8 plotIndex)
+{
+    auto guard = LockState();
+    _state->PlotIndex = plotIndex;
+}
+
+void Housing::SetCosmeticOwnerGuid(ObjectGuid guid)
+{
+    {
+        auto guard = LockState();
+        if (_state->CosmeticOwnerGuid == guid)
+            return;
+
+        _state->CosmeticOwnerGuid = guid;
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_COSMETIC_OWNER);
+        stmt->setUInt64(0, guid.GetCounter());
+        stmt->setUInt64(1, GetDatabaseId());
+        CharacterDatabase.Execute(stmt);
+    }
+
+    // The plot shows the cosmetic owner to everyone in the neighborhood.
+    if (Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(_state->NeighborhoodGuid))
+        neighborhood->UpdatePlotCosmeticOwnerByHouse(_state->HouseGuid, guid);
+
+    SyncUpdateFields();
 }
 
 void Housing::Delete()
 {
+    auto guard = LockState();
+
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    DeleteFromDB(_owner->GetGUID().GetCounter(), trans);
+    DeleteFromDB(GetDatabaseId(), trans);
     CharacterDatabase.CommitTransaction(trans);
 
     TC_LOG_DEBUG("housing", "Housing::Delete: Player {} (GUID {}) deleted house {}",
-        _owner->GetName(), _owner->GetGUID().GetCounter(), _houseGuid.ToString());
+        _owner->GetName(), _owner->GetGUID().GetCounter(), _state->HouseGuid.ToString());
 
     // m2/A5: release the neighborhood plot so it becomes vacant and
     // re-purchasable instead of being orphaned forever (the old bug: delete /
     // kiosk-reset removed the character rows but never freed the PlotInfo).
-    if (!_neighborhoodGuid.IsEmpty())
+    if (!_state->NeighborhoodGuid.IsEmpty())
     {
-        if (Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(_neighborhoodGuid))
+        if (Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(_state->NeighborhoodGuid))
             neighborhood->ReleasePlot(_owner->GetGUID());
     }
 
     // Remove all decor storage entries from account UpdateField (only if storage is populated)
-    if (_storagePopulated && _owner->GetSession() && !_placedDecor.empty())
+    if (_storagePopulated && _owner->GetSession() && !_state->PlacedDecorByGuid.empty())
     {
         Battlenet::Account& account = _owner->GetSession()->GetBattlenetAccount();
-        for (auto const& [decorGuid, decor] : _placedDecor)
+        for (auto const& [decorGuid, decor] : _state->PlacedDecorByGuid)
             account.RemoveHousingDecorStorageEntry(decorGuid);
     }
 
-    _houseGuid.Clear();
-    _neighborhoodGuid.Clear();
-    _plotIndex = INVALID_PLOT_INDEX;
-    _level = 1;
-    _favor = 0;
-    _settingsFlags = HOUSE_SETTING_DEFAULT;
+    _state->HouseGuid.Clear();
+    _state->NeighborhoodGuid.Clear();
+    _state->PlotIndex = INVALID_PLOT_INDEX;
+    _state->Level = 1;
+    _state->Favor = 0;
+    _state->SettingsFlags = HOUSE_SETTING_DEFAULT;
     _editorMode = HOUSING_EDITOR_MODE_NONE;
-    _exteriorLocked = false;
-    _houseSize = HOUSING_FIXTURE_SIZE_SMALL;
-    _houseType = 0;
-    _hasCustomPosition = false;
-    _housePosX = _housePosY = _housePosZ = _houseFacing = 0.0f;
-    _placedDecor.clear();
-    _rooms.clear();
-    _fixtures.clear();
-    _catalog.clear();
+    _state->ExteriorLocked = false;
+    _state->HouseSize = HOUSING_FIXTURE_SIZE_SMALL;
+    _state->HouseType = 0;
+    _state->HasCustomPosition = false;
+    _state->HousePosX = _state->HousePosY = _state->HousePosZ = _state->HouseFacing = 0.0f;
+    _state->PlacedDecorByGuid.clear();
+    _state->Rooms.clear();
+    _state->Fixtures.clear();
+    _state->Deleted = true;
 }
 
 ObjectGuid Housing::GenerateDecorGuid(uint32 decorEntryId)
@@ -791,15 +974,16 @@ ObjectGuid Housing::GenerateDecorGuid(uint32 decorEntryId)
 
 ObjectGuid Housing::StartPlacingNewDecor(uint32 catalogEntryId, HousingResult& result)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty())
     {
         result = HOUSING_RESULT_HOUSE_NOT_FOUND;
         return ObjectGuid::Empty;
     }
 
     // Validate entry exists in catalog
-    auto catalogItr = _catalog.find(catalogEntryId);
-    if (catalogItr == _catalog.end() || catalogItr->second.Count == 0)
+    auto catalogItr = _catalog->Entries.find(catalogEntryId);
+    if (catalogItr == _catalog->Entries.end() || catalogItr->second.Count == 0)
     {
         result = HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE;
         return ObjectGuid::Empty;
@@ -842,14 +1026,15 @@ void Housing::CancelPendingPlacement(ObjectGuid decorGuid)
 HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntryId, float x, float y, float z,
     float rotX, float rotY, float rotZ, float rotW, ObjectGuid roomGuid)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
         !std::isfinite(rotX) || !std::isfinite(rotY) || !std::isfinite(rotZ) || !std::isfinite(rotW))
         return HOUSING_RESULT_BOUNDS_FAILURE_ROOM;
 
-    HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(decorEntryId, Position(x, y, z), _level);
+    HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(decorEntryId, Position(x, y, z), _state->Level);
     if (validationResult != HOUSING_RESULT_SUCCESS)
         return validationResult;
 
@@ -864,7 +1049,7 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntr
     // -entry-id>-counter=Y (arg2=1 etc.). AttachParent is always Empty.
     //
     // Detect the plot exterior room identity and route it to the exterior
-    // budget/skip the interior _rooms lookup, while preserving the RoomGuid
+    // budget/skip the interior _state->Rooms lookup, while preserving the RoomGuid
     // as-sent so downstream consumers (DB row, move/remove round-trips) still
     // see what retail sends.
     bool const isExterior = IsExteriorDecorPlacement(roomGuid);
@@ -877,23 +1062,23 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntr
     uint32 weightCost = sHousingMgr.GetDecorWeightCost(decorEntryId);
     if (isExterior)
     {
-        if (_exteriorDecorWeightUsed + weightCost > GetMaxExteriorDecorBudget())
+        if (_state->ExteriorDecorWeightUsed + weightCost > GetMaxExteriorDecorBudget())
             return HOUSING_RESULT_MAX_PLACED_DECOR_REACHED;
     }
     else
     {
-        if (_interiorDecorWeightUsed + weightCost > GetMaxInteriorDecorBudget())
+        if (_state->InteriorDecorWeightUsed + weightCost > GetMaxInteriorDecorBudget())
             return HOUSING_RESULT_MAX_PLACED_DECOR_REACHED;
     }
 
     if (!isExterior)
     {
-        auto roomItr = _rooms.find(roomGuid);
-        if (roomItr == _rooms.end())
+        auto roomItr = _state->Rooms.find(roomGuid);
+        if (roomItr == _state->Rooms.end())
             return HOUSING_RESULT_ROOM_NOT_FOUND;
 
         uint32 roomDecorCount = 0;
-        for (auto const& [guid, decor] : _placedDecor)
+        for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
         {
             if (decor.RoomGuid == roomGuid)
                 ++roomDecorCount;
@@ -902,20 +1087,20 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntr
             return HOUSING_RESULT_MAX_PLACED_DECOR_REACHED;
     }
 
-    auto catalogItr = _catalog.find(decorEntryId);
-    if (catalogItr == _catalog.end() || catalogItr->second.Count == 0)
+    auto catalogItr = _catalog->Entries.find(decorEntryId);
+    if (catalogItr == _catalog->Entries.end() || catalogItr->second.Count == 0)
         return HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE;
 
     // H-09: decorGuid arrives from the client on the fallback path (no matching pending
     // placement), and used to be trusted as the map key and the DB row id without ever
     // being checked. Two consequences, both closed here.
     //
-    // 1. _placedDecor[decorGuid] overwrote an existing entry in place. Re-sending the GUID
+    // 1. _state->PlacedDecorByGuid[decorGuid] overwrote an existing entry in place. Re-sending the GUID
     //    of something already placed destroyed the old record: its weight was never
     //    returned to the budget (so the budget inflated permanently), the catalog was
     //    still decremented, and the player silently lost the item that had been there.
     //    Placement onto an occupied GUID is now refused instead of overwriting.
-    if (_placedDecor.contains(decorGuid))
+    if (_state->PlacedDecorByGuid.contains(decorGuid))
         return HOUSING_RESULT_INVALID_DECOR_ITEM;
 
     // 2. A client-chosen counter never advanced s_nextDecorDbId, so the generator would
@@ -932,7 +1117,7 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntr
     // M13: persist a normalized unit quaternion for a lossless cardinal round-trip.
     NormalizeDecorRotation(rotX, rotY, rotZ, rotW);
 
-    PlacedDecor& decor = _placedDecor[decorGuid];
+    PlacedDecor& decor = _state->PlacedDecorByGuid[decorGuid];
     decor.Guid = decorGuid;
     decor.DecorEntryId = decorEntryId;
     decor.PosX = x;
@@ -951,35 +1136,35 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntr
 
     catalogItr->second.Count--;
     if (catalogItr->second.Count == 0)
-        _catalog.erase(catalogItr);
+        _catalog->Entries.erase(catalogItr);
 
     // M2: charge the SAME budget the CHECK validated (exterior-plot rooms count
     // as exterior, not interior).
     if (isExterior)
-        _exteriorDecorWeightUsed += weightCost;
+        _state->ExteriorDecorWeightUsed += weightCost;
     else
-        _interiorDecorWeightUsed += weightCost;
+        _state->InteriorDecorWeightUsed += weightCost;
 
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_DECOR);
-        BindDecorInsert(stmt, _owner->GetGUID().GetCounter(), decorGuid, decor);
+        BindDecorInsert(stmt, GetDatabaseId(), decorGuid, decor);
         CharacterDatabase.Execute(stmt);
     }
 
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_CATALOG_COUNT);
-        auto catItr = _catalog.find(decorEntryId);
-        stmt->setUInt32(0, catItr != _catalog.end() ? catItr->second.Count : 0);
-        stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+        auto catItr = _catalog->Entries.find(decorEntryId);
+        stmt->setUInt32(0, catItr != _catalog->Entries.end() ? catItr->second.Count : 0);
+        stmt->setUInt32(1, GetOwnerAccountId());
         stmt->setUInt32(2, decorEntryId);
         CharacterDatabase.Execute(stmt);
     }
 
     if (_owner->GetSession())
-        _owner->GetSession()->GetBattlenetAccount().SetHousingDecorStorageEntry(decorGuid, _houseGuid, decor.SourceType, decor.SourceValue);
+        _owner->GetSession()->GetBattlenetAccount().SetHousingDecorStorageEntry(decorGuid, _state->HouseGuid, decor.SourceType, decor.SourceValue);
 
     TC_LOG_DEBUG("housing", "Housing::PlaceDecorWithGuid: Player {} placed decor entry {} (GUID: {}) at ({}, {}, {}) in house {}",
-        _owner->GetName(), decorEntryId, decorGuid.ToString(), x, y, z, _houseGuid.ToString());
+        _owner->GetName(), decorEntryId, decorGuid.ToString(), x, y, z, _state->HouseGuid.ToString());
 
     // CriteriaType::PlaceDecor (270, "Place any decor"). miscValue1 = HouseDecor entry so decor-scoped
     // ModifierTree conditions can still discriminate; this is the single commit point for a placement.
@@ -992,7 +1177,8 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, uint32 decorEntr
 HousingResult Housing::PlaceDecor(uint32 decorEntryId, float x, float y, float z,
     float rotX, float rotY, float rotZ, float rotW, ObjectGuid roomGuid)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     // Validate coordinate sanity (reject NaN/Inf and extreme values)
@@ -1001,7 +1187,7 @@ HousingResult Housing::PlaceDecor(uint32 decorEntryId, float x, float y, float z
         return HOUSING_RESULT_BOUNDS_FAILURE_ROOM;
 
     // Validate decor entry exists in the HousingMgr DB2 data
-    HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(decorEntryId, Position(x, y, z), _level);
+    HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(decorEntryId, Position(x, y, z), _state->Level);
     if (validationResult != HOUSING_RESULT_SUCCESS)
         return validationResult;
 
@@ -1022,26 +1208,26 @@ HousingResult Housing::PlaceDecor(uint32 decorEntryId, float x, float y, float z
     if (isExterior)
     {
         // Outdoor decor uses exterior budget
-        if (_exteriorDecorWeightUsed + weightCost > GetMaxExteriorDecorBudget())
+        if (_state->ExteriorDecorWeightUsed + weightCost > GetMaxExteriorDecorBudget())
             return HOUSING_RESULT_MAX_PLACED_DECOR_REACHED;
     }
     else
     {
         // Indoor decor uses interior budget
-        if (_interiorDecorWeightUsed + weightCost > GetMaxInteriorDecorBudget())
+        if (_state->InteriorDecorWeightUsed + weightCost > GetMaxInteriorDecorBudget())
             return HOUSING_RESULT_MAX_PLACED_DECOR_REACHED;
     }
 
     // Validate room exists if specified, and check per-room decor limit
     if (!isExterior)
     {
-        auto roomItr = _rooms.find(roomGuid);
-        if (roomItr == _rooms.end())
+        auto roomItr = _state->Rooms.find(roomGuid);
+        if (roomItr == _state->Rooms.end())
             return HOUSING_RESULT_ROOM_NOT_FOUND;
 
         // Enforce per-room decor limit
         uint32 roomDecorCount = 0;
-        for (auto const& [guid, decor] : _placedDecor)
+        for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
         {
             if (decor.RoomGuid == roomGuid)
                 ++roomDecorCount;
@@ -1051,8 +1237,8 @@ HousingResult Housing::PlaceDecor(uint32 decorEntryId, float x, float y, float z
     }
 
     // Check catalog for available copies
-    auto catalogItr = _catalog.find(decorEntryId);
-    if (catalogItr == _catalog.end() || catalogItr->second.Count == 0)
+    auto catalogItr = _catalog->Entries.find(decorEntryId);
+    if (catalogItr == _catalog->Entries.end() || catalogItr->second.Count == 0)
         return HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE;
 
     // Generate a new decor guid.
@@ -1065,7 +1251,7 @@ HousingResult Housing::PlaceDecor(uint32 decorEntryId, float x, float y, float z
     // M13: persist a normalized unit quaternion for a lossless cardinal round-trip.
     NormalizeDecorRotation(rotX, rotY, rotZ, rotW);
 
-    PlacedDecor& decor = _placedDecor[decorGuid];
+    PlacedDecor& decor = _state->PlacedDecorByGuid[decorGuid];
     decor.Guid = decorGuid;
     decor.DecorEntryId = decorEntryId;
     decor.PosX = x;
@@ -1085,39 +1271,39 @@ HousingResult Housing::PlaceDecor(uint32 decorEntryId, float x, float y, float z
     // Decrement catalog count
     catalogItr->second.Count--;
     if (catalogItr->second.Count == 0)
-        _catalog.erase(catalogItr);
+        _catalog->Entries.erase(catalogItr);
 
     // Update budget tracking (route to correct budget based on room) — M2.
     if (isExterior)
-        _exteriorDecorWeightUsed += weightCost;
+        _state->ExteriorDecorWeightUsed += weightCost;
     else
-        _interiorDecorWeightUsed += weightCost;
+        _state->InteriorDecorWeightUsed += weightCost;
 
     // Immediate persist for crash safety
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_DECOR);
-        BindDecorInsert(stmt, _owner->GetGUID().GetCounter(), decorGuid, decor);
+        BindDecorInsert(stmt, GetDatabaseId(), decorGuid, decor);
         CharacterDatabase.Execute(stmt);
     }
 
     // Also persist updated catalog count
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_CATALOG_COUNT);
-        auto catItr = _catalog.find(decorEntryId);
-        stmt->setUInt32(0, catItr != _catalog.end() ? catItr->second.Count : 0);
-        stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+        auto catItr = _catalog->Entries.find(decorEntryId);
+        stmt->setUInt32(0, catItr != _catalog->Entries.end() ? catItr->second.Count : 0);
+        stmt->setUInt32(1, GetOwnerAccountId());
         stmt->setUInt32(2, decorEntryId);
         CharacterDatabase.Execute(stmt);
     }
 
     // Update account decor storage UpdateField (only if storage is populated — not during LoadFromDB)
     if (_storagePopulated && _owner->GetSession())
-        _owner->GetSession()->GetBattlenetAccount().SetHousingDecorStorageEntry(decorGuid, _houseGuid, decor.SourceType, decor.SourceValue);
+        _owner->GetSession()->GetBattlenetAccount().SetHousingDecorStorageEntry(decorGuid, _state->HouseGuid, decor.SourceType, decor.SourceValue);
 
     TC_LOG_DEBUG("housing", "Housing::PlaceDecor: Player {} placed decor entry {} at ({}, {}, {}) in house {} (interior {}/{}, exterior {}/{})",
-        _owner->GetName(), decorEntryId, x, y, z, _houseGuid.ToString(),
-        _interiorDecorWeightUsed, GetMaxInteriorDecorBudget(),
-        _exteriorDecorWeightUsed, GetMaxExteriorDecorBudget());
+        _owner->GetName(), decorEntryId, x, y, z, _state->HouseGuid.ToString(),
+        _state->InteriorDecorWeightUsed, GetMaxInteriorDecorBudget(),
+        _state->ExteriorDecorWeightUsed, GetMaxExteriorDecorBudget());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1125,17 +1311,18 @@ HousingResult Housing::PlaceDecor(uint32 decorEntryId, float x, float y, float z
 
 uint32 Housing::PlaceStarterDecor()
 {
-    if (_houseGuid.IsEmpty() || !_owner)
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty() || !_owner)
         return 0;
 
     // Don't place if decor already exists (house already has items)
-    if (!_placedDecor.empty())
+    if (!_state->PlacedDecorByGuid.empty())
         return 0;
 
     // Find the visual room (non-base room, typically Room 1)
     ObjectGuid visualRoomGuid;
     Room const* visualRoom = nullptr;
-    for (auto const& [guid, room] : _rooms)
+    for (auto const& [guid, room] : _state->Rooms)
     {
         if (!sHousingMgr.IsBaseRoom(room.RoomEntryId))
         {
@@ -1148,7 +1335,7 @@ uint32 Housing::PlaceStarterDecor()
     if (visualRoomGuid.IsEmpty() || !visualRoom)
     {
         TC_LOG_ERROR("housing", "Housing::PlaceStarterDecor: No visual room found for house {} — cannot place starter decor",
-            _houseGuid.ToString());
+            _state->HouseGuid.ToString());
         return 0;
     }
 
@@ -1212,8 +1399,8 @@ uint32 Housing::PlaceStarterDecor()
     for (auto const& p : placements)
     {
         // Check that decor exists in catalog before placing
-        auto catalogItr = _catalog.find(p.DecorEntryId);
-        if (catalogItr == _catalog.end() || catalogItr->second.Count == 0)
+        auto catalogItr = _catalog->Entries.find(p.DecorEntryId);
+        if (catalogItr == _catalog->Entries.end() || catalogItr->second.Count == 0)
             continue;
 
         HousingResult result = PlaceDecor(p.DecorEntryId,
@@ -1230,7 +1417,7 @@ uint32 Housing::PlaceStarterDecor()
     TC_LOG_ERROR("housing", "Housing::PlaceStarterDecor: Placed {}/{} starter decor items in visual room {} "
         "for house {} (player {})",
         placedCount, uint32(placements.size()), visualRoomGuid.ToString(),
-        _houseGuid.ToString(), _owner->GetName());
+        _state->HouseGuid.ToString(), _owner->GetName());
 
     return placedCount;
 }
@@ -1238,7 +1425,8 @@ uint32 Housing::PlaceStarterDecor()
 HousingResult Housing::MoveDecor(ObjectGuid decorGuid, float x, float y, float z,
     float rotX, float rotY, float rotZ, float rotW, float scale /*= 1.0f*/)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     // Validate coordinate sanity
@@ -1252,14 +1440,14 @@ HousingResult Housing::MoveDecor(ObjectGuid decorGuid, float x, float y, float z
     if (scale > 5.0f)
         scale = 5.0f;
 
-    auto itr = _placedDecor.find(decorGuid);
-    if (itr == _placedDecor.end())
+    auto itr = _state->PlacedDecorByGuid.find(decorGuid);
+    if (itr == _state->PlacedDecorByGuid.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
     // M1: MoveDecor previously performed NO spatial validation. Route the move
     // target through the same room/plot AABB check as placement so a moved item
     // cannot be flung to arbitrary coordinates.
-    HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(itr->second.DecorEntryId, Position(x, y, z), _level);
+    HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(itr->second.DecorEntryId, Position(x, y, z), _state->Level);
     if (validationResult != HOUSING_RESULT_SUCCESS)
         return validationResult;
 
@@ -1293,12 +1481,12 @@ HousingResult Housing::MoveDecor(ObjectGuid decorGuid, float x, float y, float z
     stmt->setFloat(5, rotZ);
     stmt->setFloat(6, rotW);
     stmt->setFloat(7, scale);
-    stmt->setUInt64(8, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(8, GetDatabaseId());
     stmt->setUInt64(9, decorGuid.GetCounter());
     CharacterDatabase.Execute(stmt);
 
     TC_LOG_DEBUG("housing", "Housing::MoveDecor: Player {} moved decor {} to ({}, {}, {}) scale={:.2f} in house {}",
-        _owner->GetName(), decorGuid.ToString(), x, y, z, scale, _houseGuid.ToString());
+        _owner->GetName(), decorGuid.ToString(), x, y, z, scale, _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1306,11 +1494,12 @@ HousingResult Housing::MoveDecor(ObjectGuid decorGuid, float x, float y, float z
 
 HousingResult Housing::RemoveDecor(ObjectGuid decorGuid)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _placedDecor.find(decorGuid);
-    if (itr == _placedDecor.end())
+    auto itr = _state->PlacedDecorByGuid.find(decorGuid);
+    if (itr == _state->PlacedDecorByGuid.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
     // Sniff-verified: Lock→Remove is a valid retail flow (packet #27117 LOCK then
@@ -1322,21 +1511,21 @@ HousingResult Housing::RemoveDecor(ObjectGuid decorGuid)
     uint32 weightCost = sHousingMgr.GetDecorWeightCost(decorEntryId);
     if (IsExteriorDecorPlacement(itr->second.RoomGuid))
     {
-        if (_exteriorDecorWeightUsed >= weightCost)
-            _exteriorDecorWeightUsed -= weightCost;
+        if (_state->ExteriorDecorWeightUsed >= weightCost)
+            _state->ExteriorDecorWeightUsed -= weightCost;
         else
-            _exteriorDecorWeightUsed = 0;
+            _state->ExteriorDecorWeightUsed = 0;
     }
     else
     {
-        if (_interiorDecorWeightUsed >= weightCost)
-            _interiorDecorWeightUsed -= weightCost;
+        if (_state->InteriorDecorWeightUsed >= weightCost)
+            _state->InteriorDecorWeightUsed -= weightCost;
         else
-            _interiorDecorWeightUsed = 0;
+            _state->InteriorDecorWeightUsed = 0;
     }
 
     // Return decor to catalog, preserving source info
-    CatalogEntry& catEntry = _catalog[decorEntryId];
+    CatalogEntry& catEntry = _catalog->Entries[decorEntryId];
     catEntry.DecorEntryId = decorEntryId;
     catEntry.Count++;
     if (itr->second.SourceType != DECOR_SOURCE_STANDARD || !itr->second.SourceValue.empty())
@@ -1345,12 +1534,12 @@ HousingResult Housing::RemoveDecor(ObjectGuid decorGuid)
         catEntry.SourceValue = itr->second.SourceValue;
     }
 
-    _placedDecor.erase(itr);
+    _state->PlacedDecorByGuid.erase(itr);
 
     // Immediate persist for crash safety — delete the placed decor row
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_DECOR_SINGLE);
-        stmt->setUInt64(0, _owner->GetGUID().GetCounter());
+        stmt->setUInt64(0, GetDatabaseId());
         stmt->setUInt64(1, decorGuid.GetCounter());
         CharacterDatabase.Execute(stmt);
     }
@@ -1358,8 +1547,8 @@ HousingResult Housing::RemoveDecor(ObjectGuid decorGuid)
     // Persist updated catalog count
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_CATALOG_COUNT);
-        stmt->setUInt32(0, _catalog[decorEntryId].Count);
-        stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+        stmt->setUInt32(0, _catalog->Entries[decorEntryId].Count);
+        stmt->setUInt32(1, GetOwnerAccountId());
         stmt->setUInt32(2, decorEntryId);
         CharacterDatabase.Execute(stmt);
     }
@@ -1369,7 +1558,7 @@ HousingResult Housing::RemoveDecor(ObjectGuid decorGuid)
         _owner->GetSession()->GetBattlenetAccount().RemoveHousingDecorStorageEntry(decorGuid);
 
     TC_LOG_DEBUG("housing", "Housing::RemoveDecor: Player {} removed decor {} from house {}, returned to catalog",
-        _owner->GetName(), decorGuid.ToString(), _houseGuid.ToString());
+        _owner->GetName(), decorGuid.ToString(), _state->HouseGuid.ToString());
 
     // CriteriaType::RemoveDecor (271, "Remove any decor"). miscValue1 = the HouseDecor entry removed
     // (captured before the erase invalidated the iterator).
@@ -1381,11 +1570,12 @@ HousingResult Housing::RemoveDecor(ObjectGuid decorGuid)
 
 HousingResult Housing::CommitDecorDyes(ObjectGuid decorGuid, std::array<uint32, MAX_HOUSING_DYE_SLOTS> const& dyeSlots)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _placedDecor.find(decorGuid);
-    if (itr == _placedDecor.end())
+    auto itr = _state->PlacedDecorByGuid.find(decorGuid);
+    if (itr == _state->PlacedDecorByGuid.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
     // Validate each requested dye color exists in the palette (DyeColor.db2). A color of 0
@@ -1410,12 +1600,12 @@ HousingResult Housing::CommitDecorDyes(ObjectGuid decorGuid, std::array<uint32, 
     stmt->setUInt32(0, dyeSlots[0]);
     stmt->setUInt32(1, dyeSlots[1]);
     stmt->setUInt32(2, dyeSlots[2]);
-    stmt->setUInt64(3, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(3, GetDatabaseId());
     stmt->setUInt64(4, decorGuid.GetCounter());
     CharacterDatabase.Execute(stmt);
 
     TC_LOG_DEBUG("housing", "Housing::CommitDecorDyes: Player {} updated dyes on decor {} in house {}",
-        _owner->GetName(), decorGuid.ToString(), _houseGuid.ToString());
+        _owner->GetName(), decorGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1423,11 +1613,12 @@ HousingResult Housing::CommitDecorDyes(ObjectGuid decorGuid, std::array<uint32, 
 
 HousingResult Housing::SetDecorLocked(ObjectGuid decorGuid, bool locked)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _placedDecor.find(decorGuid);
-    if (itr == _placedDecor.end())
+    auto itr = _state->PlacedDecorByGuid.find(decorGuid);
+    if (itr == _state->PlacedDecorByGuid.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
     itr->second.Locked = locked;
@@ -1435,12 +1626,12 @@ HousingResult Housing::SetDecorLocked(ObjectGuid decorGuid, bool locked)
     // Immediate persist for crash safety
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_DECOR_LOCKED);
     stmt->setUInt8(0, locked ? 1 : 0);
-    stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(1, GetDatabaseId());
     stmt->setUInt64(2, decorGuid.GetCounter());
     CharacterDatabase.Execute(stmt);
 
     TC_LOG_DEBUG("housing", "Housing::SetDecorLocked: Player {} {} decor {} in house {}",
-        _owner->GetName(), locked ? "locked" : "unlocked", decorGuid.ToString(), _houseGuid.ToString());
+        _owner->GetName(), locked ? "locked" : "unlocked", decorGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1448,11 +1639,12 @@ HousingResult Housing::SetDecorLocked(ObjectGuid decorGuid, bool locked)
 
 HousingResult Housing::SetDecorPet(ObjectGuid decorGuid, ObjectGuid petGuid, uint8 petFlag)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _placedDecor.find(decorGuid);
-    if (itr == _placedDecor.end())
+    auto itr = _state->PlacedDecorByGuid.find(decorGuid);
+    if (itr == _state->PlacedDecorByGuid.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
     itr->second.PetGuid = petGuid;
@@ -1462,13 +1654,13 @@ HousingResult Housing::SetDecorPet(ObjectGuid decorGuid, ObjectGuid petGuid, uin
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_DECOR_PET);
     stmt->setUInt64(0, petGuid.IsEmpty() ? 0 : petGuid.GetCounter());
     stmt->setUInt8(1, petFlag);
-    stmt->setUInt64(2, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(2, GetDatabaseId());
     stmt->setUInt64(3, decorGuid.GetCounter());
     CharacterDatabase.Execute(stmt);
 
     TC_LOG_DEBUG("housing", "Housing::SetDecorPet: Player {} {} pet {} on decor {} in house {}",
         _owner->GetName(), petGuid.IsEmpty() ? "cleared" : "bound", petGuid.ToString(),
-        decorGuid.ToString(), _houseGuid.ToString());
+        decorGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1476,7 +1668,8 @@ HousingResult Housing::SetDecorPet(ObjectGuid decorGuid, ObjectGuid petGuid, uin
 
 HousingResult Housing::ResetDecor(uint8 scope, uint32* outRemoved /*= nullptr*/)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     // HousingHouseScope: 1 = Interior, 2 = Exterior. Anything else is rejected.
@@ -1485,10 +1678,10 @@ HousingResult Housing::ResetDecor(uint8 scope, uint32* outRemoved /*= nullptr*/)
 
     bool wantExterior = (scope == 2);
 
-    // Snapshot the matching guids first — RemoveDecor mutates _placedDecor.
+    // Snapshot the matching guids first — RemoveDecor mutates _state->PlacedDecorByGuid.
     std::vector<ObjectGuid> toRemove;
-    toRemove.reserve(_placedDecor.size());
-    for (auto const& [guid, decor] : _placedDecor)
+    toRemove.reserve(_state->PlacedDecorByGuid.size());
+    for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
     {
         if (IsExteriorDecorPlacement(decor.RoomGuid) == wantExterior)
             toRemove.push_back(guid);
@@ -1507,15 +1700,15 @@ HousingResult Housing::ResetDecor(uint8 scope, uint32* outRemoved /*= nullptr*/)
         *outRemoved = removed;
 
     TC_LOG_INFO("housing", "Housing::ResetDecor: Player {} reset {} scope, removed {} decor from house {}",
-        _owner->GetName(), wantExterior ? "exterior" : "interior", removed, _houseGuid.ToString());
+        _owner->GetName(), wantExterior ? "exterior" : "interior", removed, _state->HouseGuid.ToString());
 
     return HOUSING_RESULT_SUCCESS;
 }
 
 Housing::PlacedDecor const* Housing::GetPlacedDecor(ObjectGuid decorGuid) const
 {
-    auto itr = _placedDecor.find(decorGuid);
-    if (itr != _placedDecor.end())
+    auto itr = _state->PlacedDecorByGuid.find(decorGuid);
+    if (itr != _state->PlacedDecorByGuid.end())
         return &itr->second;
 
     return nullptr;
@@ -1524,15 +1717,16 @@ Housing::PlacedDecor const* Housing::GetPlacedDecor(ObjectGuid decorGuid) const
 std::vector<Housing::PlacedDecor const*> Housing::GetAllPlacedDecor() const
 {
     std::vector<PlacedDecor const*> result;
-    result.reserve(_placedDecor.size());
-    for (auto const& [guid, decor] : _placedDecor)
+    result.reserve(_state->PlacedDecorByGuid.size());
+    for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
         result.push_back(&decor);
     return result;
 }
 
 HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 orientation, bool mirrored, ObjectGuid* outRoomGuid, int32 gridX, int32 gridY, int32 floorIndex)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     // Validate room entry exists
@@ -1545,13 +1739,13 @@ HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 or
         return HOUSING_RESULT_PLOT_NOT_FOUND;
 
     // First room placed must be a base room
-    if (_rooms.empty() && !roomData->IsBaseRoom())
+    if (_state->Rooms.empty() && !roomData->IsBaseRoom())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     // Only one base room allowed
     if (roomData->IsBaseRoom())
     {
-        for (auto const& [guid, existingRoom] : _rooms)
+        for (auto const& [guid, existingRoom] : _state->Rooms)
         {
             HouseRoomData const* existingData = sHousingMgr.GetHouseRoomData(existingRoom.RoomEntryId);
             if (existingData && existingData->IsBaseRoom())
@@ -1560,28 +1754,28 @@ HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 or
     }
 
     // Non-base rooms require at least one existing room in the house
-    if (!roomData->IsBaseRoom() && _rooms.empty())
+    if (!roomData->IsBaseRoom() && _state->Rooms.empty())
         return HOUSING_RESULT_ROOM_UPDATE_FAILED;
 
     // Check room count limit
-    if (_rooms.size() >= MAX_HOUSING_ROOMS_PER_HOUSE)
+    if (_state->Rooms.size() >= MAX_HOUSING_ROOMS_PER_HOUSE)
     {
         TC_LOG_ERROR("housing", "PlaceRoom: rejected entry {} - count limit ({}/{})",
-            roomEntryId, uint32(_rooms.size()), MAX_HOUSING_ROOMS_PER_HOUSE);
+            roomEntryId, uint32(_state->Rooms.size()), MAX_HOUSING_ROOMS_PER_HOUSE);
         return HOUSING_RESULT_GENERIC_FAILURE;
     }
 
     // Check WeightCost-based room budget
     uint32 roomWeightCost = sHousingMgr.GetRoomWeightCost(roomEntryId);
-    if (_roomWeightUsed + roomWeightCost > GetMaxRoomBudget())
+    if (_state->RoomWeightUsed + roomWeightCost > GetMaxRoomBudget())
     {
         TC_LOG_ERROR("housing", "PlaceRoom: rejected entry {} - weight budget exceeded (used={} + cost={} > max={})",
-            roomEntryId, _roomWeightUsed, roomWeightCost, GetMaxRoomBudget());
+            roomEntryId, _state->RoomWeightUsed, roomWeightCost, GetMaxRoomBudget());
         return HOUSING_RESULT_GENERIC_FAILURE;
     }
 
     // Check for slot collision
-    for (auto const& [guid, room] : _rooms)
+    for (auto const& [guid, room] : _state->Rooms)
     {
         if (room.SlotIndex == slotIndex)
             return HOUSING_RESULT_PLOT_NOT_FOUND;
@@ -1597,7 +1791,7 @@ HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 or
     // arg2=roomEntryId matches retail GUID format (sniff-verified: arg2=HouseRoomID)
     ObjectGuid roomGuid = ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 2, 0, roomEntryId, newDbId);
 
-    Room& room = _rooms[roomGuid];
+    Room& room = _state->Rooms[roomGuid];
     room.Guid = roomGuid;
     room.RoomEntryId = roomEntryId;
     room.SlotIndex = slotIndex;
@@ -1612,11 +1806,11 @@ HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 or
         *outRoomGuid = roomGuid;
 
     // Update room budget tracking
-    _roomWeightUsed += roomWeightCost;
+    _state->RoomWeightUsed += roomWeightCost;
 
     TC_LOG_DEBUG("housing", "Housing::PlaceRoom: Player {} placed room entry {} at slot {} in house {} (room budget {}/{})",
-        _owner->GetName(), roomEntryId, slotIndex, _houseGuid.ToString(),
-        _roomWeightUsed, GetMaxRoomBudget());
+        _owner->GetName(), roomEntryId, slotIndex, _state->HouseGuid.ToString(),
+        _state->RoomWeightUsed, GetMaxRoomBudget());
 
     // Account-level notification: room collection update
     if (_owner->GetSession())
@@ -1632,11 +1826,12 @@ HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 or
 
 HousingResult Housing::RemoveRoom(ObjectGuid roomGuid)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     // Can't remove the base room
@@ -1645,12 +1840,12 @@ HousingResult Housing::RemoveRoom(ObjectGuid roomGuid)
         return HOUSING_RESULT_ROOM_UPDATE_FAILED;
 
     // Can't remove the last room
-    if (_rooms.size() <= 1)
+    if (_state->Rooms.size() <= 1)
         return HOUSING_RESULT_ROOM_UPDATE_FAILED;
 
     // Auto-remove any placed decor in this room (return to catalog)
     std::vector<ObjectGuid> decorToRemove;
-    for (auto const& [guid, decor] : _placedDecor)
+    for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
     {
         if (decor.RoomGuid == roomGuid)
             decorToRemove.push_back(guid);
@@ -1668,15 +1863,15 @@ HousingResult Housing::RemoveRoom(ObjectGuid roomGuid)
 
     // Refund room WeightCost budget
     uint32 roomWeightCost = sHousingMgr.GetRoomWeightCost(itr->second.RoomEntryId);
-    if (_roomWeightUsed >= roomWeightCost)
-        _roomWeightUsed -= roomWeightCost;
+    if (_state->RoomWeightUsed >= roomWeightCost)
+        _state->RoomWeightUsed -= roomWeightCost;
     else
-        _roomWeightUsed = 0;
+        _state->RoomWeightUsed = 0;
 
-    _rooms.erase(itr);
+    _state->Rooms.erase(itr);
 
     TC_LOG_DEBUG("housing", "Housing::RemoveRoom: Player {} removed room {} from house {}",
-        _owner->GetName(), roomGuid.ToString(), _houseGuid.ToString());
+        _owner->GetName(), roomGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1684,11 +1879,12 @@ HousingResult Housing::RemoveRoom(ObjectGuid roomGuid)
 
 HousingResult Housing::RotateRoom(ObjectGuid roomGuid, bool clockwise)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     Room& room = itr->second;
@@ -1700,7 +1896,7 @@ HousingResult Housing::RotateRoom(ObjectGuid roomGuid, bool clockwise)
     PersistRoomToDB(roomGuid, room);
 
     TC_LOG_DEBUG("housing", "Housing::RotateRoom: Player {} rotated room {} to orientation {} in house {}",
-        _owner->GetName(), roomGuid.ToString(), room.Orientation, _houseGuid.ToString());
+        _owner->GetName(), roomGuid.ToString(), room.Orientation, _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1708,18 +1904,19 @@ HousingResult Housing::RotateRoom(ObjectGuid roomGuid, bool clockwise)
 
 HousingResult Housing::MoveRoom(ObjectGuid roomGuid, uint32 newSlotIndex, ObjectGuid swapRoomGuid, uint32 /*swapSlotIndex*/)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     // If swapping with another room
     if (!swapRoomGuid.IsEmpty())
     {
-        auto swapItr = _rooms.find(swapRoomGuid);
-        if (swapItr == _rooms.end())
+        auto swapItr = _state->Rooms.find(swapRoomGuid);
+        if (swapItr == _state->Rooms.end())
             return HOUSING_RESULT_ROOM_NOT_FOUND;
 
         // Swap slot indices
@@ -1731,12 +1928,12 @@ HousingResult Housing::MoveRoom(ObjectGuid roomGuid, uint32 newSlotIndex, Object
         PersistRoomToDB(swapRoomGuid, swapItr->second);
 
         TC_LOG_DEBUG("housing", "Housing::MoveRoom: Player {} swapped room {} and room {} in house {}",
-            _owner->GetName(), roomGuid.ToString(), swapRoomGuid.ToString(), _houseGuid.ToString());
+            _owner->GetName(), roomGuid.ToString(), swapRoomGuid.ToString(), _state->HouseGuid.ToString());
     }
     else
     {
         // Check that target slot is not occupied
-        for (auto const& [guid, room] : _rooms)
+        for (auto const& [guid, room] : _state->Rooms)
         {
             if (guid != roomGuid && room.SlotIndex == newSlotIndex)
                 return HOUSING_RESULT_PLOT_NOT_FOUND;
@@ -1747,7 +1944,7 @@ HousingResult Housing::MoveRoom(ObjectGuid roomGuid, uint32 newSlotIndex, Object
         PersistRoomToDB(roomGuid, itr->second);
 
         TC_LOG_DEBUG("housing", "Housing::MoveRoom: Player {} moved room {} to slot {} in house {}",
-            _owner->GetName(), roomGuid.ToString(), newSlotIndex, _houseGuid.ToString());
+            _owner->GetName(), roomGuid.ToString(), newSlotIndex, _state->HouseGuid.ToString());
     }
 
     SyncUpdateFields();
@@ -1756,7 +1953,7 @@ HousingResult Housing::MoveRoom(ObjectGuid roomGuid, uint32 newSlotIndex, Object
 
 ObjectGuid Housing::FindBaseRoomGuid() const
 {
-    for (auto const& [guid, room] : _rooms)
+    for (auto const& [guid, room] : _state->Rooms)
     {
         HouseRoomData const* roomData = sHousingMgr.GetHouseRoomData(room.RoomEntryId);
         if (roomData && roomData->IsBaseRoom())
@@ -1769,7 +1966,7 @@ ObjectGuid Housing::FindBaseRoomGuid() const
 bool Housing::IsRoomGraphConnectedWithout(ObjectGuid excludeRoomGuid) const
 {
     // If only the excluded room would remain (or nothing), the graph is trivially connected
-    if (_rooms.size() <= 2)
+    if (_state->Rooms.size() <= 2)
         return true;
 
     // Find the base room as BFS start
@@ -1779,7 +1976,7 @@ bool Housing::IsRoomGraphConnectedWithout(ObjectGuid excludeRoomGuid) const
 
     // Build slot-to-guid map for remaining rooms (excluding the removed one)
     std::unordered_map<uint32 /*slotIndex*/, ObjectGuid> slotToRoom;
-    for (auto const& [guid, room] : _rooms)
+    for (auto const& [guid, room] : _state->Rooms)
     {
         if (guid != excludeRoomGuid)
             slotToRoom[room.SlotIndex] = guid;
@@ -1799,8 +1996,8 @@ bool Housing::IsRoomGraphConnectedWithout(ObjectGuid excludeRoomGuid) const
         ObjectGuid currentGuid = queue.front();
         queue.pop();
 
-        auto currentItr = _rooms.find(currentGuid);
-        if (currentItr == _rooms.end())
+        auto currentItr = _state->Rooms.find(currentGuid);
+        if (currentItr == _state->Rooms.end())
             continue;
 
         uint32 currentSlot = currentItr->second.SlotIndex;
@@ -1828,11 +2025,12 @@ bool Housing::IsRoomGraphConnectedWithout(ObjectGuid excludeRoomGuid) const
 
 HousingResult Housing::ApplyRoomTheme(ObjectGuid roomGuid, uint32 themeSetId, std::vector<uint32> const& optionIds)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     // Classify component IDs by surface type so walls/floors/ceilings can
@@ -1872,7 +2070,7 @@ HousingResult Housing::ApplyRoomTheme(ObjectGuid roomGuid, uint32 themeSetId, st
     PersistRoomToDB(roomGuid, itr->second);
 
     TC_LOG_DEBUG("housing", "Housing::ApplyRoomTheme: Player {} applied theme {} to room {} ({} options) in house {}",
-        _owner->GetName(), themeSetId, roomGuid.ToString(), optionIds.size(), _houseGuid.ToString());
+        _owner->GetName(), themeSetId, roomGuid.ToString(), optionIds.size(), _state->HouseGuid.ToString());
 
     // Account-level notification: theme collection update
     if (_owner->GetSession())
@@ -1888,11 +2086,12 @@ HousingResult Housing::ApplyRoomTheme(ObjectGuid roomGuid, uint32 themeSetId, st
 
 HousingResult Housing::ApplyRoomMaterial(ObjectGuid roomGuid, uint32 textureId, int32 colorOverride, std::vector<uint32> const& optionIds)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     // Determine which surface type(s) the component IDs target and store per-type.
@@ -1940,7 +2139,7 @@ HousingResult Housing::ApplyRoomMaterial(ObjectGuid roomGuid, uint32 textureId, 
     TC_LOG_DEBUG("housing", "Housing::ApplyRoomMaterial: Player {} applied texture {} (color {}) to room {} "
         "({} options, wall={} floor={} ceiling={}) in house {}",
         _owner->GetName(), textureId, colorOverride, roomGuid.ToString(),
-        optionIds.size(), anyWall, anyFloor, anyCeiling, _houseGuid.ToString());
+        optionIds.size(), anyWall, anyFloor, anyCeiling, _state->HouseGuid.ToString());
 
     // Account-level notification: material collection update
     if (_owner->GetSession())
@@ -1956,11 +2155,12 @@ HousingResult Housing::ApplyRoomMaterial(ObjectGuid roomGuid, uint32 textureId, 
 
 HousingResult Housing::SetDoorType(ObjectGuid roomGuid, uint32 doorTypeId, uint8 doorSlot)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     itr->second.DoorTypeId = doorTypeId;
@@ -1969,7 +2169,7 @@ HousingResult Housing::SetDoorType(ObjectGuid roomGuid, uint32 doorTypeId, uint8
     PersistRoomToDB(roomGuid, itr->second);
 
     TC_LOG_DEBUG("housing", "Housing::SetDoorType: Player {} set door type {} (slot {}) on room {} in house {}",
-        _owner->GetName(), doorTypeId, doorSlot, roomGuid.ToString(), _houseGuid.ToString());
+        _owner->GetName(), doorTypeId, doorSlot, roomGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1977,11 +2177,12 @@ HousingResult Housing::SetDoorType(ObjectGuid roomGuid, uint32 doorTypeId, uint8
 
 HousingResult Housing::SetCeilingType(ObjectGuid roomGuid, uint32 ceilingTypeId, uint8 ceilingSlot)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return HOUSING_RESULT_ROOM_NOT_FOUND;
 
     itr->second.CeilingTypeId = ceilingTypeId;
@@ -1990,7 +2191,7 @@ HousingResult Housing::SetCeilingType(ObjectGuid roomGuid, uint32 ceilingTypeId,
     PersistRoomToDB(roomGuid, itr->second);
 
     TC_LOG_DEBUG("housing", "Housing::SetCeilingType: Player {} set ceiling type {} (slot {}) on room {} in house {}",
-        _owner->GetName(), ceilingTypeId, ceilingSlot, roomGuid.ToString(), _houseGuid.ToString());
+        _owner->GetName(), ceilingTypeId, ceilingSlot, roomGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -1999,15 +2200,16 @@ HousingResult Housing::SetCeilingType(ObjectGuid roomGuid, uint32 ceilingTypeId,
 std::vector<Housing::Room const*> Housing::GetRooms() const
 {
     std::vector<Room const*> result;
-    result.reserve(_rooms.size());
-    for (auto const& [guid, room] : _rooms)
+    result.reserve(_state->Rooms.size());
+    for (auto const& [guid, room] : _state->Rooms)
         result.push_back(&room);
     return result;
 }
 
 HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionId, std::vector<uint32>* removedHookIDs /*= nullptr*/)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     // Root fixture selections (optionId == 0) use componentID as fixturePointId — skip hook validation
@@ -2043,7 +2245,7 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
 
         if (compEntry->Type == HOUSING_FIXTURE_TYPE_DOOR)
         {
-            for (auto const& [pointId, fixture] : _fixtures)
+            for (auto const& [pointId, fixture] : _state->Fixtures)
             {
                 if (pointId == fixturePointId || fixture.OptionId == 0)
                     continue;
@@ -2058,8 +2260,8 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
         }
 
         // If the target hook already has a different fixture, remove it
-        auto existingAtHook = _fixtures.find(fixturePointId);
-        if (existingAtHook != _fixtures.end() && existingAtHook->second.OptionId != 0
+        auto existingAtHook = _state->Fixtures.find(fixturePointId);
+        if (existingAtHook != _state->Fixtures.end() && existingAtHook->second.OptionId != 0
             && existingAtHook->second.OptionId != optionId)
         {
             TC_LOG_INFO("housing", "SelectFixtureOption: removing existing fixture (comp {}) at hook {} to place new comp {}",
@@ -2070,13 +2272,13 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
         // Remove all conflicting fixtures (data + DB)
         for (uint32 conflictHookId : conflictHooks)
         {
-            _fixtures.erase(conflictHookId);
+            _state->Fixtures.erase(conflictHookId);
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_FIXTURE_SINGLE);
-            stmt->setUInt64(0, _owner->GetGUID().GetCounter());
+            stmt->setUInt64(0, GetDatabaseId());
             stmt->setUInt32(1, conflictHookId);
             CharacterDatabase.Execute(stmt);
-            if (_fixtureWeightUsed > 0)
-                --_fixtureWeightUsed;
+            if (_state->FixtureWeightUsed > 0)
+                --_state->FixtureWeightUsed;
 
             // Signal the removed hookID to the caller for mesh despawning
             if (removedHookIDs)
@@ -2093,7 +2295,7 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
         {
             uint8 newType = newComp->Type;
             std::vector<uint32> toRemove;
-            for (auto const& [pointId, fixture] : _fixtures)
+            for (auto const& [pointId, fixture] : _state->Fixtures)
             {
                 if (fixture.OptionId != 0 || pointId == fixturePointId)
                     continue;
@@ -2107,32 +2309,32 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
             }
             for (uint32 oldKey : toRemove)
             {
-                _fixtures.erase(oldKey);
+                _state->Fixtures.erase(oldKey);
                 // Delete old entry from DB
                 CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_FIXTURE_SINGLE);
-                stmt->setUInt64(0, _owner->GetGUID().GetCounter());
+                stmt->setUInt64(0, GetDatabaseId());
                 stmt->setUInt32(1, oldKey);
                 CharacterDatabase.Execute(stmt);
-                if (_fixtureWeightUsed > 0)
-                    --_fixtureWeightUsed;
+                if (_state->FixtureWeightUsed > 0)
+                    --_state->FixtureWeightUsed;
             }
         }
     }
 
-    bool isNew = _fixtures.find(fixturePointId) == _fixtures.end();
-    if (isNew && _fixtures.size() >= MAX_HOUSING_FIXTURES_PER_HOUSE)
+    bool isNew = _state->Fixtures.find(fixturePointId) == _state->Fixtures.end();
+    if (isNew && _state->Fixtures.size() >= MAX_HOUSING_FIXTURES_PER_HOUSE)
         return HOUSING_RESULT_FIXTURE_NOT_FOUND;
 
     // Enforce fixture budget for new fixtures (WeightCost = 1 per fixture by default)
     uint32 const fixtureWeightCost = 1;
     if (isNew)
     {
-        if (_fixtureWeightUsed + fixtureWeightCost > GetMaxFixtureBudget())
+        if (_state->FixtureWeightUsed + fixtureWeightCost > GetMaxFixtureBudget())
             return HOUSING_RESULT_GENERIC_FAILURE;
-        _fixtureWeightUsed += fixtureWeightCost;
+        _state->FixtureWeightUsed += fixtureWeightCost;
     }
 
-    Fixture& fixture = _fixtures[fixturePointId];
+    Fixture& fixture = _state->Fixtures[fixturePointId];
     fixture.FixturePointId = fixturePointId;
     fixture.OptionId = optionId;
 
@@ -2143,15 +2345,15 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_FIXTURES);
         uint8 index = 0;
-        stmt->setUInt64(index++, _owner->GetGUID().GetCounter());
+        stmt->setUInt64(index++, GetDatabaseId());
         stmt->setUInt32(index++, fixturePointId);
         stmt->setUInt32(index++, optionId);
         CharacterDatabase.Execute(stmt);
     }
 
     TC_LOG_DEBUG("housing", "Housing::SelectFixtureOption: Player {} set fixture point {} to option {} in house {} (budget: {}/{})",
-        _owner->GetName(), fixturePointId, optionId, _houseGuid.ToString(),
-        _fixtureWeightUsed, GetMaxFixtureBudget());
+        _owner->GetName(), fixturePointId, optionId, _state->HouseGuid.ToString(),
+        _state->FixtureWeightUsed, GetMaxFixtureBudget());
 
     // Account-level notification: fixture collection update
     if (isNew && _owner->GetSession())
@@ -2167,16 +2369,17 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
 
 HousingResult Housing::RemoveFixture(uint32 componentID, uint32* outHookID /*= nullptr*/)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockState();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     // Try direct key lookup first (covers core fixtures where key == componentID)
-    auto itr = _fixtures.find(componentID);
+    auto itr = _state->Fixtures.find(componentID);
 
     // If not found by key, search by OptionId (for hook-based fixtures, key=hookID, OptionId=componentID)
-    if (itr == _fixtures.end())
+    if (itr == _state->Fixtures.end())
     {
-        for (auto it = _fixtures.begin(); it != _fixtures.end(); ++it)
+        for (auto it = _state->Fixtures.begin(); it != _state->Fixtures.end(); ++it)
         {
             if (it->second.OptionId == componentID)
             {
@@ -2186,31 +2389,31 @@ HousingResult Housing::RemoveFixture(uint32 componentID, uint32* outHookID /*= n
         }
     }
 
-    if (itr == _fixtures.end())
+    if (itr == _state->Fixtures.end())
         return HOUSING_RESULT_FIXTURE_NOT_FOUND;
 
     uint32 hookID = itr->first; // the key is either hookID or componentID for core fixtures
     if (outHookID)
         *outHookID = hookID;
 
-    _fixtures.erase(itr);
+    _state->Fixtures.erase(itr);
 
     // Immediate persist — delete single fixture from DB
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_FIXTURE_SINGLE);
-        stmt->setUInt64(0, _owner->GetGUID().GetCounter());
+        stmt->setUInt64(0, GetDatabaseId());
         stmt->setUInt32(1, hookID);
         CharacterDatabase.Execute(stmt);
     }
 
     // Refund fixture budget
     uint32 const fixtureWeightCost = 1;
-    if (_fixtureWeightUsed >= fixtureWeightCost)
-        _fixtureWeightUsed -= fixtureWeightCost;
+    if (_state->FixtureWeightUsed >= fixtureWeightCost)
+        _state->FixtureWeightUsed -= fixtureWeightCost;
 
     TC_LOG_DEBUG("housing", "Housing::RemoveFixture: Player {} removed fixture {} (hook {}) in house {} (budget: {}/{})",
-        _owner->GetName(), componentID, hookID, _houseGuid.ToString(),
-        _fixtureWeightUsed, GetMaxFixtureBudget());
+        _owner->GetName(), componentID, hookID, _state->HouseGuid.ToString(),
+        _state->FixtureWeightUsed, GetMaxFixtureBudget());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -2219,8 +2422,8 @@ HousingResult Housing::RemoveFixture(uint32 componentID, uint32* outHookID /*= n
 std::vector<Housing::Fixture const*> Housing::GetFixtures() const
 {
     std::vector<Fixture const*> result;
-    result.reserve(_fixtures.size());
-    for (auto const& [pointId, fixture] : _fixtures)
+    result.reserve(_state->Fixtures.size());
+    for (auto const& [pointId, fixture] : _state->Fixtures)
         result.push_back(&fixture);
     return result;
 }
@@ -2232,7 +2435,7 @@ std::unordered_map<uint32, uint32> Housing::GetFixtureOverrideMap() const
     // Root overrides (base, roof variants) are handled separately via GetRootComponentOverrides().
     std::unordered_map<uint32, uint32> result;
 
-    for (auto const& [pointId, fixture] : _fixtures)
+    for (auto const& [pointId, fixture] : _state->Fixtures)
     {
         if (fixture.OptionId != 0)
             result[fixture.FixturePointId] = fixture.OptionId;
@@ -2248,7 +2451,7 @@ std::unordered_map<uint8, uint32> Housing::GetRootComponentOverrides() const
     // (ParentComponentID != 0) — color variants are valid selections via SetCoreFixture.
     std::unordered_map<uint8, uint32> result;
 
-    for (auto const& [pointId, fixture] : _fixtures)
+    for (auto const& [pointId, fixture] : _state->Fixtures)
     {
         if (fixture.OptionId != 0)
             continue;
@@ -2267,10 +2470,10 @@ std::unordered_map<uint8, uint32> Housing::GetRootComponentOverrides() const
                 comp->ID, comp->Type);
             continue;
         }
-        if (_houseType != 0 && comp->HouseExteriorWmoDataID != static_cast<uint32>(_houseType))
+        if (_state->HouseType != 0 && comp->HouseExteriorWmoDataID != static_cast<uint32>(_state->HouseType))
         {
             TC_LOG_DEBUG("housing", "GetRootComponentOverrides: comp={} type={} — wmo={} != houseType={} (wrong style)",
-                comp->ID, comp->Type, comp->HouseExteriorWmoDataID, _houseType);
+                comp->ID, comp->Type, comp->HouseExteriorWmoDataID, _state->HouseType);
             continue;
         }
 
@@ -2280,7 +2483,7 @@ std::unordered_map<uint8, uint32> Housing::GetRootComponentOverrides() const
     }
 
     TC_LOG_INFO("housing", "GetRootComponentOverrides: {} types resolved from {} fixtures (houseType={})",
-        uint32(result.size()), uint32(_fixtures.size()), _houseType);
+        uint32(result.size()), uint32(_state->Fixtures.size()), _state->HouseType);
     return result;
 }
 
@@ -2288,7 +2491,7 @@ uint32 Housing::GetCoreExteriorComponentID() const
 {
     // The core fixture is the primary component set via SetCoreFixture (OptionId == 0).
     // It can be any root type — Base (9) for Alliance, or different types for Horde.
-    for (auto const& [pointId, fixture] : _fixtures)
+    for (auto const& [pointId, fixture] : _state->Fixtures)
     {
         if (fixture.OptionId == 0)
         {
@@ -2296,14 +2499,14 @@ uint32 Housing::GetCoreExteriorComponentID() const
             // Only return this fixture if it matches the current house type's WMO data.
             // When the player switches house type, old fixtures from the previous type
             // must not override the new type's default component.
-            if (comp && comp->ParentComponentID == 0 && (_houseType == 0 || comp->HouseExteriorWmoDataID == _houseType))
+            if (comp && comp->ParentComponentID == 0 && (_state->HouseType == 0 || comp->HouseExteriorWmoDataID == _state->HouseType))
                 return fixture.FixturePointId;
         }
     }
     // No explicit core fixture set — find first default root component for this house's WMO data ID.
-    if (_houseType > 0)
+    if (_state->HouseType > 0)
     {
-        auto const* roots = sHousingMgr.GetRootComponentsForWmoData(static_cast<uint32>(_houseType));
+        auto const* roots = sHousingMgr.GetRootComponentsForWmoData(static_cast<uint32>(_state->HouseType));
         if (roots)
         {
             uint32 fallbackComp = 0;
@@ -2320,7 +2523,7 @@ uint32 Housing::GetCoreExteriorComponentID() const
             if (fallbackComp)
                 return fallbackComp;
         }
-        TC_LOG_ERROR("housing", "Housing::GetCoreExteriorComponentID: No root component found for houseType={}", _houseType);
+        TC_LOG_ERROR("housing", "Housing::GetCoreExteriorComponentID: No root component found for houseType={}", _state->HouseType);
     }
     else
     {
@@ -2331,15 +2534,16 @@ uint32 Housing::GetCoreExteriorComponentID() const
 
 HousingResult Housing::AddToCatalog(uint32 decorEntryId, uint8 sourceType, std::string sourceValue)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
     // A decor entry the player has never owned before is a NEW unique collection entry
     // (CriteriaType::CollectUniqueDecor 272). The catalog is quantity-based, so "first time" is exactly
     // "no row existed before this add"; a second copy of the same entry must NOT count again.
-    bool const firstTimeAcquired = !_catalog.contains(decorEntryId);
+    bool const firstTimeAcquired = !_catalog->Entries.contains(decorEntryId);
 
-    CatalogEntry& entry = _catalog[decorEntryId];
+    CatalogEntry& entry = _catalog->Entries[decorEntryId];
     entry.DecorEntryId = decorEntryId;
     entry.Count++;
     // Store the most recent source info for this entry type.
@@ -2353,7 +2557,7 @@ HousingResult Housing::AddToCatalog(uint32 decorEntryId, uint8 sourceType, std::
     // Persist to DB immediately (crash safety).
     // Uses REPLACE INTO to handle both first-add and count-increment cases.
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_CHARACTER_HOUSING_CATALOG);
-    stmt->setUInt64(0, _owner->GetGUID().GetCounter());
+    stmt->setUInt32(0, GetOwnerAccountId());
     stmt->setUInt32(1, decorEntryId);
     stmt->setUInt32(2, entry.Count);
     stmt->setUInt8(3, entry.SourceType);
@@ -2361,7 +2565,7 @@ HousingResult Housing::AddToCatalog(uint32 decorEntryId, uint8 sourceType, std::
     CharacterDatabase.Execute(stmt);
 
     TC_LOG_DEBUG("housing", "Housing::AddToCatalog: Player {} added decor entry {} to catalog (count: {}) in house {}",
-        _owner->GetName(), decorEntryId, entry.Count, _houseGuid.ToString());
+        _owner->GetName(), decorEntryId, entry.Count, _state->HouseGuid.ToString());
 
     // CriteriaType::CollectUniqueDecor (272) - counted once per distinct HouseDecor entry ever acquired.
     if (firstTimeAcquired)
@@ -2404,19 +2608,20 @@ HousingResult Housing::AddToCatalog(uint32 decorEntryId, uint8 sourceType, std::
 
 HousingResult Housing::RemoveFromCatalog(uint32 decorEntryId)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _catalog.find(decorEntryId);
-    if (itr == _catalog.end() || itr->second.Count == 0)
+    auto itr = _catalog->Entries.find(decorEntryId);
+    if (itr == _catalog->Entries.end() || itr->second.Count == 0)
         return HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE;
 
     itr->second.Count--;
     if (itr->second.Count == 0)
-        _catalog.erase(itr);
+        _catalog->Entries.erase(itr);
 
     TC_LOG_DEBUG("housing", "Housing::RemoveFromCatalog: Player {} removed one copy of decor entry {} from catalog in house {}",
-        _owner->GetName(), decorEntryId, _houseGuid.ToString());
+        _owner->GetName(), decorEntryId, _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
@@ -2424,24 +2629,25 @@ HousingResult Housing::RemoveFromCatalog(uint32 decorEntryId)
 
 HousingResult Housing::DestroyAllCopies(uint32 decorEntryId)
 {
-    if (_houseGuid.IsEmpty())
+    auto guard = LockStateAndCatalog();
+    if (_state->HouseGuid.IsEmpty())
         return HOUSING_RESULT_HOUSE_NOT_FOUND;
 
-    auto itr = _catalog.find(decorEntryId);
-    if (itr == _catalog.end())
+    auto itr = _catalog->Entries.find(decorEntryId);
+    if (itr == _catalog->Entries.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND_IN_STORAGE;
 
     uint32 destroyedCount = itr->second.Count;
-    _catalog.erase(itr);
+    _catalog->Entries.erase(itr);
 
     // Also remove all placed decor of this entry and their storage entries
     std::vector<ObjectGuid> removedGuids;
-    for (auto it = _placedDecor.begin(); it != _placedDecor.end(); )
+    for (auto it = _state->PlacedDecorByGuid.begin(); it != _state->PlacedDecorByGuid.end(); )
     {
         if (it->second.DecorEntryId == decorEntryId)
         {
             removedGuids.push_back(it->first);
-            it = _placedDecor.erase(it);
+            it = _state->PlacedDecorByGuid.erase(it);
         }
         else
             ++it;
@@ -2456,37 +2662,51 @@ HousingResult Housing::DestroyAllCopies(uint32 decorEntryId)
     }
 
     TC_LOG_DEBUG("housing", "Housing::DestroyAllCopies: Player {} destroyed all copies ({}) of decor entry {} in house {}",
-        _owner->GetName(), destroyedCount, decorEntryId, _houseGuid.ToString());
+        _owner->GetName(), destroyedCount, decorEntryId, _state->HouseGuid.ToString());
 
     SyncUpdateFields();
     return HOUSING_RESULT_SUCCESS;
 }
 
-std::vector<Housing::CatalogEntry const*> Housing::GetCatalogEntries() const
+std::vector<Housing::CatalogEntry> Housing::GetCatalogEntries() const
 {
-    std::vector<CatalogEntry const*> result;
-    result.reserve(_catalog.size());
-    for (auto const& [entryId, entry] : _catalog)
-        result.push_back(&entry);
+    std::lock_guard<std::recursive_mutex> catalogGuard(_catalog->Lock);
+    std::vector<CatalogEntry> result;
+    result.reserve(_catalog->Entries.size());
+    for (auto const& [entryId, entry] : _catalog->Entries)
+        result.push_back(entry);
     return result;
+}
+
+std::string Housing::GetHouseName() const
+{
+    auto guard = LockState();
+    return _state->HouseName;
+}
+
+std::string Housing::GetHouseDescription() const
+{
+    auto guard = LockState();
+    return _state->HouseDescription;
 }
 
 void Housing::AddLevel(uint32 amount)
 {
-    uint32 newLevel = std::min(_level + amount, MAX_HOUSE_LEVEL);
-    if (newLevel == _level)
+    auto guard = LockState();
+    uint32 newLevel = std::min(_state->Level + amount, MAX_HOUSE_LEVEL);
+    if (newLevel == _state->Level)
         return;
 
-    _level = newLevel;
+    _state->Level = newLevel;
 
     TC_LOG_DEBUG("housing", "Housing::AddLevel: Player {} house leveled up to {} (added {}) in house {}",
-        _owner->GetName(), _level, amount, _houseGuid.ToString());
+        _owner->GetName(), _state->Level, amount, _state->HouseGuid.ToString());
 
     // Persist level/favor to DB immediately
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_LEVEL_FAVOR);
-    stmt->setUInt32(0, _level);
-    stmt->setUInt32(1, _favor);
-    stmt->setUInt64(2, _owner->GetGUID().GetCounter());
+    stmt->setUInt32(0, _state->Level);
+    stmt->setUInt32(1, _state->Favor);
+    stmt->setUInt64(2, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     RecalculateBudgets();
@@ -2499,28 +2719,29 @@ void Housing::AddLevel(uint32 amount)
     {
         WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor levelUpdate;
         levelUpdate.Result = 0;
-        levelUpdate.ChangeAmount = _favor;
-        levelUpdate.Reason = _level;
+        levelUpdate.ChangeAmount = _state->Favor;
+        levelUpdate.Reason = _state->Level;
         auto& fav = levelUpdate.Houses.emplace_back();
-        fav.HouseGUID = _houseGuid;
-        fav.HouseLevel = static_cast<int32>(_favor);
+        fav.HouseGUID = _state->HouseGuid;
+        fav.HouseLevel = static_cast<int32>(_state->Favor);
         _owner->SendDirectMessage(levelUpdate.Write());
     }
 }
 
 void Housing::AddFavor(uint64 amount, HousingFavorUpdateSource source /*= HOUSING_FAVOR_SOURCE_UNKNOWN*/, bool emitUpdate /*= true*/)
 {
-    _favor64 += amount;
-    _favor = static_cast<uint32>(std::min<uint64>(_favor64, std::numeric_limits<uint32>::max()));
+    auto guard = LockState();
+    _state->Favor64 += amount;
+    _state->Favor = static_cast<uint32>(std::min<uint64>(_state->Favor64, std::numeric_limits<uint32>::max()));
 
     TC_LOG_DEBUG("housing", "Housing::AddFavor: Player {} favor now {} (source {}) in house {}",
-        _owner->GetName(), _favor64, uint8(source), _houseGuid.ToString());
+        _owner->GetName(), _state->Favor64, uint8(source), _state->HouseGuid.ToString());
 
     // Persist level/favor to DB immediately
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_LEVEL_FAVOR);
-    stmt->setUInt32(0, _level);
-    stmt->setUInt32(1, _favor);
-    stmt->setUInt64(2, _owner->GetGUID().GetCounter());
+    stmt->setUInt32(0, _state->Level);
+    stmt->setUInt32(1, _state->Favor);
+    stmt->setUInt64(2, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     SyncUpdateFields();
@@ -2532,32 +2753,33 @@ void Housing::AddFavor(uint64 amount, HousingFavorUpdateSource source /*= HOUSIN
     {
         WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor favorUpdate;
         favorUpdate.Result = static_cast<uint8>(source);
-        favorUpdate.ChangeAmount = _favor;
-        favorUpdate.Reason = _level;
+        favorUpdate.ChangeAmount = _state->Favor;
+        favorUpdate.Reason = _state->Level;
         auto& fav = favorUpdate.Houses.emplace_back();
-        fav.HouseGUID = _houseGuid;
-        fav.HouseLevel = static_cast<int32>(_favor);
+        fav.HouseGUID = _state->HouseGuid;
+        fav.HouseLevel = static_cast<int32>(_state->Favor);
         _owner->SendDirectMessage(favorUpdate.Write());
     }
 }
 
 void Housing::OnQuestCompleted(uint32 questId)
 {
+    auto guard = LockState();
     // QuestID-based level progression
     // Check if this quest matches the next HouseLevelData entry
-    uint32 nextLevelQuestId = sHousingMgr.GetQuestForLevel(_level + 1);
+    uint32 nextLevelQuestId = sHousingMgr.GetQuestForLevel(_state->Level + 1);
     if (nextLevelQuestId > 0 && nextLevelQuestId == questId)
     {
-        uint32 previousLevel = _level;
-        _level++;
+        uint32 previousLevel = _state->Level;
+        _state->Level++;
         TC_LOG_DEBUG("housing", "Housing::OnQuestCompleted: Player {} house leveled up to {} (quest {}) in house {}",
-            _owner->GetName(), _level, questId, _houseGuid.ToString());
+            _owner->GetName(), _state->Level, questId, _state->HouseGuid.ToString());
 
         // Persist level change and recalculate budgets
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_LEVEL_FAVOR);
-        stmt->setUInt32(0, _level);
-        stmt->setUInt32(1, _favor);
-        stmt->setUInt64(2, _owner->GetGUID().GetCounter());
+        stmt->setUInt32(0, _state->Level);
+        stmt->setUInt32(1, _state->Favor);
+        stmt->setUInt64(2, GetDatabaseId());
         CharacterDatabase.Execute(stmt);
 
         RecalculateBudgets();
@@ -2570,11 +2792,11 @@ void Housing::OnQuestCompleted(uint32 questId)
         {
             WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor levelUpdate;
             levelUpdate.Result = 0;
-            levelUpdate.ChangeAmount = _favor;
-            levelUpdate.Reason = _level;
+            levelUpdate.ChangeAmount = _state->Favor;
+            levelUpdate.Reason = _state->Level;
             auto& fav = levelUpdate.Houses.emplace_back();
-            fav.HouseGUID = _houseGuid;
-            fav.HouseLevel = static_cast<int32>(_favor);
+            fav.HouseGUID = _state->HouseGuid;
+            fav.HouseLevel = static_cast<int32>(_state->Favor);
             _owner->SendDirectMessage(levelUpdate.Write());
         }
     }
@@ -2582,27 +2804,27 @@ void Housing::OnQuestCompleted(uint32 questId)
 
 uint32 Housing::GetMaxDecorCount() const
 {
-    return sHousingMgr.GetMaxDecorForLevel(_level);
+    return sHousingMgr.GetMaxDecorForLevel(_state->Level);
 }
 
 uint32 Housing::GetMaxInteriorDecorBudget() const
 {
-    return sHousingMgr.GetInteriorDecorBudgetForLevel(_level);
+    return sHousingMgr.GetInteriorDecorBudgetForLevel(_state->Level);
 }
 
 uint32 Housing::GetMaxExteriorDecorBudget() const
 {
-    return sHousingMgr.GetExteriorDecorBudgetForLevel(_level);
+    return sHousingMgr.GetExteriorDecorBudgetForLevel(_state->Level);
 }
 
 uint32 Housing::GetMaxRoomBudget() const
 {
-    return sHousingMgr.GetRoomBudgetForLevel(_level);
+    return sHousingMgr.GetRoomBudgetForLevel(_state->Level);
 }
 
 uint32 Housing::GetMaxFixtureBudget() const
 {
-    return sHousingMgr.GetFixtureBudgetForLevel(_level);
+    return sHousingMgr.GetFixtureBudgetForLevel(_state->Level);
 }
 
 bool Housing::IsExteriorDecorPlacement(ObjectGuid roomGuid)
@@ -2630,7 +2852,7 @@ HousingResult Housing::CheckLightOverlap(uint32 decorEntryId, float x, float y, 
         return HOUSING_RESULT_SUCCESS;
 
     float const radiusSq = HOUSING_LIGHT_OVERLAP_RADIUS * HOUSING_LIGHT_OVERLAP_RADIUS;
-    for (auto const& [guid, decor] : _placedDecor)
+    for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
     {
         if (guid == excludeGuid)
             continue;
@@ -2651,47 +2873,53 @@ HousingResult Housing::CheckLightOverlap(uint32 decorEntryId, float x, float y, 
 
 void Housing::RecalculateBudgets()
 {
-    _interiorDecorWeightUsed = 0;
-    _exteriorDecorWeightUsed = 0;
-    _roomWeightUsed = 0;
-    _fixtureWeightUsed = 0;
+    auto guard = LockState();
+    _state->InteriorDecorWeightUsed = 0;
+    _state->ExteriorDecorWeightUsed = 0;
+    _state->RoomWeightUsed = 0;
+    _state->FixtureWeightUsed = 0;
 
     // Sum WeightCost of all placed decor, routing to interior or exterior budget
-    for (auto const& [guid, decor] : _placedDecor)
+    for (auto const& [guid, decor] : _state->PlacedDecorByGuid)
     {
         uint32 weightCost = sHousingMgr.GetDecorWeightCost(decor.DecorEntryId);
         if (IsExteriorDecorPlacement(decor.RoomGuid))
-            _exteriorDecorWeightUsed += weightCost;
+            _state->ExteriorDecorWeightUsed += weightCost;
         else
-            _interiorDecorWeightUsed += weightCost;
+            _state->InteriorDecorWeightUsed += weightCost;
     }
 
     // Sum WeightCost of all placed rooms
-    for (auto const& [guid, room] : _rooms)
+    for (auto const& [guid, room] : _state->Rooms)
     {
         uint32 weightCost = sHousingMgr.GetRoomWeightCost(room.RoomEntryId);
-        _roomWeightUsed += weightCost;
+        _state->RoomWeightUsed += weightCost;
     }
 
     TC_LOG_DEBUG("housing", "Housing::RecalculateBudgets: Interior decor weight: {}/{}, Exterior decor weight: {}/{}, Room weight: {}/{}",
-        _interiorDecorWeightUsed, GetMaxInteriorDecorBudget(),
-        _exteriorDecorWeightUsed, GetMaxExteriorDecorBudget(),
-        _roomWeightUsed, GetMaxRoomBudget());
+        _state->InteriorDecorWeightUsed, GetMaxInteriorDecorBudget(),
+        _state->ExteriorDecorWeightUsed, GetMaxExteriorDecorBudget(),
+        _state->RoomWeightUsed, GetMaxRoomBudget());
 }
 
 void Housing::SyncUpdateFields()
 {
+    auto guard = LockState();
     if (!_owner || !_owner->GetSession())
         return;
 
-    // FHousingPlayerHouse_C belongs on the Housing/3 entity, NOT the BNetAccount entity.
-    HousingPlayerHouseEntity& houseEntity = _owner->GetSession()->GetHousingPlayerHouseEntity();
+    if (_state->HouseGuid.IsEmpty())
+        return;
+
+    // FHousingPlayerHouse_C belongs on the house's own Housing/3 entity, NOT the BNetAccount entity.
+    HousingPlayerHouseEntity& houseEntity = _owner->GetSession()->GetHousingPlayerHouseEntity(_state->HouseGuid);
     houseEntity.SetBnetAccount(_owner->GetSession()->GetBattlenetAccountGUID());
-    houseEntity.SetEntityGUID(_houseGuid);
+    houseEntity.SetCosmeticOwner(_state->CosmeticOwnerGuid);
+    houseEntity.SetEntityGUID(_state->HouseGuid);
     // HouseType and HouseSize are NOT part of this fragment (IDA-verified).
-    houseEntity.SetPlotIndex(static_cast<int32>(_plotIndex));
-    houseEntity.SetLevel(_level);
-    houseEntity.SetFavor(_favor64);
+    houseEntity.SetPlotIndex(static_cast<int32>(_state->PlotIndex));
+    houseEntity.SetLevel(_state->Level);
+    houseEntity.SetFavor(_state->Favor64);
     // Send MAX budgets — the client computes remaining locally by summing placed decor weight
     // from FHousingStorage_C entries. Sending (max - used) would cause double-subtraction.
     houseEntity.SetBudgets(
@@ -2702,13 +2930,14 @@ void Housing::SyncUpdateFields()
     );
 
     TC_LOG_DEBUG("housing", "Housing::SyncUpdateFields: EntityGUID={} BnetAccount={} PlotIndex={} Level={} Favor={} Budgets=[{},{},{},{}]",
-        _houseGuid.ToString(), _owner->GetSession()->GetBattlenetAccountGUID().ToString(),
-        _plotIndex, _level, _favor64,
+        _state->HouseGuid.ToString(), _owner->GetSession()->GetBattlenetAccountGUID().ToString(),
+        _state->PlotIndex, _state->Level, _state->Favor64,
         GetMaxInteriorDecorBudget(), GetMaxExteriorDecorBudget(), GetMaxRoomBudget(), GetMaxFixtureBudget());
 }
 
 void Housing::PopulateCatalogStorageEntries()
 {
+    auto guard = LockStateAndCatalog();
     if (!_owner || !_owner->GetSession())
         return;
 
@@ -2717,20 +2946,20 @@ void Housing::PopulateCatalogStorageEntries()
 
     Battlenet::Account& account = _owner->GetSession()->GetBattlenetAccount();
 
-    // 1. Placed decor → HouseGUID=_houseGuid, SourceType from decor instance
-    for (auto const& [decorGuid, decor] : _placedDecor)
-        account.SetHousingDecorStorageEntry(decorGuid, _houseGuid, decor.SourceType, decor.SourceValue);
+    // 1. Placed decor → HouseGUID=_state->HouseGuid, SourceType from decor instance
+    for (auto const& [decorGuid, decor] : _state->PlacedDecorByGuid)
+        account.SetHousingDecorStorageEntry(decorGuid, _state->HouseGuid, decor.SourceType, decor.SourceValue);
 
     // 2. Catalog (unplaced/available) entries → HouseGUID=Empty, SourceType=0
     // Sniff-verified: items in storage have HouseGUID=Empty, placed items have non-empty HouseGUID.
     // Catalog Count includes placed instances, so subtract them to get the storage-only count.
     std::unordered_map<uint32, uint32> placedCountByEntry;
-    for (auto const& [decorGuid, decor] : _placedDecor)
+    for (auto const& [decorGuid, decor] : _state->PlacedDecorByGuid)
         placedCountByEntry[decor.DecorEntryId]++;
 
     uint64 catalogGuidBase = _owner->GetGUID().GetCounter() * 100000;
     uint32 totalStorageItems = 0;
-    for (auto const& [entryId, entry] : _catalog)
+    for (auto const& [entryId, entry] : _catalog->Entries)
     {
         uint32 placedOfType = 0;
         auto pIt = placedCountByEntry.find(entryId);
@@ -2754,7 +2983,7 @@ void Housing::PopulateCatalogStorageEntries()
     _storagePopulated = true;
 
     TC_LOG_INFO("housing", "Housing::PopulateCatalogStorageEntries: Pushed {} placed + {} storage items ({} catalog types) for player {}",
-        uint32(_placedDecor.size()), totalStorageItems, uint32(_catalog.size()), _owner->GetGUID().ToString());
+        uint32(_state->PlacedDecorByGuid.size()), totalStorageItems, uint32(_catalog->Entries.size()), _owner->GetGUID().ToString());
 }
 
 // TODO housing Stage 2 (protocol migration): guarded with WorldPackets::Housing::HousingCatalogStateSync
@@ -2763,6 +2992,7 @@ void Housing::PopulateCatalogStorageEntries()
 #if 0
 void Housing::BuildCatalogStateSync(WorldPackets::Housing::HousingCatalogStateSync& packet) const
 {
+    auto guard = LockStateAndCatalog();
     // Encoding reference (sniff-verified on dump_12.0.1.66838_2026-04-15):
     //   bits 0-1 : HousingCatalogEntrySubtype
     //              1 = Unowned, 2 = OwnedModifiedStack, 3 = OwnedUnmodifiedStack
@@ -2778,7 +3008,7 @@ void Housing::BuildCatalogStateSync(WorldPackets::Housing::HousingCatalogStateSy
     // catalog item is placed in the world — the stack is in a "modified" state on the
     // client because the player has positioned/customized it).
     std::unordered_set<uint32> placedDecorEntries;
-    for (auto const& [decorGuid, decor] : _placedDecor)
+    for (auto const& [decorGuid, decor] : _state->PlacedDecorByGuid)
     {
         if (!decor.DecorEntryId)
             continue;
@@ -2792,13 +3022,13 @@ void Housing::BuildCatalogStateSync(WorldPackets::Housing::HousingCatalogStateSy
 
     // Remaining catalog stacks (owned count beyond what is placed) are
     // OwnedUnmodifiedStack — the storage pile the player hasn't touched.
-    for (auto const& [entryId, entry] : _catalog)
+    for (auto const& [entryId, entry] : _catalog->Entries)
     {
         if (!entry.Count)
             continue;
 
         uint32 placedOfType = 0;
-        for (auto const& [decorGuid, decor] : _placedDecor)
+        for (auto const& [decorGuid, decor] : _state->PlacedDecorByGuid)
             if (decor.DecorEntryId == entryId)
                 ++placedOfType;
 
@@ -2815,7 +3045,7 @@ void Housing::BuildCatalogStateSync(WorldPackets::Housing::HousingCatalogStateSy
     // The flag16 bit is clear on Room rows in the sniff (distribution 12/12), so we
     // mirror that exactly.
     std::unordered_set<uint32> roomEntries;
-    for (auto const& [roomGuid, room] : _rooms)
+    for (auto const& [roomGuid, room] : _state->Rooms)
     {
         if (!room.RoomEntryId)
             continue;
@@ -2831,97 +3061,103 @@ void Housing::BuildCatalogStateSync(WorldPackets::Housing::HousingCatalogStateSy
 
 void Housing::SaveSettings(uint32 settingsFlags)
 {
-    _settingsFlags = settingsFlags;
+    auto guard = LockState();
+    _state->SettingsFlags = settingsFlags;
 
     // Immediate persist for crash safety
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_SETTINGS);
-    stmt->setUInt32(0, _settingsFlags);
-    stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+    stmt->setUInt32(0, _state->SettingsFlags);
+    stmt->setUInt64(1, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     // Mirror onto the in-memory neighborhood plot so visitor permission checks
     // (CanVisitorAccessPlot) work correctly when the owner is offline.
-    if (Neighborhood* nbh = sNeighborhoodMgr.GetNeighborhood(_neighborhoodGuid))
-        nbh->UpdatePlotSettingsFlags(_owner->GetGUID(), _settingsFlags);
+    if (Neighborhood* nbh = sNeighborhoodMgr.GetNeighborhood(_state->NeighborhoodGuid))
+        nbh->UpdatePlotSettingsFlagsByHouse(_state->HouseGuid, _state->SettingsFlags);
 
     SyncUpdateFields();
 
     TC_LOG_DEBUG("housing", "Housing::SaveSettings: Player {} updated house settings to {} in house {}",
-        _owner->GetName(), settingsFlags, _houseGuid.ToString());
+        _owner->GetName(), settingsFlags, _state->HouseGuid.ToString());
 }
 
 void Housing::SetHouseNameDescription(std::string const& name, std::string const& desc)
 {
-    _houseName = name.substr(0, HOUSING_MAX_NAME_LENGTH);
-    _houseDescription = desc.substr(0, 256);
+    auto guard = LockState();
+    _state->HouseName = name.substr(0, HOUSING_MAX_NAME_LENGTH);
+    _state->HouseDescription = desc.substr(0, 256);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_NAME_DESC);
-    stmt->setString(0, _houseName);
-    stmt->setString(1, _houseDescription);
-    stmt->setUInt64(2, _owner->GetGUID().GetCounter());
+    stmt->setString(0, _state->HouseName);
+    stmt->setString(1, _state->HouseDescription);
+    stmt->setUInt64(2, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     SyncUpdateFields();
 
     TC_LOG_DEBUG("housing", "Housing::SetHouseNameDescription: Player {} set house name='{}' desc='{}' in house {}",
-        _owner->GetName(), _houseName, _houseDescription, _houseGuid.ToString());
+        _owner->GetName(), _state->HouseName, _state->HouseDescription, _state->HouseGuid.ToString());
 }
 
 void Housing::SetExteriorLocked(bool locked)
 {
-    _exteriorLocked = locked;
+    auto guard = LockState();
+    _state->ExteriorLocked = locked;
 
     // Immediate persist for crash safety
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_EXTERIOR_LOCKED);
     stmt->setUInt8(0, locked ? 1 : 0);
-    stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(1, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     SyncUpdateFields();
 
     TC_LOG_DEBUG("housing", "Housing::SetExteriorLocked: Player {} {} exterior of house {}",
-        _owner->GetName(), locked ? "locked" : "unlocked", _houseGuid.ToString());
+        _owner->GetName(), locked ? "locked" : "unlocked", _state->HouseGuid.ToString());
 }
 
 void Housing::SetHouseSize(uint8 size)
 {
-    _houseSize = size;
+    auto guard = LockState();
+    _state->HouseSize = size;
 
     // Immediate persist for crash safety
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_HOUSE_SIZE);
     stmt->setUInt8(0, size);
-    stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(1, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     SyncUpdateFields();
 
     TC_LOG_DEBUG("housing", "Housing::SetHouseSize: Player {} set house {} size to {}",
-        _owner->GetName(), _houseGuid.ToString(), size);
+        _owner->GetName(), _state->HouseGuid.ToString(), size);
 }
 
 void Housing::SetHouseType(uint32 typeId)
 {
-    _houseType = typeId;
+    auto guard = LockState();
+    _state->HouseType = typeId;
 
     // Immediate persist for crash safety
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_HOUSE_TYPE);
     stmt->setUInt32(0, typeId);
-    stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(1, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     SyncUpdateFields();
 
     TC_LOG_DEBUG("housing", "Housing::SetHouseType: Player {} set house {} type to {}",
-        _owner->GetName(), _houseGuid.ToString(), typeId);
+        _owner->GetName(), _state->HouseGuid.ToString(), typeId);
 }
 
 void Housing::SetHousePosition(float x, float y, float z, float facing)
 {
-    _housePosX = x;
-    _housePosY = y;
-    _housePosZ = z;
-    _houseFacing = facing;
-    _hasCustomPosition = true;
+    auto guard = LockState();
+    _state->HousePosX = x;
+    _state->HousePosY = y;
+    _state->HousePosZ = z;
+    _state->HouseFacing = facing;
+    _state->HasCustomPosition = true;
 
     // Immediate persist for crash safety
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_POSITION);
@@ -2929,11 +3165,11 @@ void Housing::SetHousePosition(float x, float y, float z, float facing)
     stmt->setFloat(1, y);
     stmt->setFloat(2, z);
     stmt->setFloat(3, facing);
-    stmt->setUInt64(4, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(4, GetDatabaseId());
     CharacterDatabase.Execute(stmt);
 
     TC_LOG_DEBUG("housing", "Housing::SetHousePosition: Player {} positioned house at ({}, {}, {}, {}) in house {}",
-        _owner->GetName(), x, y, z, facing, _houseGuid.ToString());
+        _owner->GetName(), x, y, z, facing, _state->HouseGuid.ToString());
 }
 
 uint64 Housing::GenerateDecorDbId()
@@ -2954,7 +3190,7 @@ void Housing::PersistRoomToDB(ObjectGuid roomGuid, Room const& room)
     stmt->setInt32(index++, room.GridX);
     stmt->setInt32(index++, room.GridY);
     stmt->setInt32(index++, room.FloorIndex);
-    stmt->setUInt32(index++, room.Orientation);
+    stmt->setUInt8(index++, uint8(room.Orientation));
     stmt->setUInt8(index++, room.Mirrored ? 1 : 0);
     stmt->setUInt32(index++, room.ThemeId);
     stmt->setUInt32(index++, room.WallTextureId);
@@ -2968,7 +3204,7 @@ void Housing::PersistRoomToDB(ObjectGuid roomGuid, Room const& room)
     stmt->setUInt32(index++, room.WallThemeId);
     stmt->setUInt32(index++, room.FloorThemeId);
     stmt->setUInt32(index++, room.CeilingThemeId);
-    stmt->setUInt64(index++, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(index++, GetDatabaseId());
     stmt->setUInt64(index++, roomGuid.GetCounter());
     CharacterDatabase.Execute(stmt);
 }
@@ -2977,34 +3213,35 @@ void Housing::PersistFixtureToDB(uint32 fixturePointId, uint32 optionId)
 {
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_FIXTURE);
     stmt->setUInt32(0, optionId);
-    stmt->setUInt64(1, _owner->GetGUID().GetCounter());
+    stmt->setUInt64(1, GetDatabaseId());
     stmt->setUInt32(2, fixturePointId);
     CharacterDatabase.Execute(stmt);
 }
 
 void Housing::PopulateStarterFixtures()
 {
+    auto guard = LockState();
     // Starter house = Base(9) + Roof(10) as root components.
     // Door(11) auto-resolves from hook system via GetDefaultFixtureForType.
     // Root components are stored as { FixturePointId = componentID, OptionId = 0 }.
-    // Only add types that don't already have a valid root in _fixtures.
+    // Only add types that don't already have a valid root in _state->Fixtures.
     static constexpr uint8 starterTypes[] = { HOUSING_FIXTURE_TYPE_BASE, HOUSING_FIXTURE_TYPE_ROOF };
 
     // Determine which root types already exist
     std::unordered_set<uint8> existingRootTypes;
-    for (auto const& [pointId, fix] : _fixtures)
+    for (auto const& [pointId, fix] : _state->Fixtures)
     {
         if (fix.OptionId != 0)
             continue;
         ExteriorComponentEntry const* comp = sExteriorComponentStore.LookupEntry(fix.FixturePointId);
         if (!comp)
             continue;
-        if (_houseType != 0 && comp->HouseExteriorWmoDataID != static_cast<uint32>(_houseType))
+        if (_state->HouseType != 0 && comp->HouseExteriorWmoDataID != static_cast<uint32>(_state->HouseType))
             continue;
         existingRootTypes.insert(comp->Type);
     }
 
-    uint64 ownerGuid = _owner->GetGUID().GetCounter();
+    uint64 houseDatabaseId = GetDatabaseId();
 
     for (uint8 fixtureType : starterTypes)
     {
@@ -3015,36 +3252,36 @@ void Housing::PopulateStarterFixtures()
             continue;
         }
 
-        uint32 compID = sHousingMgr.GetDefaultFixtureForType(fixtureType, _houseType, _houseSize);
+        uint32 compID = sHousingMgr.GetDefaultFixtureForType(fixtureType, _state->HouseType, _state->HouseSize);
         if (!compID)
         {
             TC_LOG_ERROR("housing", "Housing::PopulateStarterFixtures: No default component for type={} wmo={} size={} — skipping",
-                fixtureType, _houseType, _houseSize);
+                fixtureType, _state->HouseType, _state->HouseSize);
             continue;
         }
 
         // Insert into in-memory map
-        Fixture& fixture = _fixtures[compID];
+        Fixture& fixture = _state->Fixtures[compID];
         fixture.FixturePointId = compID;
         fixture.OptionId = 0;
 
         // Persist to DB
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_FIXTURES);
         uint8 index = 0;
-        stmt->setUInt64(index++, ownerGuid);
+        stmt->setUInt64(index++, houseDatabaseId);
         stmt->setUInt32(index++, compID);
         stmt->setUInt32(index++, 0); // OptionId = 0 (default)
         CharacterDatabase.Execute(stmt);
 
         TC_LOG_INFO("housing", "Housing::PopulateStarterFixtures: Added type={} compID={} wmo={} for player {}",
-            fixtureType, compID, _houseType, _owner->GetName());
+            fixtureType, compID, _state->HouseType, _owner->GetName());
     }
 
     // --- Starter door ---
     // Every new house starts with a door at the first door hook on the base component.
     // Check if a door fixture already exists (any hook-based fixture with a door component).
     bool hasDoor = false;
-    for (auto const& [pointId, fix] : _fixtures)
+    for (auto const& [pointId, fix] : _state->Fixtures)
     {
         if (fix.OptionId == 0)
             continue;
@@ -3060,7 +3297,7 @@ void Housing::PopulateStarterFixtures()
     {
         // Find the base component to get its door hooks
         uint32 baseCompID = 0;
-        for (auto const& [pointId, fix] : _fixtures)
+        for (auto const& [pointId, fix] : _state->Fixtures)
         {
             if (fix.OptionId != 0)
                 continue;
@@ -3090,16 +3327,16 @@ void Housing::PopulateStarterFixtures()
 
                 if (doorHookID)
                 {
-                    uint32 doorCompID = sHousingMgr.GetDefaultFixtureForType(HOUSING_FIXTURE_TYPE_DOOR, _houseType, _houseSize);
+                    uint32 doorCompID = sHousingMgr.GetDefaultFixtureForType(HOUSING_FIXTURE_TYPE_DOOR, _state->HouseType, _state->HouseSize);
                     if (doorCompID)
                     {
-                        Fixture& doorFixture = _fixtures[doorHookID];
+                        Fixture& doorFixture = _state->Fixtures[doorHookID];
                         doorFixture.FixturePointId = doorHookID;
                         doorFixture.OptionId = doorCompID;
 
                         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHARACTER_HOUSING_FIXTURES);
                         uint8 index = 0;
-                        stmt->setUInt64(index++, ownerGuid);
+                        stmt->setUInt64(index++, houseDatabaseId);
                         stmt->setUInt32(index++, doorHookID);
                         stmt->setUInt32(index++, doorCompID);
                         CharacterDatabase.Execute(stmt);
@@ -3109,7 +3346,7 @@ void Housing::PopulateStarterFixtures()
                     }
                     else
                     {
-                        TC_LOG_ERROR("housing", "Housing::PopulateStarterFixtures: No default door component for wmo={} size={}", _houseType, _houseSize);
+                        TC_LOG_ERROR("housing", "Housing::PopulateStarterFixtures: No default door component for wmo={} size={}", _state->HouseType, _state->HouseSize);
                     }
                 }
                 else
@@ -3123,27 +3360,28 @@ void Housing::PopulateStarterFixtures()
 
 Housing::Room const* Housing::GetRoom(ObjectGuid roomGuid) const
 {
-    auto itr = _rooms.find(roomGuid);
-    return itr != _rooms.end() ? &itr->second : nullptr;
+    auto itr = _state->Rooms.find(roomGuid);
+    return itr != _state->Rooms.end() ? &itr->second : nullptr;
 }
 
 uint32 Housing::GetNextRoomSlotIndex() const
 {
     uint32 nextSlot = 0;
-    for (auto const& [guid, room] : _rooms)
+    for (auto const& [guid, room] : _state->Rooms)
         nextSlot = std::max(nextSlot, room.SlotIndex + 1);
     return nextSlot;
 }
 
 void Housing::RemoveAllNonBaseRooms()
 {
-    for (auto itr = _rooms.begin(); itr != _rooms.end();)
+    auto guard = LockState();
+    for (auto itr = _state->Rooms.begin(); itr != _state->Rooms.end();)
     {
         HouseRoomData const* roomData = sHousingMgr.GetHouseRoomData(itr->second.RoomEntryId);
         if (roomData && roomData->IsBaseRoom())
             ++itr;
         else
-            itr = _rooms.erase(itr);
+            itr = _state->Rooms.erase(itr);
     }
 
     RecalculateBudgets();
@@ -3152,8 +3390,9 @@ void Housing::RemoveAllNonBaseRooms()
 
 void Housing::SetRoomAppearance(ObjectGuid roomGuid, Room const& appearance)
 {
-    auto itr = _rooms.find(roomGuid);
-    if (itr == _rooms.end())
+    auto guard = LockState();
+    auto itr = _state->Rooms.find(roomGuid);
+    if (itr == _state->Rooms.end())
         return;
 
     Room& room = itr->second;
@@ -3174,9 +3413,10 @@ void Housing::SetRoomAppearance(ObjectGuid roomGuid, Room const& appearance)
 
 void Housing::ReplaceFixtures(std::vector<Fixture> const& fixtures)
 {
-    _fixtures.clear();
+    auto guard = LockState();
+    _state->Fixtures.clear();
     for (Fixture const& fixture : fixtures)
-        _fixtures[fixture.FixturePointId] = fixture;
+        _state->Fixtures[fixture.FixturePointId] = fixture;
 
     SyncUpdateFields();
 }

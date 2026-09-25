@@ -1413,7 +1413,8 @@ void InitiativeManager::GrantMilestoneRewards(Player* player, uint32 milestoneID
         // Grant decor items if DecorID is set
         if (reward->DecorID > 0 && reward->DecorQuantity > 0)
         {
-            if (Housing* housing = player->GetHousing())
+            // The decor catalog belongs to the account, so any of its houses will do.
+            if (Housing* housing = player->GetAccountCatalogHousing())
             {
                 for (int32 i = 0; i < reward->DecorQuantity; ++i)
                     housing->AddToCatalog(static_cast<uint32>(reward->DecorID));

@@ -19,6 +19,7 @@
 #include "HousingNeighborhoodMirrorEntity.h"
 #include "BattlenetAccountMgr.h"
 #include "DatabaseEnv.h"
+#include "HousingMgr.h"
 #include "HousingPackets.h"
 #include "GameTime.h"
 #include "Log.h"
@@ -33,7 +34,7 @@ Neighborhood::Neighborhood(ObjectGuid guid) : _guid(guid)
 }
 
 bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryResult members, PreparedQueryResult invites,
-    PreparedQueryResult memberFixtures /*= nullptr*/, PreparedQueryResult memberDecor /*= nullptr*/,
+    PreparedQueryResult houses /*= nullptr*/, PreparedQueryResult memberFixtures /*= nullptr*/, PreparedQueryResult memberDecor /*= nullptr*/,
     PreparedQueryResult memberRooms /*= nullptr*/)
 {
     if (!neighborhood)
@@ -70,11 +71,8 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
         {
             Field* memberFields = members->Fetch();
 
-            //          0              1     2          3          4           5          6              7         8           9            10
-            // SELECT nm.playerGuid, nm.role, nm.joinTime, nm.plotIndex, ch.houseId, c.account, ch.houseLevel, ch.favor, ch.houseName, ch.houseType, ch.settingsFlags
-            // FROM neighborhood_members nm LEFT JOIN character_housing ch ON nm.playerGuid = ch.guid
-            //   LEFT JOIN characters c ON nm.playerGuid = c.guid
-            // WHERE nm.neighborhoodGuid = ?
+            //          0         1       2         3
+            // SELECT playerGuid, role, joinTime, plotIndex FROM neighborhood_members WHERE neighborhoodGuid = ?
 
             Member member;
             member.PlayerGuid   = ObjectGuid::Create<HighGuid::Player>(memberFields[0].GetUInt64());
@@ -83,58 +81,57 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
             member.PlotIndex    = memberFields[3].GetUInt8();
 
             _members.push_back(member);
-
-            // Build plot info from members that have plots assigned
-            if (member.PlotIndex != INVALID_PLOT_INDEX && member.PlotIndex < MAX_NEIGHBORHOOD_PLOTS)
-            {
-                _plots[member.PlotIndex].PlotIndex  = member.PlotIndex;
-                _plots[member.PlotIndex].OwnerGuid  = member.PlayerGuid;
-
-                // Resolve BNet account GUID from characters.account JOIN (column 5).
-                // The client requires non-zero HouseOwnerBnetAccountGUID on the plot AreaTrigger's
-                // FHousingPlotAreaTrigger_C fragment for IsInsidePlot() validation.
-                uint32 gameAccountId = memberFields[5].GetUInt32();
-                if (gameAccountId != 0)
-                {
-                    uint32 bnetAccountId = Battlenet::AccountMgr::GetIdByGameAccount(gameAccountId);
-                    if (bnetAccountId != 0)
-                    {
-                        _plots[member.PlotIndex].OwnerBnetGuid = ObjectGuid::Create<HighGuid::BNetAccount>(bnetAccountId);
-                        // HouseGuid counter MUST match HousingPlayerHouseEntity GUID (WorldSession.cpp),
-                        // which uses battlenetAccountId. Using ch.houseId (DB2 entry) was wrong.
-                        _plots[member.PlotIndex].HouseGuid = ObjectGuid::Create<HighGuid::Housing>(
-                            /*subType*/ 3, /*arg1*/ sRealmList->GetCurrentRealmId().Realm, /*arg2*/ 7, uint64(bnetAccountId));
-                    }
-                }
-
-                // Mirror ch.houseLevel / ch.favor / ch.houseName so the neighborhood-map
-                // hover tooltip can show real level + favor without a per-plot DB fetch.
-                // ch.* columns are NULL when the member has no character_housing row yet,
-                // in which case GetUInt*/GetString return 0/"" and we keep the defaults.
-                if (!memberFields[6].IsNull())
-                    _plots[member.PlotIndex].HouseLevel = std::max<uint8>(1, memberFields[6].GetUInt8());
-                if (!memberFields[7].IsNull())
-                    _plots[member.PlotIndex].HouseFavor = memberFields[7].GetUInt64();
-                if (!memberFields[8].IsNull())
-                    _plots[member.PlotIndex].HouseName  = memberFields[8].GetString();
-                if (!memberFields[9].IsNull())
-                    _plots[member.PlotIndex].HouseType  = memberFields[9].GetUInt32();
-                if (!memberFields[10].IsNull())
-                    _plots[member.PlotIndex].HouseSettingsFlags = memberFields[10].GetUInt32();
-
-                TC_LOG_INFO("housing", "Neighborhood::LoadFromDB plot[{}] owner={} lvl={} favor={} name='{}' "
-                    "(ch.houseLevel.IsNull={} ch.favor.IsNull={} ch.houseName.IsNull={})",
-                    member.PlotIndex, member.PlayerGuid.ToString(),
-                    _plots[member.PlotIndex].HouseLevel,
-                    _plots[member.PlotIndex].HouseFavor,
-                    _plots[member.PlotIndex].HouseName,
-                    memberFields[6].IsNull(), memberFields[7].IsNull(), memberFields[8].IsNull());
-            }
         } while (members->NextRow());
     }
 
     TC_LOG_DEBUG("housing", "Neighborhood::LoadFromDB: Loaded {} members for neighborhood '{}'",
         _members.size(), _name);
+
+    // The houses standing in this neighborhood fill the plots. The owner shown on a plot is the house's cosmetic
+    // owner; the plot belongs to the house's Battle.net account, which the client also needs on the plot's
+    // area trigger (FHousingPlotAreaTrigger_C HouseOwnerBnetAccountGUID) to know who is inside their own plot.
+    if (houses)
+    {
+        do
+        {
+            Field* houseFields = houses->Fetch();
+
+            //        0         1             2           3                 4          5          6        7          8           9
+            // SELECT guid, bnetAccountId, slot, cosmeticOwnerGuid, plotIndex, houseLevel, favor, houseName, houseType, settingsFlags
+            // FROM character_housing WHERE neighborhoodGuid = ? AND packed = 0
+            uint8 plotIndex = houseFields[4].GetUInt8();
+            if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS)
+            {
+                TC_LOG_ERROR("housing", "Neighborhood::LoadFromDB: house {} in neighborhood '{}' stands on plot {}, which does not exist",
+                    houseFields[0].GetUInt64(), _name, plotIndex);
+                continue;
+            }
+
+            PlotInfo& plot = _plots[plotIndex];
+            if (plot.IsOccupied())
+            {
+                TC_LOG_ERROR("housing", "Neighborhood::LoadFromDB: houses {} and {} in neighborhood '{}' both stand on plot {}; keeping the first",
+                    plot.HouseDatabaseId, houseFields[0].GetUInt64(), _name, plotIndex);
+                continue;
+            }
+
+            uint32 bnetAccountId = houseFields[1].GetUInt32();
+            plot.PlotIndex        = plotIndex;
+            plot.HouseDatabaseId  = houseFields[0].GetUInt64();
+            plot.OwnerBnetGuid    = ObjectGuid::Create<HighGuid::BNetAccount>(bnetAccountId);
+            plot.HouseGuid        = Housing::MakeHouseGuid(houseFields[2].GetUInt8(), bnetAccountId);
+            if (uint64 cosmeticOwner = houseFields[3].GetUInt64())
+                plot.OwnerGuid    = ObjectGuid::Create<HighGuid::Player>(cosmeticOwner);
+            plot.HouseLevel       = static_cast<uint8>(std::max<uint32>(1, houseFields[5].GetUInt32()));
+            plot.HouseFavor       = houseFields[6].GetUInt32();
+            plot.HouseName        = houseFields[7].GetString();
+            plot.HouseType        = houseFields[8].GetUInt32();
+            plot.HouseSettingsFlags = houseFields[9].GetUInt32();
+
+            TC_LOG_INFO("housing", "Neighborhood::LoadFromDB plot[{}] house={} owner={} lvl={} favor={} name='{}'",
+                plotIndex, plot.HouseGuid.ToString(), plot.OwnerGuid.ToString(), plot.HouseLevel, plot.HouseFavor, plot.HouseName);
+        } while (houses->NextRow());
+    }
 
     // Load pending invites
     if (invites)
@@ -159,13 +156,11 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
     TC_LOG_DEBUG("housing", "Neighborhood::LoadFromDB: Loaded {} pending invites for neighborhood '{}'",
         _pendingInvites.size(), _name);
 
-    // Resolve an owner's GUID to the matching plot index (for the JOIN-by-ownerGuid
-    // fixture/decor result sets below). Linear scan over _members — tiny constant
-    // given the plot cap per neighborhood, amortised by cache locality.
-    auto findPlotByOwner = [this](ObjectGuid ownerGuid) -> PlotInfo*
+    // Resolve a house database id to its plot (for the per-house fixture, decor and room result sets below).
+    auto findPlotByHouse = [this](uint64 houseDatabaseId) -> PlotInfo*
     {
         for (PlotInfo& p : _plots)
-            if (p.OwnerGuid == ownerGuid)
+            if (p.IsOccupied() && p.HouseDatabaseId == houseDatabaseId)
                 return &p;
         return nullptr;
     };
@@ -180,9 +175,8 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
         {
             Field* f = memberFixtures->Fetch();
             //   0           1                 2
-            // ownerGuid, fixturePointId, fixtureOptionId
-            ObjectGuid ownerGuid = ObjectGuid::Create<HighGuid::Player>(f[0].GetUInt64());
-            PlotInfo* plot = findPlotByOwner(ownerGuid);
+            // houseGuid, fixturePointId, fixtureOptionId
+            PlotInfo* plot = findPlotByHouse(f[0].GetUInt64());
             if (!plot)
                 continue;
             plot->Fixtures[f[1].GetUInt32()] = f[2].GetUInt32();
@@ -203,9 +197,8 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
         {
             Field* d = memberDecor->Fetch();
             //   0      1            2            3     4     5     6     7     8     9       10     11        12        13       14        15      16            17           18
-            // id, ownerGuid, houseDecorId, posX, posY, posZ, rotX, rotY, rotZ, rotW, scale, dyeSlot0, dyeSlot1, dyeSlot2, roomGuid, locked, placementTime, sourceType, sourceValue
-            ObjectGuid ownerGuid = ObjectGuid::Create<HighGuid::Player>(d[1].GetUInt64());
-            PlotInfo* plot = findPlotByOwner(ownerGuid);
+            // id, houseGuid, houseDecorId, posX, posY, posZ, rotX, rotY, rotZ, rotW, scale, dyeSlot0, dyeSlot1, dyeSlot2, roomGuid, locked, placementTime, sourceType, sourceValue
+            PlotInfo* plot = findPlotByHouse(d[1].GetUInt64());
             if (!plot)
                 continue;
 
@@ -254,9 +247,8 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
         {
             Field* r = memberRooms->Fetch();
             //   0         1       2              3           4      5      6             7            8         9          10             11              12               13              14          15        16             17           18            19             20
-            // ownerGuid, id, houseRoomId, slotIndex, gridX, gridY, floorIndex, orientation, mirrored, themeId, wallTextureId, floorTextureId, ceilingTextureId, colorOverride, doorTypeId, doorSlot, ceilingTypeId, ceilingSlot, wallThemeId, floorThemeId, ceilingThemeId
-            ObjectGuid ownerGuid = ObjectGuid::Create<HighGuid::Player>(r[0].GetUInt64());
-            PlotInfo* plot = findPlotByOwner(ownerGuid);
+            // houseGuid, id, houseRoomId, slotIndex, gridX, gridY, floorIndex, orientation, mirrored, themeId, wallTextureId, floorTextureId, ceilingTextureId, colorOverride, doorTypeId, doorSlot, ceilingTypeId, ceilingSlot, wallThemeId, floorThemeId, ceilingThemeId
+            PlotInfo* plot = findPlotByHouse(r[0].GetUInt64());
             if (!plot)
                 continue;
 
@@ -1083,7 +1075,7 @@ HousingResult Neighborhood::PurchasePlot(ObjectGuid playerGuid, uint8 plotIndex)
     return HOUSING_RESULT_SUCCESS;
 }
 
-void Neighborhood::UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, ObjectGuid ownerBnetGuid)
+void Neighborhood::UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, ObjectGuid ownerBnetGuid, uint64 houseDatabaseId /*= 0*/)
 {
     if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS || !_plots[plotIndex].IsOccupied())
     {
@@ -1092,25 +1084,88 @@ void Neighborhood::UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, Ob
         return;
     }
 
+    // A plot that already names a house is only refreshed for that house. A character can still hold a house that
+    // no longer stands here (evicted, or moved away), and its plot index must not hand this plot to her account.
+    if (_plots[plotIndex].HouseDatabaseId && _plots[plotIndex].HouseDatabaseId != houseDatabaseId)
+    {
+        TC_LOG_DEBUG("housing", "Neighborhood::UpdatePlotHouseInfo: Plot {} in neighborhood '{}' holds house {}, not house {} ({})",
+            plotIndex, _name, _plots[plotIndex].HouseDatabaseId, houseDatabaseId, houseGuid.ToString());
+        return;
+    }
+
     _plots[plotIndex].HouseGuid = houseGuid;
     _plots[plotIndex].OwnerBnetGuid = ownerBnetGuid;
+    if (houseDatabaseId)
+        _plots[plotIndex].HouseDatabaseId = houseDatabaseId;
 
     TC_LOG_DEBUG("housing", "Neighborhood::UpdatePlotHouseInfo: Plot {} updated with HouseGuid {} and BnetGuid {} in neighborhood '{}'",
         plotIndex, houseGuid.ToString(), ownerBnetGuid.ToString(), _name);
 }
 
-void Neighborhood::UpdatePlotSettingsFlags(ObjectGuid ownerGuid, uint32 settingsFlags)
+void Neighborhood::UpdatePlotSettingsFlagsByHouse(ObjectGuid houseGuid, uint32 settingsFlags)
 {
     for (PlotInfo& plot : _plots)
     {
-        if (plot.IsOccupied() && plot.OwnerGuid == ownerGuid)
+        if (plot.IsOccupied() && !houseGuid.IsEmpty() && plot.HouseGuid == houseGuid)
         {
             plot.HouseSettingsFlags = settingsFlags;
-            TC_LOG_DEBUG("housing", "Neighborhood::UpdatePlotSettingsFlags: plot {} owner {} settings=0x{:X} in '{}'",
-                plot.PlotIndex, ownerGuid.ToString(), settingsFlags, _name);
+            TC_LOG_DEBUG("housing", "Neighborhood::UpdatePlotSettingsFlagsByHouse: plot {} house {} settings=0x{:X} in '{}'",
+                plot.PlotIndex, houseGuid.ToString(), settingsFlags, _name);
             return;
         }
     }
+}
+
+void Neighborhood::UpdatePlotCosmeticOwnerByHouse(ObjectGuid houseGuid, ObjectGuid cosmeticOwnerGuid)
+{
+    for (PlotInfo& plot : _plots)
+    {
+        if (plot.IsOccupied() && !houseGuid.IsEmpty() && plot.HouseGuid == houseGuid)
+        {
+            plot.OwnerGuid = cosmeticOwnerGuid;
+            return;
+        }
+    }
+}
+
+uint32 Neighborhood::GetHouseSettingsFlags(PlotInfo const& plot) const
+{
+    if (Player* shownOwner = ObjectAccessor::FindPlayer(plot.OwnerGuid))
+        if (Housing const* housing = shownOwner->GetHousingByGuid(plot.HouseGuid))
+            return housing->GetSettingsFlags();
+
+    // Housing::SaveSettings keeps the plot's copy current, so it is right when no character of the account is online.
+    return plot.HouseSettingsFlags;
+}
+
+Neighborhood::HouseEntry Neighborhood::CheckHouseEntry(Player const* player, uint8 plotIndex, bool interior) const
+{
+    HouseEntry entry;
+    PlotInfo const* plot = GetPlotInfo(plotIndex);
+    if (!player || !plot || plot->HouseGuid.IsEmpty())
+        return entry;
+
+    entry.HouseGuid = plot->HouseGuid;
+    entry.IsOwner = player->GetSession() && plot->IsOwnedByAccount(player->GetSession()->GetBattlenetAccountGUID());
+    if (Housing const* ownHousing = player->GetHousingByGuid(plot->HouseGuid))
+        entry.SettingsFlags = ownHousing->GetSettingsFlags();
+    else
+        entry.SettingsFlags = GetHouseSettingsFlags(*plot);
+
+    entry.Allowed = entry.IsOwner || sHousingMgr.CanVisitorAccessPlot(player, plot->OwnerGuid, entry.SettingsFlags, interior);
+    return entry;
+}
+
+Neighborhood::PlotInfo const* Neighborhood::GetPlotInfoByHouse(ObjectGuid houseGuid) const
+{
+    if (houseGuid.IsEmpty())
+        return nullptr;
+
+    for (PlotInfo const& plot : _plots)
+        if (plot.IsOccupied() && plot.HouseGuid == houseGuid)
+            return &plot;
+
+    return nullptr;
 }
 
 HousingResult Neighborhood::MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotIndex)

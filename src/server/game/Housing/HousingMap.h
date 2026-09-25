@@ -42,7 +42,8 @@ public:
     bool AddPlayerToMap(Player* player, bool initPlayer = true) override;
     void RemovePlayerFromMap(Player* player, bool remove) override;
 
-    Housing* GetHousingForPlayer(ObjectGuid playerGuid) const;
+    // The live Housing of a house whose account has a character on this map, or nothing.
+    Housing* GetHousingForHouse(ObjectGuid houseGuid) const;
     AreaTrigger* GetPlotAreaTrigger(uint8 plotIndex);
     // Returns the plot index whose plot-bounds AT equals `atGuid`, or -1 when none.
     int8 GetPlotIndexForAreaTrigger(ObjectGuid atGuid) const;
@@ -57,9 +58,14 @@ public:
     void SpawnPlotGameObjects();
     void LockPlotGrids();
 
-    // Player housing instance tracking
-    void AddPlayerHousing(ObjectGuid playerGuid, Housing* housing);
-    void RemovePlayerHousing(ObjectGuid playerGuid);
+    // Live houses of the characters on this map, by house GUID. The index holds raw pointers to Housing objects
+    // that the characters own, so an entry must never outlive its Housing: a character leaving the map drops her
+    // entries, and a Housing that is destroyed while its character is still here (a relinquished, reset, evicted or
+    // forgotten house) must be dropped with ForgetHousing first. Either way the house is handed to another character
+    // of the account on this map who holds it too, if there is one.
+    void AddPlayerHousing(Housing* housing);
+    void RemovePlayerHousing(Player* player);
+    void ForgetHousing(Housing const* housing);
 
     // Fixture override map: hookID → ExteriorComponentID from player's fixture selections.
     // When provided, SpawnExtCompTree uses these instead of the DB2 default component at each hook.
@@ -218,7 +224,10 @@ public:
 private:
     uint32 _neighborhoodId;
     Neighborhood* _neighborhood;
-    std::unordered_map<ObjectGuid, Housing*> _playerHousings;
+    // Puts a house back in the index through another character on this map who holds it, skipping `leaving`.
+    void HandPlayerHousingToAnotherCharacter(ObjectGuid houseGuid, Player const* leaving);
+
+    std::unordered_map<ObjectGuid /*houseGuid*/, Housing*> _playerHousings;
     std::unordered_map<uint8, ObjectGuid> _plotAreaTriggers;
     std::unordered_map<uint8, ObjectGuid> _plotGameObjects;
 

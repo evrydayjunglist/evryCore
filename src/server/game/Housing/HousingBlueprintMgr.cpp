@@ -159,9 +159,9 @@ uint32 FixtureComponentId(HousingBlueprintFixture const& fixture)
 
 uint32 CatalogCount(Housing const& housing, uint32 decorEntryId)
 {
-    for (Housing::CatalogEntry const* entry : housing.GetCatalogEntries())
-        if (entry && entry->DecorEntryId == decorEntryId)
-            return entry->Count;
+    for (Housing::CatalogEntry const& entry : housing.GetCatalogEntries())
+        if (entry.DecorEntryId == decorEntryId)
+            return entry.Count;
     return 0;
 }
 

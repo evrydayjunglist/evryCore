@@ -384,16 +384,16 @@ void HousingSvcsUpdateHouseSettings::Read()
 {
     _worldPacket >> HouseGuid;
     _worldPacket >> OptionalInit(PlotSettingsID);
-    _worldPacket >> OptionalInit(VisitorPermissionGuid);
+    _worldPacket >> OptionalInit(NewOwnerGuid);
 
     if (PlotSettingsID)
         _worldPacket >> *PlotSettingsID;
 
-    if (VisitorPermissionGuid)
-        _worldPacket >> *VisitorPermissionGuid;
+    if (NewOwnerGuid)
+        _worldPacket >> *NewOwnerGuid;
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_UPDATE_HOUSE_SETTINGS HouseGuid: {} HasPlotSettings: {} HasVisitorPermission: {}",
-        HouseGuid.ToString(), PlotSettingsID.has_value(), VisitorPermissionGuid.has_value());
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_UPDATE_HOUSE_SETTINGS HouseGuid: {} HasPlotSettings: {} NewOwner: {}",
+        HouseGuid.ToString(), PlotSettingsID.has_value(), NewOwnerGuid ? NewOwnerGuid->ToString() : "none");
 }
 
 void HousingSvcsPlayerViewHousesByPlayer::Read()
@@ -493,9 +493,9 @@ void HousingGetPlayerPermissions::Read()
 
 void HousingSvcsGetPotentialHouseOwners::Read()
 {
-    _worldPacket >> NeighborhoodGuid;
+    _worldPacket >> HouseGuid;
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_GET_POTENTIAL_HOUSE_OWNERS NeighborhoodGuid: {}", NeighborhoodGuid.ToString());
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_GET_POTENTIAL_HOUSE_OWNERS HouseGuid: {}", HouseGuid.ToString());
 }
 
 // Retired 2026-05-12: HousingSystemGetHouseInfoAlt / HousingSystemHouseSnapshot /

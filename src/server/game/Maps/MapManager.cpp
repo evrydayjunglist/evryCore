@@ -40,10 +40,75 @@
 #include "ScenarioMgr.h"
 #include "ScriptMgr.h"
 #include "World.h"
+#include "WorldSession.h"
 #include "WorldStateMgr.h"
 
 #include <boost/dynamic_bitset.hpp>
+#include <limits>
 #include <numeric>
+
+namespace
+{
+    // The plot a house stands on, and its neighborhood. A house stands on at most one plot.
+    std::pair<Neighborhood*, Neighborhood::PlotInfo const*> FindPlotByHouse(ObjectGuid houseGuid)
+    {
+        if (houseGuid.IsEmpty())
+            return { nullptr, nullptr };
+
+        for (Neighborhood* neighborhood : sNeighborhoodMgr.GetAllNeighborhoods())
+            if (Neighborhood::PlotInfo const* plot = neighborhood->GetPlotInfoByHouse(houseGuid))
+                return { neighborhood, plot };
+
+        return { nullptr, nullptr };
+    }
+
+    // The neighborhood instance a character goes to on a neighborhood map: the one where a house of her
+    // Battle.net account stands, else one where she is a member of the roster.
+    Neighborhood* FindAccountNeighborhoodForMap(Player const* player, uint32 neighborhoodMapId)
+    {
+        for (Housing const* housing : player->GetAllHousings())
+            if (Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(housing->GetNeighborhoodGuid()))
+                if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId)
+                    return neighborhood;
+
+        for (Neighborhood* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForAccount(player))
+            if (neighborhood->GetNeighborhoodMapID() == neighborhoodMapId)
+                return neighborhood;
+
+        return nullptr;
+    }
+
+    // The house whose interior a character enters: the house the front door named (at login, Player::LoadFromDB
+    // names the house whose interior she logged out in), or, when nothing named one, the account's house for where
+    // she is, or its first house.
+    ObjectGuid ResolveInteriorHouse(Player const* player, ObjectGuid visitTarget)
+    {
+        if (!visitTarget.IsEmpty())
+            return visitTarget;
+
+        if (Housing const* housing = player->GetHousing())
+            return housing->GetHouseGuid();
+
+        std::vector<Housing const*> housings = player->GetAllHousings();
+        return housings.empty() ? ObjectGuid::Empty : housings.front()->GetHouseGuid();
+    }
+
+    // One interior instance per house, numbered by the house's database id. The house GUID's counter cannot be
+    // used: it is the Battle.net account id, the same for both houses of an account.
+    uint32 GetInteriorInstanceId(Player const* player, ObjectGuid houseGuid)
+    {
+        uint64 houseDatabaseId = 0;
+        if (Housing const* housing = player->GetHousingByGuid(houseGuid))
+            houseDatabaseId = housing->GetDatabaseId();
+        else if (Neighborhood::PlotInfo const* plot = FindPlotByHouse(houseGuid).second)
+            houseDatabaseId = plot->HouseDatabaseId;
+
+        if (!houseDatabaseId || houseDatabaseId > std::numeric_limits<uint32>::max())
+            return 0;
+
+        return uint32(houseDatabaseId);
+    }
+}
 
 MapManager::MapManager()
     : _freeInstanceIds(std::make_unique<InstanceIds>()), _nextInstanceId(0), _scheduledScripts(0)
@@ -250,15 +315,17 @@ void MapManager::PreloadHousingMaps()
     TC_LOG_INFO("server.loading", ">> Pre-loaded {} housing neighborhood maps in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
-HouseInteriorMap* MapManager::CreateHouseInterior(uint32 mapId, uint32 instanceId, Player* creator, ObjectGuid houseOwner)
+HouseInteriorMap* MapManager::CreateHouseInterior(uint32 mapId, uint32 instanceId, Player* creator, ObjectGuid houseGuid)
 {
-    // When `houseOwner` is empty the creator is entering their own interior;
-    // use the creator's GUID as the owner. Otherwise the creator is visiting
-    // someone else's plot — the HouseInteriorMap's `_owner` must point at the
-    // visited player so the spawn path loads the right house data.
-    ObjectGuid effectiveOwner = !houseOwner.IsEmpty() ? houseOwner : creator->GetGUID();
+    auto [houseNeighborhood, housePlot] = FindPlotByHouse(houseGuid);
+
+    // The map's owner is the character shown as the house's owner; the house itself is what the map is for.
+    ObjectGuid effectiveOwner = housePlot && !housePlot->OwnerGuid.IsEmpty() ? housePlot->OwnerGuid : creator->GetGUID();
+    if (Housing const* ownHousing = creator->GetHousingByGuid(houseGuid))
+        effectiveOwner = ownHousing->GetCosmeticOwnerGuid();
 
     HouseInteriorMap* map = new HouseInteriorMap(mapId, i_gridCleanUpDelay, instanceId, effectiveOwner);
+    map->SetHouseGuid(houseGuid);
     map->InitSpawnGroupState();
 
     // Store the source neighborhood info for exit teleport. Use the creator's
@@ -281,36 +348,18 @@ HouseInteriorMap* MapManager::CreateHouseInterior(uint32 mapId, uint32 instanceI
             sourceWorldMapId = creator->GetMapId();
     }
 
-    // Resolve the plot index being visited. For own-interior the creator's
-    // Housing has it; for a visit we look up the owner's plot in their
-    // neighborhood.
-    if (houseOwner.IsEmpty())
-    {
-        if (Housing* housing = creator->GetHousing())
-            sourcePlotIndex = housing->GetPlotIndex();
-    }
-    else
-    {
-        for (Neighborhood* nbh : sNeighborhoodMgr.GetNeighborhoodsForPlayer(houseOwner))
-        {
-            for (Neighborhood::PlotInfo const& plot : nbh->GetPlots())
-            {
-                if (plot.OwnerGuid == houseOwner)
-                {
-                    sourcePlotIndex = plot.PlotIndex;
-                    break;
-                }
-            }
-            if (sourcePlotIndex != 0)
-                break;
-        }
-    }
+    // The plot of the house being entered, for the exit teleport.
+    if (Housing const* ownHousing = creator->GetHousingByGuid(houseGuid))
+        sourcePlotIndex = ownHousing->GetPlotIndex();
+    else if (housePlot)
+        sourcePlotIndex = housePlot->PlotIndex;
 
     map->SetSourceNeighborhoodMapId(sourceWorldMapId);
     map->SetSourcePlotIndex(sourcePlotIndex);
 
-    TC_LOG_DEBUG("housing", "MapManager::CreateHouseInterior: Created interior map {} instanceId {} for owner {} (creator {}, srcMap {}, srcPlot {})",
-        mapId, instanceId, effectiveOwner.ToString(), creator->GetGUID().ToString(), sourceWorldMapId, sourcePlotIndex);
+    TC_LOG_DEBUG("housing", "MapManager::CreateHouseInterior: Created interior map {} instanceId {} for house {} owner {} (creator {}, neighborhood {}, srcMap {}, srcPlot {})",
+        mapId, instanceId, houseGuid.ToString(), effectiveOwner.ToString(), creator->GetGUID().ToString(),
+        houseNeighborhood ? houseNeighborhood->GetName() : "none", sourceWorldMapId, sourcePlotIndex);
 
     return map;
 }
@@ -416,15 +465,20 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
     }
     else if (entry->IsHouseInterior())
     {
-        // House interior: per-house instanced map. The instance id is the OWNER's
-        // GUID counter — visitors to the same neighbour's house land in the same
-        // instance and see the same rooms/decor. Default: player is entering their
-        // own house (visit target empty).
-        ObjectGuid visitTarget = player->GetHouseVisitTarget();
-        ObjectGuid effectiveOwner = !visitTarget.IsEmpty() ? visitTarget : player->GetGUID();
-        bool isVisit = !visitTarget.IsEmpty();
+        // House interior: one instance per house, so visitors to a house land in the same
+        // instance as its owners and see the same rooms and decor. The front door names the
+        // house through the visit target, for owners and visitors alike.
+        ObjectGuid houseGuid = ResolveInteriorHouse(player, player->GetHouseVisitTarget());
         player->ClearHouseVisitTarget();
-        newInstanceId = effectiveOwner.GetCounter();
+        // Any character of the house's Battle.net account enters as owner.
+        bool isVisit = !player->GetHousingByGuid(houseGuid);
+        newInstanceId = GetInteriorInstanceId(player, houseGuid);
+        if (!newInstanceId)
+        {
+            TC_LOG_ERROR("housing", "MapManager::CreateMap: Player {} has no house interior to enter (house {})",
+                player->GetGUID().ToString(), houseGuid.ToString());
+            return nullptr;
+        }
         map = FindMap_i(mapId, newInstanceId);
         if (map)
         {
@@ -437,7 +491,7 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
             // different neighborhood map entirely.
             if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(map); interiorMap && !isVisit)
             {
-                if (Housing* housing = player->GetHousing())
+                if (Housing* housing = player->GetHousingByGuid(houseGuid))
                 {
                     // FindMap(), not GetMap() - same reason as in CreateHouseInterior: this also
                     // runs from Player::LoadFromDB, before the player is on any map.
@@ -462,10 +516,10 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
         }
         else
         {
-            map = CreateHouseInterior(mapId, newInstanceId, player, isVisit ? effectiveOwner : ObjectGuid::Empty);
+            map = CreateHouseInterior(mapId, newInstanceId, player, houseGuid);
             TC_LOG_ERROR("housing", "MapManager::CreateMap: CREATED NEW HouseInteriorMap mapId={} instanceId={} "
-                "for player {} (visit={} owner={} map ptr={})",
-                mapId, newInstanceId, player->GetGUID().ToString(), isVisit, effectiveOwner.ToString(), (void*)map);
+                "for player {} (visit={} house={} map ptr={})",
+                mapId, newInstanceId, player->GetGUID().ToString(), isVisit, houseGuid.ToString(), (void*)map);
         }
     }
     else if (entry->IsNeighborhood())
@@ -474,23 +528,8 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
         uint32 neighborhoodMapId = sHousingMgr.GetNeighborhoodMapIdByWorldMap(mapId);
         TC_LOG_DEBUG("housing", "MapManager::CreateMap: Neighborhood map entry - worldMapId={} neighborhoodMapId={}", mapId, neighborhoodMapId);
 
-        Neighborhood* neighborhood = nullptr;
-
-        // Check existing membership first
-        auto playerNeighborhoods = sNeighborhoodMgr.GetNeighborhoodsForPlayer(player->GetGUID());
-        TC_LOG_DEBUG("housing", "MapManager::CreateMap: Player {} has {} neighborhood memberships",
-            player->GetGUID().ToString(), uint32(playerNeighborhoods.size()));
-
-        for (Neighborhood* n : playerNeighborhoods)
-        {
-            TC_LOG_DEBUG("housing", "MapManager::CreateMap:   - Neighborhood '{}' guid={} neighborhoodMapId={} (looking for {})",
-                n->GetName(), n->GetGuid().ToString(), n->GetNeighborhoodMapID(), neighborhoodMapId);
-            if (n->GetNeighborhoodMapID() == neighborhoodMapId)
-            {
-                neighborhood = n;
-                break;
-            }
-        }
+        // The neighborhood of the account's house on this map first, then the character's own memberships.
+        Neighborhood* neighborhood = FindAccountNeighborhoodForMap(player, neighborhoodMapId);
 
         // If the player isn't a member of any neighborhood on this map,
         // find an existing public neighborhood for map rendering only.
@@ -602,11 +641,12 @@ uint32 MapManager::FindInstanceIdForPlayer(uint32 mapId, Player const* player) c
     else if (entry->IsNeighborhood())
     {
         uint32 neighborhoodMapId = sHousingMgr.GetNeighborhoodMapIdByWorldMap(mapId);
-        for (Neighborhood* n : sNeighborhoodMgr.GetNeighborhoodsForPlayer(player->GetGUID()))
-            if (n->GetNeighborhoodMapID() == neighborhoodMapId)
-                return static_cast<uint32>(n->GetGuid().GetCounter());
+        if (Neighborhood const* neighborhood = FindAccountNeighborhoodForMap(player, neighborhoodMapId))
+            return static_cast<uint32>(neighborhood->GetGuid().GetCounter());
         return 0;
     }
+    else if (entry->IsHouseInterior())
+        return GetInteriorInstanceId(player, ResolveInteriorHouse(player, player->GetHouseVisitTarget()));
     else
     {
         return Timerunning::GetWorldInstanceId(player->GetTimerunningSeasonId(), entry->IsSplitByFaction(), player->GetTeamId()).value_or(0);

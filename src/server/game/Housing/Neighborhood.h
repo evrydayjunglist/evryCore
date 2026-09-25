@@ -29,6 +29,7 @@
 #include <unordered_map>
 #include <vector>
 
+class Player;
 class WorldPacket;
 
 namespace WorldPackets::Neighborhood
@@ -53,9 +54,15 @@ public:
     {
         uint8 PlotIndex = INVALID_PLOT_INDEX;
         ObjectGuid PlotGuid;
+        // The character shown as the house's owner (its cosmetic owner). Ownership itself is OwnerBnetGuid.
         ObjectGuid OwnerGuid;
         ObjectGuid HouseGuid;
         ObjectGuid OwnerBnetGuid;
+        // character_housing.guid of the house on this plot, 0 until the house row exists.
+        uint64 HouseDatabaseId = 0;
+
+        // A house belongs to a Battle.net account, so every character of that account owns this plot.
+        bool IsOwnedByAccount(ObjectGuid bnetAccountGuid) const { return IsOccupied() && !bnetAccountGuid.IsEmpty() && OwnerBnetGuid == bnetAccountGuid; }
 
         // Mirrored from character_housing for tooltip display of OTHER players' houses
         // on the neighborhood map (hover info). Set by Neighborhood::LoadFromDB; refreshed
@@ -115,7 +122,7 @@ public:
 
     // DB persistence
     bool LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryResult members, PreparedQueryResult invites,
-        PreparedQueryResult memberFixtures = nullptr, PreparedQueryResult memberDecor = nullptr,
+        PreparedQueryResult houses = nullptr, PreparedQueryResult memberFixtures = nullptr, PreparedQueryResult memberDecor = nullptr,
         PreparedQueryResult memberRooms = nullptr);
     void SaveToDB(CharacterDatabaseTransaction trans);
     static void DeleteFromDB(ObjectGuid::LowType guid, CharacterDatabaseTransaction trans);
@@ -163,8 +170,10 @@ public:
 
     // Plot management
     HousingResult PurchasePlot(ObjectGuid playerGuid, uint8 plotIndex);
-    void UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, ObjectGuid ownerBnetGuid);
-    void UpdatePlotSettingsFlags(ObjectGuid ownerGuid, uint32 settingsFlags);
+    void UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, ObjectGuid ownerBnetGuid, uint64 houseDatabaseId = 0);
+    // Keep the plot's copy of a house's settings and shown owner current, found by the house, not by a character.
+    void UpdatePlotSettingsFlagsByHouse(ObjectGuid houseGuid, uint32 settingsFlags);
+    void UpdatePlotCosmeticOwnerByHouse(ObjectGuid houseGuid, ObjectGuid cosmeticOwnerGuid);
     HousingResult MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotIndex);
     void SetPlotAreaTriggerGuid(uint8 plotIndex, ObjectGuid atGuid);
     // m2/A5: free the plot owned by `ownerGuid` on house delete / kiosk reset so
@@ -179,6 +188,21 @@ public:
         return (plotIndex < MAX_NEIGHBORHOOD_PLOTS && _plots[plotIndex].IsOccupied())
             ? &_plots[plotIndex] : nullptr;
     }
+
+    PlotInfo const* GetPlotInfoByHouse(ObjectGuid houseGuid) const;
+
+    // How a character may enter the plot or the house standing on it. Any character of the house's Battle.net account
+    // enters as owner; anyone else is a visitor, checked against the house's settings.
+    struct HouseEntry
+    {
+        bool Allowed = false;
+        bool IsOwner = false;
+        ObjectGuid HouseGuid;
+        uint32 SettingsFlags = 0;
+    };
+    HouseEntry CheckHouseEntry(Player const* player, uint8 plotIndex, bool interior) const;
+    // The house's current settings: from a live Housing of its account when one is online, else the plot's copy.
+    uint32 GetHouseSettingsFlags(PlotInfo const& plot) const;
 
     std::array<PlotInfo, MAX_NEIGHBORHOOD_PLOTS> const& GetPlots() const { return _plots; }
     uint32 GetOccupiedPlotCount() const;

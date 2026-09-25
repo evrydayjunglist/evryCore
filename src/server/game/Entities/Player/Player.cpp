@@ -22013,7 +22013,7 @@ void Player::_SaveMail(CharacterDatabaseTransaction trans)
             stmt->setInt64(2, m->deliver_time);
             stmt->setUInt64(3, m->money);
             stmt->setUInt64(4, m->COD);
-            stmt->setUInt32(5, uint8(m->checked));
+            stmt->setUInt32(5, m->checked);
             stmt->setUInt64(6, m->messageID);
 
             trans->Append(stmt);

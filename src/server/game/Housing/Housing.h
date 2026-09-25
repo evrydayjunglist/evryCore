@@ -144,6 +144,24 @@ public:
     // district is unpacked; when the account may not have another house, any packed house is.
     static int32 ChoosePackedHouseToUnpack(std::vector<int32> const& packedHouseWorldMapIds, int32 districtWorldMapId, bool atHouseCap);
 
+    // Whether a character may be shown as a house's owner, as the House Settings owner list marks each character
+    // (HouseOwnerError in the 12.1 client): in one of the server's public neighborhoods she must be of its faction, and
+    // in a guild neighborhood she must be in that guild. factionRestriction is NEIGHBORHOOD_FACTION_NONE for any other
+    // neighborhood, and neighborhoodGuildId is 0 outside guild neighborhoods; team is HORDE or ALLIANCE.
+    static HouseOwnerError GetHouseOwnerError(int32 factionRestriction, uint32 neighborhoodGuildId, uint32 team, uint64 characterGuildId);
+
+    // A character of the house's Battle.net account who could be shown as its owner.
+    struct OwnerCandidate
+    {
+        ObjectGuid Guid;
+        uint32 Team = 0;
+        uint64 GuildId = 0;
+    };
+    // Who is shown as a house's owner once the character shown now is deleted: the first candidate, in the order
+    // given, that GetHouseOwnerError accepts for the neighborhood the house stands in. Empty when none is, and then
+    // the house is packed.
+    static ObjectGuid ChooseNextCosmeticOwner(std::vector<OwnerCandidate> const& candidates, int32 factionRestriction, uint32 neighborhoodGuildId);
+
     // Exterior decor is stored in world coordinates, so a house that changes plot has to take it along. This moves one
     // piece so that it keeps its place and turn relative to the plot: fromPlot and toPlot are each plot's room anchor
     // (HousingMgr::GetPlotRoomAnchor).
@@ -237,6 +255,8 @@ public:
     // same account (hf1 1075094-1075101: a second character of the account is sent the buyer as CosmeticOwner).
     ObjectGuid GetCosmeticOwnerGuid() const { return _state->CosmeticOwnerGuid; }
     void SetCosmeticOwnerGuid(ObjectGuid guid);
+    // The same, with the row written in the given transaction so it is saved together with the change it belongs to.
+    void SetCosmeticOwnerGuid(ObjectGuid guid, CharacterDatabaseTransaction trans);
     // The house as the houses info, current house info and buy replies list it: GUID, cosmetic owner, neighborhood,
     // plot and house setting flags.
     void FillHouseEntry(WorldPackets::Housing::JamCliHouse& house) const;

@@ -16,6 +16,7 @@
  */
 
 #include "NeighborhoodMgr.h"
+#include "CharacterCache.h"
 #include "Containers.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
@@ -33,6 +34,7 @@
 #include "Timer.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
 
 NeighborhoodMgr& NeighborhoodMgr::Instance()
 {
@@ -1030,4 +1032,300 @@ ObjectGuid NeighborhoodMgr::GenerateNeighborhoodGuid(uint32 neighborhoodMapID)
     // NeighborhoodMap id (e.g. 1 = the Alliance map) masked it for Alliance characters and would still have
     // failed for Horde.
     return ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 4, /*arg1*/ neighborhoodMapID, /*arg2*/ 0, counter);
+}
+
+namespace
+{
+    // A character of the account that is online and holds the house. Every online character of a Battle.net account
+    // holds all of its houses and they share one stored state, so a change made through one of them reaches the
+    // others and is what they save.
+    Player* FindOnlineHouseHolder(uint32 bnetAccountId, ObjectGuid houseGuid)
+    {
+        if (!bnetAccountId || houseGuid.IsEmpty())
+            return nullptr;
+
+        for (auto const& [accountId, session] : sWorld->GetAllSessions())
+            if (session && session->GetBattlenetAccountId() == bnetAccountId)
+                if (Player* player = session->GetPlayer(); player && player->GetHousingByGuid(houseGuid))
+                    return player;
+
+        return nullptr;
+    }
+
+    // The characters of a Battle.net account, on every one of its game accounts, that are not deleted, apart from
+    // excludedGuid; oldest first, the order the House Settings owner list shows them in. Faction and guild come from
+    // the character cache, which follows guild changes at once.
+    std::vector<Housing::OwnerCandidate> LoadOwnerCandidates(uint32 bnetAccountId, ObjectGuid excludedGuid)
+    {
+        std::vector<Housing::OwnerCandidate> candidates;
+        if (!bnetAccountId)
+            return candidates;
+
+        LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_GAME_ACCOUNT_IDS);
+        loginStmt->setUInt32(0, bnetAccountId);
+        PreparedQueryResult gameAccounts = LoginDatabase.Query(loginStmt);
+        if (!gameAccounts)
+            return candidates;
+
+        std::vector<ObjectGuid::LowType> characterGuids;
+        do
+        {
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
+            stmt->setUInt32(0, gameAccounts->Fetch()[0].GetUInt32());
+            if (PreparedQueryResult characters = CharacterDatabase.Query(stmt))
+            {
+                do
+                    characterGuids.push_back(characters->Fetch()[0].GetUInt64());
+                while (characters->NextRow());
+            }
+        } while (gameAccounts->NextRow());
+
+        std::sort(characterGuids.begin(), characterGuids.end());
+        for (ObjectGuid::LowType lowGuid : characterGuids)
+        {
+            ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(lowGuid);
+            if (guid == excludedGuid)
+                continue;
+
+            CharacterCacheEntry const* character = sCharacterCache->GetCharacterCacheByGuid(guid);
+            if (!character || character->IsDeleted)
+                continue;
+
+            candidates.push_back({ guid, uint32(Player::TeamForRace(character->Race)), character->GuildId });
+        }
+
+        return candidates;
+    }
+
+    // Shows a new owner for a house: through the Housing a character of the account holds while one is online (it
+    // updates the plot), otherwise on its plot. Either way the row is written in the given transaction, so the new
+    // owner is saved together with the delete or pack it belongs to.
+    void SetHouseCosmeticOwner(Player* holder, Neighborhood* neighborhood, ObjectGuid houseGuid, uint64 houseDatabaseId,
+        ObjectGuid cosmeticOwnerGuid, CharacterDatabaseTransaction trans)
+    {
+        if (Housing* housing = holder ? holder->GetHousingByGuid(houseGuid) : nullptr)
+        {
+            housing->SetCosmeticOwnerGuid(cosmeticOwnerGuid, trans);
+            holder->SyncAccountHouseOnOtherCharacters(houseGuid);
+            return;
+        }
+
+        if (houseDatabaseId)
+        {
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_COSMETIC_OWNER);
+            stmt->setUInt64(0, cosmeticOwnerGuid.GetCounter());
+            stmt->setUInt64(1, houseDatabaseId);
+            trans->Append(stmt);
+        }
+
+        if (neighborhood)
+            neighborhood->UpdatePlotCosmeticOwnerByHouse(houseGuid, cosmeticOwnerGuid);
+    }
+}
+
+void NeighborhoodMgr::PackHouseForOwnerLoss(Neighborhood* neighborhood, uint8 plotIndex, ObjectGuid houseGuid, uint64 houseDatabaseId,
+    uint32 bnetAccountId, ObjectGuid newCosmeticOwner, bool clearCosmeticOwner, CharacterDatabaseTransaction trans)
+{
+    // Packed the way relinquishing packs a house: rooms, decor, fixtures, level and favor are kept, the row keeps the
+    // neighborhood and plot it stood on, and the plot is free at once. Unlike a relinquish, nothing is paid back: the
+    // house was not given up by choice, and no source says what retail pays in this case.
+    Player* holder = FindOnlineHouseHolder(bnetAccountId, houseGuid);
+
+    HousingMap::DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
+    neighborhood->ReleasePlotByHouse(houseGuid, trans);
+
+    if (holder)
+        holder->PackHousing(houseGuid, trans);
+    else if (houseDatabaseId)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_PLACEMENT);
+        stmt->setUInt64(0, neighborhood->GetGuid().GetCounter());
+        stmt->setUInt8(1, plotIndex);
+        stmt->setUInt8(2, 1);
+        stmt->setUInt64(3, houseDatabaseId);
+        trans->Append(stmt);
+    }
+    else
+        TC_LOG_ERROR("housing", "NeighborhoodMgr::PackHouseForOwnerLoss: house {} on plot {} of neighborhood '{}' has no row yet; only its plot was freed",
+            houseGuid.ToString(), plotIndex, neighborhood->GetName());
+
+    if (!newCosmeticOwner.IsEmpty() || clearCosmeticOwner)
+        SetHouseCosmeticOwner(holder, nullptr, houseGuid, houseDatabaseId, newCosmeticOwner, trans);
+
+    neighborhood->RefreshMirrorDataForOnlineMembers();
+
+    // The active endeavor of the account's online characters moves off the packed house.
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+        if (session && session->GetBattlenetAccountId() == bnetAccountId)
+            if (Player* player = session->GetPlayer(); player && player->IsInWorld())
+                player->UpdateInitiativeComponent();
+
+    TC_LOG_INFO("housing", "NeighborhoodMgr::PackHouseForOwnerLoss: house {} (database id {}) of Battle.net account {} is packed and plot {} of neighborhood '{}' is free; shown owner {}",
+        houseGuid.ToString(), houseDatabaseId, bnetAccountId, plotIndex, neighborhood->GetName(),
+        clearCosmeticOwner ? std::string("none") : newCosmeticOwner.IsEmpty() ? std::string("unchanged") : newCosmeticOwner.ToString());
+}
+
+void NeighborhoodMgr::OnCharacterDeleted(ObjectGuid characterGuid, CharacterDatabaseTransaction trans)
+{
+    struct AffectedHouse
+    {
+        uint64 DatabaseId = 0;
+        uint32 BnetAccountId = 0;
+        ObjectGuid HouseGuid;
+    };
+    std::vector<AffectedHouse> houses;
+    auto noteHouse = [&houses](uint64 databaseId, uint32 bnetAccountId, ObjectGuid houseGuid)
+    {
+        if (houseGuid.IsEmpty() || std::any_of(houses.begin(), houses.end(), [&houseGuid](AffectedHouse const& house) { return house.HouseGuid == houseGuid; }))
+            return;
+        houses.push_back({ databaseId, bnetAccountId, houseGuid });
+    };
+
+    // The houses whose row shows her as owner, standing or packed.
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_BY_COSMETIC_OWNER);
+    stmt->setUInt64(0, characterGuid.GetCounter());
+    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            // SELECT guid, bnetAccountId, slot
+            uint32 const bnetAccountId = fields[1].GetUInt32();
+            noteHouse(fields[0].GetUInt64(), bnetAccountId, Housing::MakeHouseGuid(fields[2].GetUInt8(), bnetAccountId));
+        } while (result->NextRow());
+    }
+
+    // The plots that show her as owner, or whose roster entry is hers (the buyer keeps the entry when House Settings
+    // names another owner). Memory is ahead of the rows while a save is still on its way.
+    for (auto const& [neighborhoodGuid, neighborhood] : _neighborhoods)
+        for (Neighborhood::PlotInfo const& plot : neighborhood->GetPlots())
+            if (plot.IsOccupied() && (plot.OwnerGuid == characterGuid || neighborhood->GetPlotHolder(plot.PlotIndex) == characterGuid))
+                noteHouse(plot.HouseDatabaseId, uint32(plot.OwnerBnetGuid.GetCounter()), plot.HouseGuid);
+
+    if (houses.empty())
+        return;
+
+    std::unordered_map<uint32, std::vector<Housing::OwnerCandidate>> candidatesByAccount;
+    for (AffectedHouse const& house : houses)
+    {
+        auto candidatesIt = candidatesByAccount.find(house.BnetAccountId);
+        if (candidatesIt == candidatesByAccount.end())
+            candidatesIt = candidatesByAccount.emplace(house.BnetAccountId, LoadOwnerCandidates(house.BnetAccountId, characterGuid)).first;
+        std::vector<Housing::OwnerCandidate> const& candidates = candidatesIt->second;
+
+        // Where the house stands and who is shown as its owner: from the Housing an online character of the account
+        // holds, else from its plot, else it is a packed house whose row names her.
+        Player* holder = FindOnlineHouseHolder(house.BnetAccountId, house.HouseGuid);
+        Housing const* housing = holder ? holder->GetHousingByGuid(house.HouseGuid) : nullptr;
+        Neighborhood* neighborhood = nullptr;
+        uint8 plotIndex = INVALID_PLOT_INDEX;
+        ObjectGuid cosmeticOwner = characterGuid;
+        if (housing)
+        {
+            cosmeticOwner = housing->GetCosmeticOwnerGuid();
+            if (!housing->IsPacked())
+            {
+                neighborhood = GetNeighborhood(housing->GetNeighborhoodGuid());
+                plotIndex = housing->GetPlotIndex();
+            }
+        }
+        else
+        {
+            for (auto const& [neighborhoodGuid, candidateNeighborhood] : _neighborhoods)
+            {
+                if (Neighborhood::PlotInfo const* plot = candidateNeighborhood->GetPlotInfoByHouse(house.HouseGuid))
+                {
+                    neighborhood = candidateNeighborhood.get();
+                    plotIndex = plot->PlotIndex;
+                    cosmeticOwner = plot->OwnerGuid;
+                    break;
+                }
+            }
+        }
+
+        // A shown owner who is not one of the account's other living characters is replaced as well: it is her, or a
+        // character deleted before houses passed on.
+        bool const ownerGone = std::none_of(candidates.begin(), candidates.end(),
+            [&cosmeticOwner](Housing::OwnerCandidate const& candidate) { return candidate.Guid == cosmeticOwner; });
+        bool const holdsPlot = neighborhood && neighborhood->GetPlotHolder(plotIndex) == characterGuid;
+        if (!ownerGone && !holdsPlot)
+            continue;
+
+        // A packed house stands in no neighborhood, so any character of the account may be shown as its owner; with
+        // none left, nobody is, and whoever unpacks it next becomes its owner.
+        ObjectGuid const anyCharacter = Housing::ChooseNextCosmeticOwner(candidates, NEIGHBORHOOD_FACTION_NONE, 0);
+        if (!neighborhood)
+        {
+            SetHouseCosmeticOwner(holder, nullptr, house.HouseGuid, house.DatabaseId, anyCharacter, trans);
+
+            TC_LOG_INFO("housing", "NeighborhoodMgr::OnCharacterDeleted: packed house {} of deleted {} now shows owner {}",
+                house.HouseGuid.ToString(), characterGuid.ToString(), anyCharacter.IsEmpty() ? std::string("none") : anyCharacter.ToString());
+            continue;
+        }
+
+        // A standing house passes to the first character of the account who may own it where it stands: of the
+        // neighborhood's faction in one of the server's public neighborhoods, in the guild in a guild neighborhood.
+        int32 const factionRestriction = neighborhood->IsServerPublic() ? neighborhood->GetFactionRestriction() : NEIGHBORHOOD_FACTION_NONE;
+        ObjectGuid const newOwner = ownerGone
+            ? Housing::ChooseNextCosmeticOwner(candidates, factionRestriction, neighborhood->GetGuildId())
+            : cosmeticOwner;
+        if (newOwner.IsEmpty())
+        {
+            // Nobody left may own it there, so it is packed, as Blizzard Watch says a deleted owner's house is.
+            PackHouseForOwnerLoss(neighborhood, plotIndex, house.HouseGuid, house.DatabaseId, house.BnetAccountId,
+                anyCharacter, anyCharacter.IsEmpty(), trans);
+            continue;
+        }
+
+        if (ownerGone)
+            SetHouseCosmeticOwner(holder, neighborhood, house.HouseGuid, house.DatabaseId, newOwner, trans);
+        if (holdsPlot)
+            neighborhood->MovePlotHolder(plotIndex, newOwner, trans);
+        neighborhood->RefreshMirrorDataForOnlineMembers();
+
+        TC_LOG_INFO("housing", "NeighborhoodMgr::OnCharacterDeleted: house {} on plot {} of neighborhood '{}' passes from deleted {} to {}",
+            house.HouseGuid.ToString(), plotIndex, neighborhood->GetName(), characterGuid.ToString(), newOwner.ToString());
+    }
+}
+
+void NeighborhoodMgr::OnGuildMemberRemoved(uint32 guildId, ObjectGuid characterGuid, CharacterDatabaseTransaction trans)
+{
+    if (!guildId || characterGuid.IsEmpty())
+        return;
+
+    struct GuildHouse
+    {
+        Neighborhood* HouseNeighborhood = nullptr;
+        uint8 PlotIndex = INVALID_PLOT_INDEX;
+        ObjectGuid HouseGuid;
+        uint64 DatabaseId = 0;
+        uint32 BnetAccountId = 0;
+    };
+    std::vector<GuildHouse> houses;
+    for (auto const& [neighborhoodGuid, neighborhood] : _neighborhoods)
+    {
+        if (neighborhood->GetGuildId() != guildId)
+            continue;
+
+        for (Neighborhood::PlotInfo const& plot : neighborhood->GetPlots())
+            if (plot.IsOccupied() && plot.OwnerGuid == characterGuid)
+                houses.push_back({ neighborhood.get(), plot.PlotIndex, plot.HouseGuid, plot.HouseDatabaseId, uint32(plot.OwnerBnetGuid.GetCounter()) });
+    }
+
+    if (houses.empty())
+        return;
+
+    // Players who leave or are removed from the guild lose the plot, and the house is packed up with its layout saved
+    // (Wowhead and Blizzard Watch). A house in a guild neighborhood may only be owned by a guild member (the 12.1
+    // client's COSMETIC_OWNER_NOT_IN_GUILD). She stays its shown owner.
+    bool const ownTransaction = !trans;
+    if (ownTransaction)
+        trans = CharacterDatabase.BeginTransaction();
+
+    for (GuildHouse const& house : houses)
+        PackHouseForOwnerLoss(house.HouseNeighborhood, house.PlotIndex, house.HouseGuid, house.DatabaseId, house.BnetAccountId,
+            ObjectGuid::Empty, false, trans);
+
+    if (ownTransaction)
+        CharacterDatabase.CommitTransaction(trans);
 }

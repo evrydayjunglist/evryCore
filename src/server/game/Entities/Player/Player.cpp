@@ -3925,6 +3925,12 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
     LoginDatabasePreparedStatement* loginStmt = nullptr;
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+    // Her houses belong to her Battle.net account. Each one she is shown as owner of passes to another character of
+    // the account, or is packed when none is left who may own it. This runs before she leaves her guild below, so a
+    // guild neighborhood house that passes to an alt in the guild is not packed for the guild leave.
+    sNeighborhoodMgr.OnCharacterDeleted(playerguid, trans);
+
     if (ObjectGuid::LowType guildId = sCharacterCache->GetCharacterGuildIdByGuid(playerguid))
         if (Guild* guild = sGuildMgr->GetGuildById(guildId))
             guild->DeleteMember(trans, playerguid, false, false);
@@ -4381,6 +4387,16 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             trans->Append(stmt);
 
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_RESEARCH_HISTORY);
+            stmt->setUInt64(0, guid);
+            trans->Append(stmt);
+
+            // Her active endeavor neighborhood and her House Finder ignore list are hers alone, and a new character
+            // can get this guid after a restart.
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD);
+            stmt->setUInt64(0, guid);
+            trans->Append(stmt);
+
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_HOUSING_IGNORED_NEIGHBORHOODS);
             stmt->setUInt64(0, guid);
             trans->Append(stmt);
 
@@ -31839,6 +31855,11 @@ Housing* Player::UnpackHousing(ObjectGuid houseGuid, ObjectGuid neighborhoodGuid
     Housing* housing = GetHousingByGuid(houseGuid);
     if (!housing || housing->Unpack(neighborhoodGuid, plotIndex, refundAmount) != HOUSING_RESULT_SUCCESS)
         return nullptr;
+
+    // A house packed when the last character of its account was deleted shows nobody as its owner; the character who
+    // unpacks it becomes its owner.
+    if (housing->GetCosmeticOwnerGuid().IsEmpty())
+        housing->SetCosmeticOwnerGuid(GetGUID());
 
     AddPlayerMirrorHouse(*housing);
 

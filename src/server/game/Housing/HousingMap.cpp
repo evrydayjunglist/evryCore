@@ -37,6 +37,7 @@
 #include "ScriptMgr.h"
 #include "HousingPackets.h"
 #include "Log.h"
+#include "MapManager.h"
 #include "MeshObject.h"
 #include "Neighborhood.h"
 #include "NeighborhoodMgr.h"
@@ -1648,6 +1649,24 @@ void HousingMap::DropHouse(ObjectGuid houseGuid)
     if (_playerHousings.erase(houseGuid))
         TC_LOG_DEBUG("housing", "HousingMap::DropHouse: House {} no longer listed on map {} instanceId {} (remaining: {})",
             houseGuid.ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
+}
+
+void HousingMap::DespawnHouseFromPlot(Neighborhood const* neighborhood, uint8 plotIndex, ObjectGuid houseGuid)
+{
+    if (!neighborhood || plotIndex == INVALID_PLOT_INDEX)
+        return;
+
+    uint32 const worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID());
+    HousingMap* housingMap = dynamic_cast<HousingMap*>(sMapMgr->FindMap(worldMapId, uint32(neighborhood->GetGuid().GetCounter())));
+    if (!housingMap || housingMap->GetNeighborhood() != neighborhood)
+        return;
+
+    housingMap->DespawnAllDecorForPlot(plotIndex);
+    housingMap->DespawnAllMeshObjectsForPlot(plotIndex);
+    housingMap->DespawnRoomForPlot(plotIndex);
+    housingMap->DespawnHouseForPlot(plotIndex);
+    housingMap->SetPlotOwnershipState(plotIndex, false);
+    housingMap->DropHouse(houseGuid);
 }
 
 void HousingMap::HandPlayerHousingToAnotherCharacter(ObjectGuid houseGuid, Player const* leaving)

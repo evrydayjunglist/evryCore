@@ -868,6 +868,110 @@ ObjectGuid Neighborhood::ReleasePlotByHouse(ObjectGuid houseGuid, CharacterDatab
     return holderGuid;
 }
 
+ObjectGuid Neighborhood::GetPlotHolder(uint8 plotIndex) const
+{
+    if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS)
+        return ObjectGuid::Empty;
+
+    auto it = std::find_if(_members.begin(), _members.end(),
+        [plotIndex](Member const& member) { return member.PlotIndex == plotIndex; });
+    return it != _members.end() ? it->PlayerGuid : ObjectGuid::Empty;
+}
+
+void Neighborhood::MovePlotHolder(uint8 plotIndex, ObjectGuid newHolderGuid, CharacterDatabaseTransaction trans)
+{
+    if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS || newHolderGuid.IsEmpty())
+        return;
+
+    auto oldIt = std::find_if(_members.begin(), _members.end(),
+        [plotIndex](Member const& member) { return member.PlotIndex == plotIndex; });
+    if (oldIt == _members.end() || oldIt->PlayerGuid == newHolderGuid)
+        return;
+
+    auto newIt = std::find_if(_members.begin(), _members.end(),
+        [&newHolderGuid](Member const& member) { return member.PlayerGuid == newHolderGuid; });
+    if (newIt != _members.end() && newIt->PlotIndex != INVALID_PLOT_INDEX)
+    {
+        // A character holds one plot per neighborhood, and an account has one house per district, so this does not
+        // happen; the roster is left as it is rather than taking her other plot from her.
+        TC_LOG_ERROR("housing", "Neighborhood::MovePlotHolder: {} already holds plot {} in neighborhood '{}', so plot {} stays with {}",
+            newHolderGuid.ToString(), newIt->PlotIndex, _name, plotIndex, oldIt->PlayerGuid.ToString());
+        return;
+    }
+
+    ObjectGuid const oldHolderGuid = oldIt->PlayerGuid;
+    uint32 const joinTime = oldIt->JoinTime;
+
+    // The old entry first, while its iterator is still good.
+    if (oldIt->Role == NEIGHBORHOOD_ROLE_OWNER)
+    {
+        oldIt->PlotIndex = INVALID_PLOT_INDEX;
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
+        stmt->setUInt8(0, INVALID_PLOT_INDEX);
+        stmt->setUInt64(1, _guid.GetCounter());
+        stmt->setUInt64(2, oldHolderGuid.GetCounter());
+        trans->Append(stmt);
+    }
+    else
+    {
+        _members.erase(oldIt);
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_MEMBER);
+        stmt->setUInt64(0, _guid.GetCounter());
+        stmt->setUInt64(1, oldHolderGuid.GetCounter());
+        trans->Append(stmt);
+    }
+
+    newIt = std::find_if(_members.begin(), _members.end(),
+        [&newHolderGuid](Member const& member) { return member.PlayerGuid == newHolderGuid; });
+    if (newIt != _members.end())
+    {
+        newIt->PlotIndex = plotIndex;
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
+        stmt->setUInt8(0, plotIndex);
+        stmt->setUInt64(1, _guid.GetCounter());
+        stmt->setUInt64(2, newHolderGuid.GetCounter());
+        trans->Append(stmt);
+    }
+    else
+    {
+        Member& newMember = _members.emplace_back();
+        newMember.PlayerGuid = newHolderGuid;
+        newMember.Role = NEIGHBORHOOD_ROLE_RESIDENT;
+        newMember.JoinTime = joinTime;
+        newMember.PlotIndex = plotIndex;
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_NEIGHBORHOOD_MEMBER);
+        uint8 index = 0;
+        stmt->setUInt64(index++, _guid.GetCounter());
+        stmt->setUInt64(index++, newHolderGuid.GetCounter());
+        stmt->setUInt8(index++, newMember.Role);
+        stmt->setUInt32(index++, newMember.JoinTime);
+        stmt->setUInt8(index++, newMember.PlotIndex);
+        trans->Append(stmt);
+
+        // Joining uses up an invite she had to this neighborhood.
+        auto inviteIt = std::find_if(_pendingInvites.begin(), _pendingInvites.end(),
+            [&newHolderGuid](PendingInvite const& invite) { return invite.InviteeGuid == newHolderGuid; });
+        if (inviteIt != _pendingInvites.end())
+        {
+            _pendingInvites.erase(inviteIt);
+
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_INVITE);
+            stmt->setUInt64(0, _guid.GetCounter());
+            stmt->setUInt64(1, newHolderGuid.GetCounter());
+            trans->Append(stmt);
+        }
+    }
+
+    TC_LOG_DEBUG("housing", "Neighborhood::MovePlotHolder: plot {} of neighborhood '{}' passed from {} to {}",
+        plotIndex, _name, oldHolderGuid.ToString(), newHolderGuid.ToString());
+
+    BroadcastRoster();
+}
+
 HousingResult Neighborhood::TransferOwnership(ObjectGuid newOwnerGuid)
 {
     Member* oldOwner = nullptr;

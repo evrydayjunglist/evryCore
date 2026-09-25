@@ -71,6 +71,12 @@ public:
     void ForgetHousing(Housing const* housing);
     // A packed house stands on no plot of this map any more: stop listing it, without handing it to anyone.
     void DropHouse(ObjectGuid houseGuid);
+    // Takes a house's exterior, rooms and decor off its plot on its neighborhood's own map, when that map is loaded,
+    // wherever the character acting is: a house is often relinquished from the dashboard, and a house packed because
+    // its owner was deleted or left the guild has nobody on the map at all. Each neighborhood has its own map instance,
+    // numbered by the neighborhood; the same plot index on another neighborhood's map is someone else's. That map also
+    // stops listing the house among its live houses. World thread only.
+    static void DespawnHouseFromPlot(Neighborhood const* neighborhood, uint8 plotIndex, ObjectGuid houseGuid);
 
     // Fixture override map: hookID → ExteriorComponentID from player's fixture selections.
     // When provided, SpawnExtCompTree uses these instead of the DB2 default component at each hook.

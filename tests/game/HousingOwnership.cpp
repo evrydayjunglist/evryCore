@@ -18,6 +18,7 @@
 #include "tc_catch2.h"
 #include "Housing.h"
 #include "ObjectGuid.h"
+#include "SharedDefines.h"
 #include <cmath>
 #include <vector>
 
@@ -203,5 +204,42 @@ TEST_CASE("A house that changes plot takes its exterior decor along", "[Housing]
         REQUIRE(decor.PosY == Catch::Approx(original.PosY).margin(0.001));
         REQUIRE(decor.PosZ == Catch::Approx(original.PosZ).margin(0.001));
         REQUIRE(decor.RotationW == Catch::Approx(1.0f).margin(0.0001));
+    }
+}
+
+TEST_CASE("A deleted owner's house passes to a character of the account who may own it", "[Housing][Ownership]")
+{
+    uint32 constexpr GuildId = 7;
+    ObjectGuid const hordeInGuild = ObjectGuid::Create<HighGuid::Player>(11);
+    ObjectGuid const allianceNoGuild = ObjectGuid::Create<HighGuid::Player>(12);
+    ObjectGuid const hordeNoGuild = ObjectGuid::Create<HighGuid::Player>(13);
+    std::vector<Housing::OwnerCandidate> const candidates =
+    {
+        { allianceNoGuild, ALLIANCE, 0 },
+        { hordeNoGuild, HORDE, 0 },
+        { hordeInGuild, HORDE, GuildId },
+    };
+
+    SECTION("The owner list's rules: a public neighborhood's faction and a guild neighborhood's guild")
+    {
+        REQUIRE(Housing::GetHouseOwnerError(NEIGHBORHOOD_FACTION_HORDE, 0, ALLIANCE, 0) == HOUSE_OWNER_ERROR_FACTION);
+        REQUIRE(Housing::GetHouseOwnerError(NEIGHBORHOOD_FACTION_ALLIANCE, 0, HORDE, 0) == HOUSE_OWNER_ERROR_FACTION);
+        REQUIRE(Housing::GetHouseOwnerError(NEIGHBORHOOD_FACTION_HORDE, 0, HORDE, 0) == HOUSE_OWNER_ERROR_NONE);
+        REQUIRE(Housing::GetHouseOwnerError(NEIGHBORHOOD_FACTION_NONE, GuildId, ALLIANCE, 0) == HOUSE_OWNER_ERROR_GUILD);
+        REQUIRE(Housing::GetHouseOwnerError(NEIGHBORHOOD_FACTION_NONE, GuildId, ALLIANCE, GuildId) == HOUSE_OWNER_ERROR_NONE);
+        REQUIRE(Housing::GetHouseOwnerError(NEIGHBORHOOD_FACTION_NONE, 0, ALLIANCE, GuildId) == HOUSE_OWNER_ERROR_NONE);
+    }
+
+    SECTION("The first character in the owner list's order that may own it where it stands")
+    {
+        REQUIRE(Housing::ChooseNextCosmeticOwner(candidates, NEIGHBORHOOD_FACTION_NONE, 0) == allianceNoGuild);
+        REQUIRE(Housing::ChooseNextCosmeticOwner(candidates, NEIGHBORHOOD_FACTION_HORDE, 0) == hordeNoGuild);
+        REQUIRE(Housing::ChooseNextCosmeticOwner(candidates, NEIGHBORHOOD_FACTION_NONE, GuildId) == hordeInGuild);
+    }
+
+    SECTION("Nobody who may own it, or nobody left, packs it")
+    {
+        REQUIRE(Housing::ChooseNextCosmeticOwner(candidates, NEIGHBORHOOD_FACTION_ALLIANCE, GuildId).IsEmpty());
+        REQUIRE(Housing::ChooseNextCosmeticOwner({}, NEIGHBORHOOD_FACTION_NONE, 0).IsEmpty());
     }
 }

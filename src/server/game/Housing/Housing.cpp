@@ -186,6 +186,27 @@ int32 Housing::ChoosePackedHouseToUnpack(std::vector<int32> const& packedHouseWo
     return atHouseCap && !packedHouseWorldMapIds.empty() ? 0 : -1;
 }
 
+HouseOwnerError Housing::GetHouseOwnerError(int32 factionRestriction, uint32 neighborhoodGuildId, uint32 team, uint64 characterGuildId)
+{
+    if ((factionRestriction == NEIGHBORHOOD_FACTION_HORDE && team != HORDE)
+        || (factionRestriction == NEIGHBORHOOD_FACTION_ALLIANCE && team != ALLIANCE))
+        return HOUSE_OWNER_ERROR_FACTION;
+
+    if (neighborhoodGuildId && characterGuildId != neighborhoodGuildId)
+        return HOUSE_OWNER_ERROR_GUILD;
+
+    return HOUSE_OWNER_ERROR_NONE;
+}
+
+ObjectGuid Housing::ChooseNextCosmeticOwner(std::vector<OwnerCandidate> const& candidates, int32 factionRestriction, uint32 neighborhoodGuildId)
+{
+    for (OwnerCandidate const& candidate : candidates)
+        if (GetHouseOwnerError(factionRestriction, neighborhoodGuildId, candidate.Team, candidate.GuildId) == HOUSE_OWNER_ERROR_NONE)
+            return candidate.Guid;
+
+    return ObjectGuid::Empty;
+}
+
 void Housing::MoveDecorBetweenPlots(Position const& fromPlot, Position const& toPlot, PlacedDecor& decor)
 {
     // Into the old plot's frame, then out of the new one's. The turn is a yaw, the same convention HousingMap uses
@@ -849,6 +870,11 @@ void Housing::FillHouseEntry(WorldPackets::Housing::JamCliHouse& house) const
 
 void Housing::SetCosmeticOwnerGuid(ObjectGuid guid)
 {
+    SetCosmeticOwnerGuid(guid, nullptr);
+}
+
+void Housing::SetCosmeticOwnerGuid(ObjectGuid guid, CharacterDatabaseTransaction trans)
+{
     {
         auto guard = LockState();
         if (_state->CosmeticOwnerGuid == guid)
@@ -859,7 +885,10 @@ void Housing::SetCosmeticOwnerGuid(ObjectGuid guid)
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_HOUSING_COSMETIC_OWNER);
         stmt->setUInt64(0, guid.GetCounter());
         stmt->setUInt64(1, GetDatabaseId());
-        CharacterDatabase.Execute(stmt);
+        if (trans)
+            trans->Append(stmt);
+        else
+            CharacterDatabase.Execute(stmt);
     }
 
     // The plot shows the cosmetic owner to everyone in the neighborhood.

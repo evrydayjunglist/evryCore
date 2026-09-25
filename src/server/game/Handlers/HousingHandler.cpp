@@ -154,28 +154,6 @@ namespace
         }
     }
 
-    // Take a house's exterior, rooms and decor off its plot on its neighborhood's map, wherever the character acting
-    // is: a house is often relinquished from the dashboard, away from its plot. Each neighborhood has its own map
-    // instance, numbered by the neighborhood; the same plot index on another neighborhood's map is someone else's.
-    // That map also stops listing the house among its live houses, since the house no longer stands there.
-    void DespawnHouseFromPlot(Neighborhood const* neighborhood, uint8 plotIndex, ObjectGuid houseGuid)
-    {
-        if (!neighborhood || plotIndex == INVALID_PLOT_INDEX)
-            return;
-
-        uint32 const worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID());
-        HousingMap* housingMap = dynamic_cast<HousingMap*>(sMapMgr->FindMap(worldMapId, uint32(neighborhood->GetGuid().GetCounter())));
-        if (!housingMap || housingMap->GetNeighborhood() != neighborhood)
-            return;
-
-        housingMap->DespawnAllDecorForPlot(plotIndex);
-        housingMap->DespawnAllMeshObjectsForPlot(plotIndex);
-        housingMap->DespawnRoomForPlot(plotIndex);
-        housingMap->DespawnHouseForPlot(plotIndex);
-        housingMap->SetPlotOwnershipState(plotIndex, false);
-        housingMap->DropHouse(houseGuid);
-    }
-
     void SendGuildRemoveHouseNotification(Player* player, ObjectGuid houseGuid, ObjectGuid cosmeticOwnerGuid)
     {
         if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
@@ -204,7 +182,7 @@ namespace
         Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
 
         // Despawn map entities BEFORE the housing data goes away.
-        DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
+        HousingMap::DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
 
         // Housing::Delete frees the plot by the house and drops the plot holder from the roster, in the same
         // transaction as the rows.
@@ -3489,7 +3467,7 @@ void WorldSession::HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::Housi
         return;
     }
 
-    DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
+    HousingMap::DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
 
     // The plot, the packed house and the refund as one unit.
     {
@@ -4121,14 +4099,8 @@ void WorldSession::SendHousingPotentialHouseOwners(ObjectGuid houseGuid, int32 f
 
             // The owner of a house in a faction's neighborhood must be of that faction, and the owner of a house in a
             // guild neighborhood must be in that guild (HouseOwnerError Faction and Guild in the 12.1 client).
-            Team team = Player::TeamForRace(fields[2].GetUInt8());
-            if ((factionRestriction == NEIGHBORHOOD_FACTION_HORDE && team != HORDE)
-                || (factionRestriction == NEIGHBORHOOD_FACTION_ALLIANCE && team != ALLIANCE))
-                ownerData.Error = HOUSE_OWNER_ERROR_FACTION;
-            else if (guildId && fields[4].GetUInt64() != guildId)
-                ownerData.Error = HOUSE_OWNER_ERROR_GUILD;
-            else
-                ownerData.Error = HOUSE_OWNER_ERROR_NONE;
+            ownerData.Error = Housing::GetHouseOwnerError(factionRestriction, guildId, Player::TeamForRace(fields[2].GetUInt8()),
+                fields[4].GetUInt64());
 
             _housingPotentialOwners[ownerData.PlayerGuid] = ownerData.Error;
             response.PotentialOwners.push_back(std::move(ownerData));

@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS `character_housing` (
     PRIMARY KEY (`guid`),
     UNIQUE KEY `idx_account_slot` (`bnetAccountId`, `slot`),
     UNIQUE KEY `idx_neighborhood_plot` (`activeNeighborhoodGuid`, `plotIndex`),
-    KEY `idx_neighborhood` (`neighborhoodGuid`)
+    KEY `idx_neighborhood` (`neighborhoodGuid`),
+    KEY `idx_cosmetic_owner` (`cosmeticOwnerGuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `account_housing_decor` (

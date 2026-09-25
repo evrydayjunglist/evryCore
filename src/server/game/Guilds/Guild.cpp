@@ -36,6 +36,7 @@
 #include "Language.h"
 #include "Log.h"
 #include "Map.h"
+#include "NeighborhoodMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -2990,6 +2991,11 @@ bool Guild::DeleteMember(CharacterDatabaseTransaction trans, ObjectGuid guid, bo
     }
     // Call script on remove before member is actually removed from guild (and database)
     sScriptMgr->OnGuildRemoveMember(this, guid, isDisbanding, isKicked);
+
+    // A member who leaves or is removed loses her house in the guild's neighborhood: it is packed and its plot is
+    // free. What happens to a guild neighborhood when the guild disbands is not known, so disbanding does not.
+    if (!isDisbanding)
+        sNeighborhoodMgr.OnGuildMemberRemoved(GetId(), guid, trans);
 
     m_members.erase(guid);
 

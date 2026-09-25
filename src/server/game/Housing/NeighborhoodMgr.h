@@ -19,6 +19,7 @@
 #define TRINITYCORE_NEIGHBORHOOD_MGR_H
 
 #include "Define.h"
+#include "DatabaseEnvFwd.h"
 #include "ObjectGuid.h"
 #include <memory>
 #include <string>
@@ -97,7 +98,24 @@ public:
     // Regenerate names for public neighborhoods using base DB2 entry IDs
     void RegenerateNeighborhoodNames();
 
+    // A character is being deleted (Player::DeleteFromDB). Every house she is shown as owner of passes to another
+    // character of her Battle.net account who may own it where it stands, and her roster entry holding its plot goes
+    // with it. With no such character a standing house is packed, as a relinquished house is, and its plot is free.
+    // Rows change in trans. World thread only.
+    void OnCharacterDeleted(ObjectGuid characterGuid, CharacterDatabaseTransaction trans);
+    // A character left or was removed from a guild (Guild::DeleteMember, not when the guild disbands). A house she is
+    // shown as owner of in one of that guild's neighborhoods is packed and its plot is free, since only a guild member
+    // may own a house there. trans may be empty; the rows are then saved on their own. World thread only.
+    void OnGuildMemberRemoved(uint32 guildId, ObjectGuid characterGuid, CharacterDatabaseTransaction trans);
+
 private:
+    // Packs a house that stands on a plot of the neighborhood, for OnCharacterDeleted and OnGuildMemberRemoved:
+    // through a character of its account that is online and holds it, else in its rows and on the plot directly.
+    // newCosmeticOwner is who is shown as its owner afterwards when that changes, or Empty to keep the current one;
+    // clearCosmeticOwner leaves nobody shown, for a house whose account has no character left.
+    void PackHouseForOwnerLoss(Neighborhood* neighborhood, uint8 plotIndex, ObjectGuid houseGuid, uint64 houseDatabaseId,
+        uint32 bnetAccountId, ObjectGuid newCosmeticOwner, bool clearCosmeticOwner, CharacterDatabaseTransaction trans);
+
     NeighborhoodMgr() = default;
 
     std::unordered_map<ObjectGuid, std::unique_ptr<Neighborhood>> _neighborhoods;

@@ -216,6 +216,13 @@ public:
     // bought again at once. The roster entry that held the plot leaves the roster, except the neighborhood's owner,
     // who only loses the plot. Its rows change in trans. Returns the character whose roster entry held the plot.
     ObjectGuid ReleasePlotByHouse(ObjectGuid houseGuid, CharacterDatabaseTransaction trans);
+    // Gives the roster entry that holds a plot to another character, when the character holding it is deleted and her
+    // house passes to another character of her Battle.net account. The new holder joins the roster as a resident with
+    // the old entry's join time unless she is on it already. The old entry leaves the roster, except the
+    // neighborhood's owner, who only loses the plot. Its rows change in trans.
+    void MovePlotHolder(uint8 plotIndex, ObjectGuid newHolderGuid, CharacterDatabaseTransaction trans);
+    // The character whose roster entry holds a plot, or empty.
+    ObjectGuid GetPlotHolder(uint8 plotIndex) const;
 
     PlotInfo const* GetPlotInfo(uint8 plotIndex) const
     {

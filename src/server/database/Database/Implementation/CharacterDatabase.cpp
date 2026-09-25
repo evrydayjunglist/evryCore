@@ -1015,6 +1015,14 @@ void CharacterDatabaseConnection::DoPrepareStatements()
         "SELECT neighborhoodGuid FROM character_housing_active_neighborhood WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_REP_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD,
         "REPLACE INTO character_housing_active_neighborhood (guid, neighborhoodGuid) VALUES (?, ?)", CONNECTION_ASYNC);
+
+    // A deleted character's housing rows: her own choices go, and her houses pass on or are packed
+    PrepareStatement(CHAR_DEL_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD,
+        "DELETE FROM character_housing_active_neighborhood WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_CHARACTER_HOUSING_IGNORED_NEIGHBORHOODS,
+        "DELETE FROM character_housing_ignored_neighborhood WHERE ownerGuid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_CHARACTER_HOUSING_BY_COSMETIC_OWNER,
+        "SELECT guid, bnetAccountId, slot FROM character_housing WHERE cosmeticOwnerGuid = ?", CONNECTION_SYNCH);
 }
 
 CharacterDatabaseConnection::CharacterDatabaseConnection(MySQLConnectionInfo& connInfo, ConnectionFlags connectionFlags) : MySQLConnection(connInfo, connectionFlags)

@@ -20,27 +20,62 @@
 
 namespace WorldPackets::Housing
 {
+namespace
+{
+// Reads the length of a client string, counted with its terminating zero. A
+// length longer than the field allows, or longer than the bytes left in the
+// packet, is refused before any memory is reserved for the string.
+uint32 ReadCStringSize(WorldPacket& data, uint32 bits, uint32 maximumLength)
+{
+    uint32 length = data.ReadBits(bits);
+    if (length > maximumLength + 1)
+        throw ByteBufferInvalidValueException("housing blueprint string length", std::to_string(length));
+    if (length > data.size() - data.rpos())
+        data.OnInvalidPosition(data.rpos(), length);
+    return length;
+}
+
+// Reads the string itself. A zero length means an empty string with no bytes.
+// Otherwise the last byte must be the terminating zero and no other byte may be.
+std::string ReadCString(WorldPacket& data, uint32 length)
+{
+    if (!length)
+        return {};
+
+    std::string result(data.ReadString(length - 1));
+    if (data.read<char>() != '\0' || result.find('\0') != std::string::npos)
+        throw ByteBufferInvalidValueException("housing blueprint string", "invalid terminator");
+    return result;
+}
+
 // The client's senders write a zero length for an empty string (and no bytes); SizedCString::BitsSize would write 1.
-static void WriteCStringSize(WorldPacket& data, std::string const& value, uint32 bits)
+void WriteCStringSize(WorldPacket& data, std::string const& value, uint32 bits)
 {
     data.WriteBits(value.empty() ? 0 : uint32(value.size() + 1), bits);
 }
+}
+
+// A blueprint name fills a 6-bit length, so at most 62 characters and the zero.
+constexpr uint32 MaxBlueprintNameLength = 62;
+// A blueprint UUID is written as 8-4-4-4-12 hex digits; HousingBlueprintMgr
+// refuses any other length.
+constexpr uint32 BlueprintUuidLength = 36;
 
 void HousingBlueprintExport::Read()
 {
-    _worldPacket >> SizedCString::BitsSize<6>(Name);
+    uint32 nameLength = ReadCStringSize(_worldPacket, 6, MaxBlueprintNameLength);
     _worldPacket.ResetBitPos();
     _worldPacket >> BlueprintType;
     _worldPacket >> RoomGuid;
-    _worldPacket >> SizedCString::Data(Name);
+    Name = ReadCString(_worldPacket, nameLength);
 }
 
 void HousingBlueprintRename::Read()
 {
     _worldPacket >> BlueprintID;
-    _worldPacket >> SizedCString::BitsSize<6>(Name);
+    uint32 nameLength = ReadCStringSize(_worldPacket, 6, MaxBlueprintNameLength);
     _worldPacket.ResetBitPos();
-    _worldPacket >> SizedCString::Data(Name);
+    Name = ReadCString(_worldPacket, nameLength);
 }
 
 void HousingBlueprintDelete::Read()
@@ -50,23 +85,23 @@ void HousingBlueprintDelete::Read()
 
 void HousingBlueprintImport::Read()
 {
-    _worldPacket >> SizedCString::BitsSize<24>(Uuid);
+    uint32 uuidLength = ReadCStringSize(_worldPacket, 24, BlueprintUuidLength);
     _worldPacket >> Bits<1>(Flag);
     _worldPacket.ResetBitPos();
     _worldPacket >> BlueprintType;
     _worldPacket >> SourceRoomGuid;
     _worldPacket >> TargetDoorComponentID;
-    _worldPacket >> SizedCString::Data(Uuid);
+    Uuid = ReadCString(_worldPacket, uuidLength);
 }
 
 void HousingBlueprintRequestContents::Read()
 {
-    _worldPacket >> SizedCString::BitsSize<24>(Uuid);
+    uint32 uuidLength = ReadCStringSize(_worldPacket, 24, BlueprintUuidLength);
     _worldPacket >> Bits<1>(Flag);
     _worldPacket.ResetBitPos();
     _worldPacket >> BlueprintType;
     _worldPacket >> TargetHouseGuid;
-    _worldPacket >> SizedCString::Data(Uuid);
+    Uuid = ReadCString(_worldPacket, uuidLength);
 }
 
 WorldPacket const* HousingBlueprintExportResponse::Write()

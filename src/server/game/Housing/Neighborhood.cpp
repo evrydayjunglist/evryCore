@@ -1019,6 +1019,10 @@ HousingResult Neighborhood::PurchasePlot(ObjectGuid playerGuid, uint8 plotIndex)
         return HOUSING_RESULT_PLOT_NOT_FOUND;
     }
 
+    // Another player's House Finder hold keeps the plot for them until it runs out.
+    if (!GetPlotReserverOther(plotIndex, playerGuid).IsEmpty())
+        return HOUSING_RESULT_PLOT_RESERVED;
+
     // Check if player is a member
     Member* buyer = nullptr;
     for (Member& member : _members)
@@ -1117,6 +1121,10 @@ HousingResult Neighborhood::MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotI
             newPlotIndex, _name);
         return HOUSING_RESULT_PLOT_NOT_FOUND;
     }
+
+    // Another player's House Finder hold keeps the plot for them until it runs out.
+    if (!GetPlotReserverOther(newPlotIndex, sourcePlotOwner).IsEmpty())
+        return HOUSING_RESULT_PLOT_RESERVED;
 
     // Check destination is not occupied
     if (_plots[newPlotIndex].IsOccupied())

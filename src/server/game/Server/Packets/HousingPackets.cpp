@@ -304,7 +304,7 @@ void HousingRoomMoveRoom::Read()
 void HousingRoomSetComponentTheme::Read()
 {
     _worldPacket >> RoomGuid;
-    _worldPacket >> BoundedSize<uint32>(OptionIDs); // NOT Size<> — an unbounded count here is a world-thread bad_alloc
+    _worldPacket >> BoundedSize<uint32, sizeof(uint32)>(OptionIDs);
     _worldPacket >> HouseThemeID;
     for (uint32& optionID : OptionIDs)
         _worldPacket >> optionID;
@@ -321,7 +321,7 @@ void HousingRoomApplyComponentMaterials::Read()
     // The byte sits BEFORE the array, not after — earlier guess parsed it as a
     // trailing Bits<1> which misaligned OptionIDs[0] one byte forward.
     _worldPacket >> RoomGuid;
-    _worldPacket >> BoundedSize<uint32>(OptionIDs); // NOT Size<> — an unbounded count here is a world-thread bad_alloc
+    _worldPacket >> BoundedSize<uint32, sizeof(uint32)>(OptionIDs);
     _worldPacket >> ColorOverride;
     _worldPacket >> RoomComponentTextureID;
     _worldPacket >> ComponentSlot;
@@ -1736,9 +1736,14 @@ void BulkRefund::Read()
     uint32 count = 0;
     _worldPacket >> count;
 
-    // Sane limit — retail client UI limits to the refund window (2h) worth of decor
+    // Refuse an oversized batch whole. Refunding only its first 500 would
+    // refund a different selection from the one the player asked for.
     if (count > 500)
-        count = 500;
+        throw ByteBufferInvalidValueException("housing refund count", std::to_string(count));
+
+    // A packed GUID takes at least its two mask bytes, even when it is empty.
+    if (count > (_worldPacket.size() - _worldPacket.rpos()) / 2)
+        _worldPacket.OnInvalidPosition(_worldPacket.rpos(), std::size_t(count) * 2);
 
     DecorGUIDs.resize(count);
     for (uint32 i = 0; i < count; ++i)

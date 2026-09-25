@@ -68,6 +68,64 @@ namespace
     {
         return fmt::format("lo={:016X} hi={:016X}", guid.GetRawValue(0), guid.GetRawValue(1));
     }
+
+    // Finds the plot of the cornerstone the player is actually standing at: a
+    // real cornerstone game object on the player's housing map, within reach
+    // and in line of sight. A GUID the client names, or a plot it remembers,
+    // is not enough on its own.
+    NeighborhoodPlotData const* ResolveCornerstone(Player* player, ObjectGuid cornerstoneGuid, Neighborhood*& neighborhood)
+    {
+        neighborhood = nullptr;
+        if (!player)
+            return nullptr;
+
+        if (!cornerstoneGuid.IsGameObject())
+        {
+            TC_LOG_DEBUG("housing", "Cornerstone refused for player {}: {} is not a game object",
+                player->GetGUID().ToString(), cornerstoneGuid.ToString());
+            return nullptr;
+        }
+
+        HousingMap* map = dynamic_cast<HousingMap*>(player->GetMap());
+        if (!map || !map->GetNeighborhood())
+        {
+            TC_LOG_DEBUG("housing", "Cornerstone refused for player {}: map {} is not a housing map with a neighborhood (cornerstone {})",
+                player->GetGUID().ToString(), player->GetMapId(), cornerstoneGuid.ToString());
+            return nullptr;
+        }
+
+        GameObject* cornerstone = player->GetGameObjectIfCanInteractWith(cornerstoneGuid);
+        if (!cornerstone)
+        {
+            TC_LOG_DEBUG("housing", "Cornerstone refused for player {}: {} is not on this map, not in this phase or out of reach",
+                player->GetGUID().ToString(), cornerstoneGuid.ToString());
+            return nullptr;
+        }
+
+        // Only static world geometry (walls, buildings, terrain) is checked.
+        // An unowned plot's cornerstone has collision, and a game object has no
+        // hit sphere, so a ray that included game objects would end inside the
+        // cornerstone's own model and always be blocked by it.
+        if (!player->IsWithinLOSInMap(cornerstone, LINEOFSIGHT_CHECK_VMAP))
+        {
+            TC_LOG_DEBUG("housing", "Cornerstone refused for player {}: no line of sight to {} (distance {:.1f})",
+                player->GetGUID().ToString(), cornerstoneGuid.ToString(), player->GetExactDist(cornerstone));
+            return nullptr;
+        }
+
+        NeighborhoodPlotData const* plot = sHousingMgr.GetPlotByCornerstoneEntry(
+            map->GetNeighborhood()->GetNeighborhoodMapID(), cornerstone->GetEntry());
+        if (!plot || plot->PlotIndex < 0 || plot->PlotIndex >= int32(MAX_NEIGHBORHOOD_PLOTS))
+        {
+            TC_LOG_DEBUG("housing", "Cornerstone refused for player {}: no plot for cornerstone {} (entry {}) on neighborhood map {}",
+                player->GetGUID().ToString(), cornerstoneGuid.ToString(), cornerstone->GetEntry(),
+                map->GetNeighborhood()->GetNeighborhoodMapID());
+            return nullptr;
+        }
+
+        neighborhood = map->GetNeighborhood();
+        return plot;
+    }
 }
 
 // ============================================================
@@ -1160,30 +1218,36 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
     TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_BUY_HOUSE CornerstoneGuid: {}, HouseGuid: {}",
         neighborhoodBuyHouse.CornerstoneGuid.ToString(), neighborhoodBuyHouse.HouseGuid.ToString());
 
-    // CMSG contains CornerstoneGuid (not a NeighborhoodGuid) — resolve neighborhood from player's map
-    Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(neighborhoodBuyHouse.CornerstoneGuid, player);
-    if (!neighborhood)
+    // The buy packet names only the cornerstone. The plot comes from that
+    // cornerstone, which must be within the player's reach, and it must be the
+    // same cornerstone and plot the purchase window was opened on.
+    Neighborhood* neighborhood = nullptr;
+    NeighborhoodPlotData const* plot = ResolveCornerstone(player, neighborhoodBuyHouse.CornerstoneGuid, neighborhood);
+    if (!plot || _lastCornerstoneGuid != neighborhoodBuyHouse.CornerstoneGuid
+        || _lastClientPlotIndex != uint32(plot->PlotIndex))
     {
-        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_NEIGHBORHOOD_NOT_FOUND);
-        SendPacket(response.Write());
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: refused for player {}: cornerstone {} (plot {}), window was opened on cornerstone {} (plot {}){}",
+            player->GetGUID().ToString(), neighborhoodBuyHouse.CornerstoneGuid.ToString(),
+            plot ? std::to_string(plot->PlotIndex) : std::string("none"),
+            _lastCornerstoneGuid.ToString(), _lastClientPlotIndex,
+            plot ? ", which is not the same cornerstone and plot" : ", and the cornerstone check failed");
 
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Neighborhood not found for CornerstoneGuid {}",
-            neighborhoodBuyHouse.CornerstoneGuid.ToString());
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_INVALID_INTERACTION);
+        SendPacket(response.Write());
         return;
     }
 
-    // Use the client's PlotIndex cached from OpenCornerstoneUI.
-    // The BuyHouse CMSG doesn't include a PlotIndex field, so we rely on the
-    // previous OpenCornerstoneUI interaction which cached _lastClientPlotIndex.
-    // Validate by checking the cornerstone GUID matches what we cached.
-    uint8 resolvedPlotIndex = static_cast<uint8>(_lastClientPlotIndex);
+    uint8 const resolvedPlotIndex = uint8(plot->PlotIndex);
 
-    // Also resolve via DB2 for logging/validation
-    int32 db2Resolved = sHousingMgr.ResolvePlotIndex(neighborhoodBuyHouse.CornerstoneGuid, neighborhood);
-
-    TC_LOG_INFO("housing", "HandleNeighborhoodBuyHouse: Using client PlotIndex={} (DB2 resolved={}), CornerstoneGuid={}, HouseGuid={}",
-        resolvedPlotIndex, db2Resolved, neighborhoodBuyHouse.CornerstoneGuid.ToString(), neighborhoodBuyHouse.HouseGuid.ToString());
+    // Refuse a plot another player holds before joining the neighborhood.
+    if (!neighborhood->GetPlotReserverOther(resolvedPlotIndex, player->GetGUID()).IsEmpty())
+    {
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_PLOT_RESERVED);
+        SendPacket(response.Write());
+        return;
+    }
 
     // Auto-join neighborhood if not already a member — buying a plot implies joining
     if (!neighborhood->IsMember(player->GetGUID()))
@@ -1525,18 +1589,23 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
     TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_MOVE_HOUSE CornerstoneGuid: {}, HouseGuid: {}",
         neighborhoodMoveHouse.CornerstoneGuid.ToString(), neighborhoodMoveHouse.HouseGuid.ToString());
 
-    // Use cornerstone GO GUID to find the neighborhood and destination plot.
-    // Per IDA TryMoveHouse (0x7FF75CC59CA1), the first PackedGUID is validated
-    // to be HighGuid::GameObject — i.e., a cornerstone GO at the destination plot.
-    Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(neighborhoodMoveHouse.CornerstoneGuid, player);
-    if (!neighborhood)
+    // The move packet names the cornerstone of the destination plot. It must be
+    // within the player's reach, and it must be the same cornerstone and plot
+    // the window was opened on.
+    Neighborhood* neighborhood = nullptr;
+    NeighborhoodPlotData const* targetPlot = ResolveCornerstone(player, neighborhoodMoveHouse.CornerstoneGuid, neighborhood);
+    if (!targetPlot || _lastCornerstoneGuid != neighborhoodMoveHouse.CornerstoneGuid
+        || _lastClientPlotIndex != uint32(targetPlot->PlotIndex))
     {
-        WorldPackets::Neighborhood::NeighborhoodMoveHouseResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_NEIGHBORHOOD_NOT_FOUND);
-        SendPacket(response.Write());
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodMoveHouse: refused for player {}: cornerstone {} (plot {}), window was opened on cornerstone {} (plot {}){}",
+            player->GetGUID().ToString(), neighborhoodMoveHouse.CornerstoneGuid.ToString(),
+            targetPlot ? std::to_string(targetPlot->PlotIndex) : std::string("none"),
+            _lastCornerstoneGuid.ToString(), _lastClientPlotIndex,
+            targetPlot ? ", which is not the same cornerstone and plot" : ", and the cornerstone check failed");
 
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodMoveHouse: Neighborhood not found via cornerstone {}",
-            neighborhoodMoveHouse.CornerstoneGuid.ToString());
+        WorldPackets::Neighborhood::NeighborhoodMoveHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_INVALID_INTERACTION);
+        SendPacket(response.Write());
         return;
     }
 
@@ -1556,25 +1625,7 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
         return;
     }
 
-    // Resolve destination plot index from the cornerstone GO GUID. Falls back to
-    // the cached _lastClientPlotIndex if the cornerstone resolve misses (covers
-    // the OPEN_CORNERSTONE_UI → MOVE_HOUSE flow where the GO no longer exists
-    // on the destination plot, e.g. just-bought plots).
-    int32 resolvedTarget = sHousingMgr.ResolvePlotIndex(neighborhoodMoveHouse.CornerstoneGuid, neighborhood);
-    uint8 targetPlotIndex = (resolvedTarget >= 0)
-        ? static_cast<uint8>(resolvedTarget)
-        : static_cast<uint8>(_lastClientPlotIndex);
-
-    if (targetPlotIndex == INVALID_PLOT_INDEX)
-    {
-        WorldPackets::Neighborhood::NeighborhoodMoveHouseResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_PLOT_NOT_FOUND);
-        SendPacket(response.Write());
-
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodMoveHouse: Could not resolve destination plot from cornerstone {} (fallback _lastClientPlotIndex={})",
-            neighborhoodMoveHouse.CornerstoneGuid.ToString(), _lastClientPlotIndex);
-        return;
-    }
+    uint8 const targetPlotIndex = uint8(targetPlot->PlotIndex);
 
     // Reject moving to the same plot the player already occupies (no-op).
     Neighborhood::Member const* memberInfo = neighborhood->GetMember(player->GetGUID());
@@ -1700,92 +1751,39 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
     TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI PlotIndex(raw): {}, NeighborhoodGuid: {}",
         neighborhoodOpenCornerstoneUI.PlotIndex, neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString());
 
-    Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(neighborhoodOpenCornerstoneUI.NeighborhoodGuid, player);
-    if (!neighborhood)
+    // The packet's GUID is the cornerstone the player clicked. Forget the last
+    // window first, so a refused open cannot leave an older plot to buy.
+    _lastCornerstoneGuid.Clear();
+    _lastClientPlotIndex = INVALID_PLOT_INDEX;
+
+    // Retail's client sends the plot of the cornerstone it clicked (PlotID 13
+    // with cornerstone entry 457142 on Razorwind Shores, hbcd3 1295070-1295072),
+    // so a plot that does not match the cornerstone in reach is refused.
+    Neighborhood* neighborhood = nullptr;
+    NeighborhoodPlotData const* plot = ResolveCornerstone(player, neighborhoodOpenCornerstoneUI.NeighborhoodGuid, neighborhood);
+    if (!plot || neighborhoodOpenCornerstoneUI.PlotIndex != uint32(plot->PlotIndex))
     {
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodOpenCornerstoneUI: Neighborhood {} not found",
-            neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString());
+        if (plot)
+            TC_LOG_DEBUG("housing", "HandleNeighborhoodOpenCornerstoneUI: refused for player {}: client sent plot {} but cornerstone {} is plot {}",
+                player->GetGUID().ToString(), neighborhoodOpenCornerstoneUI.PlotIndex,
+                neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString(), plot->PlotIndex);
+        else
+            TC_LOG_DEBUG("housing", "HandleNeighborhoodOpenCornerstoneUI: refused for player {}: client sent plot {}, and the cornerstone check on {} failed",
+                player->GetGUID().ToString(), neighborhoodOpenCornerstoneUI.PlotIndex,
+                neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString());
+
         WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUIResponse response;
         response.PlotIndex = neighborhoodOpenCornerstoneUI.PlotIndex;
+        response.CanPurchase = false;
         SendPacket(response.Write());
         return;
     }
 
-    // Use the client's PlotIndex directly — it may differ from our DB2 PlotIndex
-    // values (our SQL has sequential 0-54; the client's actual DB2 may differ).
-    // Also cache for the subsequent BuyHouse CMSG which doesn't include PlotIndex.
-    uint32 plotIndex = neighborhoodOpenCornerstoneUI.PlotIndex;
+    // Remembered for the buy or move that follows; neither packet carries a plot.
+    uint32 const plotIndex = uint32(plot->PlotIndex);
+    uint64 const plotCost = plot->Cost;
     _lastClientPlotIndex = plotIndex;
     _lastCornerstoneGuid = neighborhoodOpenCornerstoneUI.NeighborhoodGuid;
-
-    // Also resolve via cornerstone GO entry for cost lookup (uses our DB2 internal index)
-    int32 resolved = sHousingMgr.ResolvePlotIndex(neighborhoodOpenCornerstoneUI.NeighborhoodGuid, neighborhood);
-
-    TC_LOG_INFO("housing", "HandleNeighborhoodOpenCornerstoneUI: Client PlotIndex={}, DB2 resolved={}, CornerstoneGuid={}",
-        plotIndex, resolved, neighborhoodOpenCornerstoneUI.NeighborhoodGuid.ToString());
-
-    // Look up cost from plot data — try both the client's PlotIndex and our DB2 PlotIndex
-    uint32 neighborhoodMapId = neighborhood->GetNeighborhoodMapID();
-    std::vector<NeighborhoodPlotData const*> plots = sHousingMgr.GetPlotsForMap(neighborhoodMapId);
-
-    uint64 plotCost = 0;
-    bool plotFound = false;
-
-    // Try the client's PlotIndex first, then fall back to DB2 resolved index
-    for (NeighborhoodPlotData const* plot : plots)
-    {
-        if (plot->PlotIndex == static_cast<int32>(plotIndex))
-        {
-            plotCost = plot->Cost;
-            plotFound = true;
-            break;
-        }
-    }
-
-    // If client PlotIndex didn't match our DB2, try the resolved DB2 PlotIndex
-    if (!plotFound && resolved >= 0 && static_cast<uint32>(resolved) != plotIndex)
-    {
-        for (NeighborhoodPlotData const* plot : plots)
-        {
-            if (plot->PlotIndex == resolved)
-            {
-                plotCost = plot->Cost;
-                plotFound = true;
-                TC_LOG_INFO("housing", "HandleNeighborhoodOpenCornerstoneUI: Cost found via DB2 PlotIndex {} (client sent {})",
-                    resolved, plotIndex);
-                break;
-            }
-        }
-    }
-
-    // Last resort: use the cornerstone GO entry to find the plot
-    if (!plotFound)
-    {
-        uint32 goEntry = neighborhoodOpenCornerstoneUI.NeighborhoodGuid.GetEntry();
-        if (goEntry)
-        {
-            NeighborhoodPlotData const* plotData = sHousingMgr.GetPlotByCornerstoneEntry(neighborhoodMapId, goEntry);
-            if (plotData)
-            {
-                plotCost = plotData->Cost;
-                plotFound = true;
-                TC_LOG_INFO("housing", "HandleNeighborhoodOpenCornerstoneUI: Cost found via cornerstone GO entry {} (DB2 PlotIndex {})",
-                    goEntry, plotData->PlotIndex);
-            }
-        }
-    }
-
-    if (!plotFound)
-    {
-        TC_LOG_ERROR("housing", "HandleNeighborhoodOpenCornerstoneUI: PlotIndex {} (DB2: {}) not found in neighborhood map {}",
-            plotIndex, resolved,
-            plotIndex, neighborhoodMapId);
-        WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUIResponse response;
-        response.PlotIndex = plotIndex;
-        response.NeighborhoodName = neighborhood->GetName();
-        SendPacket(response.Write());
-        return;
-    }
 
     // Pre-send neighborhood name response to populate the JamCliNeighborhoodName
     // DataCache. Flag +574 in the display function checks whether the TLS

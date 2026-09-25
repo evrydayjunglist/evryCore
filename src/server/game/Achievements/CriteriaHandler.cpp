@@ -29,6 +29,9 @@
 #include "GameTime.h"
 #include "Garrison.h"
 #include "Group.h"
+#include "Housing.h"
+#include "HousingDecorStore.h"
+#include "HousingMgr.h"
 #include "InstanceScript.h"
 #include "Item.h"
 #include "ItemBonusMgr.h"
@@ -592,8 +595,37 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
         case CriteriaType::SellItemsToVendors:
         case CriteriaType::ReachMaxLevel:
         case CriteriaType::LearnTaxiNode:
+        // --- housing
+        case CriteriaType::PlaceDecor:
+        case CriteriaType::RemoveDecor:
             SetCriteriaProgress(criteria, 1, referencePlayer, PROGRESS_ACCUMULATE);
             break;
+        case CriteriaType::CollectUniqueDecor:
+        {
+            // Counted here as the decor entries the Battle.net account has owned, whichever character got them,
+            // including the entries its first house purchase credits for its earlier deeds. In hbcd3 criteria 109249
+            // read 1 at login (147482) and 109 at the house purchase (1299380-1299576), which brought seven starter
+            // pieces while the account's storage held 15 distinct entries right after (1431714-1431809), and
+            // achievements 61309 and 61310 were earned then (1299588, 1299666). It stayed 109 when decor 1163 arrived
+            // (1783639) and read 110 when 1482 arrived (2106237). The asset is the least item quality that counts:
+            // criteria 109249 has asset 2 for "Collect 100 unique decor of uncommon quality or higher" (achievement
+            // 61310). A decor with no item has no quality and counts only when the criteria asks for none.
+            uint32 owned = 0;
+            if (HousingDecorStore const* store = referencePlayer ? referencePlayer->GetHousingDecorStore() : nullptr)
+            {
+                int32 const minQuality = criteria->Entry->Asset.ID;
+                owned = store->CountOwnedEntries([minQuality](uint32 decorEntryId)
+                {
+                    if (minQuality <= 0)
+                        return true;
+                    HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
+                    ItemTemplate const* item = decorData && decorData->ItemID > 0 ? sObjectMgr->GetItemTemplate(uint32(decorData->ItemID)) : nullptr;
+                    return item && int32(item->GetQuality()) >= minQuality;
+                });
+            }
+            SetCriteriaProgress(criteria, owned, referencePlayer, PROGRESS_HIGHEST);
+            break;
+        }
         // std case: increment at miscValue1
         case CriteriaType::MoneyEarnedFromSales:
         case CriteriaType::MoneySpentOnRespecs:
@@ -1393,6 +1425,31 @@ bool CriteriaHandler::CanUpdateCriteria(Criteria const* criteria, CriteriaTreeLi
     return true;
 }
 
+bool CriteriaHandler::MeetsCriteriaRequirements(Criteria const* criteria, uint64 miscValue1, uint64 miscValue2, uint64 miscValue3, WorldObject const* ref, Player* referencePlayer) const
+{
+    if (DisableMgr::IsDisabledFor(DISABLE_TYPE_CRITERIA, criteria->ID, nullptr))
+        return false;
+
+    if (!RequirementsSatisfied(criteria, miscValue1, miscValue2, miscValue3, ref, referencePlayer))
+        return false;
+
+    if (criteria->Modifier && !ModifierTreeSatisfied(criteria->Modifier, miscValue1, miscValue2, ref, referencePlayer))
+        return false;
+
+    if (!ConditionsSatisfied(criteria, referencePlayer))
+        return false;
+
+    if (criteria->Entry->EligibilityWorldStateID != 0)
+        if (WorldStateMgr::GetValue(criteria->Entry->EligibilityWorldStateID, referencePlayer->GetMap()) != criteria->Entry->EligibilityWorldStateValue)
+            return false;
+
+    if (CriteriaDataSet const* data = sCriteriaMgr->GetCriteriaDataSet(criteria))
+        if (!data->Meets(referencePlayer, ref, uint32(miscValue1), uint32(miscValue2)))
+            return false;
+
+    return true;
+}
+
 bool CriteriaHandler::ConditionsSatisfied(Criteria const* criteria, Player* /*referencePlayer*/) const
 {
     if (criteria->Entry->StartEvent && !_startedCriteria.contains(criteria->ID))
@@ -1739,6 +1796,15 @@ bool CriteriaHandler::RequirementsSatisfied(Criteria const* criteria, uint64 mis
             break;
         case CriteriaType::LearnTaxiNode:
             if (miscValue1 != uint32(criteria->Entry->Asset.TaxiNodesID))
+                return false;
+            break;
+        // Placing and removing decor have no asset; the ModifierTree discriminates. "Collect unique decor" has a
+        // minimum item quality as its asset, applied where UpdateCriteria counts. All three need a real HouseDecor
+        // entry in miscValue1.
+        case CriteriaType::PlaceDecor:
+        case CriteriaType::RemoveDecor:
+        case CriteriaType::CollectUniqueDecor:
+            if (!miscValue1)
                 return false;
             break;
         default:
@@ -4060,6 +4126,10 @@ bool CriteriaHandler::ModifierSatisfied(ModifierTreeEntry const* modifier, uint6
             break;
         case ModifierTreeType::PlayerIsInGuild: // 404
             if (!referencePlayer->GetGuildId())
+                return false;
+            break;
+        case ModifierTreeType::PlayerHousesCountEqualOrGreaterThan: // 419
+            if (referencePlayer->GetAllHousings().size() < reqValue)
                 return false;
             break;
         case ModifierTreeType::PlayerMoneyIsRelOp: // 417

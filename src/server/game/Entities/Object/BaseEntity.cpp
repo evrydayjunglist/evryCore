@@ -21,6 +21,7 @@
 #include "Errors.h"
 #include "GameTime.h"
 #include "Log.h"
+#include "MeshObject.h"
 #include "MovementPackets.h"
 #include "Player.h"
 #include "SmoothPhasing.h"
@@ -186,7 +187,7 @@ void BaseEntity::BuildValuesUpdateBlockForPlayer(UpdateData* data, Player const*
     data->AddUpdateBlock();
 }
 
-inline void BaseEntity::BuildEntityFragments(ByteBuffer& data, std::span<WowCS::EntityFragment const> fragments)
+void BaseEntity::BuildEntityFragments(ByteBuffer& data, std::span<WowCS::EntityFragment const> fragments)
 {
     data.append(fragments.data(), fragments.size());
     data << uint8(WowCS::EntityFragment::End);
@@ -633,20 +634,29 @@ void BaseEntity::BuildMovementUpdate(ByteBuffer& data, CreateObjectBits flags, P
         data.FlushBits();
     }
 
-    //if (flags.Room)
-    //    data << ObjectGuid(HouseGUID);
+    if (flags.Room)
+    {
+        MeshObject const* self = static_cast<MeshObject const*>(this);
+        data << self->GetRoomHouseGUID();
+    }
 
-    //if (flags.Decor)
-    //    data << ObjectGuid(RoomGUID);
+    if (flags.Decor)
+    {
+        MeshObject const* self = static_cast<MeshObject const*>(this);
+        data << self->GetDecorRoomEntityGUID();
+    }
 
-    //if (flags.MeshObject)
-    //{
-    //    data << ObjectGuid(AttachParentGUID);
-    //    data << TaggedPosition<Position::XYZ>(PositionLocalSpace);
-    //    data << QuaternionData(RotationLocalSpace);
-    //    data << float(ScaleLocalSpace);
-    //    data << uint8(AttachmentFlags);
-    //}
+    if (flags.MeshObject)
+    {
+        MeshObject const* self = static_cast<MeshObject const*>(this);
+        data << self->GetAttachParentGUID();
+        // The position is local to the attach parent, not the world position used for grid placement.
+        data << TaggedPosition<Position::XYZ>(self->GetLocalPosition());
+        QuaternionData const& rotation = self->GetLocalRotation();
+        data << float(rotation.x) << float(rotation.y) << float(rotation.z) << float(rotation.w);
+        data << float(self->GetLocalScale());
+        data << uint8(self->GetAttachmentFlags());
+    }
 
     if (!PauseTimes.empty())
         data.append(PauseTimes.data(), PauseTimes.size());

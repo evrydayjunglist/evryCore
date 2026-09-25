@@ -58,6 +58,10 @@
 #include "GameTime.h"
 #include "GarrisonMgr.h"
 #include "GitRevision.h"
+#include "HousingBlueprintMgr.h"
+#include "HousingMgr.h"
+#include "InitiativeManager.h"
+#include "NeighborhoodMgr.h"
 #include "GridNotifiersImpl.h"
 #include "GroupMgr.h"
 #include "GuildMgr.h"
@@ -697,6 +701,12 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Load.Locales"sv, .DefaultValue = true, .Index = CONFIG_LOAD_LOCALES },
         { .Name = "BattlePay.Enabled"sv, .DefaultValue = false, .Index = CONFIG_BATTLE_PAY_ENABLED },
         // CONFIG_BATTLE_PAY_SHOP2_ENABLED is not loaded here. The CatalogShop module sets it from CatalogShop.Enable.
+        { .Name = "Housing.EnableBuyHouse"sv, .DefaultValue = true, .Index = CONFIG_HOUSING_ENABLE_BUY_HOUSE },
+        { .Name = "Housing.EnableDeleteHouse"sv, .DefaultValue = true, .Index = CONFIG_HOUSING_ENABLE_DELETE_HOUSE },
+        { .Name = "Housing.EnableMoveHouse"sv, .DefaultValue = true, .Index = CONFIG_HOUSING_ENABLE_MOVE_HOUSE },
+        { .Name = "Housing.EnableCreateCharterNeighborhood"sv, .DefaultValue = true, .Index = CONFIG_HOUSING_ENABLE_CREATE_CHARTER_NEIGHBORHOOD },
+        { .Name = "Housing.EnableCreateGuildNeighborhood"sv, .DefaultValue = true, .Index = CONFIG_HOUSING_ENABLE_CREATE_GUILD_NEIGHBORHOOD },
+        { .Name = "Housing.TutorialsEnabled"sv, .DefaultValue = true, .Index = CONFIG_HOUSING_TUTORIALS_ENABLED },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint32, INT_CONFIG_VALUE_COUNT> ints =
@@ -842,6 +852,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Visibility.Notify.Period.InInstances"sv, .DefaultValue = DEFAULT_VISIBILITY_NOTIFY_PERIOD, .Index = CONFIG_VISIBILITY_NOTIFY_PERIOD_INSTANCE },
         { .Name = "Visibility.Notify.Period.InBG"sv, .DefaultValue = DEFAULT_VISIBILITY_NOTIFY_PERIOD, .Index = CONFIG_VISIBILITY_NOTIFY_PERIOD_BATTLEGROUND },
         { .Name = "Visibility.Notify.Period.InArenas"sv, .DefaultValue = DEFAULT_VISIBILITY_NOTIFY_PERIOD, .Index = CONFIG_VISIBILITY_NOTIFY_PERIOD_ARENA },
+        { .Name = "Housing.MaxHousesPerAccount"sv, .DefaultValue = 2, .Index = CONFIG_HOUSING_MAX_HOUSES_PER_ACCOUNT },
         { .Name = "CharDelete.Method"sv, .DefaultValue = 0, .Index = CONFIG_CHARDELETE_METHOD },
         { .Name = "CharDelete.MinLevel"sv, .DefaultValue = 0, .Index = CONFIG_CHARDELETE_MIN_LEVEL },
         { .Name = "CharDelete.DeathKnight.MinLevel"sv, .DefaultValue = 0, .Index = CONFIG_CHARDELETE_DEATH_KNIGHT_MIN_LEVEL },
@@ -1922,6 +1933,18 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading garrison info...");
     sGarrisonMgr.Initialize();
 
+    TC_LOG_INFO("server.loading", "Loading housing info...");
+    sHousingMgr.Initialize();
+
+    TC_LOG_INFO("server.loading", "Loading neighborhood info...");
+    sNeighborhoodMgr.Initialize();
+
+    TC_LOG_INFO("server.loading", "Loading housing blueprints...");
+    sHousingBlueprintMgr.LoadFromDB();
+
+    TC_LOG_INFO("server.loading", "Loading initiative info...");
+    sInitiativeManager.Initialize();
+
     ///- Handle outdated emails (delete/return)
     TC_LOG_INFO("server.loading", "Returning old mails...");
     sObjectMgr->ReturnOrDeleteOldMails(false);
@@ -1950,6 +1973,19 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Initializing Scripts...");
     sScriptMgr->Initialize();
     sScriptMgr->OnConfigLoad(false);                                // must be done after the ScriptMgr has been properly initialized
+
+    ///- MUST run after sScriptMgr->Initialize(). The preload spawns every occupied plot's
+    /// house: the front-door GameObject and the plot AreaTrigger (entry 37358) are created
+    /// here, and both pick their AI once, at construction, via AIM_Initialize(). Run before
+    /// the scripts are registered and the registry lookup misses, so both silently get the
+    /// default AI and are never revisited - at_housing_plot::OnUnitEnter (which calls
+    /// SetCurrentHouse, the value the client's C_Housing.IsInsidePlot reads) never runs.
+    /// The symptom was "out of plot bounds" on decor placement.
+    /// Only bites for plots owned at startup. A plot bought, unpacked onto or moved to later gets
+    /// its trigger and house when that happens (HousingMap::SetPlotOwnershipState and the buy and
+    /// move handlers), after the scripts are registered.
+    TC_LOG_INFO("server.loading", "Pre-loading housing neighborhood maps...");
+    sMapMgr->PreloadHousingMaps();
 
     TC_LOG_INFO("server.loading", "Validating spell scripts...");
     sObjectMgr->ValidateSpellScripts();
@@ -2367,6 +2403,9 @@ void World::Update(uint32 diff)
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update battlefields"));
         sBattlefieldMgr->Update(diff);
     }
+
+    sInitiativeManager.Update(diff);
+    sNeighborhoodMgr.Update(diff);
 
     ///- Delete all characters which have been deleted X days before
     if (m_timers[WUPDATE_DELETECHARS].Passed())

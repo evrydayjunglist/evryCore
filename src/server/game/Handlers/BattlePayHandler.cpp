@@ -61,26 +61,6 @@ void WorldSession::HandleCharacterUpgradeStart(WorldPackets::Character::Characte
     GetBattlePayMgr()->HandleCharacterUpgradeStart(packet.CharacterGUID, packet.ProductChoice);
 }
 
-void WorldSession::HandleGetLastCatalogFetch(WorldPackets::CatalogShop::GetLastCatalogFetch& /*packet*/)
-{
-    GetBattlePayMgr()->SendLastCatalogFetchResponse();
-}
-
-void WorldSession::HandleUpdateLastCatalogFetch(WorldPackets::CatalogShop::UpdateLastCatalogFetch& /*packet*/)
-{
-    GetBattlePayMgr()->SendLastCatalogFetchResponse();
-}
-
-void WorldSession::HandleGetDecorRefundList(WorldPackets::CatalogShop::GetDecorRefundList& /*packet*/)
-{
-    GetBattlePayMgr()->SendDecorRefundListResponse();
-}
-
-void WorldSession::HandleGetAllLicensedDecorQuantities(WorldPackets::CatalogShop::GetAllLicensedDecorQuantities& /*packet*/)
-{
-    GetBattlePayMgr()->SendAllLicensedDecorQuantitiesResponse();
-}
-
 void WorldSession::HandleCatalogShopLicenseGameDataRequest(WorldPackets::CatalogShop::LicenseGameDataRequest& packet)
 {
     GetBattlePayMgr()->HandleCatalogShopLicenseGameDataRequest(packet.RequestSize);

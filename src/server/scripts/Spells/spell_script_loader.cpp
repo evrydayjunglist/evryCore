@@ -35,6 +35,7 @@ void AddSC_quest_spell_scripts();
 void AddSC_item_spell_scripts();
 void AddSC_azerite_item_spell_scripts();
 void AddSC_archaeology_spell_scripts();
+void AddSC_housing_spell_scripts();
 
 // The name of this function should match:
 // void Add${NameOfDirectory}Scripts()
@@ -59,4 +60,5 @@ void AddSpellsScripts()
     AddSC_item_spell_scripts();
     AddSC_azerite_item_spell_scripts();
     AddSC_archaeology_spell_scripts();
+    AddSC_housing_spell_scripts();
 }

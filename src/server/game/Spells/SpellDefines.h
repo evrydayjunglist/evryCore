@@ -427,6 +427,16 @@ public:
     bool HasDst() const;
     bool HasTraj() const { return m_speed != 0; }
 
+    // A destination the server picks for a spell the player does not aim, such as the plot Teleport Home (1233637)
+    // takes her to. It may lie on another map, so the cast does not measure its range or line of sight to it, and
+    // the cast sends its facing and map with it, as retail does (hbcd3 2044258).
+    void SetServerChosenDst(WorldLocation const& dest);
+    bool IsServerChosenDst() const { return m_serverChosenDst; }
+
+    // The housing object the cast is about; Teleport Home names the neighborhood (hbcd3 2044258).
+    ObjectGuid GetHousingTargetGUID() const { return m_housingGuid; }
+    void SetHousingTarget(ObjectGuid housingGuid, bool isResident = false);
+
     float GetPitch() const { return m_pitch; }
     void SetPitch(float pitch) { m_pitch = pitch; }
     float GetSpeed() const { return m_speed; }
@@ -456,6 +466,10 @@ private:
 
     float m_pitch, m_speed;
     std::string m_strTarget;
+
+    ObjectGuid m_housingGuid;
+    bool m_housingIsResident = false;
+    bool m_serverChosenDst = false;
 };
 
 struct TC_GAME_API CastSpellTargetArg

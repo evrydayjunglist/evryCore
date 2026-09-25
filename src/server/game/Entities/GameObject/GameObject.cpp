@@ -3455,24 +3455,37 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
 
             WorldPackets::GameObject::GameObjectInteraction gameObjectUILink;
             gameObjectUILink.ObjectGUID = GetGUID();
-            switch (GetGOInfo()->UILink.UILinkType)
+            if (GetGOInfo()->UILink.PlayerInteractionType)
+                gameObjectUILink.InteractionType = static_cast<PlayerInteractionType>(GetGOInfo()->UILink.PlayerInteractionType);
+            else
             {
-                case 0:
-                    gameObjectUILink.InteractionType = PlayerInteractionType::AdventureJournal;
-                    break;
-                case 1:
-                    gameObjectUILink.InteractionType = PlayerInteractionType::ObliterumForge;
-                    break;
-                case 2:
-                    gameObjectUILink.InteractionType = PlayerInteractionType::ScrappingMachine;
-                    break;
-                case 3:
-                    gameObjectUILink.InteractionType = PlayerInteractionType::ItemInteraction;
-                    break;
-                default:
-                    break;
+                switch (GetGOInfo()->UILink.UILinkType)
+                {
+                    case 0:
+                        gameObjectUILink.InteractionType = PlayerInteractionType::AdventureJournal;
+                        break;
+                    case 1:
+                        gameObjectUILink.InteractionType = PlayerInteractionType::ObliterumForge;
+                        break;
+                    case 2:
+                        gameObjectUILink.InteractionType = PlayerInteractionType::ScrappingMachine;
+                        break;
+                    case 3:
+                        gameObjectUILink.InteractionType = PlayerInteractionType::ItemInteraction;
+                        break;
+                    case 4:
+                        gameObjectUILink.InteractionType = PlayerInteractionType::CornerstoneInteraction;
+                        break;
+                    default:
+                        break;
+                }
             }
             player->SendDirectMessage(gameObjectUILink.Write());
+
+            // A housing cornerstone (457142) names spell 1266097. Retail sends the interaction (type 70) and then the
+            // player casts that spell on herself (hbcd3 1294983, SMSG_SPELL_START at 1294987).
+            if (uint32 spellId = GetGOInfo()->UILink.spell)
+                player->CastSpell(player, spellId, true);
             return;
         }
         case GAMEOBJECT_TYPE_GATHERING_NODE:                //50
@@ -4220,6 +4233,99 @@ void GameObject::ClearValuesChangesMask()
 {
     m_values.ClearChangesMask(&GameObject::m_gameObjectData);
     WorldObject::ClearValuesChangesMask();
+}
+
+void GameObject::InitHousingCornerstoneData(uint64 cost, int32 plotIndex)
+{
+    if (m_housingCornerstoneData.has_value())
+        return;
+
+    SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingCornerstoneData, 0)
+        .ModifyValue(&UF::HousingCornerstoneData::Cost), cost);
+    SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingCornerstoneData, 0)
+        .ModifyValue(&UF::HousingCornerstoneData::PlotIndex), plotIndex);
+
+    m_entityFragments.Add(WowCS::EntityFragment::FJamHousingCornerstone_C, IsInWorld(),
+        WowCS::GetRawFragmentData(m_housingCornerstoneData));
+
+    TC_LOG_DEBUG("housing", "GameObject::InitHousingCornerstoneData: entry={} guid={} cost={} plotIndex={} "
+        "isInWorld={} fragmentCount={} updateableCount={}",
+        GetEntry(), GetGUID().ToString(), cost, plotIndex,
+        IsInWorld(), m_entityFragments.Count, m_entityFragments.UpdateableCount);
+}
+
+void GameObject::InitHousingDecorData(ObjectGuid decorGuid, ObjectGuid houseGuid,
+    uint8 flags, ObjectGuid attachParent /*= ObjectGuid::Empty*/,
+    uint8 sourceType /*= 0*/, std::string sourceValue /*= {}*/)
+{
+    if (m_housingDecorData.has_value())
+        return;
+
+    SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
+        .ModifyValue(&UF::HousingDecorData::DecorGUID), decorGuid);
+    SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
+        .ModifyValue(&UF::HousingDecorData::AttachParentGUID), attachParent);
+    SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
+        .ModifyValue(&UF::HousingDecorData::Flags), flags);
+    // A decor item that is a game object names no other game object.
+    SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
+        .ModifyValue(&UF::HousingDecorData::TargetGameObjectGUID), ObjectGuid::Empty);
+
+    // Set persisted data (house ownership + source tracking)
+    auto persistedRef = m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
+        .ModifyValue(&UF::HousingDecorData::PersistedData, 0);
+    SetUpdateFieldValue(persistedRef.ModifyValue(&UF::DecorStoragePersistedData::HouseGUID), houseGuid);
+    SetUpdateFieldValue(persistedRef.ModifyValue(&UF::DecorStoragePersistedData::SourceType), sourceType);
+    if (!sourceValue.empty())
+        SetUpdateFieldValue(persistedRef.ModifyValue(&UF::DecorStoragePersistedData::SourceValue), std::move(sourceValue));
+
+    m_entityFragments.Add(WowCS::EntityFragment::FHousingDecor_C, IsInWorld(),
+        WowCS::GetRawFragmentData(m_housingDecorData));
+
+    TC_LOG_DEBUG("housing", "GameObject::InitHousingDecorData: entry={} goGuid={} decorGuid={} houseGuid={} flags={} "
+        "isInWorld={} fragmentCount={}",
+        GetEntry(), GetGUID().ToString(), decorGuid.ToString(), houseGuid.ToString(), flags,
+        IsInWorld(), m_entityFragments.Count);
+}
+
+void GameObject::InitHousingDecorMirroredPosition(Position const& localPos, QuaternionData const& localRot,
+    float localScale, ObjectGuid attachParent, uint8 attachFlags /*= 3*/)
+{
+    // Retail sniff-verified: GameObject decor carries FMirroredPositionData_C fragment
+    // with AttachParent=room entity and local-space position.
+    auto posData = m_values.ModifyValue(&GameObject::m_mirroredPositionData, 0)
+        .ModifyValue(&UF::MirroredPositionData::PositionData);
+    SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::AttachParentGUID), attachParent);
+    SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::PositionLocalSpace),
+        TaggedPosition<Position::XYZ>(localPos.GetPositionX(), localPos.GetPositionY(), localPos.GetPositionZ()));
+    SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::RotationLocalSpace), localRot);
+    SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::ScaleLocalSpace), localScale);
+    SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::AttachmentFlags), attachFlags);
+
+    m_entityFragments.Add(WowCS::EntityFragment::FMirroredPositionData_C, IsInWorld(),
+        WowCS::GetRawFragmentData(m_mirroredPositionData));
+
+    TC_LOG_DEBUG("housing", "GameObject::InitHousingDecorMirroredPosition: entry={} goGuid={} "
+        "localPos=({:.2f},{:.2f},{:.2f}) attachParent={} attachFlags={}",
+        GetEntry(), GetGUID().ToString(),
+        localPos.GetPositionX(), localPos.GetPositionY(), localPos.GetPositionZ(),
+        attachParent.ToString(), attachFlags);
+}
+
+void GameObject::InitHousingDecorProxy(ObjectGuid parentEntity)
+{
+    InitHousingDecorMirroredPosition(Position(), QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 1.0f, parentEntity, 7);
+    m_entityFragments.Add(WowCS::EntityFragment::Tag_HousingDecorProxyGameObject, IsInWorld());
+    SetHousingTransport(parentEntity, Position());
+}
+
+void GameObject::SetHousingTransport(ObjectGuid parent, Position const& localPos)
+{
+    m_movementInfo.transport.Reset();
+    m_movementInfo.transport.guid = parent;
+    m_movementInfo.transport.pos.Relocate(localPos);
+    m_movementInfo.transport.seat = 0;
+    m_updateFlag.MovementTransport = true;
 }
 
 std::span<uint32 const> GameObject::GetPauseTimes() const

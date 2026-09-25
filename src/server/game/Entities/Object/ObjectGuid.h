@@ -54,7 +54,13 @@ enum TypeID : uint8
     TYPEID_SCENARIO               = 16,
     TYPEID_LOOT_OBJECT            = 17,
 
-    NUM_CLIENT_OBJECT_TYPES
+    NUM_CLIENT_OBJECT_TYPES,
+
+    // Retail sends object type 18 for the Battle.net account and for housing entities
+    // (houses, neighborhoods, rooms, decor and their mirrors). It has the same
+    // value as NUM_CLIENT_OBJECT_TYPES but is kept out of that count, so the update masks sized
+    // by the count stay as they are.
+    TYPEID_HOUSING_ENTITY         = 18
 };
 
 enum TypeMask
@@ -77,6 +83,7 @@ enum TypeMask
     TYPEMASK_AI_GROUP               = 1 << TYPEID_AI_GROUP,
     TYPEMASK_SCENARIO               = 1 << TYPEID_SCENARIO,
     TYPEMASK_LOOT_OBJECT            = 1 << TYPEID_LOOT_OBJECT,
+    TYPEMASK_HOUSING_ENTITY         = 1 << TYPEID_HOUSING_ENTITY,
 
     TYPEMASK_SEER                   = TYPEMASK_UNIT | TYPEMASK_PLAYER | TYPEMASK_DYNAMICOBJECT,
     TYPEMASK_WORLDOBJECT            = TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT | TYPEMASK_DYNAMICOBJECT | TYPEMASK_CORPSE | TYPEMASK_AREATRIGGER | TYPEMASK_SCENEOBJECT | TYPEMASK_CONVERSATION | TYPEMASK_MESH_OBJECT

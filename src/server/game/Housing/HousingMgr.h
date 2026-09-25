@@ -1,0 +1,581 @@
+/*
+ * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef HousingMgr_h__
+#define HousingMgr_h__
+
+#include "Define.h"
+#include "HousingDefines.h"
+#include "ObjectGuid.h"
+#include "Position.h"
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+class Neighborhood;
+class Player;
+struct GameObjectsEntry;
+struct QuaternionData;
+struct ExteriorComponentEntry;
+struct ExteriorComponentExitPointEntry;
+struct ExteriorComponentHookEntry;
+struct RoomComponentOptionEntry;
+struct RoomComponentTextureEntry;
+
+struct HouseDecorData
+{
+    uint32 ID = 0;
+    std::string Name;
+    float InitialRotation[3] = {};
+    int32 GameObjectID = 0;
+    int32 Flags = 0;
+    uint8 Type = 0;
+    uint8 ModelType = 0;
+    int32 ModelFileDataID = 0;
+    int32 ThumbnailFileDataID = 0;
+    int32 WeightCost = 1;
+    int32 ItemID = 0;
+    float InitialScale = 1.0f;
+    int32 FirstAcquisitionBonus = 0;     // House XP gained on first acquisition (from Lua API)
+    int32 OrderIndex = 0;
+    int8 Size = 0;                       // HousingCatalogEntrySize (inferred from Lua API)
+    int32 StartingQuantity = 0;
+    int32 UiModelSceneID = 0;
+};
+
+struct HouseLevelData
+{
+    uint32 ID = 0;
+    int32 Level = 0;
+    int32 QuestID = 0;                  // the level's reward quest, "[DNT] House Level N Room Award" for levels 2 to 6
+};
+
+// How a visitor is related to a house's owner, for the house's access settings.
+struct HouseVisitorRelation
+{
+    bool Neighbor = false;
+    bool Guild = false;
+    bool Friend = false;
+    bool Party = false;
+};
+
+// The four maximums a house level gives, named as the house entity sends them (FHousingPlayerHouse_C).
+struct HouseLevelBudgets
+{
+    uint32 InteriorDecor = 0;
+    uint32 ExteriorDecor = 0;
+    uint32 RoomPlacement = 0;
+    uint32 ExteriorFixture = 0;
+};
+
+struct HouseRoomData
+{
+    uint32 ID = 0;
+    std::string Name;
+    int8 Size = 0;
+    int32 Flags = 0;            // HousingRoomFlags bitmask
+    int32 Field_002 = 0;
+    int32 RoomWmoDataID = 0;
+    int32 UiTextureAtlasElementID = 0;
+    int32 WeightCost = 1;
+
+    bool IsBaseRoom() const { return (Flags & HOUSING_ROOM_FLAG_BASE_ROOM) != 0; }
+    bool HasStairs() const { return (Flags & HOUSING_ROOM_FLAG_HAS_STAIRS) != 0; }
+};
+
+struct RoomDoorInfo
+{
+    uint32 RoomComponentID = 0;
+    float OffsetPos[3] = {};
+    float OffsetRot[3] = {};
+    uint8 ConnectionType = 0;   // RoomConnectionType
+};
+
+/// Full room component data (all types: wall, floor, ceiling, stairs, pillar, doorway)
+struct RoomComponentData
+{
+    uint32 ID = 0;
+    uint32 RoomWmoDataID = 0;
+    float OffsetPos[3] = {};
+    float OffsetRot[3] = {};
+    int32 ModelFileDataID = 0;  // The WMO/mesh file to spawn
+    uint8 Type = 0;             // HousingRoomComponentType
+    int32 MeshStyleFilterID = 0;
+    uint8 ConnectionType = 0;   // RoomConnectionType (for doorways)
+    int32 Flags = 0;
+};
+
+struct HouseThemeData
+{
+    uint32 ID = 0;
+    std::string Name;
+    int32 Flags = 0;                // DB2: Flags
+    int32 ParentThemeID = 0;        // DB2: ParentThemeID FK->HouseTheme
+};
+
+struct HouseDecorThemeSetData
+{
+    uint32 ID = 0;
+    std::string Name;
+    int32 HouseThemeID = 0;
+    int32 HouseDecorCategoryID = 0;
+};
+
+struct NeighborhoodMapData
+{
+    uint32 ID = 0;
+    float Origin[3] = {};           // DB2: Position[3]
+    int32 MapID = 0;                // DB2: MapID
+    float EntryRotation = 0.0f;     // DB2: EntryRotation
+    uint32 UiTextureKitID = 0;      // DB2: UiTextureKitID
+    int32 Flags = 0;                // DB2: Flags (bitmask: 0x1=Alliance, 0x2=Horde, 0x4=SystemGenerate)
+};
+
+struct NeighborhoodPlotData
+{
+    uint32 ID = 0;
+    uint64 Cost = 0;
+    std::string Name;
+    float HousePosition[3] = {};         // Was named HousePosition before 12.0.0.64975
+    float HouseRotation[3] = {};         // Was named HouseRotation before 12.0.0.64975
+    float CornerstonePosition[3] = {};
+    float CornerstoneRotation[3] = {};
+    float TeleportPosition[3] = {};
+    int32 NeighborhoodMapID = 0;
+    int32 Field_010 = 0;
+    int32 CornerstoneGameObjectID = 0;
+    int32 PlotIndex = 0;
+    int32 WorldState = 0;
+    int32 PlotGameObjectID = 0;
+    float TeleportFacing = 0.0f;         // Facing angle at TeleportPosition
+    int32 Field_016 = 0;
+};
+
+struct NeighborhoodNameGenData
+{
+    uint32 ID = 0;
+    std::string Prefix;
+    std::string Middle;
+    std::string Suffix;
+    int32 NeighborhoodMapID = 0;
+};
+
+struct HouseDecorMaterialData
+{
+    uint32 ID = 0;
+    uint64 WMOMaterialReference = 0;    // DB2: WMOMaterialReference
+    int32 MaterialTextureIndex = 0;     // DB2: MaterialTextureIndex
+    int32 HouseThemeID = 0;             // DB2: HouseThemeID FK->HouseTheme
+    int32 TextureAFileDataID = 0;       // DB2: TextureAFileDataID FK->FileData
+    int32 TextureBFileDataID = 0;       // DB2: TextureBFileDataID FK->FileData
+};
+
+struct HouseExteriorWmoData
+{
+    uint32 ID = 0;
+    std::string Name;
+    int32 Flags = 0;
+};
+
+struct HouseLevelRewardInfoData
+{
+    uint32 ID = 0;
+    std::string Name;
+    std::string Description;
+    int32 HouseLevelDataID = 0;         // DB2: HouseLevelDataID FK->HouseLevelData
+    int32 Field_4 = 0;                  // DB2: Field_12_0_0_63967_004
+    int32 IconFileDataID = 0;           // DB2: IconFileDataID FK->FileData
+};
+
+struct NeighborhoodInitiativeData
+{
+    uint32 ID = 0;
+    std::string Name;
+    std::string Description;
+    int32 InitiativeType = 0;
+    int32 Duration = 0;
+    int32 RequiredParticipants = 0;
+    int32 RewardCurrencyID = 0;
+};
+
+struct DecorCategoryData
+{
+    uint32 ID = 0;
+    std::string Name;
+    int32 UiTextureAtlasElementID = 0;  // DB2: UiTextureAtlasElementID
+    int32 OrderIndex = 0;               // DB2: OrderIndex
+};
+
+struct DecorSubcategoryData
+{
+    uint32 ID = 0;
+    std::string Name;
+    int32 UiTextureAtlasElementID = 0;  // DB2: UiTextureAtlasElementID
+    int32 DecorCategoryID = 0;
+    int32 OrderIndex = 0;               // DB2: OrderIndex
+};
+
+struct DecorDyeSlotData
+{
+    uint32 ID = 0;
+    int32 DyeColorCategoryID = 0;       // DB2: DyeColorCategoryID FK->DyeColorCategory
+    int32 HouseDecorID = 0;
+    int32 OrderIndex = 0;               // DB2: OrderIndex
+    int32 Channel = 0;                  // DB2: Channel
+};
+
+class TC_GAME_API HousingMgr
+{
+public:
+    HousingMgr();
+    HousingMgr(HousingMgr const&) = delete;
+    HousingMgr(HousingMgr&&) = delete;
+    HousingMgr& operator=(HousingMgr const&) = delete;
+    HousingMgr& operator=(HousingMgr&&) = delete;
+    ~HousingMgr();
+
+    static HousingMgr& Instance();
+
+    void Initialize();
+
+    // DB2 data accessors
+    HouseDecorData const* GetHouseDecorData(uint32 id) const;
+    HouseLevelData const* GetLevelData(uint32 level) const;
+    HouseRoomData const* GetHouseRoomData(uint32 id) const;
+    HouseThemeData const* GetHouseThemeData(uint32 id) const;
+    HouseDecorThemeSetData const* GetHouseDecorThemeSetData(uint32 id) const;
+    NeighborhoodMapData const* GetNeighborhoodMapData(uint32 id) const;
+    std::unordered_map<uint32, NeighborhoodMapData> const& GetAllNeighborhoodMapData() const { return _neighborhoodMapStore; }
+    HouseDecorMaterialData const* GetHouseDecorMaterialData(uint32 id) const;
+    HouseExteriorWmoData const* GetHouseExteriorWmoData(uint32 id) const;
+    HouseLevelRewardInfoData const* GetHouseLevelRewardInfoData(uint32 id) const;
+    NeighborhoodInitiativeData const* GetNeighborhoodInitiativeData(uint32 id) const;
+    DecorCategoryData const* GetDecorCategoryData(uint32 id) const;
+    DecorSubcategoryData const* GetDecorSubcategoryData(uint32 id) const;
+
+    // Outdoor lighting: classify a HouseDecor by its parent DecorCategory
+    // (via DecorXDecorSubcategory -> DecorSubcategory.DecorCategoryID). Returns 0
+    // when the decor has no category link. IsLightingDecor() == category 4.
+    uint32 GetDecorCategoryForDecor(uint32 decorId) const;
+    bool IsLightingDecor(uint32 decorId) const;
+
+    // Indexed lookups
+    std::vector<DecorSubcategoryData const*> GetSubcategoriesForCategory(uint32 categoryId) const;
+    std::vector<uint32> GetDecorIdsForSubcategory(uint32 subcategoryId) const;
+    std::vector<DecorDyeSlotData const*> GetDyeSlotsForDecor(uint32 houseDecorId) const;
+    std::vector<HouseDecorMaterialData const*> GetMaterialsForTheme(uint32 houseThemeId) const;
+    std::vector<HouseLevelRewardInfoData const*> GetRewardsForLevel(uint32 houseLevelId) const;
+
+    // Neighborhood plot lookups
+    uint32 GetPlotStoreSize() const { return uint32(_neighborhoodPlotStore.size()); }
+    std::vector<NeighborhoodPlotData const*> GetPlotsForMap(uint32 neighborhoodMapId) const;
+    // The plot with this PlotIndex on a neighborhood map, or nothing.
+    NeighborhoodPlotData const* GetPlot(uint32 neighborhoodMapId, uint8 plotIndex) const;
+    // The CreatedBy of a plot's cornerstone: a client actor of owner type 1 whose owner id is the neighborhood's world
+    // map and whose counter is the plot's CornerstoneGameObjectID. For plot 13 of Razorwind Shores retail sends
+    // 0x5000042AC0000000 / 0x73FD3 (hbcd3 456682-456741).
+    static ObjectGuid MakeCornerstoneCreator(NeighborhoodPlotData const& plot, uint32 worldMapId);
+    // Where a plot's cornerstone stands and how it is turned. `clientRow` is the GameObjects.db2 row named by the
+    // plot's CornerstoneGameObjectID when that row is on the same world map (Founder's Point has one per plot, Razorwind
+    // Shores has none); its position and rotation win. Without one, a few Razorwind Shores plots whose DB2 cornerstone
+    // is known to be stale take the transform retail sent, and every other plot stands at CornerstonePosition facing
+    // CornerstoneRotation.z plus a half turn.
+    static void GetCornerstonePlacement(NeighborhoodPlotData const& plot, uint32 worldMapId, GameObjectsEntry const* clientRow,
+        Position& position, QuaternionData& rotation);
+    // Where a plot's house room stands and how it is turned. Everything of a house on the plot hangs on that room. The
+    // anchor is the plot's "Plot - Plot N" row in GameObjects.db2 (NeighborhoodPlot.PlotGameObjectID), turned half a
+    // turn further than the row: every room retail sent in the captures stands there to the digit, plot 13 of
+    // Razorwind Shores at 886.38367, -577.75696, 1.4168056 facing 0.05236292 (hbcd3 1299610), and plots 1, 5, 31, 36,
+    // 44, 48, 49, 53 and 54 the same way (hbcd3, hled1). NeighborhoodPlot.HousePosition is not used: for 53 of the 55
+    // Razorwind Shores plots it lies 290 to 2200 yards away from the plot. `plotRow` must be on `worldMapId`; false
+    // when it is missing or on another map.
+    static bool GetRoomAnchor(GameObjectsEntry const* plotRow, uint32 worldMapId, Position& position, QuaternionData& rotation);
+    // The same for a plot of a neighborhood map. False when the neighborhood map, its world map, the plot or its
+    // GameObjects.db2 row is unknown.
+    bool GetPlotRoomAnchor(uint32 neighborhoodMapId, uint8 plotIndex, Position& position, QuaternionData& rotation) const;
+    bool GetPlotRoomAnchor(uint32 neighborhoodMapId, uint8 plotIndex, Position& position) const;
+    // Where something attached to a parent stands in the world: the parent's position and rotation, then the local
+    // offset turned by the parent's rotation, and the two rotations one after the other. The orientation of worldPos is
+    // the turn about the vertical axis of worldRot. Retail's client places a house's pieces this way: room, exterior
+    // root, wall, entry and entry offset give the front door's position to the digit (hbcd3 1310816, hled1 282003).
+    static void ComposeAttachment(Position const& parentPos, QuaternionData const& parentRot,
+        Position const& localPos, QuaternionData const& localRot, Position& worldPos, QuaternionData& worldRot);
+    // How a piece hanging on an exterior hook is turned. ExteriorComponentHook stores the turn in degrees, and retail
+    // sends the opposite turn: hook 17262 holds 22.6199 about the vertical axis and the entry on it arrives turned by
+    // -22.6199 (z -0.1961155, w 0.9805808, hbcd3 1310953). Hooks 17265 and 17222 agree (hled1). Those turn about the
+    // vertical axis only; 19 of the 1812 hooks also tilt, and no capture shows how retail orders those tilts, so they
+    // are applied as the turn, then the tilt about y, then about x, each negated.
+    static QuaternionData GetHookRotation(ExteriorComponentHookEntry const& hook);
+    // The GUID of a house's exterior root on its neighborhood map: an Entity with entry 0, as retail sends it. The
+    // counter is this server's own choice, made from the plot so that every character of the house's account can name
+    // the root without being on that map; retail's root carries a counter it shares with the house's pieces and front
+    // door (hbcd3 1310328 and Number 14144, all 6616838). The counter stays clear of the ones the map hands out to
+    // other entities, which start at 1. The same plot of another neighborhood of the same world map gets the same GUID.
+    static ObjectGuid MakeExteriorRootGuid(uint32 worldMapId, uint8 plotIndex);
+    // Whether a house placement, the exterior root's pose inside the plot's room, lies inside the room's geobox and is
+    // a real number throughout. The client sends a drag as that pose (hled1 645894: -7.4893, 1.7693, 0.02055 facing
+    // 1.5708).
+    static bool IsRootPlacementInRoom(Position const& placement);
+    // Where a character arrives on a plot: NeighborhoodPlot.TeleportPosition, facing CornerstoneRotation.z, on the
+    // neighborhood's world map. Retail lands her there after Teleport Home (hbcd3 2044258) and after Exit House
+    // (hbcd3 1456426), both at 902.6711, -542.7863, 1.9622 facing 4.5902157 for plot 13 of Razorwind Shores. The
+    // TeleportFacing column (1.570796 for that plot) is not what retail used.
+    static WorldLocation MakePlotArrival(NeighborhoodPlotData const& plot, uint32 worldMapId);
+    // False when the neighborhood map, its world map or the plot is unknown.
+    bool GetPlotArrival(uint32 neighborhoodMapId, uint8 plotIndex, WorldLocation& arrival) const;
+
+    // Get the NeighborhoodMapData for a world MapID (returns nullptr if not a neighborhood)
+    NeighborhoodMapData const* GetNeighborhoodMapDataForWorldMap(uint32 mapId) const;
+
+    // Check if a world MapID corresponds to a neighborhood map
+    bool IsNeighborhoodWorldMap(uint32 mapId) const;
+    // Get the NeighborhoodMapID for a world MapID (returns 0 if not a neighborhood)
+    uint32 GetNeighborhoodMapIdByWorldMap(uint32 mapId) const;
+    // Get the world MapID for a NeighborhoodMapID (reverse lookup, returns 0 if not found)
+    uint32 GetWorldMapIdByNeighborhoodMapId(uint32 neighborhoodMapId) const;
+    // The NeighborhoodMap row of the house interior map (row 7 for map 2783). Retail puts it in the house GUID and
+    // in every PlayerMirrorHouse.MapID it sends (hf1 211460, 468253).
+    uint32 GetHouseInteriorNeighborhoodMapId() const { return GetNeighborhoodMapIdByWorldMap(HOUSE_INTERIOR_MAP_ID); }
+
+    // Name generation
+    std::string GenerateNeighborhoodName(uint32 neighborhoodMapId) const;
+
+    // Level-based limits
+    uint32 GetQuestForLevel(uint32 level) const;
+    // Total house experience a house needs to reach a level (the client's C_Housing.GetHouseLevelFavorForLevel).
+    // Nothing levels a house from it yet: the client says to "Visit the General Contractor in your Neighborhood to level up
+    // your House" (GlobalStrings HOUSING_DASHBOARD_VISIT_NPC), and no capture shows that visit.
+    static uint32 GetFavorThresholdForLevel(uint32 level);
+    // A level's maximums; a level above the cap takes the cap's.
+    static HouseLevelBudgets GetBudgetsForLevel(uint32 level);
+    uint32 GetInteriorDecorBudgetForLevel(uint32 level) const;
+    uint32 GetExteriorDecorBudgetForLevel(uint32 level) const;
+    uint32 GetRoomBudgetForLevel(uint32 level) const;
+    uint32 GetFixtureBudgetForLevel(uint32 level) const;
+    uint32 GetDecorWeightCost(uint32 decorEntryId) const;
+    uint32 GetRoomWeightCost(uint32 roomEntryId) const;
+
+    // Room connectivity
+    bool IsBaseRoom(uint32 roomEntryId) const;
+    uint32 GetRoomDoorCount(uint32 roomEntryId) const;
+    std::vector<RoomDoorInfo> const* GetRoomDoors(uint32 roomWmoDataId) const;
+
+    // Room component data (all types: wall, floor, ceiling, stairs, doorway, etc.)
+    std::vector<RoomComponentData> const* GetRoomComponents(uint32 roomWmoDataId) const;
+
+    // Faction-to-theme mapping (sniff-verified: Alliance=6, Horde=2)
+    int32 GetFactionDefaultThemeID(int32 factionRestriction) const;
+    int32 GetDefaultSubThemeID(int32 baseThemeID) const;
+    int32 GetBaseThemeID(int32 themeID) const;
+
+    // Find a RoomComponentOption matching a specific MeshStyleFilterID + theme
+    // The retail DB2 links RoomComponent to RoomComponentOption via MeshStyleFilterID.
+    // Returns nullptr if no match found
+    RoomComponentOptionEntry const* FindRoomComponentOption(int32 meshStyleFilterID, int32 houseThemeID) const;
+    std::vector<RoomComponentOptionEntry const*> FindAllRoomComponentOptions(int32 meshStyleFilterID, int32 houseThemeID) const;
+
+    // Get the base room entry ID (exterior geobox room, from DB2 IsBaseRoom flag, fallback 18)
+    uint32 GetBaseRoomEntryId() const { return _baseRoomEntryId; }
+
+    // Get the entry hall room entry ID (interior base room, sniff-verified: Room 46)
+    // Room 18 = exterior plot geobox (SpawnRoomForPlot), Room 46 = interior entry hall
+    uint32 GetEntryHallRoomEntryId() const { return _entryHallRoomEntryId; }
+
+    // Room grid spacing for interior layout (~24 yards between room centers)
+    float GetRoomGridSpacing() const { return _roomGridSpacing; }
+
+    // RoomComponentTexture lookup: given a RoomComponentOption ID, find the texture ID
+    // Returns the first matched RoomComponentTexture ID, or 0 if no link exists in DB2.
+    int32 GetTextureIdForComponentOption(int32 roomComponentOptionID) const;
+    // RoomComponentTexture by component type: fallback when per-option data is missing
+    // Returns the first matching texture for a given component type (1=wall, 2=floor, 3=ceiling)
+    int32 GetTextureIdForComponentType(uint8 componentType) const;
+
+    // ExteriorComponent indexed lookups
+    std::vector<ExteriorComponentHookEntry const*> const* GetHooksOnComponent(uint32 extCompID) const;
+    ExteriorComponentExitPointEntry const* GetExitPoint(uint32 extCompID) const;
+    int32 GetGroupForComponent(uint32 extCompID) const;
+    std::vector<uint32> const* GetChildComponents(uint32 parentCompID) const;
+    std::vector<uint32> const* GetRootComponentsForWmoData(uint32 wmoDataID) const;
+    std::vector<uint32> const* GetComponentsInGroup(int32 groupID) const;
+
+    // Fixture resolution: given a hook's component type, the house's WmoDataID, and
+    // optionally the house size, returns the default fixture component ID
+    // (Flags & 0x1, ParentComponentID == 0).
+    // If houseSize is 0, returns any size match; otherwise filters to exact size.
+    uint32 GetDefaultFixtureForType(uint8 componentType, uint32 wmoDataID, uint8 houseSize = 0) const;
+
+    // Racial house style: maps player race to the appropriate HouseExteriorWmoDataID.
+    // Night Elf → 55, Blood Elf → 56, other Alliance → 9 (Human), other Horde → 87 (Orc).
+    static uint32 GetRacialWmoDataID(uint8 race, uint32 teamId);
+
+    // Find the first HouseRoom entry with visual components (not the base room 18)
+    uint32 GetDefaultVisualRoomEntry() const;
+
+    // The HouseDecor row whose ItemID is the item, or 0. Spell 1256487 names no decor; its item 253493 is decor 1163.
+    uint32 GetDecorIdForItem(uint32 itemId) const;
+
+    // Whether a house's settings let someone onto its plot (isInterior false) or into the house (isInterior true). Any
+    // character of the owning Battle.net account is let in; anyone else is checked against the settings, which work
+    // while the owner is offline: the guild and friends checks use the character shown as the owner, the neighbors check
+    // the neighborhood the house stands in, and the party check any character of the owning account in the group.
+    bool CanVisitorAccessPlot(Player const* visitor, ObjectGuid ownerBnetGuid, ObjectGuid shownOwnerGuid,
+        Neighborhood const* neighborhood, uint32 settingsFlags, bool isInterior) const;
+    // The settings check alone, for a visitor whose relations to the owner are known.
+    static bool AccessSettingsAllow(uint32 settingsFlags, bool isInterior, HouseVisitorRelation const& relation);
+    // HouseSettingFlags BlueprintExport*: may this visitor save the house as a blueprint. Nobody but the owner unless the
+    // owner opted in.
+    bool CanVisitorExportBlueprint(Player const* visitor, ObjectGuid ownerGuid, uint32 settingsFlags) const;
+
+    // Validation
+    // The piece exists and the position is a real place. Where the piece may stand is the house's own business
+    // (Housing::PlaceDecorWithGuid and Housing::MoveDecor check it against the room it stands in).
+    HousingResult ValidateDecorPlacement(uint32 decorId, Position const& pos, uint32 houseLevel) const;
+
+    // A room's geobox, relative to where the room stands: RoomWmoData's bounding box for the room's HouseRoom row, or
+    // the box retail sends for a plot's room when that row is missing. The client checks decor against this box.
+    void GetRoomGeobox(uint32 roomEntryId, Position& min, Position& max) const;
+    // Whether a map position lies inside a geobox around a room that stands at `room` and turns about the vertical
+    // axis by its orientation, give or take `margin` yards on every side.
+    static bool IsInsideRoomGeobox(Position const& room, Position const& min, Position const& max, Position const& point, float margin);
+
+    // HouseExteriorWmoData.Flags: whether a house type needs unlocking first, and whether it may stand in a
+    // neighborhood with this faction restriction (the Horde and Alliance bits; a type with neither bit, or a
+    // neighborhood with no restriction, allows it).
+    static bool IsHouseTypeUnlockedByDefault(HouseExteriorWmoData const& houseType);
+    static bool IsHouseTypeAllowedInNeighborhood(HouseExteriorWmoData const& houseType, int32 factionRestriction);
+    // ExteriorComponent.Flags: whether an exterior piece is usable without unlocking it first. In the 12.1 client every
+    // piece except six parts of the two Westfall barn house types and one hook marker has this bit.
+    static bool IsExteriorComponentUnlockedByDefault(ExteriorComponentEntry const& component);
+
+    // Whether a character of this team may found a neighborhood from a NeighborhoodMap row: the row belongs to a
+    // neighborhood district (Map.db2 instance type 8, so not the house interior), and its Flags let that team buy
+    // there (1 Alliance, 2 Horde). INVALID_MAP for a row that is not a district, INCORRECT_FACTION for the other team's.
+    HousingResult CheckNeighborhoodFoundingMap(uint32 neighborhoodMapId, uint32 team) const;
+    static HousingResult CheckNeighborhoodFoundingFlags(bool isDistrict, int32 neighborhoodMapFlags, uint32 team);
+    // The faction restriction a neighborhood founded by a character of this team gets.
+    static int32 GetNeighborhoodFactionForTeam(uint32 team);
+
+    // House-finder per-player ignore list (CMSG_HOUSING_SVCS_HOUSE_FINDER_IGNORE_NEIGHBORHOOD).
+    // Lazily loaded from character_housing_ignored_neighborhood, cached in memory, write-through
+    // to DB on mutation. Used to exclude neighborhoods from the finder listing.
+    bool IsNeighborhoodIgnored(ObjectGuid playerGuid, ObjectGuid neighborhoodGuid);
+    void AddIgnoredNeighborhood(ObjectGuid playerGuid, ObjectGuid neighborhoodGuid);
+    void RemoveIgnoredNeighborhood(ObjectGuid playerGuid, ObjectGuid neighborhoodGuid);
+
+private:
+    // Ensure the player's ignore set is loaded from DB into _ignoredNeighborhoods.
+    std::unordered_set<ObjectGuid>& EnsureIgnoredNeighborhoodsLoaded(ObjectGuid playerGuid);
+    void LoadHouseDecorData();
+    void LoadHouseLevelData();
+    void LoadHouseRoomData();
+    void LoadHouseThemeData();
+    void LoadHouseDecorThemeSetData();
+    void LoadNeighborhoodMapData();
+    void LoadNeighborhoodPlotData();
+    void LoadNeighborhoodNameGenData();
+    void LoadHouseDecorMaterialData();
+    void LoadHouseExteriorWmoData();
+    void LoadHouseLevelRewardInfoData();
+    void LoadNeighborhoodInitiativeData();
+    void LoadRoomComponentData();
+    void LoadDecorCategoryData();
+    void LoadDecorSubcategoryData();
+    void LoadDecorDyeSlotData();
+    void LoadDecorXDecorSubcategoryData();
+
+    // DB2 data stores indexed by ID
+    std::unordered_map<uint32, HouseDecorData> _houseDecorStore;
+    std::unordered_map<uint32, HouseLevelData> _houseLevelDataStore;
+    std::unordered_map<uint32, HouseRoomData> _houseRoomStore;
+    std::unordered_map<uint32, HouseThemeData> _houseThemeStore;
+    std::unordered_map<uint32, HouseDecorThemeSetData> _houseDecorThemeSetStore;
+    std::unordered_map<uint32, NeighborhoodMapData> _neighborhoodMapStore;
+    std::unordered_map<uint32, NeighborhoodPlotData> _neighborhoodPlotStore;
+    std::unordered_map<uint32, HouseDecorMaterialData> _houseDecorMaterialStore;
+    std::unordered_map<uint32, HouseExteriorWmoData> _houseExteriorWmoStore;
+    std::unordered_map<uint32, HouseLevelRewardInfoData> _houseLevelRewardInfoStore;
+    std::unordered_map<uint32, NeighborhoodInitiativeData> _neighborhoodInitiativeStore;
+    std::unordered_map<uint32, DecorCategoryData> _decorCategoryStore;
+    std::unordered_map<uint32, DecorSubcategoryData> _decorSubcategoryStore;
+    std::unordered_map<uint32, DecorDyeSlotData> _decorDyeSlotStore;
+
+    // Lookup indexes
+    std::unordered_map<uint32 /*neighborhoodMapId*/, std::vector<NeighborhoodPlotData const*>> _plotsByMap;
+    std::unordered_map<uint32 /*neighborhoodMapId*/, std::vector<NeighborhoodNameGenData>> _nameGenByMap;
+    std::unordered_map<uint32 /*level*/, HouseLevelData const*> _levelDataByLevel;
+    std::unordered_map<uint32 /*houseThemeId*/, std::vector<HouseDecorMaterialData const*>> _materialsByTheme;
+    std::unordered_map<uint32 /*houseLevelId*/, std::vector<HouseLevelRewardInfoData const*>> _rewardsByLevel;
+    std::unordered_map<uint32 /*categoryId*/, std::vector<DecorSubcategoryData const*>> _subcategoriesByCategory;
+    std::unordered_map<uint32 /*subcategoryId*/, std::vector<uint32 /*houseDecorId*/>> _decorsBySubcategory;
+    std::unordered_map<uint32 /*houseDecorId*/, uint32 /*categoryId*/> _categoryByDecor;
+    std::unordered_map<uint32 /*houseDecorId*/, std::vector<DecorDyeSlotData const*>> _dyeSlotsByDecor;
+
+    // Reverse lookup: world MapID -> NeighborhoodMap ID
+    std::unordered_map<int32 /*worldMapId*/, uint32 /*neighborhoodMapId*/> _worldMapToNeighborhoodMap;
+
+    // Room doorway map: RoomWmoDataID -> list of doorway components
+    std::unordered_map<uint32 /*roomWmoDataId*/, std::vector<RoomDoorInfo>> _roomDoorMap;
+
+    // All room components indexed by RoomWmoDataID (walls, floors, ceilings, stairs, doorways)
+    std::unordered_map<uint32 /*roomWmoDataId*/, std::vector<RoomComponentData>> _roomComponentsByWmoData;
+
+    // O(1) RoomComponentOption lookup: key = (uint64(MeshStyleFilterID) << 32) | uint32(HouseThemeID)
+    std::unordered_map<uint64, RoomComponentOptionEntry const*> _roomCompOptionIndex;
+    void BuildRoomComponentOptionIndex();
+    void BuildExteriorComponentIndexes();
+    void BuildRoomComponentTextureIndex();
+    void DumpExteriorComponentDiagnostics();
+    void DumpRoomComponentTextureDiagnostics();
+    void EnsureDoorGameObjectTemplates();
+
+    // Base room entry ID — exterior geobox (from DB2 IsBaseRoom flag scan, fallback 18)
+    uint32 _baseRoomEntryId = 0;
+
+    // Entry hall room entry ID — interior base room (second BASE_ROOM in DB2, fallback to _baseRoomEntryId)
+    // Sniff-verified: Room 46 is the entry corridor with door connecting to the visual room
+    uint32 _entryHallRoomEntryId = 0;
+
+    // Room grid spacing (~24 yards between room centers)
+    float _roomGridSpacing = HOUSING_ROOM_GRID_SPACING;
+
+    // RoomComponentTexture indexes
+    // RoomComponentOptionID → RoomComponentTextureID (from RoomComponentOptionTexture join)
+    std::unordered_map<int32 /*optionID*/, int32 /*textureID*/> _textureByOptionId;
+    // componentType → textureID (first matching texture per type, fallback)
+    std::unordered_map<uint8 /*type*/, int32 /*textureID*/> _textureByComponentType;
+
+    // ExteriorComponent indexes
+    std::unordered_map<uint32 /*extCompID*/, std::vector<ExteriorComponentHookEntry const*>> _hooksByExtComp;
+    std::unordered_map<uint32 /*extCompID*/, ExteriorComponentExitPointEntry const*> _exitPointByExtComp;
+    std::unordered_map<uint32 /*extCompID*/, int32 /*groupID*/> _groupByExtComp;
+    std::unordered_map<int32 /*groupID*/, std::vector<uint32 /*extCompID*/>> _extCompsByGroup;
+    std::unordered_map<uint32 /*parentCompID*/, std::vector<uint32 /*childCompID*/>> _childrenByExtComp;
+    std::unordered_map<uint32 /*wmoDataID*/, std::vector<uint32 /*compID*/>> _rootCompsByWmoDataId;
+
+    // Fixture resolution: (componentType, wmoDataID, size) → default component ID
+    // Key = (uint64(componentType) << 40) | (uint64(wmoDataID) << 8) | size
+    std::unordered_map<uint64, uint32> _defaultFixtureByTypeWmo;
+
+    // House-finder ignore list, per player. Value present == loaded from DB.
+    std::unordered_map<ObjectGuid, std::unordered_set<ObjectGuid>> _ignoredNeighborhoods;
+};
+
+#define sHousingMgr HousingMgr::Instance()
+
+#endif // HousingMgr_h__

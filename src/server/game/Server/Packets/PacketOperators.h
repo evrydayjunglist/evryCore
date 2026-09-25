@@ -20,6 +20,7 @@
 
 #include "ByteBuffer.h"
 #include "Optional.h"
+#include <cstddef>
 #include <memory>
 
 namespace WorldPackets
@@ -210,6 +211,37 @@ namespace WorldPackets
 
     template<AsWritable Underlying, ContainerReadable<Underlying> Container>
     inline SizeReaderWriter<Underlying, Container> Size(Container& value) { return { value }; }
+
+    // Size<> resizes the container from the wire count before any element is
+    // read, so a malformed count becomes a huge allocation. BoundedSize refuses
+    // a count that cannot fit in the bytes left in the packet, given the
+    // smallest size one element can take, and throws before resizing. It never
+    // shortens the count, because acting on part of a list is not what the
+    // client asked for. Use it for every list whose length comes from the client.
+    template<AsWritable Underlying, std::size_t MinimumElementBytes, ContainerReadable<Underlying> Container>
+    struct BoundedSizeReaderWriter : SizeWriter<Underlying, Container>
+    {
+        static_assert(MinimumElementBytes > 0);
+
+        friend inline ByteBuffer& operator>>(ByteBuffer& data, BoundedSizeReaderWriter const& size)
+        {
+            Underlying temp;
+            data >> temp;
+
+            std::size_t const remaining = data.size() > data.rpos() ? data.size() - data.rpos() : 0;
+            if (std::size_t(temp) > remaining / MinimumElementBytes)
+                data.OnInvalidPosition(data.rpos(), std::size_t(temp));
+
+            const_cast<Container&>(size.Value).resize(std::size_t(temp));
+            return data;
+        }
+    };
+
+    template<AsWritable Underlying, std::size_t MinimumElementBytes = 1, ContainerWritable<Underlying> Container>
+    inline SizeWriter<Underlying, Container> BoundedSize(Container const& value) { return { value }; }
+
+    template<AsWritable Underlying, std::size_t MinimumElementBytes = 1, ContainerReadable<Underlying> Container>
+    inline BoundedSizeReaderWriter<Underlying, MinimumElementBytes, Container> BoundedSize(Container& value) { return { value }; }
 
     template<uint32 BitCount, ContainerWritable<uint32> Container>
     struct BitsSizeWriter

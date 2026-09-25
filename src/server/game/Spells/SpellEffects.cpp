@@ -16,6 +16,7 @@
  */
 
 #include "Spell.h"
+#include "Account.h"
 #include "AccountMgr.h"
 #include "AreaTrigger.h"
 #include "AzeriteEmpoweredItem.h"
@@ -46,6 +47,11 @@
 #include "GridNotifiersImpl.h"
 #include "Group.h"
 #include "Guild.h"
+#include "Housing.h"
+#include "HousingDecorStore.h"
+#include "HousingMap.h"
+#include "HousingMgr.h"
+#include "HousingPackets.h"
 #include "InstanceScript.h"
 #include "Item.h"
 #include "Language.h"
@@ -56,6 +62,8 @@
 #include "MiscPackets.h"
 #include "MotionMaster.h"
 #include "MoveSpline.h"
+#include "Neighborhood.h"
+#include "NeighborhoodMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvPMgr.h"
@@ -64,6 +72,7 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "QuestMgr.h"
+#include "RealmList.h"
 #include "ReputationMgr.h"
 #include "RestMgr.h"
 #include "SceneObject.h"
@@ -413,7 +422,7 @@ NonDefaultConstructible<SpellEffectHandlerFn> SpellEffectHandlers[TOTAL_SPELL_EF
     &Spell::EffectNULL,                                     //321 SPELL_EFFECT_321
     &Spell::EffectNULL,                                     //322 SPELL_EFFECT_322
     &Spell::EffectNULL,                                     //323 SPELL_EFFECT_323
-    &Spell::EffectNULL,                                     //324 SPELL_EFFECT_324
+    &Spell::EffectCollectHousingDecor,                       //324 SPELL_EFFECT_COLLECT_HOUSING_DECOR
     &Spell::EffectNULL,                                     //325 SPELL_EFFECT_325
     &Spell::EffectNULL,                                     //326 SPELL_EFFECT_326
     &Spell::EffectNULL,                                     //327 SPELL_EFFECT_327
@@ -437,13 +446,13 @@ NonDefaultConstructible<SpellEffectHandlerFn> SpellEffectHandlers[TOTAL_SPELL_EF
     &Spell::EffectNULL,                                     //345 SPELL_EFFECT_ASSIST_ACTION
     &Spell::EffectNULL,                                     //346 SPELL_EFFECT_346
     &Spell::EffectEquipTransmogOutfit,                      //347 SPELL_EFFECT_EQUIP_TRANSMOG_OUTFIT
-    &Spell::EffectNULL,                                     //348 SPELL_EFFECT_GIVE_HOUSE_LEVEL
-    &Spell::EffectNULL,                                     //349 SPELL_EFFECT_LEARN_HOUSE_ROOM
-    &Spell::EffectNULL,                                     //350 SPELL_EFFECT_LEARN_HOUSE_EXTERIOR_COMPONENT
-    &Spell::EffectNULL,                                     //351 SPELL_EFFECT_LEARN_HOUSE_THEME
-    &Spell::EffectNULL,                                     //352 SPELL_EFFECT_LEARN_HOUSE_ROOM_COMPONENT_TEXTURE
+    &Spell::EffectGiveHouseLevel,                            //348 SPELL_EFFECT_GIVE_HOUSE_LEVEL
+    &Spell::EffectLearnHouseRoom,                            //349 SPELL_EFFECT_LEARN_HOUSE_ROOM
+    &Spell::EffectLearnHouseExteriorComponent,               //350 SPELL_EFFECT_LEARN_HOUSE_EXTERIOR_COMPONENT
+    &Spell::EffectLearnHouseTheme,                           //351 SPELL_EFFECT_LEARN_HOUSE_THEME
+    &Spell::EffectLearnHouseRoomComponentTexture,            //352 SPELL_EFFECT_LEARN_HOUSE_ROOM_COMPONENT_TEXTURE
     &Spell::EffectCreateAreaTrigger,                        //353 SPELL_EFFECT_CREATE_AREATRIGGER_2
-    &Spell::EffectNULL,                                     //354 SPELL_EFFECT_SET_NEIGHBORHOOD_INITIATIVE
+    &Spell::EffectSetNeighborhoodInitiative,                 //354 SPELL_EFFECT_SET_NEIGHBORHOOD_INITIATIVE
     &Spell::EffectNULL,                                     //355 SPELL_EFFECT_LEARN_HOUSE_TYPE
     &Spell::EffectNULL,                                     //356 SPELL_EFFECT_356
     &Spell::EffectNULL,                                     //357 SPELL_EFFECT_357
@@ -6389,4 +6398,267 @@ void Spell::EffectEquipTransmogOutfit()
     }
 
     target->EquipTransmogOutfit(m_misc.EquipTransmogOutfit.TransmogOutfitId, static_cast<TransmogSituationTrigger>(m_misc.EquipTransmogOutfit.SituationTrigger), locked);
+}
+
+void Spell::EffectGiveHouseLevel()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
+
+    Player* player = Object::ToPlayer(unitTarget);
+    if (!player)
+        return;
+
+    // The only 12.1 spell with this effect is 1252051 "[DNT] Test Level Up Houses", so every standing house of the
+    // account takes the levels.
+    uint32 levelsToAdd = std::max(GetEffectValueAsInt(), 1);
+    for (Housing const* house : player->GetAllHousings())
+    {
+        Housing* housing = player->GetHousingByGuid(house->GetHouseGuid());
+        if (!housing)
+            continue;
+
+        TC_LOG_DEBUG("spells", "Spell::EffectGiveHouseLevel: Adding {} level(s) to house for player {} (house {}, current level {})",
+            levelsToAdd, player->GetName(), housing->GetHouseGuid().ToString(), housing->GetLevel());
+
+        housing->AddLevel(levelsToAdd);
+    }
+}
+
+void Spell::EffectCollectHousingDecor()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
+
+    Player* player = Object::ToPlayer(unitTarget);
+    if (!player)
+        return;
+
+    // The decor goes to the Battle.net account's store, which needs no house.
+    HousingDecorStore* store = player->GetHousingDecorStore();
+    if (!store)
+        return;
+
+    // A spell with no decor in MiscValue grants its item's decor: 1256487 cast by item 253493 is decor 1163.
+    uint32 decorEntryId = effectInfo->MiscValue;
+    if (!decorEntryId && m_castItemEntry)
+        decorEntryId = sHousingMgr.GetDecorIdForItem(m_castItemEntry);
+
+    HouseDecorData const* decorData = decorEntryId ? sHousingMgr.GetHouseDecorData(decorEntryId) : nullptr;
+    if (!decorData)
+    {
+        TC_LOG_ERROR("spells", "Spell::EffectCollectHousingDecor: spell {} (item {}) names no known HouseDecor ({})",
+            m_spellInfo->Id, m_castItemEntry, decorEntryId);
+        return;
+    }
+
+    // One new piece in storage. Cast by an item, its source is the item with the item's GUID as the value (hled1
+    // 789060-789062); otherwise the spell, with its id.
+    uint8 sourceType = DECOR_SOURCE_SPELL;
+    std::string sourceValue = std::to_string(m_spellInfo->Id);
+    if (!m_castItemGUID.IsEmpty())
+    {
+        sourceType = DECOR_SOURCE_ITEM;
+        sourceValue = HousingDecorStore::MakeItemSourceValue(sRealmList->GetCurrentRealmId().Realm, m_castItemGUID.GetCounter());
+    }
+
+    bool firstOwned = false;
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    Housing::PlacedDecor const piece = store->CreateStored(decorEntryId, sourceType, std::move(sourceValue), firstOwned, trans);
+    CharacterDatabase.CommitTransaction(trans);
+
+    // Retail's order (hbcd3 Numbers 20363-20365 for decor 1163 from item 253493): the account's update with the new
+    // piece, then the "collect unique decor" criteria update, then the add-to-chest reply naming the piece. Here that
+    // criteria update only goes out when the count of owned entries changes, because the shared criteria code sends
+    // nothing for an unchanged count; retail repeated it unchanged (Number 20364 read 109, as Number 19800 had). The
+    // update carried no source value; the saved one appears after a relog. No first-time message follows a grant in any
+    // capture. For an entry owned for the first time retail then sent the house level and favor update (Number 25462
+    // for decor 1482); that packet is not sent here yet.
+    WorldSession* session = player->GetSession();
+    Battlenet::Account& account = session->GetBattlenetAccount();
+    if (account.IsHousingDecorStorageSent())
+    {
+        account.SetHousingDecorStorageEntry(piece.Guid, ObjectGuid::Empty, piece.SourceType, std::string());
+        account.SendUpdateToPlayer(player);
+    }
+
+    Housing::OnDecorAcquired(player, decorEntryId, firstOwned);
+
+    WorldPackets::Housing::HousingDecorAddToHouseChestResponse chestResponse;
+    chestResponse.Success = true;
+    chestResponse.DecorGuids.push_back(piece.Guid);
+    player->SendDirectMessage(chestResponse.Write());
+
+    TC_LOG_DEBUG("spells", "Spell::EffectCollectHousingDecor: Player {} got decor '{}' (ID: {}) as {} from spell {}",
+        player->GetName(), decorData->Name, decorEntryId, piece.Guid.ToString(), m_spellInfo->Id);
+}
+
+void Spell::EffectLearnHouseRoom()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
+
+    Player* player = Object::ToPlayer(unitTarget);
+    if (!player)
+        return;
+
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
+    if (!housing)
+        return;
+
+    uint32 houseRoomId = effectInfo->MiscValue;
+    if (!houseRoomId)
+        return;
+
+    HouseRoomData const* roomData = sHousingMgr.GetHouseRoomData(houseRoomId);
+    if (!roomData)
+    {
+        TC_LOG_ERROR("spells", "Spell::EffectLearnHouseRoom: Invalid HouseRoom ID {} from spell {}",
+            houseRoomId, m_spellInfo->Id);
+        return;
+    }
+
+    TC_LOG_DEBUG("spells", "Spell::EffectLearnHouseRoom: Player {} learned house room '{}' (ID: {})",
+        player->GetName(), roomData->Name, houseRoomId);
+
+    // Send collection update to the client
+    WorldPackets::Housing::AccountRoomCollectionUpdate collectionUpdate;
+    collectionUpdate.AddSingle(houseRoomId);
+    player->SendDirectMessage(collectionUpdate.Write());
+}
+
+void Spell::EffectLearnHouseExteriorComponent()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
+
+    Player* player = Object::ToPlayer(unitTarget);
+    if (!player)
+        return;
+
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
+    if (!housing)
+        return;
+
+    uint32 exteriorComponentId = effectInfo->MiscValue;
+    if (!exteriorComponentId)
+        return;
+
+    TC_LOG_DEBUG("spells", "Spell::EffectLearnHouseExteriorComponent: Player {} learned exterior component ID {} from spell {}",
+        player->GetName(), exteriorComponentId, m_spellInfo->Id);
+
+    // Send collection update to the client
+    WorldPackets::Housing::AccountExteriorFixtureCollectionUpdate collectionUpdate;
+    collectionUpdate.AddSingle(exteriorComponentId);
+    player->SendDirectMessage(collectionUpdate.Write());
+}
+
+void Spell::EffectLearnHouseTheme()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
+
+    Player* player = Object::ToPlayer(unitTarget);
+    if (!player)
+        return;
+
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
+    if (!housing)
+        return;
+
+    uint32 houseThemeId = effectInfo->MiscValue;
+    if (!houseThemeId)
+        return;
+
+    HouseThemeData const* themeData = sHousingMgr.GetHouseThemeData(houseThemeId);
+    if (!themeData)
+    {
+        TC_LOG_ERROR("spells", "Spell::EffectLearnHouseTheme: Invalid HouseTheme ID {} from spell {}",
+            houseThemeId, m_spellInfo->Id);
+        return;
+    }
+
+    TC_LOG_DEBUG("spells", "Spell::EffectLearnHouseTheme: Player {} learned house theme '{}' (ID: {})",
+        player->GetName(), themeData->Name, houseThemeId);
+
+    // Send collection update to the client
+    WorldPackets::Housing::AccountRoomThemeCollectionUpdate collectionUpdate;
+    collectionUpdate.AddSingle(houseThemeId);
+    player->SendDirectMessage(collectionUpdate.Write());
+}
+
+void Spell::EffectLearnHouseRoomComponentTexture()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
+
+    Player* player = Object::ToPlayer(unitTarget);
+    if (!player)
+        return;
+
+    // The account's collections are shared by all its houses, so any house of the account will do.
+    Housing* housing = player->GetAccountCatalogHousing();
+    if (!housing)
+        return;
+
+    uint32 textureId = effectInfo->MiscValue;
+    if (!textureId)
+        return;
+
+    TC_LOG_DEBUG("spells", "Spell::EffectLearnHouseRoomComponentTexture: Player {} learned room component texture ID {} from spell {}",
+        player->GetName(), textureId, m_spellInfo->Id);
+
+    // Send collection update to the client (texture = material in the collection system)
+    WorldPackets::Housing::AccountRoomMaterialCollectionUpdate collectionUpdate;
+    collectionUpdate.AddSingle(textureId);
+    player->SendDirectMessage(collectionUpdate.Write());
+}
+
+void Spell::EffectSetNeighborhoodInitiative()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
+
+    Player* player = Object::ToPlayer(unitTarget);
+    if (!player)
+        return;
+
+    uint32 initiativeId = effectInfo->MiscValue;
+    if (!initiativeId)
+        return;
+
+    NeighborhoodInitiativeData const* initiativeData = sHousingMgr.GetNeighborhoodInitiativeData(initiativeId);
+    if (!initiativeData)
+    {
+        TC_LOG_ERROR("spells", "Spell::EffectSetNeighborhoodInitiative: Invalid NeighborhoodInitiative ID {} from spell {}",
+            initiativeId, m_spellInfo->Id);
+        return;
+    }
+
+    // The neighborhood she stands in, where the Steward is, else her active one. Starting the endeavor from a manager's
+    // pick is not built yet; this only checks and logs.
+    ObjectGuid neighborhoodGuid = player->GetHousingActiveNeighborhood();
+    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()); housingMap && housingMap->GetNeighborhood())
+        neighborhoodGuid = housingMap->GetNeighborhood()->GetGuid();
+    Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
+    if (!neighborhood)
+    {
+        TC_LOG_ERROR("spells", "Spell::EffectSetNeighborhoodInitiative: Player {} has no valid neighborhood (guid: {})",
+            player->GetName(), neighborhoodGuid.ToString());
+        return;
+    }
+
+    // Only the neighborhood owner or managers should be able to set initiatives
+    if (!neighborhood->IsOwner(player->GetGUID()) && !neighborhood->IsManager(player->GetGUID()))
+    {
+        TC_LOG_DEBUG("spells", "Spell::EffectSetNeighborhoodInitiative: Player {} is not owner/manager of neighborhood {}",
+            player->GetName(), neighborhoodGuid.ToString());
+        return;
+    }
+
+    TC_LOG_DEBUG("spells", "Spell::EffectSetNeighborhoodInitiative: Player {} set initiative '{}' (ID: {}) on neighborhood {}",
+        player->GetName(), initiativeData->Name, initiativeId, neighborhoodGuid.ToString());
 }

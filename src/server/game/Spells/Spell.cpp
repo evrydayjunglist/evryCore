@@ -173,6 +173,15 @@ void SpellCastTargets::Write(WorldPackets::Spells::SpellTargetData& data)
 
     if (m_targetMask & TARGET_FLAG_STRING)
         data.Name = m_strTarget;
+
+    data.HousingGUID = m_housingGuid;
+    data.HousingIsResident = m_housingIsResident;
+
+    if (m_serverChosenDst && (m_targetMask & TARGET_FLAG_DEST_LOCATION))
+    {
+        data.Orientation = m_dst._position.GetOrientation();
+        data.MapID = int32(m_dst._position.GetMapId());
+    }
 }
 
 ObjectGuid SpellCastTargets::GetUnitTargetGUID() const
@@ -383,6 +392,19 @@ void SpellCastTargets::ModDst(SpellDestination const& spellDest)
 void SpellCastTargets::RemoveDst()
 {
     m_targetMask &= ~(TARGET_FLAG_DEST_LOCATION);
+    m_serverChosenDst = false;
+}
+
+void SpellCastTargets::SetServerChosenDst(WorldLocation const& dest)
+{
+    SetDst(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), dest.GetMapId());
+    m_serverChosenDst = true;
+}
+
+void SpellCastTargets::SetHousingTarget(ObjectGuid housingGuid, bool isResident)
+{
+    m_housingGuid = housingGuid;
+    m_housingIsResident = isResident;
 }
 
 bool SpellCastTargets::HasSrc() const
@@ -6011,8 +6033,9 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
         }
     }
 
-    // Check for line of sight for spells with dest
-    if (m_targets.HasDst())
+    // Check for line of sight for spells with dest. A destination the server picked is not one she aimed at, and it
+    // can be on another map.
+    if (m_targets.HasDst() && !m_targets.IsServerChosenDst())
         if (!IsWithinLOS(m_caster, *m_targets.GetDstPos(), VMAP::ModelIgnoreFlags::M2))
             return SPELL_FAILED_LINE_OF_SIGHT;
 
@@ -7315,7 +7338,9 @@ SpellCastResult Spell::CheckRange(bool strict) const
             return SPELL_FAILED_OUT_OF_RANGE;
     }
 
-    if (m_targets.HasDst() && !m_targets.HasTraj())
+    // A destination the server picked is not in reach of her aim: Teleport Home (1233637) is a self-only spell whose
+    // destination is her plot, wherever she casts it from.
+    if (m_targets.HasDst() && !m_targets.HasTraj() && !m_targets.IsServerChosenDst())
     {
         if (m_caster->GetExactDistSq(m_targets.GetDstPos()) > maxRange)
             return SPELL_FAILED_OUT_OF_RANGE;

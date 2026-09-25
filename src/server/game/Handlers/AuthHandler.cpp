@@ -220,13 +220,20 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
     }
     vars.emplace_back("recentAlliesEnabledClient"sv, "0"sv);
     vars.emplace_back("browserEnabled"sv, catalogShopEnabled ? "1"sv : "0"sv);
-    vars.emplace_back("housingEnableCreateGuildNeighborhood"sv, "0"sv);
-    vars.emplace_back("housingEnableDeleteHouse"sv, "0"sv);
-    vars.emplace_back("housingServiceEnabled"sv, "0"sv);
-    vars.emplace_back("housingEnableMoveHouse"sv, "0"sv);
-    vars.emplace_back("housingEnableCreateCharterNeighborhood"sv, "0"sv);
-    vars.emplace_back("housingEnableBuyHouse"sv, "0"sv);
-    vars.emplace_back("housingMarketEnabled"sv, "0"sv);
+    // Housing services, sent only at the character screen (hbcd3 1442).
+    vars.emplace_back("housingServiceEnabled"sv, "1"sv);
+    vars.emplace_back("housingEnableBuyHouse"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_BUY_HOUSE) ? "1"sv : "0"sv);
+    vars.emplace_back("housingEnableDeleteHouse"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_DELETE_HOUSE) ? "1"sv : "0"sv);
+    vars.emplace_back("housingEnableMoveHouse"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_MOVE_HOUSE) ? "1"sv : "0"sv);
+    vars.emplace_back("housingEnableCreateCharterNeighborhood"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_CREATE_CHARTER_NEIGHBORHOOD) ? "1"sv : "0"sv);
+    vars.emplace_back("housingEnableCreateGuildNeighborhood"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_CREATE_GUILD_NEIGHBORHOOD) ? "1"sv : "0"sv);
+    // Blueprints are new in 12.1 and no capture names these three; they come from agatho's housing branch, read from the 12.1
+    // client, which gates C_HousingBlueprint.GetFeatureAvailability, GetImportAvailability and
+    // GetExportAvailability on them.
+    vars.emplace_back("housingBlueprintsEnabled"sv, "1"sv);
+    vars.emplace_back("housingBlueprintImportEnabled"sv, "1"sv);
+    vars.emplace_back("housingBlueprintExportEnabled"sv, "1"sv);
+    AppendHousingMirrorVars(vars, false);
 
     WorldPackets::System::MirrorVars variables;
     variables.Variables = vars;
@@ -239,6 +246,50 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
     // Push Dist with glue so the Use Boost token is already counted.
     if (GetBattlePayMgr())
         GetBattlePayMgr()->SendAvailableL80Distributions();
+}
+
+/*static*/ void WorldSession::AppendHousingMirrorVars(std::vector<WorldPackets::System::MirrorVarSingle>& vars, bool inWorld)
+{
+    // Retail sends these at the character screen (hbcd3 1442) and again in the world after login and after each map
+    // change (hbcd3 167415, 245836, 356261, 1344902, 1456481), with the same values.
+    vars.insert(vars.end(),
+    {
+        { "performHousingExpansionCheckClient"sv, "1"sv },
+        { "housingExteriorTypeByNeighborhoodFactionRestriction"sv, "1"sv },
+        { "housingExteriorLightsAllowed"sv, "1"sv },
+        { "housingExteriorLightsRadiusMultiplier"sv, "0.500000"sv },
+        { "housingBasicDecor_MaxPreviewLimit"sv, "100"sv },
+        { "housingCatalog_CartSizeLimit"sv, "20"sv },
+        { "housingExpertDecor_Scale_Indoor_Min"sv, "0.200000"sv },
+        { "housingExpertDecor_Scale_Indoor_Max"sv, "2.000000"sv },
+        { "housingExpertDecor_Scale_Outdoor_Min"sv, "0.200000"sv },
+        { "housingExpertDecor_Scale_Outdoor_Max"sv, "2.000000"sv },
+        { "housingDecorReportScreenshotFacingDotThreshold"sv, "0.500000"sv },
+        { "housingDecorReportScreenshotDistanceThreshold"sv, "150.000000"sv },
+        { "housingMarketEnabled"sv, "1"sv },
+        { "housingMarketShopEnabled"sv, "1"sv },
+        { "housingMarketCartFullRemoveEnabled"sv, "1"sv },
+        { "housingMarketViewInStoreTelemThrottle"sv, "5"sv },
+        { "housingMarketViewBundleTelemThrottle"sv, "10"sv },
+        { "housingMarketAddToCartTelemThrottle"sv, "15"sv },
+        { "housingMarketClearCartTelemThrottle"sv, "5"sv },
+        { "housingMarketRemoveFromCartTelemThrottle"sv, "20"sv },
+        { "housingMarketThrottleTimePeriodMs"sv, "10000"sv },
+    });
+
+    // Sent in the world only; the character screen list does not have it.
+    if (inWorld)
+        vars.emplace_back("minNeighborhoodGroupMembers"sv, "3"sv);
+}
+
+void WorldSession::SendHousingMirrorVars()
+{
+    std::vector<WorldPackets::System::MirrorVarSingle> vars;
+    AppendHousingMirrorVars(vars, true);
+
+    WorldPackets::System::MirrorVars variables;
+    variables.Variables = vars;
+    SendPacket(variables.Write());
 }
 
 void WorldSession::UpdateTimerunningSeason()

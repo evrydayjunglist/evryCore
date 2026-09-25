@@ -48,6 +48,8 @@ class InstanceLock;
 class Item;
 class LoginQueryHolder;
 class MessageBuffer;
+class HousingPlayerHouseEntity;
+class HousingNeighborhoodMirrorEntity;
 class Player;
 class Unit;
 class WorldPacket;
@@ -67,7 +69,12 @@ enum class AuctionResult : int8;
 enum class PlayerInteractionType : int32;
 enum InventoryResult : uint8;
 enum class StableResult : uint8;
+enum HousingResult : uint8;
 enum class TabardVendorType : int32;
+
+class Housing;
+class HousingNeighborhoodMirrorEntity;
+class HousingPlayerHouseEntity;
 
 namespace Battlenet
 {
@@ -449,7 +456,123 @@ namespace WorldPackets
 
     namespace Housing
     {
+        // Patch 12.1.0 (build 69299) blueprint packets (HousingBlueprintPackets.h)
+        class HousingBlueprintRequestCollection;
+        class HousingBlueprintRequestContents;
+        class HousingBlueprintExport;
+        class HousingBlueprintRename;
+        class HousingBlueprintDelete;
+        class HousingBlueprintImport;
+        class HouseExteriorCommitPosition;
+        class HouseInteriorLeaveHouse;
+        class HousingDecorSetEditMode;
+        class HousingDecorPlace;
+        class HousingDecorMove;
+        class HousingDecorRemove;
+        class HousingDecorLock;
+        class HousingDecorSetPet;
+        class HousingDecorSetDyeSlots;
+        class HousingDecorDeleteFromStorage;
+        class HousingDecorRequestStorage;
+        class HousingDecorRedeemDeferredDecor;
+        class HousingDecorStartPlacingNewDecor;
+        class HousingDecorCatalogCreateSearcher;
+        class GetLastCatalogFetch;
+        class UpdateLastCatalogFetch;
+        class HousingFixtureSetEditMode;
+        class HousingFixtureSetCoreFixture;
+        class HousingFixtureCreateFixture;
+        class HousingFixtureDeleteFixture;
+        class HousingRoomSetLayoutEditMode;
+        class HousingRoomAdd;
+        class HousingRoomRemove;
+        class HousingRoomRotate;
+        class HousingRoomMoveRoom;
+        class HousingRoomSetComponentTheme;
+        class HousingRoomApplyComponentMaterials;
+        class HousingRoomSetDoorType;
+        class HousingRoomSetCeilingType;
+        class HousingSvcsGuildCreateNeighborhood;
+        class HousingSvcsNeighborhoodReservePlot;
+        class HousingSvcsRelinquishHouse;
+        class HousingSvcsUpdateHouseSettings;
+        class HousingSvcsPlayerViewHousesByPlayer;
+        class HousingSvcsPlayerViewHousesByBnetAccount;
+        class HousingSvcsGetPlayerHousesInfo;
+        class HousingSvcsTeleportToPlot;
+        class HousingSvcsStartTutorial;
+        class HousingSvcsSetTutorialState;
+        class HousingSvcsCompleteTutorialStep;
+        class HousingSvcsSkipTutorial;
+        class HousingSvcsQueryPendingInvites;
+        class HousingSvcsAcceptNeighborhoodOwnership;
+        class HousingSvcsRejectNeighborhoodOwnership;
+        class HousingSvcsGetPotentialHouseOwners;
+        class HousingSvcsGetHouseFinderInfo;
+        class HousingSvcsGetHouseFinderNeighborhood;
+        class HousingSvcsHouseFinderIgnoreNeighborhood;
+        class HousingSvcsGetBnetFriendNeighborhoods;
+        class HousingSvcsDeleteAllNeighborhoodInvites;
+        class HousingHouseStatus;
+        class HousingGetCurrentHouseInfo;
+        class HousingGetPlayerPermissions;
+        class HousingResetKioskMode;
+        class HousingResetHouse;
         class DeclineNeighborhoodInvites;
+        class QueryNeighborhoodInfo;
+        class InvitePlayerToNeighborhood;
+        class GuildGetOthersOwnedHouses;
+        class HouseExteriorLock;
+        class HousingPhotoSharingCompleteAuthorization;
+        class HousingPhotoSharingClearAuthorization;
+        class HousingFixtureSetHouseSize;
+        class HousingFixtureSetHouseType;
+        class GetAllLicensedDecorQuantities;
+        class GetDecorRefundList;
+        class BulkRefund;
+        class HousingRequestEditorAvailability;
+    }
+
+    namespace Neighborhood
+    {
+        class NeighborhoodCharterOpenConfirmationUI;
+        class NeighborhoodCharterCreate;
+        class NeighborhoodCharterEdit;
+        class NeighborhoodCharterFinalize;
+        class NeighborhoodCharterAddSignature;
+        class NeighborhoodCharterSendSignatureRequest;
+        class NeighborhoodUpdateName;
+        class NeighborhoodSetPublicFlag;
+        class NeighborhoodAddSecondaryOwner;
+        class NeighborhoodRemoveSecondaryOwner;
+        class NeighborhoodInviteResident;
+        class NeighborhoodCancelInvitation;
+        class NeighborhoodPlayerDeclineInvite;
+        class NeighborhoodPlayerGetInvite;
+        class NeighborhoodGetInvites;
+        class NeighborhoodBuyHouse;
+        class NeighborhoodMoveHouse;
+        class NeighborhoodOpenCornerstoneUI;
+        class NeighborhoodOfferOwnership;
+        class NeighborhoodGetRoster;
+        class NeighborhoodEvictPlot;
+        class NeighborhoodInitiativeServiceStatusCheck;
+        class GetAvailableInitiativeRequest;
+        class GetPlayerInitiativeInfoRequest;
+        class GetInitiativeActivityLogRequest;
+        class InitiativeUpdateActiveNeighborhood;
+        class NeighborhoodInitiativeOp01;
+        class NeighborhoodInitiativeOp05;
+        class NeighborhoodInitiativeOp06;
+        class NeighborhoodInitiativeOp07;
+        class NeighborhoodInitiativeOp08;
+        class NeighborhoodInitiativeOp09;
+        class NeighborhoodInitiativeOp0A;
+        class NeighborhoodInitiativeOp0B;
+        class NeighborhoodInitiativeOp0C;
+        class NeighborhoodInitiativeOp0D;
+        class NeighborhoodInitiativeOp0E;
+        class NeighborhoodInitiativeOp0F;
     }
 
     namespace Inspect
@@ -574,6 +697,84 @@ namespace WorldPackets
         class GetCharacterCurrencyTransferLog;
     }
 
+    namespace Housing
+    {
+        // Patch 12.1.0 (build 69299) blueprint packets (HousingBlueprintPackets.h)
+        class HousingBlueprintRequestCollection;
+        class HousingBlueprintRequestContents;
+        class HousingBlueprintExport;
+        class HousingBlueprintRename;
+        class HousingBlueprintDelete;
+        class HousingBlueprintImport;
+        class HouseExteriorCommitPosition;
+        class HouseInteriorLeaveHouse;
+        class HousingDecorSetEditMode;
+        class HousingDecorPlace;
+        class HousingDecorMove;
+        class HousingDecorRemove;
+        class HousingDecorLock;
+        class HousingDecorSetPet;
+        class HousingDecorSetDyeSlots;
+        class HousingDecorDeleteFromStorage;
+        class HousingDecorRequestStorage;
+        class HousingDecorRedeemDeferredDecor;
+        class HousingDecorStartPlacingNewDecor;
+        class HousingDecorCatalogCreateSearcher;
+        class GetLastCatalogFetch;
+        class UpdateLastCatalogFetch;
+        class HousingFixtureSetEditMode;
+        class HousingFixtureSetCoreFixture;
+        class HousingFixtureCreateFixture;
+        class HousingFixtureDeleteFixture;
+        class HousingRoomSetLayoutEditMode;
+        class HousingRoomAdd;
+        class HousingRoomRemove;
+        class HousingRoomRotate;
+        class HousingRoomMoveRoom;
+        class HousingRoomSetComponentTheme;
+        class HousingRoomApplyComponentMaterials;
+        class HousingRoomSetDoorType;
+        class HousingRoomSetCeilingType;
+        class HousingSvcsGuildCreateNeighborhood;
+        class HousingSvcsNeighborhoodReservePlot;
+        class HousingSvcsRelinquishHouse;
+        class HousingSvcsUpdateHouseSettings;
+        class HousingSvcsPlayerViewHousesByPlayer;
+        class HousingSvcsPlayerViewHousesByBnetAccount;
+        class HousingSvcsGetPlayerHousesInfo;
+        class HousingSvcsTeleportToPlot;
+        class HousingSvcsStartTutorial;
+        class HousingSvcsSetTutorialState;
+        class HousingSvcsCompleteTutorialStep;
+        class HousingSvcsSkipTutorial;
+        class HousingSvcsQueryPendingInvites;
+        class HousingSvcsAcceptNeighborhoodOwnership;
+        class HousingSvcsRejectNeighborhoodOwnership;
+        class HousingSvcsGetPotentialHouseOwners;
+        class HousingSvcsGetHouseFinderInfo;
+        class HousingSvcsGetHouseFinderNeighborhood;
+        class HousingSvcsHouseFinderIgnoreNeighborhood;
+        class HousingSvcsGetBnetFriendNeighborhoods;
+        class HousingSvcsDeleteAllNeighborhoodInvites;
+        class HousingHouseStatus;
+        class HousingGetCurrentHouseInfo;
+        class HousingGetPlayerPermissions;
+        class HousingResetKioskMode;
+        class HousingResetHouse;
+        class DeclineNeighborhoodInvites;
+        class QueryNeighborhoodInfo;
+        class InvitePlayerToNeighborhood;
+        class GuildGetOthersOwnedHouses;
+        class HouseExteriorLock;
+        class HousingPhotoSharingCompleteAuthorization;
+        class HousingPhotoSharingClearAuthorization;
+        class HousingFixtureSetHouseSize;
+        class HousingFixtureSetHouseType;
+        class GetAllLicensedDecorQuantities;
+        class GetDecorRefundList;
+        class BulkRefund;
+        class HousingRequestEditorAvailability;
+    }
     namespace Movement
     {
         class ClientPlayerMovement;
@@ -725,6 +926,11 @@ namespace WorldPackets
     {
         class AcceptLevelGrant;
         class GrantLevel;
+    }
+
+    namespace System
+    {
+        struct MirrorVarSingle;
     }
 
     namespace Toy
@@ -1054,6 +1260,13 @@ class TC_GAME_API WorldSession
         uint32 GetBattlenetAccountId() const;
         ObjectGuid GetBattlenetAccountGUID() const;
         Battlenet::Account& GetBattlenetAccount() const { return *_battlenetAccount; }
+        // One FHousingPlayerHouse_C entity per house the account owns, created the first time it is needed. Retail sends
+        // none before the account has a house (hbcd3: the own 0xDC60...354769D entity first appears after the purchase).
+        bool HasHousingPlayerHouseEntity(ObjectGuid houseGuid) const { return _housingPlayerHouseEntities.contains(houseGuid); }
+        bool HasHousingNeighborhoodMirrorEntity() const { return _housingNeighborhoodMirrorEntity != nullptr; }
+        HousingPlayerHouseEntity& GetHousingPlayerHouseEntity(ObjectGuid houseGuid);
+        std::unordered_map<ObjectGuid, std::unique_ptr<HousingPlayerHouseEntity>> const& GetHousingPlayerHouseEntities() const { return _housingPlayerHouseEntities; }
+        HousingNeighborhoodMirrorEntity& GetHousingNeighborhoodMirrorEntity() const { return *_housingNeighborhoodMirrorEntity; }
         Player* GetPlayer() const { return _player; }
         std::string const& GetPlayerName() const;
         std::string GetPlayerInfo() const;
@@ -1106,6 +1319,11 @@ class TC_GAME_API WorldSession
         void SendSetTimeZoneInformation();
         void SendFeatureSystemStatus();
         void SendFeatureSystemStatusGlueScreen();
+        // The housing mirror variables retail sends in the world, after login and after each map change.
+        void SendHousingMirrorVars();
+        // The housing mirror variables retail sends both at the character screen and in the world, and, in the world
+        // only, minNeighborhoodGroupMembers.
+        static void AppendHousingMirrorVars(std::vector<WorldPackets::System::MirrorVarSingle>& vars, bool inWorld);
         void UpdateTimerunningSeason();
 
         void BuildNameQueryData(ObjectGuid guid, WorldPackets::Query::NameCacheLookupResult& lookupData);
@@ -1519,8 +1737,166 @@ class TC_GAME_API WorldSession
         void HandleGuildChallengeUpdateRequest(WorldPackets::Guild::GuildChallengeUpdateRequest& packet);
         void HandleDeclineGuildInvites(WorldPackets::Guild::DeclineGuildInvites& packet);
 
-        void HandleDeclineNeighborhoodInvites(WorldPackets::Housing::DeclineNeighborhoodInvites const& declineNeighborhoodInvites);
+        // Housing - Exterior/Interior
+        void HandleHouseExteriorSetHousePosition(WorldPackets::Housing::HouseExteriorCommitPosition const& houseExteriorCommitPosition);
+        void HandleHouseExteriorLock(WorldPackets::Housing::HouseExteriorLock const& houseExteriorLock);
+        void HandleHouseInteriorLeaveHouse(WorldPackets::Housing::HouseInteriorLeaveHouse const& houseInteriorLeaveHouse);
 
+        // Housing - Decor System
+        // Returns false (and uses up nothing) when this session has placed, moved or removed too much decor too
+        // quickly; the handlers then reply TOO_MANY_REQUESTS.
+        bool CheckHousingDecorThrottle();
+
+        // A charter may only be signed by someone who was asked to sign it.
+        void AddPendingCharterSignatureRequest(uint64 charterId) { _pendingCharterSignatureRequests.insert(charterId); }
+        bool HasPendingCharterSignatureRequest(uint64 charterId) const { return _pendingCharterSignatureRequests.contains(charterId); }
+        void ClearPendingCharterSignatureRequest(uint64 charterId) { _pendingCharterSignatureRequests.erase(charterId); }
+        void HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingDecorSetEditMode const& housingDecorSetEditMode);
+        void HandleHousingDecorPlace(WorldPackets::Housing::HousingDecorPlace const& housingDecorPlace);
+        void HandleHousingDecorMove(WorldPackets::Housing::HousingDecorMove const& housingDecorMove);
+        void HandleHousingDecorRemove(WorldPackets::Housing::HousingDecorRemove const& housingDecorRemove);
+        void HandleHousingDecorLock(WorldPackets::Housing::HousingDecorLock const& housingDecorLock);
+        void HandleHousingDecorSetPet(WorldPackets::Housing::HousingDecorSetPet const& housingDecorSetPet);
+        void HandleHousingDecorSetDyeSlots(WorldPackets::Housing::HousingDecorSetDyeSlots const& housingDecorSetDyeSlots);
+        void HandleHousingDecorDeleteFromStorage(WorldPackets::Housing::HousingDecorDeleteFromStorage const& housingDecorDeleteFromStorage);
+        void HandleHousingDecorRequestStorage(WorldPackets::Housing::HousingDecorRequestStorage const& housingDecorRequestStorage);
+        void HandleHousingDecorRedeemDeferredDecor(WorldPackets::Housing::HousingDecorRedeemDeferredDecor const& housingDecorRedeemDeferredDecor);
+        // Answers a redeem once it is known how many of the entry's retroactive rewards the account has earned.
+        void FinishHousingDecorRedeem(uint32 decorEntryId, uint32 transactionId, uint32 earnedRetroactiveRewards);
+        void HandleGetLastCatalogFetch(WorldPackets::Housing::GetLastCatalogFetch const& getLastCatalogFetch);
+        void HandleUpdateLastCatalogFetch(WorldPackets::Housing::UpdateLastCatalogFetch const& updateLastCatalogFetch);
+
+        // Housing - Blueprint System. See HousingHandler.cpp.
+        void HandleHousingBlueprintRequestCollection(WorldPackets::Housing::HousingBlueprintRequestCollection const& packet);
+        void HandleHousingBlueprintRequestContents(WorldPackets::Housing::HousingBlueprintRequestContents const& packet);
+        void HandleHousingBlueprintExport(WorldPackets::Housing::HousingBlueprintExport const& packet);
+        void HandleHousingBlueprintRename(WorldPackets::Housing::HousingBlueprintRename const& packet);
+        void HandleHousingBlueprintDelete(WorldPackets::Housing::HousingBlueprintDelete const& packet);
+        void HandleHousingBlueprintImport(WorldPackets::Housing::HousingBlueprintImport const& packet);
+
+        // Housing - Fixture System
+        void SendFixtureUpdateObject(Player* player, Housing* housing);
+        void HandleHousingFixtureSetEditMode(WorldPackets::Housing::HousingFixtureSetEditMode const& housingFixtureSetEditMode);
+        void HandleHousingFixtureSetCoreFixture(WorldPackets::Housing::HousingFixtureSetCoreFixture const& housingFixtureSetCoreFixture);
+        void HandleHousingFixtureCreateFixture(WorldPackets::Housing::HousingFixtureCreateFixture const& housingFixtureCreateFixture);
+        void HandleHousingFixtureDeleteFixture(WorldPackets::Housing::HousingFixtureDeleteFixture const& housingFixtureDeleteFixture);
+        void HandleHousingFixtureSetHouseSize(WorldPackets::Housing::HousingFixtureSetHouseSize const& housingFixtureSetHouseSize);
+        void HandleHousingFixtureSetHouseType(WorldPackets::Housing::HousingFixtureSetHouseType const& housingFixtureSetHouseType);
+
+        // Housing - Room System
+        // Adds a room at a door of an existing room (CMSG_HOUSING_ROOM_ADD, room blueprint imports): places it, spawns it in the
+        // owner's interior and connects the door. Sends no response.
+        HousingResult AddHousingRoomAtDoor(Housing* housing, uint32 targetDoorComponentID, uint32 houseRoomID, ObjectGuid* outRoomGuid,
+            std::function<void(HousingResult)> const& onPlaced = nullptr);
+        // Rebuilds everything spawned for this house on the map the player is on after a blueprint import.
+        void RespawnHousingAfterBlueprintImport(Player* player, Housing* housing, bool interiorChanged, bool exteriorChanged,
+            std::vector<ObjectGuid> const& removedDecor);
+        void HandleHousingRoomSetLayoutEditMode(WorldPackets::Housing::HousingRoomSetLayoutEditMode const& housingRoomSetLayoutEditMode);
+        void HandleHousingRoomAdd(WorldPackets::Housing::HousingRoomAdd const& housingRoomAdd);
+        void HandleHousingRoomRemove(WorldPackets::Housing::HousingRoomRemove const& housingRoomRemove);
+        void HandleHousingRoomRotate(WorldPackets::Housing::HousingRoomRotate const& housingRoomRotate);
+        void HandleHousingRoomMoveRoom(WorldPackets::Housing::HousingRoomMoveRoom const& housingRoomMoveRoom);
+        void HandleHousingRoomSetComponentTheme(WorldPackets::Housing::HousingRoomSetComponentTheme const& housingRoomSetComponentTheme);
+        void HandleHousingRoomApplyComponentMaterials(WorldPackets::Housing::HousingRoomApplyComponentMaterials const& housingRoomApplyComponentMaterials);
+        void HandleHousingRoomSetDoorType(WorldPackets::Housing::HousingRoomSetDoorType const& housingRoomSetDoorType);
+        void HandleHousingRoomSetCeilingType(WorldPackets::Housing::HousingRoomSetCeilingType const& housingRoomSetCeilingType);
+
+        // Housing - Services System
+        void HandleHousingSvcsGuildCreateNeighborhood(WorldPackets::Housing::HousingSvcsGuildCreateNeighborhood const& housingSvcsGuildCreateNeighborhood);
+        void HandleHousingSvcsNeighborhoodReservePlot(WorldPackets::Housing::HousingSvcsNeighborhoodReservePlot const& housingSvcsNeighborhoodReservePlot);
+        void HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::HousingSvcsRelinquishHouse const& housingSvcsRelinquishHouse);
+        void HandleHousingSvcsUpdateHouseSettings(WorldPackets::Housing::HousingSvcsUpdateHouseSettings const& housingSvcsUpdateHouseSettings);
+        void HandleHousingSvcsPlayerViewHousesByPlayer(WorldPackets::Housing::HousingSvcsPlayerViewHousesByPlayer const& housingSvcsPlayerViewHousesByPlayer);
+        void HandleHousingSvcsPlayerViewHousesByBnetAccount(WorldPackets::Housing::HousingSvcsPlayerViewHousesByBnetAccount const& housingSvcsPlayerViewHousesByBnetAccount);
+        void HandleHousingSvcsGetPlayerHousesInfo(WorldPackets::Housing::HousingSvcsGetPlayerHousesInfo const& housingSvcsGetPlayerHousesInfo);
+        void HandleHousingSvcsTeleportToPlot(WorldPackets::Housing::HousingSvcsTeleportToPlot const& housingSvcsTeleportToPlot);
+        void HandleHousingSvcsStartTutorial(WorldPackets::Housing::HousingSvcsStartTutorial const& housingSvcsStartTutorial);
+        // Runs Start Tutorial once the Warband's "My First Home" state is known. The district's neighborhood was found
+        // by the handler on the world thread; only its name and guid come along, for the log.
+        void StartHousingTutorial(bool warbandCompletedMyFirstHome, ObjectGuid const& neighborhoodGuid, std::string const& neighborhoodName);
+        // Offers "A House For You" at login while no character of the Warband has completed "My First Home".
+        void OfferHousingBreadcrumbQuest();
+        // Reads what the Battle.net account's characters have done that RetroactiveDecorReward rows ask for, once for an
+        // account that has not had its first house; that purchase credits the decor it is owed.
+        void LoadHousingRetroactiveProgress();
+        // Tells the callback whether any character of this Battle.net account has turned in the quest.
+        void QueryWarbandQuestRewarded(uint32 questId, std::function<void(bool)>&& callback);
+        void HandleHousingSvcsAcceptNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsAcceptNeighborhoodOwnership const& housingSvcsAcceptNeighborhoodOwnership);
+        void HandleHousingSvcsRejectNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsRejectNeighborhoodOwnership const& housingSvcsRejectNeighborhoodOwnership);
+        void HandleHousingSvcsGetPotentialHouseOwners(WorldPackets::Housing::HousingSvcsGetPotentialHouseOwners const& housingSvcsGetPotentialHouseOwners);
+        // Builds and sends the potential-owners reply once the account's characters are read.
+        void SendHousingPotentialHouseOwners(ObjectGuid houseGuid, int32 factionRestriction, uint32 guildId, QueryResult characters);
+        void HandleHousingSvcsGetHouseFinderInfo(WorldPackets::Housing::HousingSvcsGetHouseFinderInfo const& housingSvcsGetHouseFinderInfo);
+        void HandleHousingSvcsGetHouseFinderNeighborhood(WorldPackets::Housing::HousingSvcsGetHouseFinderNeighborhood const& housingSvcsGetHouseFinderNeighborhood);
+        void HandleHousingSvcsHouseFinderIgnoreNeighborhood(WorldPackets::Housing::HousingSvcsHouseFinderIgnoreNeighborhood const& housingSvcsHouseFinderIgnoreNeighborhood);
+        void HandleHousingSvcsGetBnetFriendNeighborhoods(WorldPackets::Housing::HousingSvcsGetBnetFriendNeighborhoods const& housingSvcsGetBnetFriendNeighborhoods);
+        void HandleHousingSvcsDeleteAllNeighborhoodInvites(WorldPackets::Housing::HousingSvcsDeleteAllNeighborhoodInvites const& housingSvcsDeleteAllNeighborhoodInvites);
+
+        // Housing - Decor Licensing / Refund
+        void HandleGetAllLicensedDecorQuantities(WorldPackets::Housing::GetAllLicensedDecorQuantities const& getAllLicensedDecorQuantities);
+        void HandleGetDecorRefundList(WorldPackets::Housing::GetDecorRefundList const& getDecorRefundList);
+        void HandleBulkRefund(WorldPackets::Housing::BulkRefund const& bulkRefund);
+
+        // Housing - Photo Sharing
+        void HandleHousingPhotoSharingCompleteAuthorization(WorldPackets::Housing::HousingPhotoSharingCompleteAuthorization const& packet);
+        void HandleHousingPhotoSharingClearAuthorization(WorldPackets::Housing::HousingPhotoSharingClearAuthorization const& packet);
+
+        // Housing - Misc
+        void HandleHousingHouseStatus(WorldPackets::Housing::HousingHouseStatus const& housingHouseStatus);
+        void HandleHousingGetCurrentHouseInfo(WorldPackets::Housing::HousingGetCurrentHouseInfo const& housingGetCurrentHouseInfo);
+        void HandleHousingGetPlayerPermissions(WorldPackets::Housing::HousingGetPlayerPermissions const& housingGetPlayerPermissions);
+        void HandleHousingResetKioskMode(WorldPackets::Housing::HousingResetKioskMode const& housingResetKioskMode);
+        void HandleHousingResetHouse(WorldPackets::Housing::HousingResetHouse const& housingResetHouse);
+
+        // Housing - Neighborhood invitations and guild houses
+        void HandleDeclineNeighborhoodInvites(WorldPackets::Housing::DeclineNeighborhoodInvites const& declineNeighborhoodInvites);
+        void HandleQueryNeighborhoodInfo(WorldPackets::Housing::QueryNeighborhoodInfo const& queryNeighborhoodInfo);
+        void HandleInvitePlayerToNeighborhood(WorldPackets::Housing::InvitePlayerToNeighborhood const& invitePlayerToNeighborhood);
+        void HandleGuildGetOthersOwnedHouses(WorldPackets::Housing::GuildGetOthersOwnedHouses const& guildGetOthersOwnedHouses);
+
+        // Neighborhood - Charter System
+        void HandleNeighborhoodCharterOpenConfirmationUI(WorldPackets::Neighborhood::NeighborhoodCharterOpenConfirmationUI const& neighborhoodCharterOpenConfirmationUI);
+        void HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::NeighborhoodCharterCreate const& neighborhoodCharterCreate);
+        void HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::NeighborhoodCharterEdit const& neighborhoodCharterEdit);
+        void HandleNeighborhoodCharterFinalize(WorldPackets::Neighborhood::NeighborhoodCharterFinalize const& neighborhoodCharterFinalize);
+        void HandleNeighborhoodCharterAddSignature(WorldPackets::Neighborhood::NeighborhoodCharterAddSignature const& neighborhoodCharterAddSignature);
+        void HandleNeighborhoodCharterSendSignatureRequest(WorldPackets::Neighborhood::NeighborhoodCharterSendSignatureRequest const& neighborhoodCharterSendSignatureRequest);
+
+        // Neighborhood - Management System
+        void HandleNeighborhoodUpdateName(WorldPackets::Neighborhood::NeighborhoodUpdateName const& neighborhoodUpdateName);
+        void HandleNeighborhoodSetPublicFlag(WorldPackets::Neighborhood::NeighborhoodSetPublicFlag const& neighborhoodSetPublicFlag);
+        void HandleNeighborhoodAddSecondaryOwner(WorldPackets::Neighborhood::NeighborhoodAddSecondaryOwner const& neighborhoodAddSecondaryOwner);
+        void HandleNeighborhoodRemoveSecondaryOwner(WorldPackets::Neighborhood::NeighborhoodRemoveSecondaryOwner const& neighborhoodRemoveSecondaryOwner);
+        void HandleNeighborhoodInviteResident(WorldPackets::Neighborhood::NeighborhoodInviteResident const& neighborhoodInviteResident);
+        void HandleNeighborhoodCancelInvitation(WorldPackets::Neighborhood::NeighborhoodCancelInvitation const& neighborhoodCancelInvitation);
+        void HandleNeighborhoodPlayerDeclineInvite(WorldPackets::Neighborhood::NeighborhoodPlayerDeclineInvite const& neighborhoodPlayerDeclineInvite);
+        void HandleNeighborhoodPlayerGetInvite(WorldPackets::Neighborhood::NeighborhoodPlayerGetInvite const& neighborhoodPlayerGetInvite);
+        void HandleNeighborhoodGetInvites(WorldPackets::Neighborhood::NeighborhoodGetInvites const& neighborhoodGetInvites);
+        void HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::NeighborhoodBuyHouse const& neighborhoodBuyHouse);
+        void HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::NeighborhoodMoveHouse const& neighborhoodMoveHouse);
+        void HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhood::NeighborhoodOpenCornerstoneUI const& neighborhoodOpenCornerstoneUI);
+        void HandleNeighborhoodOfferOwnership(WorldPackets::Neighborhood::NeighborhoodOfferOwnership const& neighborhoodOfferOwnership);
+        void HandleNeighborhoodGetRoster(WorldPackets::Neighborhood::NeighborhoodGetRoster const& neighborhoodGetRoster);
+        void HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::NeighborhoodEvictPlot const& neighborhoodEvictPlot);
+
+        // Neighborhood - Initiatives
+        void HandleNeighborhoodInitiativeServiceStatusCheck(WorldPackets::Neighborhood::NeighborhoodInitiativeServiceStatusCheck const& packet);
+        void HandleGetAvailableInitiativeRequest(WorldPackets::Neighborhood::GetAvailableInitiativeRequest const& getAvailableInitiativeRequest);
+        void HandleGetPlayerInitiativeInfoRequest(WorldPackets::Neighborhood::GetPlayerInitiativeInfoRequest const& getPlayerInitiativeInfoRequest);
+        void HandleGetInitiativeActivityLogRequest(WorldPackets::Neighborhood::GetInitiativeActivityLogRequest const& getInitiativeActivityLogRequest);
+        void HandleInitiativeUpdateActiveNeighborhood(WorldPackets::Neighborhood::InitiativeUpdateActiveNeighborhood const& initiativeUpdateActiveNeighborhood);
+        void HandleNeighborhoodInitiativeOp01(WorldPackets::Neighborhood::NeighborhoodInitiativeOp01 const& packet);
+        void HandleNeighborhoodInitiativeOp05(WorldPackets::Neighborhood::NeighborhoodInitiativeOp05 const& packet);
+        void HandleNeighborhoodInitiativeOp06(WorldPackets::Neighborhood::NeighborhoodInitiativeOp06 const& packet);
+        void HandleNeighborhoodInitiativeOp07(WorldPackets::Neighborhood::NeighborhoodInitiativeOp07 const& packet);
+        void HandleNeighborhoodInitiativeOp08(WorldPackets::Neighborhood::NeighborhoodInitiativeOp08 const& packet);
+        void HandleNeighborhoodInitiativeOp09(WorldPackets::Neighborhood::NeighborhoodInitiativeOp09 const& packet);
+        void HandleNeighborhoodInitiativeOp0A(WorldPackets::Neighborhood::NeighborhoodInitiativeOp0A const& packet);
+        void HandleNeighborhoodInitiativeOp0B(WorldPackets::Neighborhood::NeighborhoodInitiativeOp0B const& packet);
+        void HandleNeighborhoodInitiativeOp0C(WorldPackets::Neighborhood::NeighborhoodInitiativeOp0C const& packet);
+        void HandleNeighborhoodInitiativeOp0D(WorldPackets::Neighborhood::NeighborhoodInitiativeOp0D const& packet);
+        void HandleNeighborhoodInitiativeOp0E(WorldPackets::Neighborhood::NeighborhoodInitiativeOp0E const& packet);
+        void HandleNeighborhoodInitiativeOp0F(WorldPackets::Neighborhood::NeighborhoodInitiativeOp0F const& packet);
         void HandleEnableTaxiNodeOpcode(WorldPackets::Taxi::EnableTaxiNode& enableTaxiNode);
         void HandleTaxiNodeStatusQueryOpcode(WorldPackets::Taxi::TaxiNodeStatusQuery& taxiNodeStatusQuery);
         void HandleTaxiQueryAvailableNodesOpcode(WorldPackets::Taxi::TaxiQueryAvailableNodes& taxiQueryAvailableNodes);
@@ -1932,10 +2308,6 @@ class TC_GAME_API WorldSession
         void HandleBattlePayConfirmPurchaseResponse(WorldPackets::BattlePay::ConfirmPurchaseResponse& packet);
         void HandleBattlePayDistributionAssignToTarget(WorldPackets::BattlePay::DistributionAssignToTarget& packet);
         void HandleCharacterUpgradeStart(WorldPackets::Character::CharacterUpgradeStart& packet);
-        void HandleGetLastCatalogFetch(WorldPackets::CatalogShop::GetLastCatalogFetch& packet);
-        void HandleUpdateLastCatalogFetch(WorldPackets::CatalogShop::UpdateLastCatalogFetch& packet);
-        void HandleGetDecorRefundList(WorldPackets::CatalogShop::GetDecorRefundList& packet);
-        void HandleGetAllLicensedDecorQuantities(WorldPackets::CatalogShop::GetAllLicensedDecorQuantities& packet);
         void HandleCatalogShopLicenseGameDataRequest(WorldPackets::CatalogShop::LicenseGameDataRequest& packet);
 
         // Battle Pets
@@ -2069,6 +2441,8 @@ class TC_GAME_API WorldSession
         uint32 _accountId;
         std::string _accountName;
         std::unique_ptr<Battlenet::Account> _battlenetAccount;
+        std::unordered_map<ObjectGuid, std::unique_ptr<HousingPlayerHouseEntity>> _housingPlayerHouseEntities;
+        std::unique_ptr<HousingNeighborhoodMirrorEntity> _housingNeighborhoodMirrorEntity;
         uint8 m_accountExpansion;
         uint8 m_expansion;
         std::string _os;
@@ -2131,6 +2505,32 @@ class TC_GAME_API WorldSession
         std::unique_ptr<AccountCurrencyMgr> _accountCurrencyMgr;
 
         ConnectToKey _instanceConnectKey;
+
+        // Housing: client's last-used PlotIndex from OpenCornerstoneUI,
+        // cached for the subsequent BuyHouse CMSG which doesn't include it.
+        // The client's PlotIndex may differ from our DB2 PlotIndex values.
+        uint32 _lastClientPlotIndex = 0;
+        ObjectGuid _lastCornerstoneGuid;
+
+        // The characters the last potential-owners reply listed for a house, with the HouseOwnerError each was sent.
+        // House Settings may only name one of them that had no error as the house's new cosmetic owner.
+        ObjectGuid _housingPotentialOwnersHouse;
+        std::unordered_map<ObjectGuid, uint8 /*HouseOwnerError*/> _housingPotentialOwners;
+
+        // How much decor this session has placed, moved or removed lately. Each of those adds to the map and writes to
+        // the database at once, so without a limit a scripted client could load the server with spawns and writes.
+        // Up to HOUSING_DECOR_THROTTLE_BURST edits are allowed in each HOUSING_DECOR_THROTTLE_WINDOW_MS window.
+        uint32 _housingDecorThrottleWindowStart = 0;
+        uint32 _housingDecorThrottleCount = 0;
+
+        // The charter ids this session has actually been asked to sign.
+        // CMSG_NEIGHBORHOOD_CHARTER_ADD_SIGNATURE takes the charter id from the client
+        // and charter ids are creator GUID counters, so without this any player could
+        // sign any charter on the realm by enumerating ids, and
+        // CMSG_NEIGHBORHOOD_CHARTER_SEND_SIGNATURE_REQUEST - which exists to invite a
+        // signer - was decorative. Session-scoped on purpose: a signature request is an
+        // in-the-moment offer, so it does not survive a relog, and nothing is persisted.
+        std::unordered_set<uint64> _pendingCharterSignatureRequests;
 
         WorldSession(WorldSession const& right) = delete;
         WorldSession& operator=(WorldSession const& right) = delete;

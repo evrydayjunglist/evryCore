@@ -332,38 +332,6 @@ namespace WorldPackets
 
     namespace CatalogShop
     {
-        class GetLastCatalogFetch final : public ClientPacket
-        {
-        public:
-            explicit GetLastCatalogFetch(WorldPacket&& packet) : ClientPacket(CMSG_GET_LAST_CATALOG_FETCH, std::move(packet)) { }
-
-            void Read() override;
-        };
-
-        class UpdateLastCatalogFetch final : public ClientPacket
-        {
-        public:
-            explicit UpdateLastCatalogFetch(WorldPacket&& packet) : ClientPacket(CMSG_UPDATE_LAST_CATALOG_FETCH, std::move(packet)) { }
-
-            void Read() override;
-        };
-
-        class GetDecorRefundList final : public ClientPacket
-        {
-        public:
-            explicit GetDecorRefundList(WorldPacket&& packet) : ClientPacket(CMSG_GET_DECOR_REFUND_LIST, std::move(packet)) { }
-
-            void Read() override { }
-        };
-
-        class GetAllLicensedDecorQuantities final : public ClientPacket
-        {
-        public:
-            explicit GetAllLicensedDecorQuantities(WorldPacket&& packet) : ClientPacket(CMSG_GET_ALL_LICENSED_DECOR_QUANTITIES, std::move(packet)) { }
-
-            void Read() override { }
-        };
-
         class LicenseGameDataRequest final : public ClientPacket
         {
         public:

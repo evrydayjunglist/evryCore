@@ -191,18 +191,6 @@ WorldPacket const* GenerateSSOTokenResponse::Write()
 
 namespace WorldPackets::CatalogShop
 {
-void GetLastCatalogFetch::Read()
-{
-    if (_worldPacket.rpos() < _worldPacket.size())
-        _worldPacket.read_skip(_worldPacket.size() - _worldPacket.rpos());
-}
-
-void UpdateLastCatalogFetch::Read()
-{
-    if (_worldPacket.rpos() < _worldPacket.size())
-        _worldPacket.read_skip(_worldPacket.size() - _worldPacket.rpos());
-}
-
 void LicenseGameDataRequest::Read()
 {
     RequestSize = _worldPacket.size();

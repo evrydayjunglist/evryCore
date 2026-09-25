@@ -51,6 +51,8 @@
 #include "Metric.h"
 #include "MiscPackets.h"
 #include "MotionMaster.h"
+#include "Neighborhood.h"
+#include "NeighborhoodMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Pet.h"
@@ -77,10 +79,11 @@ class LoginQueryHolder : public CharacterDatabaseQueryHolder
 {
     private:
         uint32 m_accountId;
+        uint32 m_bnetAccountId;
         ObjectGuid m_guid;
     public:
-        LoginQueryHolder(uint32 accountId, ObjectGuid guid)
-            : m_accountId(accountId), m_guid(guid) { }
+        LoginQueryHolder(uint32 accountId, uint32 bnetAccountId, ObjectGuid guid)
+            : m_accountId(accountId), m_bnetAccountId(bnetAccountId), m_guid(guid) { }
         ObjectGuid GetGuid() const { return m_guid; }
         uint32 GetAccountId() const { return m_accountId; }
         bool Initialize();
@@ -383,6 +386,40 @@ bool LoginQueryHolder::Initialize()
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_RESEARCH_HISTORY);
     stmt->setUInt64(0, lowGuid);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_RESEARCH_HISTORY, stmt);
+
+    // Houses and decor belong to the Battle.net account: every character of it loads them all.
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_DECOR);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_ROOMS);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_ROOMS, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_FIXTURES);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_DECOR_ENTRIES);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR_ENTRIES, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_CATALOG_FETCH);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH, stmt);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_HOUSING_FIRST_HOUSE);
+    stmt->setUInt32(0, m_bnetAccountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIRST_HOUSE, stmt);
+
+    // The neighborhood this character chose for her active endeavor.
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HOUSING_ACTIVE_NEIGHBORHOOD);
+    stmt->setUInt64(0, lowGuid);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_HOUSING_ACTIVE_NEIGHBORHOOD, stmt);
 
     return res;
 }
@@ -1265,7 +1302,7 @@ void WorldSession::HandleContinuePlayerLogin()
         return;
     }
 
-    std::shared_ptr<LoginQueryHolder> holder = std::make_shared<LoginQueryHolder>(GetAccountId(), m_playerLoading);
+    std::shared_ptr<LoginQueryHolder> holder = std::make_shared<LoginQueryHolder>(GetAccountId(), GetBattlenetAccountId(), m_playerLoading);
     if (!holder->Initialize())
     {
         m_playerLoading.Clear();
@@ -1699,6 +1736,16 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     _player->UpdateCriteria(CriteriaType::Login, 1);
 
     sScriptMgr->OnPlayerLogin(pCurrChar, firstLogin);
+
+    // The other residents' bulletin boards show this player online (NeighborhoodRosterMemberUpdateInfo.isOnline).
+    for (Neighborhood const* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForAccount(pCurrChar))
+        neighborhood->BroadcastMemberStatus(pCurrChar->GetGUID(), true);
+
+    // "A House For You" for a character whose Warband has not finished the housing tutorial.
+    OfferHousingBreadcrumbQuest();
+
+    // Which achievements and quests of the account owe it decor, ready for its first house purchase.
+    LoadHousingRetroactiveProgress();
 
     TC_METRIC_EVENT("player_events", "Login", pCurrChar->GetName());
 }

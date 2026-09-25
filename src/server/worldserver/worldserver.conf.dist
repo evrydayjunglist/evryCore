@@ -36,6 +36,7 @@
 #    AUCTION HOUSE BOT ITEM FINE TUNING
 #    AUCTION HOUSE BOT BUYER CONFIG
 #    BLACK MARKET SETTINGS
+#    HOUSING SETTINGS
 #    LOGGING SYSTEM SETTINGS
 #    CURRENCIES SETTINGS
 #    PACKET SPOOF PROTECTION SETTINGS
@@ -4140,6 +4141,83 @@ BattlePay.CatalogShopFreeBuySignalDir = "temp/catalogshop-free-buy"
 ###################################################################################################
 
 ###################################################################################################
+# HOUSING SETTINGS
+#
+#    Housing.EnableBuyHouse
+#        Description: Players may reserve a plot and buy a house at its cornerstone. The client is
+#                     told at the character screen, so it can hide what is switched off.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Housing.EnableBuyHouse = 1
+
+#
+#    Housing.EnableDeleteHouse
+#        Description: Players may give up (relinquish) a house, which packs it with its layout and
+#                     frees its plot.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Housing.EnableDeleteHouse = 1
+
+#
+#    Housing.EnableMoveHouse
+#        Description: Players may move their house to another plot of the same neighborhood.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Housing.EnableMoveHouse = 1
+
+#
+#    Housing.EnableCreateCharterNeighborhood
+#        Description: Players may start, edit, sign and finish a charter for a neighborhood of
+#                     their own.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Housing.EnableCreateCharterNeighborhood = 1
+
+#
+#    Housing.EnableCreateGuildNeighborhood
+#        Description: Guilds may create a neighborhood of their own.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Housing.EnableCreateGuildNeighborhood = 1
+
+#
+#    Housing.TutorialsEnabled
+#        Description: Players may start the housing tutorial (Start Tutorial), and characters are
+#                     offered the quest "A House For You" at login until their Warband has finished
+#                     "My First Home".
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Housing.TutorialsEnabled = 1
+
+#
+#    Housing.MaxHousesPerAccount
+#        Description: A safety cap on the houses one Battle.net account may own. The retail rule,
+#                     one house per district, already limits an account to two, and is checked
+#                     first; this cap sits under it. Packed (relinquished) houses count. At the cap
+#                     a purchase unpacks one of the account's packed houses instead of building a
+#                     new one, and is refused when the account has none packed.
+#        Default:     2
+#                     0 - (No cap)
+#
+
+Housing.MaxHousesPerAccount = 2
+
+#
+###################################################################################################
+
+###################################################################################################
 # LOGGING SYSTEM SETTINGS
 #
 #  Appender config values: Given an appender "name"
@@ -4271,6 +4349,7 @@ Logger.mmaps=3,Server
 #Logger.entities.vehicle=3,Console Server
 #Logger.gameevent=3,Console Server
 #Logger.guild=3,Console Server
+#Logger.housing=3,Console Server
 #Logger.instance.locks=3,Console Server
 #Logger.lfg=3,Console Server
 #Logger.loot=3,Console Server

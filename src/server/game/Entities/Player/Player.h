@@ -85,6 +85,8 @@ class GameObject;
 class Garrison;
 class Group;
 class Guild;
+class Housing;
+class HousingDecorStore;
 class Item;
 class LootRoll;
 class LootStore;
@@ -1032,6 +1034,14 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_RESEARCH_SITES,
     PLAYER_LOGIN_QUERY_LOAD_RESEARCH_PROJECTS,
     PLAYER_LOGIN_QUERY_LOAD_RESEARCH_HISTORY,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_ROOMS,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIXTURES,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_DECOR_ENTRIES,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_CATALOG_FETCH,
+    PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_HOUSING_FIRST_HOUSE,
+    PLAYER_LOGIN_QUERY_LOAD_HOUSING_ACTIVE_NEIGHBORHOOD,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -2743,6 +2753,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         // currently visible objects at player client
         GuidUnorderedSet m_clientGUIDs;
+        // Entities the session owns rather than the grid, which the client holds from the character's own create: the
+        // Battle.net account, the account's house entities and the neighborhood mirror. They are kept out of
+        // m_clientGUIDs, because the visibility pass sends an out-of-range for everything in that set it does not
+        // meet on the grid, and the client would drop them.
+        GuidUnorderedSet m_clientSessionEntityGUIDs;
         GuidUnorderedSet m_visibleTransports;
 
         bool HaveAtClient(BaseEntity const* u) const;
@@ -2929,6 +2944,82 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void CreateGarrison(uint32 garrSiteId);
         void DeleteGarrison();
         Garrison* GetGarrison() const { return _garrison.get(); }
+        // The house whose interior the next teleport enters: set by the front door to the plot's house GUID, owner or
+        // visitor alike, and read and cleared by MapManager when it picks that house's interior instance.
+        void SetHouseVisitTarget(ObjectGuid houseGuid) { _houseVisitTarget = houseGuid; }
+        ObjectGuid GetHouseVisitTarget() const { return _houseVisitTarget; }
+        void ClearHouseVisitTarget() { _houseVisitTarget = ObjectGuid::Empty; }
+
+        // Builds a new house for this character's Battle.net account, in memory only; the character becomes its shown
+        // owner. The caller saves it (Housing::SaveToDB) in the purchase's transaction. The account's other online
+        // characters are given the house too. Runs on the world thread, as the purchase handler does, because it
+        // changes those other characters.
+        Housing* CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
+        // Unpacks one of the account's packed houses onto a plot just bought for it, in memory only, and shows it
+        // again on the account's other online characters. The caller saves it in the purchase's transaction.
+        Housing* UnpackHousing(ObjectGuid houseGuid, ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
+        // Packs one of the account's houses when it is relinquished: it leaves its plot, keeps its layout, and stops
+        // being shown on every online character of the account. The row change goes into trans. World thread only.
+        void PackHousing(ObjectGuid houseGuid, CharacterDatabaseTransaction trans);
+        // Deletes one of the account's houses, and takes it away from the account's other online characters.
+        // World thread only, for the same reason.
+        void DeleteHousing(ObjectGuid houseGuid);
+        // The house the character is standing in or on: the interior's house, or the account's house in the
+        // neighborhood of the current housing map. Anywhere else it is the account's only standing house, and nothing
+        // when the account has two, because nothing says which one is meant. A packed house is never named here.
+        Housing* GetHousing() const;
+        // A house through which to reach the account's collections, which every house of the account shares: the one
+        // GetHousing names, otherwise any house of the account. Nothing when it has none. Decor does not need a house:
+        // it is in the account's decor store.
+        Housing* GetAccountCatalogHousing() const;
+        // The account's decor store, loaded at login whether or not the account has a house.
+        HousingDecorStore* GetHousingDecorStore() const { return _housingDecorStore.get(); }
+        // Sends the account's whole decor storage to her client through the Battle.net account's update fields: every
+        // piece in storage and every piece placed in one of the account's houses, packed ones included.
+        void PushHousingDecorStorage();
+        // One of the account's houses by its GUID, packed or not, or nothing when the account does not own that house.
+        Housing* GetHousingByGuid(ObjectGuid houseGuid) const;
+        Housing* GetHousingForNeighborhood(ObjectGuid neighborhoodGuid) const;
+        // The account's houses that stand on a plot; packed houses are left out unless includePacked is set.
+        std::vector<Housing const*> GetAllHousings(bool includePacked = false) const;
+        // Refreshes the house entity of the account's other online characters after a change they must see, such as
+        // a new cosmetic owner. World thread only, because it touches characters on other maps.
+        void SyncAccountHouseOnOtherCharacters(ObjectGuid houseGuid);
+        void SetHousingEditorModeUpdateField(uint8 mode);
+    private:
+        // The account's houses as seen by another of its characters: take a house another character holds, or let
+        // go of one another character deleted.
+        void AddAccountHousing(uint64 houseDatabaseId);
+        void ForgetHousing(ObjectGuid houseGuid);
+        // Another character of the account packed or unpacked a house this character also holds.
+        void HideAccountHousing(ObjectGuid houseGuid);
+        void ShowAccountHousing(ObjectGuid houseGuid);
+        // Creates the house's entity on this character's client when she is in the world and it is not there yet.
+        void SendHousingEntityCreate(Housing const& housing);
+        void ForgetHousingOnMap(Housing const* housing);
+        void AddPlayerMirrorHouse(Housing const& housing);
+        void RemovePlayerMirrorHouse(ObjectGuid houseGuid);
+        // Every other character of this Battle.net account that is logged in, on any of its game accounts.
+        std::vector<Player*> GetOtherOnlineAccountCharacters() const;
+    public:
+        void UpdateInitiativeFavor(uint32 favor);
+
+        // The neighborhood of her active endeavor: the one she chose on the dashboard while her account has a house
+        // there, else the neighborhood of the account's first standing house, else none. A second character of an
+        // account that never chose one still has it set (hf1 949830), and a character whose account has no house has
+        // none (hbcd3 419313).
+        ObjectGuid GetHousingActiveNeighborhood() const;
+        // Stores her choice (CMSG_INITIATIVE_UPDATE_ACTIVE_NEIGHBORHOOD) and refreshes the endeavor fields.
+        void SetHousingActiveNeighborhood(ObjectGuid neighborhoodGuid);
+        // PlayerInitiativeComponent: the active neighborhood and its endeavor.
+        void UpdateInitiativeComponent();
+
+        // 12.0.5 plot-entry mechanism: writes PlayerHouseInfoComponentData.CurrentHouse to
+        // the given house GUID (or ObjectGuid::Empty on plot-leave). Client tracks plot
+        // occupancy by observing this field's UPDATE_OBJECT changes — it replaces the
+        // removed SMSG_NEIGHBORHOOD_PLAYER_ENTER_PLOT / LEAVE_PLOT opcodes and the
+        // per-AT FHousingPlotAreaTrigger_C fragment that were deleted in 12.0.5.
+        void SetCurrentHouse(ObjectGuid houseGuid);
 
         bool IsAdvancedCombatLoggingEnabled() const { return _advancedCombatLoggingEnabled; }
         void SetAdvancedCombatLogging(bool enabled) { _advancedCombatLoggingEnabled = enabled; }
@@ -3126,6 +3217,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         UF::UpdateField<UF::PlayerData, int32(WowCS::EntityFragment::CGObject), TYPEID_PLAYER> m_playerData;
         UF::UpdateField<UF::ActivePlayerData, int32(WowCS::EntityFragment::CGObject), TYPEID_ACTIVE_PLAYER> m_activePlayerData;
+
+        // Housing entity fragment (optional - only set when player has housing data)
+        UF::OptionalUpdateField<UF::PlayerHouseInfoComponentData, int32(WowCS::EntityFragment::PlayerHouseInfoComponent_C), 0> m_playerHouseInfoComponentData;
+
+        // Initiative entity fragment (optional - initiative/endeavor state for UI)
+        UF::OptionalUpdateField<UF::PlayerInitiativeComponentData, int32(WowCS::EntityFragment::PlayerInitiativeComponent_C), 0> m_playerInitiativeComponentData;
 
         void SetAreaSpiritHealer(Creature* creature);
         ObjectGuid const& GetSpiritHealerGUID() const { return _areaSpiritHealerGUID; }
@@ -3492,10 +3589,16 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         };
         Optional<PendingArchaeologyFind> _pendingArchaeologyFind;
         std::unordered_map<uint32 /*researchSiteId*/, std::pair<float, float>> _researchSiteFindLocations;
+        // The house whose interior the pending teleport enters. Not persisted.
+        ObjectGuid _houseVisitTarget;
 
         uint32 _activeCheats;
 
         std::unique_ptr<Garrison> _garrison;
+        std::vector<std::unique_ptr<Housing>> _housings;
+        std::shared_ptr<HousingDecorStore> _housingDecorStore;
+        // The neighborhood (its counter) she chose for her active endeavor, 0 when she has not chosen one.
+        uint64 _housingChosenNeighborhood = 0;
 
         bool _advancedCombatLoggingEnabled;
 

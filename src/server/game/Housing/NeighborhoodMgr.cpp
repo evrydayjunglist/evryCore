@@ -55,7 +55,6 @@ void NeighborhoodMgr::Initialize()
     LoadFromDB();
     VerifyNeighborhoodFactions();
     EnsurePublicNeighborhoods();
-    MigrateWrongFactionResidents();
     RegenerateNeighborhoodNames();
 }
 
@@ -562,7 +561,7 @@ void NeighborhoodMgr::VerifyNeighborhoodFactions()
 {
     // Verify that each public neighborhood's factionRestriction matches its NeighborhoodMap's faction flags.
     // This fixes data inconsistencies from earlier code that may have assigned wrong faction values.
-    // Must run BEFORE EnsurePublicNeighborhoods and MigrateWrongFactionResidents.
+    // Must run BEFORE EnsurePublicNeighborhoods.
 
     auto const& allMaps = sHousingMgr.GetAllNeighborhoodMapData();
     uint32 fixedCount = 0;
@@ -697,166 +696,6 @@ void NeighborhoodMgr::EnsurePublicNeighborhoods()
             "NeighborhoodMap has no system-generatable map with the Horde flag (0x2|0x4). "
             "Check NeighborhoodMap.db2 and the hotfixes table neighborhood_map: "
             "ID 2 must be MapID 2736 with FactionRestriction 6 (0x2 Horde | 0x4 SystemGenerate).");
-}
-
-void NeighborhoodMgr::MigrateWrongFactionResidents()
-{
-    // After EnsurePublicNeighborhoods creates missing faction neighborhoods,
-    // check if any members are in the wrong faction's public neighborhood.
-    // This handles legacy data from before faction restrictions were enforced:
-    // e.g. Alliance characters placed in a Horde neighborhood when only one existed.
-
-    // Find public neighborhoods by faction
-    uint64 allianceNbLow = 0;
-    uint64 hordeNbLow = 0;
-
-    for (auto const& [guid, nb] : _neighborhoods)
-    {
-        if (!nb->IsPublic())
-            continue;
-        if (nb->GetFactionRestriction() == NEIGHBORHOOD_FACTION_ALLIANCE && !allianceNbLow)
-            allianceNbLow = guid.GetCounter();
-        else if (nb->GetFactionRestriction() == NEIGHBORHOOD_FACTION_HORDE && !hordeNbLow)
-            hordeNbLow = guid.GetCounter();
-    }
-
-    if (!allianceNbLow || !hordeNbLow)
-        return;
-
-    // Query all members in faction-restricted public neighborhoods joined with their race
-    QueryResult result = CharacterDatabase.Query(
-        "SELECT nm.playerGuid, nm.neighborhoodGuid, nm.plotIndex, nm.role, nm.joinTime, c.race "
-        "FROM neighborhood_members nm "
-        "JOIN characters c ON nm.playerGuid = c.guid "
-        "JOIN neighborhoods n ON nm.neighborhoodGuid = n.guid "
-        "WHERE n.isPublic = 1 AND n.factionRestriction != 0");
-
-    if (!result)
-        return;
-
-    struct MemberInfo
-    {
-        uint64 PlayerGuidLow;
-        uint64 NbGuidLow;
-        uint8 PlotIndex;
-        uint8 Role;
-        uint32 JoinTime;
-        uint8 Race;
-    };
-
-    std::vector<MemberInfo> allMembers;
-    do
-    {
-        Field* fields = result->Fetch();
-        allMembers.push_back({
-            fields[0].GetUInt64(),
-            fields[1].GetUInt64(),
-            fields[2].GetUInt8(),
-            fields[3].GetUInt8(),
-            fields[4].GetUInt32(),
-            fields[5].GetUInt8()
-        });
-    } while (result->NextRow());
-
-    // Build set of existing memberships for quick lookup: (playerGuid, nbGuid)
-    std::set<std::pair<uint64, uint64>> membershipSet;
-    for (auto const& m : allMembers)
-        membershipSet.insert({m.PlayerGuidLow, m.NbGuidLow});
-
-    // Pre-populate used plots in each target neighborhood
-    std::set<uint8> usedPlotsInAlliance;
-    std::set<uint8> usedPlotsInHorde;
-    for (auto const& m : allMembers)
-    {
-        if (m.NbGuidLow == allianceNbLow && m.PlotIndex != INVALID_PLOT_INDEX)
-            usedPlotsInAlliance.insert(m.PlotIndex);
-        else if (m.NbGuidLow == hordeNbLow && m.PlotIndex != INVALID_PLOT_INDEX)
-            usedPlotsInHorde.insert(m.PlotIndex);
-    }
-
-    uint32 migratedCount = 0;
-
-    for (auto const& m : allMembers)
-    {
-        Team team = Player::TeamForRace(m.Race);
-        uint64 correctNbLow = (team == ALLIANCE) ? allianceNbLow : hordeNbLow;
-
-        if (m.NbGuidLow == correctNbLow)
-            continue; // Already in correct faction's neighborhood
-
-        bool alreadyInCorrect = membershipSet.count({m.PlayerGuidLow, correctNbLow}) > 0;
-
-        // Delete old wrong-faction membership
-        CharacterDatabasePreparedStatement* delStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_MEMBER);
-        delStmt->setUInt64(0, m.NbGuidLow);
-        delStmt->setUInt64(1, m.PlayerGuidLow);
-        CharacterDatabase.DirectExecute(delStmt);
-
-        if (!alreadyInCorrect)
-        {
-            // Player doesn't have a membership in the correct neighborhood yet — create one
-            std::set<uint8>& usedPlots = (correctNbLow == allianceNbLow) ? usedPlotsInAlliance : usedPlotsInHorde;
-            uint8 newPlotIndex = m.PlotIndex;
-
-            // Check if the house this character is shown as owning already points to the correct neighborhood
-            // (e.g., player bought a new house there before migration ran). character_housing.guid is the
-            // house's own id; the character is its cosmeticOwnerGuid. A packed house keeps the neighborhood it last
-            // stood in but stands on no plot, so it is left out.
-            QueryResult housingResult = CharacterDatabase.Query(
-                Trinity::StringFormat("SELECT plotIndex FROM character_housing WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {} AND packed = 0",
-                    m.PlayerGuidLow, correctNbLow).c_str());
-            if (housingResult)
-                newPlotIndex = housingResult->Fetch()[0].GetUInt8();
-
-            // Check for plot conflict in target neighborhood
-            if (newPlotIndex != INVALID_PLOT_INDEX && usedPlots.count(newPlotIndex))
-            {
-                // Find first available plot
-                newPlotIndex = INVALID_PLOT_INDEX;
-                for (uint8 i = 0; i < MAX_NEIGHBORHOOD_PLOTS; ++i)
-                {
-                    if (!usedPlots.count(i))
-                    {
-                        newPlotIndex = i;
-                        break;
-                    }
-                }
-            }
-
-            if (newPlotIndex != INVALID_PLOT_INDEX)
-                usedPlots.insert(newPlotIndex);
-
-            // Insert new membership in correct neighborhood
-            CharacterDatabasePreparedStatement* insStmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_NEIGHBORHOOD_MEMBER);
-            insStmt->setUInt64(0, correctNbLow);
-            insStmt->setUInt64(1, m.PlayerGuidLow);
-            insStmt->setUInt8(2, m.Role);
-            insStmt->setUInt32(3, m.JoinTime);
-            insStmt->setUInt8(4, newPlotIndex);
-            CharacterDatabase.DirectExecute(insStmt);
-
-            // Update character_housing to point to correct neighborhood (only if it still references the old one)
-            CharacterDatabase.DirectExecute(
-                Trinity::StringFormat("UPDATE character_housing SET neighborhoodGuid = {}, plotIndex = {} WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {} AND packed = 0",
-                    correctNbLow, newPlotIndex, m.PlayerGuidLow, m.NbGuidLow).c_str());
-
-            TC_LOG_INFO("server.loading", ">> Migrated player {} from neighborhood {} to {} (plot {} -> {})",
-                m.PlayerGuidLow, m.NbGuidLow, correctNbLow, m.PlotIndex, newPlotIndex);
-        }
-        else
-        {
-            TC_LOG_INFO("server.loading", ">> Removed duplicate wrong-faction membership for player {} from neighborhood {}",
-                m.PlayerGuidLow, m.NbGuidLow);
-        }
-
-        ++migratedCount;
-    }
-
-    if (migratedCount > 0)
-    {
-        TC_LOG_INFO("server.loading", ">> Migrated {} resident(s) to correct faction neighborhoods — reloading", migratedCount);
-        LoadFromDB(); // Reload to pick up the changes
-    }
 }
 
 void NeighborhoodMgr::RegenerateNeighborhoodNames()

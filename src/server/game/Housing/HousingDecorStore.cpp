@@ -19,6 +19,7 @@
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "GameTime.h"
+#include "HousingMgr.h"
 #include "Log.h"
 #include "StringFormat.h"
 #include <algorithm>
@@ -275,6 +276,24 @@ void HousingDecorStore::AddRedeemed(uint32 decorEntryId, CharacterDatabaseTransa
     AppendEntryRow(trans, decorEntryId, itr->second);
 }
 
+Optional<Housing::PlacedDecor> HousingDecorStore::RedeemOwed(uint32 decorEntryId, int32 startingQuantity,
+    int32 houseDecorFlags, uint32 earnedRetroactiveRewards, uint32& owedBefore)
+{
+    std::lock_guard<std::recursive_mutex> guard(_lock);
+    owedBefore = GetOwedCount(startingQuantity, houseDecorFlags, earnedRetroactiveRewards, GetRedeemed(decorEntryId));
+    if (!owedBefore)
+        return {};
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    bool firstOwned = false;
+    Housing::PlacedDecor piece = CreateStored(decorEntryId, DECOR_SOURCE_REDEEMED, {}, firstOwned, trans);
+    AddRedeemed(decorEntryId, trans);
+    // The entry row saves the redeemed count as a number, not as one more, so the save is queued while the lock still
+    // holds: a second redeem of the same entry on another map thread queues its higher count after this one.
+    CharacterDatabase.CommitTransaction(trans);
+    return piece;
+}
+
 uint64 HousingDecorStore::GetLastCatalogFetch() const
 {
     std::lock_guard<std::recursive_mutex> guard(_lock);
@@ -344,12 +363,20 @@ void HousingDecorStore::AppendDecorRow(CharacterDatabaseTransaction trans, uint3
     stmt->setUInt32(index++, decor.DyeSlots[0]);
     stmt->setUInt32(index++, decor.DyeSlots[1]);
     stmt->setUInt32(index++, decor.DyeSlots[2]);
-    stmt->setUInt64(index++, decor.RoomGuid.IsEmpty() ? 0 : decor.RoomGuid.GetCounter());
+    stmt->setUInt64(index++, GetSavedRoomValue(decor.RoomGuid, sHousingMgr.GetBaseRoomEntryId()));
     stmt->setUInt8(index++, decor.Locked ? 1 : 0);
     stmt->setUInt64(index++, uint64(decor.PlacementTime));
     stmt->setUInt64(index++, decor.PetGuid.IsEmpty() ? 0 : decor.PetGuid.GetCounter());
     stmt->setUInt8(index++, decor.PetFlag);
     trans->Append(stmt);
+}
+
+uint64 HousingDecorStore::GetSavedRoomValue(ObjectGuid roomGuid, uint32 baseRoomEntryId)
+{
+    // A yard piece keeps the plot's room GUID the client sent (hled1 791444: HouseRoomID 18, counter 13 on plot 13).
+    // Its counter is a plot index, not a room id, so the yard saves as 0, which the house and the neighborhood both
+    // read back as the yard.
+    return Housing::IsExteriorDecorPlacement(roomGuid, baseRoomEntryId) ? 0 : roomGuid.GetCounter();
 }
 
 Housing::PlacedDecor HousingDecorStore::ReadDecorRow(Field* fields)

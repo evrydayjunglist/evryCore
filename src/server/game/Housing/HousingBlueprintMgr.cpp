@@ -927,8 +927,9 @@ HousingResult HousingBlueprintMgr::ApplyLayout(Player* player, Housing* housing,
         {
             if (!CoversExterior(blueprint.Type))
                 continue;
+            // The plot's room, as the client sends it for yard decor: its counter is the plot index (hled1 791444).
             ObjectGuid const exteriorRoomGuid = ObjectGuid::Create<HighGuid::Housing>(/*subType*/ 2, /*arg1*/ 0,
-                /*arg2*/ sHousingMgr.GetBaseRoomEntryId(), /*counter*/ ObjectGuid::LowType(housing->GetPlotIndex()) + 1);
+                /*arg2*/ sHousingMgr.GetBaseRoomEntryId(), /*counter*/ ObjectGuid::LowType(housing->GetPlotIndex()));
             PlaceBlueprintDecor(housing, decor, exteriorRoomGuid, plotFrame, pool, result);
             continue;
         }

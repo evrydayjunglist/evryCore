@@ -91,7 +91,7 @@ public:
 
         // Mirrored from account_housing_decor (the pieces placed in the plot's house). Every placed decor item
         // (exterior AND interior) for this plot's owner. HousingMap uses the
-        // exterior entries (RoomGuid.IsEmpty()) at preload so visitors see
+        // exterior entries (saved with room 0, so no RoomGuid) at preload so visitors see
         // neighbours' placed decor even when the owner is offline. Interior
         // entries are reused when a visitor opens the owner's interior map.
         std::vector<Housing::PlacedDecor> Decor;

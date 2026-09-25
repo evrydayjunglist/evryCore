@@ -194,7 +194,7 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
         fixtureCount, _name);
 
     // Load placed decor for every occupied plot's owner. SpawnPlotGameObjects
-    // only spawns exterior entries (RoomGuid.IsEmpty()); interior entries are
+    // only spawns exterior entries (saved with room 0, so no RoomGuid here); interior entries are
     // also kept so visitors can see a neighbour's interior layout when they
     // enter the owner's interior map.
     uint32 decorCount = 0;

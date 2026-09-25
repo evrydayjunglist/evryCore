@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS `account_housing_decor` (
     `dyeSlot0` INT UNSIGNED NOT NULL DEFAULT 0,
     `dyeSlot1` INT UNSIGNED NOT NULL DEFAULT 0,
     `dyeSlot2` INT UNSIGNED NOT NULL DEFAULT 0,
-    `roomGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    `roomGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'character_housing_rooms.id of the interior room it stands in, 0 in the yard or in storage',
     `locked` TINYINT UNSIGNED NOT NULL DEFAULT 0,
     `placementTime` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `petGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0,

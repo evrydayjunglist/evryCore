@@ -1154,8 +1154,9 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
             continue;
         }
 
-        // Only spawn decor placed inside a room (interior). Exterior decor has empty RoomGuid.
-        if (decor.RoomGuid.IsEmpty())
+        // Only spawn decor placed inside a room (interior). Yard decor has no room, or the plot's room GUID when it
+        // was placed this session.
+        if (Housing::IsExteriorDecorPlacement(decor.RoomGuid))
         {
             ++exteriorSkipped;
             continue;
@@ -1344,12 +1345,10 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
     if (_decorGuidToObjGuid.contains(decor.Guid))
         DespawnDecorItem(decor.Guid);
 
-    // If RoomGuid is empty, the decor was placed without room association.
-    // This can happen when placed via the interior editor before room entities existed.
-    // Skip truly exterior decor, but allow interior-placed decor through.
-    if (decor.RoomGuid.IsEmpty())
+    // Yard decor (no room, or the plot's room GUID) does not stand in the interior.
+    if (Housing::IsExteriorDecorPlacement(decor.RoomGuid))
     {
-        TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnSingleInteriorDecor: Decor {} has empty RoomGuid, skipping",
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnSingleInteriorDecor: Decor {} is yard decor, skipping",
             decor.Guid.ToString());
         return;
     }

@@ -163,6 +163,18 @@ void InitiativeManager::LoadFromDB()
 {
     _activeInitiatives.clear();
 
+    // New endeavors take ids above every id in use, also one a leftover progress, milestone, contribution or claim
+    // row still names, so a new endeavor never picks up rows that are not its own.
+    {
+        QueryResult maxId = CharacterDatabase.Query("SELECT GREATEST("
+            "(SELECT COALESCE(MAX(id), 0) FROM neighborhood_initiatives), "
+            "(SELECT COALESCE(MAX(initiativeDbId), 0) FROM neighborhood_initiative_task_progress), "
+            "(SELECT COALESCE(MAX(initiativeDbId), 0) FROM neighborhood_initiative_milestones), "
+            "(SELECT COALESCE(MAX(initiativeDbId), 0) FROM neighborhood_initiative_contributions), "
+            "(SELECT COALESCE(MAX(initiativeDbId), 0) FROM neighborhood_initiative_reward_claims))");
+        _nextInitiativeDbId.store((maxId ? (*maxId)[0].GetUInt64() : 0) + 1);
+    }
+
     // Load all active initiatives from the character database
     QueryResult result = CharacterDatabase.Query("SELECT id, neighborhoodGuid, initiativeId, startTime, progress, completed FROM neighborhood_initiatives");
     if (!result)
@@ -404,9 +416,12 @@ ActiveInitiative* InitiativeManager::StartInitiative(uint64 neighborhoodGuid, ui
             initiative->MilestonesReached[milestone.MilestoneOrderIndex] = false;
     }
 
-    // Persist to database
+    // Saved with the id the server picks, so its progress, milestones, contributions and claims are saved from the
+    // first one on.
+    initiative->DbId = _nextInitiativeDbId.fetch_add(1);
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_NEIGHBORHOOD_INITIATIVE);
     uint8 index = 0;
+    stmt->setUInt64(index++, initiative->DbId);
     stmt->setUInt64(index++, neighborhoodGuid);
     stmt->setUInt32(index++, initiativeID);
     stmt->setUInt32(index++, initiative->StartTime);
@@ -1327,10 +1342,20 @@ void InitiativeManager::CheckAndStartInitiatives()
 // Persistence
 // ============================================================
 
+bool InitiativeManager::HasSavedId(uint64 initiativeDbId)
+{
+    // Every endeavor gets its id when it starts or loads, so a 0 here is a bug; nothing is written for it.
+    if (initiativeDbId)
+        return true;
+
+    TC_LOG_ERROR("housing", "InitiativeManager: an endeavor without a database id was not saved");
+    return false;
+}
+
 void InitiativeManager::PersistInitiative(ActiveInitiative const& initiative)
 {
-    if (initiative.DbId == 0)
-        return; // Not yet in DB (just inserted via INS, will get ID on next load)
+    if (!HasSavedId(initiative.DbId))
+        return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_INITIATIVE);
     stmt->setFloat(0, initiative.Progress);
@@ -1341,7 +1366,7 @@ void InitiativeManager::PersistInitiative(ActiveInitiative const& initiative)
 
 void InitiativeManager::PersistTaskProgress(ActiveInitiative const& initiative)
 {
-    if (initiative.DbId == 0)
+    if (!HasSavedId(initiative.DbId))
         return;
 
     for (auto const& [taskId, taskProgress] : initiative.TaskProgress)
@@ -1350,7 +1375,7 @@ void InitiativeManager::PersistTaskProgress(ActiveInitiative const& initiative)
 
 void InitiativeManager::PersistSingleTaskProgress(uint64 initiativeDbId, uint32 taskId, uint32 progress, uint8 status)
 {
-    if (initiativeDbId == 0)
+    if (!HasSavedId(initiativeDbId))
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_INITIATIVE_TASK_PROGRESS);
@@ -1364,7 +1389,7 @@ void InitiativeManager::PersistSingleTaskProgress(uint64 initiativeDbId, uint32 
 
 void InitiativeManager::PersistMilestoneReached(uint64 initiativeDbId, uint32 milestoneIndex, uint32 reachedTime)
 {
-    if (initiativeDbId == 0)
+    if (!HasSavedId(initiativeDbId))
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_INITIATIVE_MILESTONE);
@@ -1378,7 +1403,7 @@ void InitiativeManager::PersistMilestoneReached(uint64 initiativeDbId, uint32 mi
 
 void InitiativeManager::PersistRewardClaim(uint64 initiativeDbId, uint32 milestoneIndex, uint32 bnetAccountId)
 {
-    if (initiativeDbId == 0)
+    if (!HasSavedId(initiativeDbId))
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_INITIATIVE_REWARD_CLAIM);
@@ -1469,8 +1494,8 @@ void InitiativeManager::GrantMilestoneRewards(Player* player, uint64 neighborhoo
 
 void InitiativeManager::PersistContribution(uint64 initiativeDbId, uint32 bnetAccountId, ObjectGuid::LowType characterGuid, uint32 taskId, uint32 amount)
 {
-    if (initiativeDbId == 0)
-        return; // Not yet persisted (just inserted, will get ID on next load)
+    if (!HasSavedId(initiativeDbId))
+        return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_INITIATIVE_CONTRIBUTION);
     uint8 index = 0;

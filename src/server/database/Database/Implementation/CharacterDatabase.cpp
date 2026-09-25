@@ -966,7 +966,7 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     // Neighborhood Initiatives
     PrepareStatement(CHAR_SEL_NEIGHBORHOOD_INITIATIVES, "SELECT id, neighborhoodGuid, initiativeId, startTime, progress, completed FROM neighborhood_initiatives WHERE neighborhoodGuid = ?", CONNECTION_SYNCH);
     PrepareStatement(CHAR_SEL_NEIGHBORHOOD_INITIATIVE, "SELECT id, neighborhoodGuid, initiativeId, startTime, progress, completed FROM neighborhood_initiatives WHERE id = ?", CONNECTION_SYNCH);
-    PrepareStatement(CHAR_INS_NEIGHBORHOOD_INITIATIVE, "INSERT INTO neighborhood_initiatives (neighborhoodGuid, initiativeId, startTime, progress, completed) VALUES (?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_NEIGHBORHOOD_INITIATIVE, "INSERT INTO neighborhood_initiatives (id, neighborhoodGuid, initiativeId, startTime, progress, completed) VALUES (?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_NEIGHBORHOOD_INITIATIVE, "UPDATE neighborhood_initiatives SET progress = ?, completed = ? WHERE id = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_NEIGHBORHOOD_INITIATIVE, "DELETE FROM neighborhood_initiatives WHERE id = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_NEIGHBORHOOD_INITIATIVES, "DELETE FROM neighborhood_initiatives WHERE neighborhoodGuid = ?", CONNECTION_ASYNC);

@@ -271,10 +271,12 @@ void WorldSession::HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::N
 
     // The creator does not count toward MIN_CHARTER_SIGNATURES; whether retail counts her is not known.
 
-    // Persist to DB
+    // Saved before the next packet is handled, as the edit, the finalize and every signature are: a queued save could
+    // run after a signature added in between and delete it without telling the signer, and an edit or a signature
+    // handled first would find no charter.
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     charter.SaveToDB(trans);
-    CharacterDatabase.CommitTransaction(trans);
+    CharacterDatabase.DirectCommitTransaction(trans);
 
     // Fill the success response so the client's charter panel shows the charter
     // GUID, name and signature progress; with only Result set the panel is blank and

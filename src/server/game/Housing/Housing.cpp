@@ -537,6 +537,7 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
     for (Field* decorFields : decor)
     {
         PlacedDecor placed = HousingDecorStore::ReadDecorRow(decorFields);
+        // A yard piece is saved with room 0 and stays without a room, which is how the yard is told apart.
         if (uint64 roomDbId = decorFields[13].GetUInt64())
         {
             // Use the room's actual GUID key from _state->Rooms, not a reconstructed one.
@@ -2667,6 +2668,11 @@ uint32 Housing::GetMaxFixtureBudget() const
 
 bool Housing::IsExteriorDecorPlacement(ObjectGuid roomGuid)
 {
+    return IsExteriorDecorPlacement(roomGuid, sHousingMgr.GetBaseRoomEntryId());
+}
+
+bool Housing::IsExteriorDecorPlacement(ObjectGuid roomGuid, uint32 baseRoomEntryId)
+{
     // No room → yard/exterior placement.
     if (roomGuid.IsEmpty())
         return true;
@@ -2676,7 +2682,7 @@ bool Housing::IsExteriorDecorPlacement(ObjectGuid roomGuid)
     // sends this RoomGuid for exterior decor even though it is "on a room".
     return roomGuid.GetHigh() == HighGuid::Housing
         && uint32((roomGuid.GetRawValue(1) >> 53) & 0x1F) == 2
-        && uint32(roomGuid.GetRawValue(1) & 0xFFFFFFFFULL) == sHousingMgr.GetBaseRoomEntryId();
+        && uint32(roomGuid.GetRawValue(1) & 0xFFFFFFFFULL) == baseRoomEntryId;
 }
 
 HousingResult Housing::CheckLightOverlap(uint32 decorEntryId, float x, float y, float z,

@@ -482,7 +482,7 @@ void HousingMap::SpawnPlotGameObjects()
             uint32 spawnedDecor = 0;
             for (Housing::PlacedDecor const& decor : plotInfo->Decor)
             {
-                if (!decor.RoomGuid.IsEmpty())
+                if (!Housing::IsExteriorDecorPlacement(decor.RoomGuid))
                     continue; // exterior-only at preload
                 if (SpawnDecorItem(plotIdx, decor, plotInfo->HouseGuid))
                     ++spawnedDecor;
@@ -3179,8 +3179,9 @@ void HousingMap::SpawnAllDecorForPlot(uint8 plotIndex, Housing const* housing)
     uint32 failCount = 0;
     for (auto const& [decorGuid, decor] : housing->GetPlacedDecorMap())
     {
-        // Skip interior decor — those are spawned by HouseInteriorMap::SpawnInteriorDecor
-        if (!decor.RoomGuid.IsEmpty())
+        // Skip interior decor — those are spawned by HouseInteriorMap::SpawnInteriorDecor. A yard piece placed this
+        // session still carries the plot's room GUID the client sent, so the yard test is not an empty room.
+        if (!Housing::IsExteriorDecorPlacement(decor.RoomGuid))
             continue;
 
         ++exteriorCount;

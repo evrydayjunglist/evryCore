@@ -21,6 +21,7 @@
 #include "Define.h"
 #include "HousingDefines.h"
 #include "ObjectGuid.h"
+#include <atomic>
 #include <memory>
 #include <set>
 #include <unordered_map>
@@ -164,6 +165,8 @@ public:
 private:
     InitiativeManager() = default;
 
+    // False, with an error logged, for an endeavor without a database id.
+    static bool HasSavedId(uint64 initiativeDbId);
     void PersistInitiative(ActiveInitiative const& initiative);
     void PersistTaskProgress(ActiveInitiative const& initiative);
     void PersistSingleTaskProgress(uint64 initiativeDbId, uint32 taskId, uint32 progress, uint8 status);
@@ -215,6 +218,10 @@ private:
         uint32 TaskID;
     };
     std::unordered_map<uint32, std::vector<CriteriaTaskLink>> _criteriaToTasks;
+
+    // The id the next endeavor is saved with. The server picks it, as it does for houses, so a new endeavor can save
+    // its progress straight away; the insert stays on the asynchronous queue, ahead of every later write for that id.
+    std::atomic<uint64> _nextInitiativeDbId{1};
 
     // Update timer
     uint32 _updateTimer = 0;

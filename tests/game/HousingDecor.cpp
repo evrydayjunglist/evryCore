@@ -171,6 +171,28 @@ TEST_CASE("A retroactive decor reward is earned by its criteria", "[Housing][Dec
     REQUIRE_FALSE(HousingDecorStore::IsRetroactiveRewardEarned(RETROACTIVE_DECOR_REWARD_FLAG_NONE, {}, hasAchievement, hasQuest));
 }
 
+TEST_CASE("Yard decor is saved with room 0 and interior decor with its room", "[Housing][Decor]")
+{
+    uint32 constexpr BaseRoomEntryId = 18;
+
+    // hled1 791444: a yard piece on plot 13 carries the plot's room, HouseRoomID 18 with counter 13.
+    ObjectGuid yard;
+    yard.SetRawValue(UI64LIT(0xDC40000000000012), UI64LIT(0x000000000000000D));
+    REQUIRE(Housing::IsExteriorDecorPlacement(yard, BaseRoomEntryId));
+    REQUIRE(HousingDecorStore::GetSavedRoomValue(yard, BaseRoomEntryId) == 0);
+    REQUIRE(HousingDecorStore::GetSavedRoomValue(ObjectGuid::Empty, BaseRoomEntryId) == 0);
+
+    // hbcd3 1443063: an interior piece carries its room, HouseRoomID 1 with counter 1, and saves that room's id.
+    ObjectGuid room;
+    room.SetRawValue(UI64LIT(0xDC40000000000001), UI64LIT(0x0000000000000001));
+    REQUIRE_FALSE(Housing::IsExteriorDecorPlacement(room, BaseRoomEntryId));
+    REQUIRE(HousingDecorStore::GetSavedRoomValue(room, BaseRoomEntryId) == 1);
+
+    // The yard of plot 1 has the same counter as room 1, and still saves as the yard.
+    ObjectGuid const plotOneYard = ObjectGuid::Create<HighGuid::Housing>(2, 0, BaseRoomEntryId, 1);
+    REQUIRE(HousingDecorStore::GetSavedRoomValue(plotOneYard, BaseRoomEntryId) == 0);
+}
+
 TEST_CASE("An item-granted piece records the item as retail does", "[Housing][Decor]")
 {
     // hled1 789060-789062: decor 1163 from item 0x...4000000A7D89D45C on realm 162 (hbcd3 1783383).

@@ -101,6 +101,16 @@ public:
         Housing::PlacedDecor const& decor);
     // A piece from a CHAR_SEL_ACCOUNT_HOUSING_DECOR row, without its room, which only the house can resolve.
     static Housing::PlacedDecor ReadDecorRow(Field* fields);
+    // The room value saved with a piece: the interior room's database id, or 0 for a piece in the yard. The client
+    // places yard decor on the plot's room, whose GUID counter is the plot index, so saving that counter would read
+    // back as an interior room id.
+    static uint64 GetSavedRoomValue(ObjectGuid roomGuid, uint32 baseRoomEntryId);
+    // A redeem: when the account is still owed a copy of the entry, makes the piece in storage, counts the copy as
+    // redeemed and queues the save, all under the store's lock, so two game accounts of one Battle.net account
+    // redeeming at once on different map threads cannot both take the last owed copy, and their saves of the redeemed
+    // count are queued in the order the count went up. owedBefore is what was owed before this redeem.
+    Optional<Housing::PlacedDecor> RedeemOwed(uint32 decorEntryId, int32 startingQuantity, int32 houseDecorFlags,
+        uint32 earnedRetroactiveRewards, uint32& owedBefore);
 
     // What an account is owed of one entry. StartingQuantity copies of every HouseDecor row but the "[DNT] ... DO NOT
     // USE" platforms, plus one per RetroactiveDecorReward row the account has earned, less what it redeemed already.

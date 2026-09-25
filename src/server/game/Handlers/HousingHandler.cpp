@@ -1638,11 +1638,16 @@ void WorldSession::FinishHousingDecorRedeem(uint32 decorEntryId, uint32 transact
     HouseDecorData const* decorData = sHousingMgr.GetHouseDecorData(decorEntryId);
     HousingDecorStore* store = player->GetHousingDecorStore();
 
-    // A redeem turns one owed copy into a piece; with nothing owed it is refused, echoing the transaction.
-    uint32 const owed = decorData && store
-        ? HousingDecorStore::GetOwedCount(decorData->StartingQuantity, decorData->Flags, earnedRetroactiveRewards, store->GetRedeemed(decorEntryId))
-        : 0;
-    if (!owed)
+    // A redeem turns one owed copy into a piece; with nothing owed it is refused, echoing the transaction. This can run
+    // from a query callback, in whichever session update picks it up: a map thread while she is in the world. Another
+    // game account of the same Battle.net account may redeem on another map thread at the same time, so the owed check,
+    // the new piece, the redeemed count and queueing their save are one call under the store's lock. The save is
+    // asynchronous, so queueing it before the packets below still leaves the client's order as retail's.
+    uint32 owed = 0;
+    Optional<Housing::PlacedDecor> const redeemed = decorData && store
+        ? store->RedeemOwed(decorEntryId, decorData->StartingQuantity, decorData->Flags, earnedRetroactiveRewards, owed)
+        : Optional<Housing::PlacedDecor>();
+    if (!redeemed)
     {
         WorldPackets::Housing::HousingRedeemDeferredDecorResponse response;
         response.Result = static_cast<uint8>(decorData ? HOUSING_RESULT_DECOR_CANNOT_BE_REDEEMED : HOUSING_RESULT_DECOR_NOT_FOUND);
@@ -1653,10 +1658,7 @@ void WorldSession::FinishHousingDecorRedeem(uint32 decorEntryId, uint32 transact
         return;
     }
 
-    bool firstOwned = false;
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    Housing::PlacedDecor const piece = store->CreateStored(decorEntryId, DECOR_SOURCE_REDEEMED, {}, firstOwned, trans);
-    store->AddRedeemed(decorEntryId, trans);
+    Housing::PlacedDecor const& piece = *redeemed;
 
     // Retail's order (hled1 788897-789026, 790913-790928): the reply with the new piece's GUID, then the account's
     // update with that piece in storage (source 3, no house, no value). No add-to-chest and no first-time message.
@@ -1673,9 +1675,6 @@ void WorldSession::FinishHousingDecorRedeem(uint32 decorEntryId, uint32 transact
     else
         player->PushHousingDecorStorage();
     account.SendUpdateToPlayer(player);
-
-    // Then the piece is saved with the GUID that was sent.
-    CharacterDatabase.CommitTransaction(trans);
 
     // Nothing else follows a redeem. Retail sent no house experience update and no "collect unique decor" criteria
     // update for any of three redeems of entries that carry a first-acquisition bonus (hbcd3 Numbers 16637-16738: the

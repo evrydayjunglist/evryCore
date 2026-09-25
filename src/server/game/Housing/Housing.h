@@ -293,6 +293,8 @@ public:
     // so they can never disagree (the old bug: CHECK counted exterior-plot rooms
     // as exterior but CHARGE routed them to interior → exterior budget unlimited).
     static bool IsExteriorDecorPlacement(ObjectGuid roomGuid);
+    // The same test against a given base room entry (HouseRoomID 18 in the 12.0.7 captures, hled1 791444).
+    static bool IsExteriorDecorPlacement(ObjectGuid roomGuid, uint32 baseRoomEntryId);
     HousingResult CommitDecorDyes(ObjectGuid decorGuid, std::array<uint32, MAX_HOUSING_DYE_SLOTS> const& dyeSlots);
     HousingResult SetDecorLocked(ObjectGuid decorGuid, bool locked);
     // Bind (or, with an empty petGuid, clear) a battle pet on a placed decor slot.

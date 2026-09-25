@@ -550,3 +550,106 @@ TEST_CASE("Housing exterior edit replies are written in retail's layout", "[Hous
             0x00, 0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC });
     }
 }
+
+TEST_CASE("Housing level and favor updates match retail byte for byte", "[Housing][Packets]")
+{
+    using HouseLevelFavor = HousingSvcsUpdateHousesLevelFavor::HouseLevelFavor;
+
+    SECTION("After a purchase, the house's favor with change and reason -1 (hbcd3 1299772, Number 13869)")
+    {
+        HousingSvcsUpdateHousesLevelFavor update;
+        update.Result = 0;
+        update.ChangeAmount = uint32(-1);
+        update.Reason = uint32(-1);
+        HouseLevelFavor& house = update.Houses.emplace_back();
+        house.HouseGUID = RetailHouse;
+        house.HouseLevel = -1;
+        house.FavorValue = 1080;
+        REQUIRE(Bytes(update.Write()) == std::vector<uint8>{
+            0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0xFF, 0xFF, 0xFF, 0xFF, 0x38, 0x04, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x80 });
+    }
+
+    SECTION("Then the favor as the change with reason 1, the house at -1 and -1 (hbcd3 1301305, Number 13925)")
+    {
+        HousingSvcsUpdateHousesLevelFavor update;
+        update.Result = 0;
+        update.ChangeAmount = 1080;
+        update.Reason = 1;
+        HouseLevelFavor& house = update.Houses.emplace_back();
+        house.HouseGUID = RetailHouse;
+        house.HouseLevel = -1;
+        house.FavorValue = -1;
+        REQUIRE(Bytes(update.Write()) == std::vector<uint8>{
+            0x00, 0x38, 0x04, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x0F, 0xC3, 0x9D, 0x76, 0x54, 0x03, 0x07, 0x80, 0x60, 0xDC,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x80 });
+    }
+
+    SECTION("A first acquisition bonus names only the Battle.net account (hbcd3 2106253, Number 25462)")
+    {
+        HousingSvcsUpdateHousesLevelFavor update;
+        update.Result = 0;
+        update.ChangeAmount = uint32(-1);
+        update.Reason = uint32(-1);
+        HouseLevelFavor& account = update.Houses.emplace_back();
+        account.BnetAccount = RetailBnetAccount;
+        account.HouseLevel = -1;
+        account.FavorValue = 10;
+        account.UpdateSource = 1;
+        account.SourceDataDecorID = 1482;
+        REQUIRE(Bytes(update.Write()) == std::vector<uint8>{
+            0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00,
+            0x0F, 0x80, 0x9D, 0x76, 0x54, 0x03, 0x78,
+            0x00, 0x00, 0x00, 0x00,
+            0xFF, 0xFF, 0xFF, 0xFF, 0x0A, 0x00, 0x00, 0x00,
+            0x01, 0xCA, 0x05, 0x00, 0x00, 0x80 });
+    }
+}
+
+TEST_CASE("Housing decor replies match retail", "[Housing][Packets]")
+{
+    SECTION("A first-time acquisition names the decor entry (hbcd3 1299364, Number 13844)")
+    {
+        HousingFirstTimeDecorAcquisition message;
+        message.DecorEntryID = 1700;
+        REQUIRE(Bytes(message.Write()) == std::vector<uint8>{ 0xA4, 0x06, 0x00, 0x00 });
+    }
+
+    SECTION("Add to chest is the success bit, a count and the pieces (hbcd3 1783648, Number 20365)")
+    {
+        HousingDecorAddToHouseChestResponse response;
+        response.Success = true;
+        response.DecorGuids.push_back(Guid(UI64LIT(0xDC2005A30000048B), UI64LIT(0x0000000091090083)));
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x80, 0x01, 0x00, 0x00, 0x00,
+            0x0D, 0xF3, 0x83, 0x09, 0x91, 0x8B, 0x04, 0xA3, 0x05, 0x20, 0xDC });
+    }
+
+    // WowPacketParser decodes both redeem replies as the new piece's GUID, the result and the transaction id, and the
+    // captured lengths (17 and 16 bytes) are what that layout gives for these two GUIDs.
+    SECTION("A redeem answers the piece, the result and the transaction (hled1 788897, Number 18783, 17 bytes)")
+    {
+        HousingRedeemDeferredDecorResponse response;
+        response.DecorGuid = Guid(UI64LIT(0xDC2005A30000020C), UI64LIT(0x00000000912C021A));
+        response.Result = 0;
+        response.SequenceIndex = 1;
+        REQUIRE(Bytes(response.Write()) == std::vector<uint8>{
+            0x0F, 0xF3, 0x1A, 0x02, 0x2C, 0x91, 0x0C, 0x02, 0xA3, 0x05, 0x20, 0xDC,
+            0x00, 0x01, 0x00, 0x00, 0x00 });
+    }
+
+    SECTION("A redeem whose GUID packs shorter (hbcd3 1443667, Number 16642, 16 bytes)")
+    {
+        HousingRedeemDeferredDecorResponse response;
+        response.DecorGuid = Guid(UI64LIT(0xDC2005A300002E9B), UI64LIT(0x000000009109007F));
+        response.Result = 0;
+        response.SequenceIndex = 1;
+        REQUIRE(response.Write()->size() == 16);
+    }
+}

@@ -48,7 +48,7 @@ InitiativeManager& InitiativeManager::Instance()
 
 void InitiativeManager::Initialize()
 {
-    TC_LOG_INFO("housing", "InitiativeManager: Initializing...");
+    TC_LOG_DEBUG("housing", "InitiativeManager: Initializing...");
 
     BuildDB2IndexMaps();
     LoadFromDB();
@@ -324,9 +324,8 @@ void InitiativeManager::Update(uint32 diff)
                     initiative->InitiativeID, initiative->NeighborhoodGuid);
                 initiative->Completed = true;
                 PersistInitiative(*initiative);
-                // Speculative SendInitiativeUpdateStatus(FAILED) retired 2026-05-11 —
-                // failed-status notification reaches the client via Account/Player entity
-                // fragment updates, not a dedicated SMSG.
+                // The failed status reaches the client through the Account/Player entity
+                // fragment updates, not a packet of its own.
             }
         }
     }
@@ -424,8 +423,7 @@ ActiveInitiative* InitiativeManager::StartInitiative(uint64 neighborhoodGuid, ui
     // Rebuild criteria reverse index now that a new initiative is active
     BuildCriteriaIndex();
 
-    // Speculative SendInitiativeUpdateStatus(STARTED) + SendInitiativePointsUpdate(0,max)
-    // retired 2026-05-11 — started-state + initial points propagate via entity-fragment
+    // The started state and the first points reach the client through the entity-fragment
     // updates on the neighborhood entity.
 
     // Every task of the new initiative starts at Progress=0 / NOT_STARTED. Clients that were
@@ -485,8 +483,7 @@ void InitiativeManager::CompleteInitiative(uint64 neighborhoodGuid, uint32 initi
             PersistTaskProgress(*initiative);
 
             // Broadcast completion to neighborhood via the real SMSG_INITIATIVE_COMPLETE.
-            // Speculative SendInitiativeUpdateStatus(COMPLETED) + SendInitiativePointsUpdate(max,max)
-            // retired 2026-05-11 — completion state propagates via entity-fragment updates.
+            // The rest of the completed state reaches the client through the entity-fragment updates.
             // Resolve by persisted counter - arg1 is the NeighborhoodMapID, not 0 (this site never matched anyway).
             Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(neighborhoodGuid);
             if (neighborhood)
@@ -617,7 +614,7 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
         if (neighborhood)
             BroadcastTaskComplete(neighborhood, initiativeID, taskID);
 
-        TC_LOG_INFO("housing", "InitiativeManager::UpdateTaskProgress: Task {} completed in initiative {} (neighborhood {})",
+        TC_LOG_DEBUG("housing", "InitiativeManager::UpdateTaskProgress: Task {} completed in initiative {} (neighborhood {})",
             taskID, initiativeID, neighborhoodGuid);
     }
 
@@ -633,8 +630,7 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(neighborhoodGuid);
 
     // Calculate current aggregate points: sum of all task progress values
-    // Speculative SendInitiativePointsUpdate(currentPoints, maxPoints) retired 2026-05-11 —
-    // progress updates propagate via entity-fragment updates on the neighborhood entity.
+    // Progress reaches the client through the entity-fragment updates on the neighborhood entity.
 
     // Check milestones
     CheckMilestones(*initiative, neighborhood);
@@ -742,7 +738,7 @@ void InitiativeManager::BuildCriteriaIndex()
         }
     }
 
-    TC_LOG_INFO("housing", "InitiativeManager::BuildCriteriaIndex: Built {} criteria->task links ({} missing trees)",
+    TC_LOG_DEBUG("housing", "InitiativeManager::BuildCriteriaIndex: Built {} criteria->task links ({} missing trees)",
         linkCount, missingTreeCount);
 }
 
@@ -1649,8 +1645,7 @@ void InitiativeManager::CheckMilestones(ActiveInitiative& initiative, Neighborho
             PersistMilestoneReached(initiative.DbId, milestone.MilestoneOrderIndex, static_cast<uint32>(GameTime::GetGameTime()));
 
             // Real SMSG_INITIATIVE_REWARD_AVAILABLE carries the milestone-reached signal.
-            // Speculative SendInitiativeUpdateStatus(MILESTONE_COMPLETED) + SendInitiativeMilestoneUpdate
-            // retired 2026-05-11 — milestone state propagates via entity-fragment updates.
+            // The rest of the milestone state reaches the client through the entity-fragment updates.
             if (neighborhood)
                 BroadcastRewardAvailable(neighborhood, initiative.InitiativeID, milestone.MilestoneOrderIndex);
 
@@ -1714,10 +1709,3 @@ uint32 InitiativeManager::CalculateMaxPoints(uint32 initiativeID) const
         maxPoints += static_cast<uint32>(std::max<int32>(1, task.ProgressContributionAmount));
     return maxPoints;
 }
-
-// Retired 2026-05-11: SendInitiativeUpdateStatus, SendInitiativePointsUpdate,
-// SendInitiativeMilestoneUpdate — all bound to speculative 0xF1000018..0xF100001C
-// opcodes that the retail client silently drops. Per 2026-05-11 sniff verification
-// (verify_opcodes_out.md), the same state changes are conveyed by the real
-// SMSG_INITIATIVE_TASK_COMPLETE (0x420365), SMSG_INITIATIVE_COMPLETE (0x420366),
-// and SMSG_INITIATIVE_REWARD_AVAILABLE (0x42036B), plus entity-fragment updates.

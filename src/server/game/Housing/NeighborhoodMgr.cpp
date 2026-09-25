@@ -153,7 +153,7 @@ void NeighborhoodMgr::LoadFromDB()
     // Debug dump all neighborhoods and their plot states
     for (auto const& [guid, neighborhood] : _neighborhoods)
     {
-        TC_LOG_INFO("housing", "NEIGHBORHOOD_DUMP: guid={} name='{}' mapId={} faction={} public={} "
+        TC_LOG_DEBUG("housing", "NEIGHBORHOOD_DUMP: guid={} name='{}' mapId={} faction={} public={} "
             "members={} occupiedPlots={} owner={}",
             guid.ToString(), neighborhood->GetName(), neighborhood->GetNeighborhoodMapID(),
             neighborhood->GetFactionRestriction(), neighborhood->IsPublic(),
@@ -162,7 +162,7 @@ void NeighborhoodMgr::LoadFromDB()
 
         for (auto const& member : neighborhood->GetMembers())
         {
-            TC_LOG_INFO("housing", "  MEMBER: player={} role={} plotIndex={} houseGuid={}",
+            TC_LOG_DEBUG("housing", "  MEMBER: player={} role={} plotIndex={} houseGuid={}",
                 member.PlayerGuid.ToString(), member.Role, member.PlotIndex, member.HouseGuid.ToString());
         }
 
@@ -171,7 +171,7 @@ void NeighborhoodMgr::LoadFromDB()
             auto const& plot = neighborhood->GetPlots()[i];
             if (plot.IsOccupied())
             {
-                TC_LOG_INFO("housing", "  PLOT[{}]: owner={} house={} bnet={}",
+                TC_LOG_DEBUG("housing", "  PLOT[{}]: owner={} house={} bnet={}",
                     i, plot.OwnerGuid.ToString(), plot.HouseGuid.ToString(), plot.OwnerBnetGuid.ToString());
             }
         }
@@ -210,7 +210,7 @@ Neighborhood* NeighborhoodMgr::CreateNeighborhood(ObjectGuid ownerGuid, std::str
     stmt->setInt32(index++, factionRestriction);
     stmt->setBool(index++, isPublic);
     stmt->setUInt32(index++, createTime);
-    stmt->setUInt32(index++, guildId); // M8: persist guild link at creation so the reload below populates _guildId
+    stmt->setUInt32(index++, guildId); // saved at creation so the reload below fills _guildId
     trans->Append(stmt);
 
     // Insert the owner as a member with OWNER role
@@ -263,7 +263,7 @@ Neighborhood* NeighborhoodMgr::CreateGuildNeighborhood(ObjectGuid ownerGuid, std
     else if (factionID == ALLIANCE)
         factionRestriction = NEIGHBORHOOD_FACTION_ALLIANCE;
 
-    // M8: persist the guild→neighborhood link so GetNeighborhoodByGuildId
+    // Save the guild→neighborhood link so GetNeighborhoodByGuildId
     // resolves this neighborhood (across restarts, via LoadFromDB).
     Neighborhood* neighborhood = CreateNeighborhood(ownerGuid, name, neighborhoodMapID, factionRestriction, /*isPublic*/ false, guildId);
     if (neighborhood)
@@ -486,7 +486,7 @@ Neighborhood* NeighborhoodMgr::FindOrCreatePublicNeighborhood(uint32 teamId)
         TC_LOG_ERROR("housing",
             "FindOrCreatePublicNeighborhood: HOUSING LOCKOUT for {} — NeighborhoodMap has no system-generatable "
             "row (Flags bit 0x4) carrying the {} flag (0x{:X}). Players of this faction cannot enter housing. "
-            "Apply the neighborhood_map hotfix (sql/housing/hotfixes_housing.sql): "
+            "Check NeighborhoodMap.db2 and the hotfixes table neighborhood_map: "
             "Alliance = ID 1 / MapID 2735 / FactionRestriction 5 (0x1|0x4), "
             "Horde = ID 2 / MapID 2736 / FactionRestriction 6 (0x2|0x4).",
             factionName, factionName, wantBit);
@@ -680,13 +680,13 @@ void NeighborhoodMgr::EnsurePublicNeighborhoods()
         TC_LOG_ERROR("server.loading",
             ">> HOUSING LOCKOUT: no public Alliance neighborhood exists and none could be created. "
             "NeighborhoodMap has no system-generatable map with the Alliance flag (0x1|0x4). "
-            "Apply the neighborhood_map hotfix (sql/housing/hotfixes_housing.sql): "
+            "Check NeighborhoodMap.db2 and the hotfixes table neighborhood_map: "
             "ID 1 must be MapID 2735 with FactionRestriction 5 (0x1 Alliance | 0x4 SystemGenerate).");
     if (!hasHordePublic)
         TC_LOG_ERROR("server.loading",
             ">> HOUSING LOCKOUT: no public Horde neighborhood exists and none could be created. "
             "NeighborhoodMap has no system-generatable map with the Horde flag (0x2|0x4). "
-            "Apply the neighborhood_map hotfix (sql/housing/hotfixes_housing.sql): "
+            "Check NeighborhoodMap.db2 and the hotfixes table neighborhood_map: "
             "ID 2 must be MapID 2736 with FactionRestriction 6 (0x2 Horde | 0x4 SystemGenerate).");
 }
 

@@ -150,7 +150,8 @@ void HousingRoomEntity::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player
     buf.put<uint32>(sizePos, buf.wpos() - sizePos - 4);
     data->AddUpdateBlock();
 
-    // Hex dump of the complete CREATE block for byte-level debugging
+    // The start of the CREATE block in hex, to check it byte by byte against a capture.
+    if (sLog->ShouldLog("network.opcode", LOG_LEVEL_DEBUG))
     {
         // Dump from start of this entity (approximate: back up from sizePos)
         std::size_t blockEnd = buf.wpos();
@@ -158,7 +159,7 @@ void HousingRoomEntity::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player
         std::string hex;
         for (std::size_t i = dumpStart; i < std::min(blockEnd, dumpStart + 80); ++i)
             hex += Trinity::StringFormat("{:02x} ", buf[i]);
-        TC_LOG_ERROR("housing", "HousingRoomEntity::BuildCreate guid={} objectType={} "
+        TC_LOG_DEBUG("network.opcode", "HousingRoomEntity::BuildCreate guid={} objectType={} "
             "fieldBlockSize={} pos=({:.1f},{:.1f},{:.1f}) HEX: {}",
             GetGUID().ToString(), uint32(m_objectTypeId),
             buf.wpos() - sizePos - 4,

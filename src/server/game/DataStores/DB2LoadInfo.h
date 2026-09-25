@@ -517,8 +517,8 @@ struct ExteriorComponentTypeLoadInfo
 struct ExteriorComponentLoadInfo
 {
     // Field order must match metadata (IndexField=2, ID is 3rd meta field; ParentIndexField=4).
-    // 12.0.5 added Field_12 (signed INT) â€” Meta grew from 13 to 14 entries,
-    // FileFieldCount 12â†’13, ParentIndexField 12â†’13, LayoutHash 0x027A2F44â†’0x53EA0925.
+    // 12.0.5 added Field_12 (signed INT) — Meta grew from 13 to 14 entries,
+    // FileFieldCount 12 to 13, ParentIndexField 12 to 13, LayoutHash 0x027A2F44 to 0x53EA0925.
     // 69404 (12.1.0): confirmed via wago.tools ExteriorComponent@12.1.0.69404 that
     // HouseExteriorWmoDataID (ParentIndexField) is inline at Meta[4] right after Size,
     // NOT trailing after ItemID as previously assumed.
@@ -539,7 +539,7 @@ struct ExteriorComponentLoadInfo
         { .IsSigned = true, .Type = FT_INT, .Name = "Field_9" },
         { .IsSigned = true, .Type = FT_INT, .Name = "GameObjectID" },
         { .IsSigned = true, .Type = FT_INT, .Name = "Field_11" },
-        { .IsSigned = true, .Type = FT_INT, .Name = "ItemID" },                   // NEW in 12.0.5 â€” per WoWDBDefs: references Item.ID
+        { .IsSigned = true, .Type = FT_INT, .Name = "ItemID" },                   // NEW in 12.0.5 — per WoWDBDefs: references Item.ID
     };
 
     static constexpr DB2LoadInfo Instance{ Fields, 16, &ExteriorComponentMeta::Instance, HOTFIX_SEL_EXTERIOR_COMPONENT };

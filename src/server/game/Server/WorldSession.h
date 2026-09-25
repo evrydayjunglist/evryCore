@@ -520,12 +520,6 @@ namespace WorldPackets
         class GetDecorRefundList;
         class BulkRefund;
         class HousingRequestEditorAvailability;
-        class HousingDecorStartPlacingFromSource;
-        class HousingDecorBatchOperation;
-        class HousingDecorPlacementPreview;
-        // Retired 2026-05-12 (batch 2): 8 fake SVCS CMSG class forward decls deleted.
-        // Retired 2026-05-12: group 0x35 system CMSG classes (HouseStatusQuery, GetHouseInfoAlt,
-        // HouseSnapshot, ExportHouse, UpdateHouseInfo) — no client senders in build 67186.
     }
 
     namespace Neighborhood
@@ -769,12 +763,6 @@ namespace WorldPackets
         class GetDecorRefundList;
         class BulkRefund;
         class HousingRequestEditorAvailability;
-        class HousingDecorStartPlacingFromSource;
-        class HousingDecorBatchOperation;
-        class HousingDecorPlacementPreview;
-        // Retired 2026-05-12 (batch 2): 8 fake SVCS CMSG class forward decls deleted.
-        // Retired 2026-05-12: group 0x35 system CMSG classes (HouseStatusQuery, GetHouseInfoAlt,
-        // HouseSnapshot, ExportHouse, UpdateHouseInfo) â€” no client senders in build 67186.
     }
     namespace Movement
     {
@@ -1735,11 +1723,11 @@ class TC_GAME_API WorldSession
         void HandleHouseInteriorLeaveHouse(WorldPackets::Housing::HouseInteriorLeaveHouse const& houseInteriorLeaveHouse);
 
         // Housing - Decor System
-        // m3/A6: returns false (and consumes no budget) when the per-session
-        // decoration throttle is exceeded; handlers then reply TOO_MANY_REQUESTS.
+        // Returns false (and uses up nothing) when this session has placed, moved or removed too much decor too
+        // quickly; the handlers then reply TOO_MANY_REQUESTS.
         bool CheckHousingDecorThrottle();
 
-        // H-25: a charter may only be signed by someone who was asked to sign it.
+        // A charter may only be signed by someone who was asked to sign it.
         void AddPendingCharterSignatureRequest(uint64 charterId) { _pendingCharterSignatureRequests.insert(charterId); }
         bool HasPendingCharterSignatureRequest(uint64 charterId) const { return _pendingCharterSignatureRequests.contains(charterId); }
         void ClearPendingCharterSignatureRequest(uint64 charterId) { _pendingCharterSignatureRequests.erase(charterId); }
@@ -1751,12 +1739,10 @@ class TC_GAME_API WorldSession
         void HandleHousingDecorSetPet(WorldPackets::Housing::HousingDecorSetPet const& housingDecorSetPet);
         void HandleHousingDecorSetDyeSlots(WorldPackets::Housing::HousingDecorSetDyeSlots const& housingDecorSetDyeSlots);
         void HandleHousingDecorDeleteFromStorage(WorldPackets::Housing::HousingDecorDeleteFromStorage const& housingDecorDeleteFromStorage);
-        // Retired 2026-05-12: HandleHousingDecorDeleteFromStorageById (fake CMSG 0x30000A).
         void HandleHousingDecorRequestStorage(WorldPackets::Housing::HousingDecorRequestStorage const& housingDecorRequestStorage);
         void HandleHousingDecorRedeemDeferredDecor(WorldPackets::Housing::HousingDecorRedeemDeferredDecor const& housingDecorRedeemDeferredDecor);
         // Answers a redeem once it is known how many of the entry's retroactive rewards the account has earned.
         void FinishHousingDecorRedeem(uint32 decorEntryId, uint32 transactionId, uint32 earnedRetroactiveRewards);
-        // Retired 2026-05-11: HandleHousingDecorStartPlacingNewDecor + CatalogCreateSearcher (TC-CUSTOM CMSGs).
         void HandleGetLastCatalogFetch(WorldPackets::Housing::GetLastCatalogFetch const& getLastCatalogFetch);
         void HandleUpdateLastCatalogFetch(WorldPackets::Housing::UpdateLastCatalogFetch const& updateLastCatalogFetch);
 
@@ -1776,12 +1762,6 @@ class TC_GAME_API WorldSession
         void HandleHousingFixtureDeleteFixture(WorldPackets::Housing::HousingFixtureDeleteFixture const& housingFixtureDeleteFixture);
         void HandleHousingFixtureSetHouseSize(WorldPackets::Housing::HousingFixtureSetHouseSize const& housingFixtureSetHouseSize);
         void HandleHousingFixtureSetHouseType(WorldPackets::Housing::HousingFixtureSetHouseType const& housingFixtureSetHouseType);
-
-        // Merge 2026-09-01 (ADV e004d7a4bf): removed a duplicate "12.1.0 build 69299 scaffolding —
-        // forward-declared only, no .cpp bodies" copy of the six HandleHousingBlueprint* signatures
-        // that used to live here (recovered from bare's 12.1 WIP in an earlier reconcile pass, before
-        // ADV's real HousingBlueprintPackets.h/.cpp implementation existed on this branch). The real,
-        // wired declarations are above ("Housing - Blueprint System (Patch 12.1.0 / build 69299)").
 
         // Housing - Room System
         // Adds a room at a door of an existing room (CMSG_HOUSING_ROOM_ADD, room blueprint imports): places it, spawns it in the
@@ -1818,9 +1798,6 @@ class TC_GAME_API WorldSession
         void OfferHousingBreadcrumbQuest();
         // Tells the callback whether any character of this Battle.net account has turned in the quest.
         void QueryWarbandQuestRewarded(uint32 questId, std::function<void(bool)>&& callback);
-        // Removed 2026-04-24: HandleHousingSvcsSetTutorialState / CompleteTutorialStep /
-        // SkipTutorial / QueryPendingInvites — no matching 12.0.5 Lua API exists.
-        // Retired 2026-05-12: HandleHousingDecorConfirmPreviewPlacement (fake CMSG 0x300011).
         void HandleHousingSvcsAcceptNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsAcceptNeighborhoodOwnership const& housingSvcsAcceptNeighborhoodOwnership);
         void HandleHousingSvcsRejectNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsRejectNeighborhoodOwnership const& housingSvcsRejectNeighborhoodOwnership);
         void HandleHousingSvcsGetPotentialHouseOwners(WorldPackets::Housing::HousingSvcsGetPotentialHouseOwners const& housingSvcsGetPotentialHouseOwners);
@@ -1831,8 +1808,6 @@ class TC_GAME_API WorldSession
         void HandleHousingSvcsHouseFinderIgnoreNeighborhood(WorldPackets::Housing::HousingSvcsHouseFinderIgnoreNeighborhood const& housingSvcsHouseFinderIgnoreNeighborhood);
         void HandleHousingSvcsGetBnetFriendNeighborhoods(WorldPackets::Housing::HousingSvcsGetBnetFriendNeighborhoods const& housingSvcsGetBnetFriendNeighborhoods);
         void HandleHousingSvcsDeleteAllNeighborhoodInvites(WorldPackets::Housing::HousingSvcsDeleteAllNeighborhoodInvites const& housingSvcsDeleteAllNeighborhoodInvites);
-
-        // Retired 2026-05-11: HandleHousingRequestEditorAvailability (sync Lua API in retail).
 
         // Housing - Decor Licensing / Refund
         void HandleGetAllLicensedDecorQuantities(WorldPackets::Housing::GetAllLicensedDecorQuantities const& getAllLicensedDecorQuantities);
@@ -1850,31 +1825,7 @@ class TC_GAME_API WorldSession
         void HandleHousingResetKioskMode(WorldPackets::Housing::HousingResetKioskMode const& housingResetKioskMode);
         void HandleHousingResetHouse(WorldPackets::Housing::HousingResetHouse const& housingResetHouse);
 
-        // Phase 7 Housing Decor handlers
-        // Retired 2026-05-12: HandleHousingDecorUpdateDyeSlot (fake CMSG 0x300008, dup of SET_DYE_SLOTS).
-        // Retired 2026-05-11: HandleHousingDecorStartPlacingFromSource + BatchOperation + PlacementPreview.
-        // Retired 2026-05-12: HandleHousingDecorCleanupModeToggle (fake CMSG 0x30000C).
-
-        // Phase 7 Housing Fixture handlers
-        // Retired 2026-05-12: HandleHousingFixtureCreateBasicHouse (fake CMSG 0x310001).
-        // Retired 2026-05-12: HandleHousingFixtureDeleteHouse (fake CMSG 0x310002, use SVCS_RELINQUISH_HOUSE).
-
-        // Phase 7 Housing Services handlers
-        // Retired 2026-05-12 (batch 2): 8 fake SVCS CMSG handlers
-        //   HandleHousingSvcsRequestPermissionsCheck (0x330000)
-        //   HandleHousingSvcsClearPlotReservation    (0x330005)
-        //   HandleHousingSvcsGetRosterData           (0x33000C)
-        //   HandleHousingSvcsRosterUpdateSubscribe   (0x33000D)
-        //   HandleHousingSvcsQueryHouseLevelFavor    (0x330012)
-        //   HandleHousingSvcsGuildAppendNeighborhood (0x330014)
-        //   HandleHousingSvcsGuildRenameNeighborhood (0x330015)
-        //   HandleHousingSvcsGuildGetHousingInfo     (0x330016)
-        // All verified fake via dual IDA + sniff cross-check (build 67186).
-
-        // Phase 7 Housing System handlers
-        // Retired 2026-05-12: HandleHousingSystemHouseStatusQuery + GetHouseInfoAlt + HouseSnapshot
-        // + ExportHouse + UpdateHouseInfo deleted (TC-CUSTOM CMSGs 0x350000-0x350004, no senders in build 67186).
-
+        // Housing - Neighborhood invitations and guild houses
         void HandleDeclineNeighborhoodInvites(WorldPackets::Housing::DeclineNeighborhoodInvites const& declineNeighborhoodInvites);
         void HandleQueryNeighborhoodInfo(WorldPackets::Housing::QueryNeighborhoodInfo const& queryNeighborhoodInfo);
         void HandleInvitePlayerToNeighborhood(WorldPackets::Housing::InvitePlayerToNeighborhood const& invitePlayerToNeighborhood);
@@ -1905,12 +1856,7 @@ class TC_GAME_API WorldSession
         void HandleNeighborhoodGetRoster(WorldPackets::Neighborhood::NeighborhoodGetRoster const& neighborhoodGetRoster);
         void HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::NeighborhoodEvictPlot const& neighborhoodEvictPlot);
 
-        // Phase 7 Neighborhood Charter handlers
-        // Retired 2026-05-12: HandleNeighborhoodCharterSignResponse + HandleNeighborhoodCharterRemoveSignature
-        // (fake CMSGs 0x370002 + 0x370005 — STUB-OK only, no client senders).
-
-        // Phase 7 Neighborhood handlers
-
+        // Neighborhood - Initiatives
         void HandleNeighborhoodInitiativeServiceStatusCheck(WorldPackets::Neighborhood::NeighborhoodInitiativeServiceStatusCheck const& packet);
         void HandleGetAvailableInitiativeRequest(WorldPackets::Neighborhood::GetAvailableInitiativeRequest const& getAvailableInitiativeRequest);
         void HandleGetPlayerInitiativeInfoRequest(WorldPackets::Neighborhood::GetPlayerInitiativeInfoRequest const& getPlayerInitiativeInfoRequest);
@@ -2550,14 +2496,13 @@ class TC_GAME_API WorldSession
         ObjectGuid _housingPotentialOwnersHouse;
         std::unordered_map<ObjectGuid, uint8 /*HouseOwnerError*/> _housingPotentialOwners;
 
-        // m3/A6 per-session decoration throttle. Each decor place/move/remove is
-        // an AddToMap + synchronous DB write; without a limit a scripted client
-        // can amplify GO-spawn / DB load. Sliding fixed window: up to
-        // HOUSING_DECOR_THROTTLE_BURST edits per HOUSING_DECOR_THROTTLE_WINDOW_MS.
+        // How much decor this session has placed, moved or removed lately. Each of those adds to the map and writes to
+        // the database at once, so without a limit a scripted client could load the server with spawns and writes.
+        // Up to HOUSING_DECOR_THROTTLE_BURST edits are allowed in each HOUSING_DECOR_THROTTLE_WINDOW_MS window.
         uint32 _housingDecorThrottleWindowStart = 0;
         uint32 _housingDecorThrottleCount = 0;
 
-        // H-25: charter ids this session has actually been asked to sign.
+        // The charter ids this session has actually been asked to sign.
         // CMSG_NEIGHBORHOOD_CHARTER_ADD_SIGNATURE takes the charter id from the client
         // and charter ids are creator GUID counters, so without this any player could
         // sign any charter on the realm by enumerating ids, and

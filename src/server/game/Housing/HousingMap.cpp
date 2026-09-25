@@ -57,30 +57,6 @@
 #include "WorldSession.h"
 #include "WorldStateMgr.h"
 
-namespace
-{
-    std::string HexDumpPacket(WorldPacket const* packet, size_t maxBytes = 128)
-    {
-        if (!packet || packet->size() == 0)
-            return "(empty)";
-        size_t len = std::min(packet->size(), maxBytes);
-        std::string result;
-        result.reserve(len * 3 + 32);
-        uint8 const* raw = packet->data();
-        for (size_t i = 0; i < len; ++i)
-        {
-            if (i > 0 && i % 32 == 0)
-                result += "\n  ";
-            else if (i > 0)
-                result += ' ';
-            result += fmt::format("{:02X}", raw[i]);
-        }
-        if (len < packet->size())
-            result += fmt::format(" ...({} more)", packet->size() - len);
-        return result;
-    }
-}
-
 HousingMap::HousingMap(uint32 id, time_t expiry, uint32 instanceId, Difficulty spawnMode, uint32 neighborhoodId)
     : Map(id, expiry, instanceId, spawnMode), _neighborhoodId(neighborhoodId), _neighborhood(nullptr)
 {
@@ -114,9 +90,9 @@ HousingMap::~HousingMap()
 
 void HousingMap::InitVisibilityDistance()
 {
-    // Audit 2026-04-21 measured ~20× over-emission vs retail when this map used
-    // MAX_VISIBILITY_DISTANCE (533y) — every player received CREATE_OBJECT for
-    // every decor / mesh / fixture on the map regardless of where they stood.
+    // With MAX_VISIBILITY_DISTANCE (533y) this map sent about twenty times as many creates
+    // as retail: every player received CREATE_OBJECT for every decor / mesh / fixture on
+    // the map regardless of where they stood.
     // Retail uses a bounded distance and relies on the client's entity registry
     // already holding the persistent infra entities (plot ATs, cornerstone GOs,
     // room identities) at any distance. We mirror that: the persistent ones are
@@ -147,7 +123,7 @@ void HousingMap::SpawnPlotGameObjects()
     uint32 neighborhoodMapId = _neighborhood->GetNeighborhoodMapID();
     std::vector<NeighborhoodPlotData const*> plots = sHousingMgr.GetPlotsForMap(neighborhoodMapId);
 
-    TC_LOG_INFO("housing", "HousingMap::SpawnPlotGameObjects: map={} instanceId={} neighborhoodMapId={} plotCount={}",
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: map={} instanceId={} neighborhoodMapId={} plotCount={}",
         GetId(), GetInstanceId(), neighborhoodMapId, uint32(plots.size()));
 
     if (plots.empty())
@@ -247,7 +223,7 @@ void HousingMap::SpawnPlotGameObjects()
 
         // Spawn plot AreaTrigger (entry 37358) above the plot's room anchor.
         // Sniff-verified: Box shape 35x30x94, DecalPropertiesId=621 (plot boundary visual),
-        // SpellForVisuals=1282351, FHousingPlotAreaTrigger_C entity fragment with owner data.
+        // SpellForVisuals=1282351.
         // The AT is required for the client to show the edit menu and plot boundary decal.
         //
         // OWNED PLOTS ONLY. Retail never creates this AreaTrigger for an unsold plot: across four
@@ -277,14 +253,14 @@ void HousingMap::SpawnPlotGameObjects()
             Position atPos(hx, hy, hz, roomAnchor.GetOrientation());
             // Create with addToMap=false so we can set up ALL housing data (entity
             // fragment, SpellForVisuals, SpellXSpellVisualID) BEFORE the CREATE_OBJECT
-            // packet is sent. The client needs FHousingPlotAreaTrigger_C and
+            // packet is sent. The client needs the visual fields and
             // DecalPropertiesId=621 in the initial create to render the plot border decal.
             AreaTrigger* plotAt = AreaTrigger::CreateStaticAreaTrigger({ .Id = 37358, .IsCustom = false }, this, atPos, -1, false);
             if (plotAt)
             {
                 PhasingHandler::InitDbPhaseShift(plotAt->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
 
-                TC_LOG_INFO("housing", "  PlotAT[{}] spawn (plotInfo={} hasOwner={})",
+                TC_LOG_DEBUG("housing", "  PlotAT[{}] spawn (plotInfo={} hasOwner={})",
                     plot->PlotIndex,
                     plotInfo ? "present" : "null",
                     plotInfo ? !plotInfo->OwnerGuid.IsEmpty() : false);
@@ -330,14 +306,12 @@ void HousingMap::SpawnPlotGameObjects()
         }
     }
 
-    // Blizzlike: the per-plot WorldState from NeighborhoodPlot.db2 is a BINARY occupancy flag
-    // that retail ships inside SMSG_INIT_WORLD_STATES (confirmed via sniff dump_12.0.1.66838_2026-04-15:
+    // The per-plot WorldState from NeighborhoodPlot.db2 is a BINARY occupancy flag that retail
+    // ships inside SMSG_INIT_WORLD_STATES (seen in the sniff dump_12.0.1.66838_2026-04-15:
     //   - interior map 2783: all 55 plot worldstates = 0 (nothing yet visible)
     //   - exterior map 2735: occupied plots = 1, empty plots = 0
     // The VALUE is not the owner-type enum — it's purely "is a house here?". Owner identity is
-    // carried in the plot AT (FHousingPlotAreaTrigger_C) and NeighborhoodMirrorData.Houses,
-    // both of which are populated elsewhere; the client correlates plot icon -> AT -> owner
-    // when you hover on the map.
+    // carried in NeighborhoodMirrorData.Houses, which is populated elsewhere.
     //
     // Setting the values through Map::SetWorldStateValue() at spawn time lands them in
     // _worldStateValues, so the next SMSG_INIT_WORLD_STATES already carries them. This
@@ -362,7 +336,7 @@ void HousingMap::SpawnPlotGameObjects()
         Neighborhood::PlotInfo const* pi = _neighborhood->GetPlotInfo(plotIdx);
         bool occupied = pi && pi->IsOccupied() && !pi->HouseGuid.IsEmpty();
         SetWorldStateValue(wsId, occupied ? 1 : 0, /*hidden*/ false);
-        TC_LOG_INFO("housing", "  PlotWS[{}] WorldState={} value={} (owner={} house={})",
+        TC_LOG_DEBUG("housing", "  PlotWS[{}] WorldState={} value={} (owner={} house={})",
             plot->PlotIndex, wsId,
             occupied ? 1 : 0,
             pi ? pi->OwnerGuid.ToString() : "n/a",
@@ -370,7 +344,7 @@ void HousingMap::SpawnPlotGameObjects()
         if (occupied) ++occupiedWs; else ++emptyWs;
     }
 
-    TC_LOG_INFO("housing", "HousingMap::SpawnPlotGameObjects: Spawned {} GOs, {} plots occupied / {} empty "
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Spawned {} GOs, {} plots occupied / {} empty "
         "(worldstate binary) for {} plots in neighborhood '{}' (noEntry={})",
         goCount, occupiedWs, emptyWs, uint32(plots.size()), _neighborhood->GetName(), noEntryCount);
 
@@ -454,7 +428,7 @@ void HousingMap::SpawnPlotGameObjects()
                 }
             }
 
-            TC_LOG_INFO("housing", "HousingMap::SpawnPlotGameObjects: Plot {} owner {} (offline) — using mirrored HouseType={} ExtComp={} fixtures={} decor={} from PlotInfo",
+            TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} owner {} (offline) — using mirrored HouseType={} ExtComp={} fixtures={} decor={} from PlotInfo",
                 plotIdx, plotInfo->OwnerGuid.ToString(), houseExteriorWmoDataID, exteriorComponentID,
                 uint32(plotInfo->Fixtures.size()), uint32(plotInfo->Decor.size()));
         }
@@ -514,7 +488,7 @@ void HousingMap::SpawnPlotGameObjects()
             }
             _decorSpawnedPlots.insert(plotIdx);
             if (spawnedDecor || !plotInfo->Decor.empty())
-                TC_LOG_INFO("housing", "HousingMap::SpawnPlotGameObjects: Plot {} (offline owner) — spawned {} exterior decor from PlotInfo ({} total decor entries cached)",
+                TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} (offline owner) — spawned {} exterior decor from PlotInfo ({} total decor entries cached)",
                     plotIdx, spawnedDecor, uint32(plotInfo->Decor.size()));
         }
     }
@@ -618,14 +592,12 @@ void HousingMap::SetPlotOwnershipState(uint8 plotIndex, bool owned)
             plotIndex, _neighborhood->GetName());
     }
 
-    // 12.0.5: per-AT ownership fragment removed. Plot ownership is communicated
+    // The area trigger carries no ownership. Plot ownership is communicated
     // via PlayerHouseInfoComponentData.CurrentHouse on each Player — updated by
     // the enter/leave-plot code paths (see HousingMap::OnPlayerEnterPlotArea).
 
-    // Blizzlike: the worldstate value is a per-player OWNER TYPE enum, not a binary
-    // flag. Update the map-scoped default (0/1) so late joiners see reasonable INIT
-    // state, then send a personalized UPDATE to every player already on the map so
-    // the CURRENT state (owner relationship) renders the right icon.
+    // Update the plot's world state, which late joiners get in their INIT state and every
+    // player already on the map gets as an UPDATE.
     uint32 neighborhoodMapId = _neighborhood->GetNeighborhoodMapID();
     std::vector<NeighborhoodPlotData const*> plots = sHousingMgr.GetPlotsForMap(neighborhoodMapId);
 
@@ -640,7 +612,7 @@ void HousingMap::SetPlotOwnershipState(uint8 plotIndex, bool owned)
 
         uint32 wsId = uint32(plotData->WorldState);
 
-        // Blizzlike: the per-plot WorldState is a BINARY occupancy flag — 0 empty,
+        // As on retail, the per-plot WorldState is a BINARY occupancy flag — 0 empty,
         // 1 occupied. `Map::SetWorldStateValue` stores the value (so future joins
         // get it in INIT_WORLD_STATES) AND broadcasts `SMSG_UPDATE_WORLD_STATE` to
         // every player currently on the map. No per-player enum override.
@@ -720,7 +692,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
         {
             _neighborhood->UpdatePlotHouseInfo(plotIdx, housing->GetHouseGuid(), ownerBnetGuid, housing->GetDatabaseId());
 
-            // 12.0.5: per-AT ownership fragment removed. Ownership is propagated via
+            // The area trigger carries no ownership; it reaches the client through
             // PlayerHouseInfoComponentData.CurrentHouse on the Player at plot entry.
         }
 
@@ -745,7 +717,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     }
     else
     {
-        TC_LOG_ERROR("housing", "HousingMap::AddPlayerToMap: Player {} has NO housing in this neighborhood (no house will spawn)",
+        TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Player {} has NO housing in this neighborhood (no house will spawn)",
             player->GetGUID().ToString());
     }
 
@@ -787,24 +759,21 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
         TC_LOG_DEBUG("housing", "=== END HOUSING DIAGNOSTIC ===");
     }
 
-    // BLIZZLIKE: no unprompted housing SMSG emissions at login.
-    //
-    // Previously we emitted SMSG_HOUSING_GET_CURRENT_HOUSE_INFO_RESPONSE,
-    // SMSG_HOUSING_CATALOG_STATE_SYNC, SMSG_HOUSING_SVCS_GET_PLAYER_HOUSES_INFO_
-    // RESPONSE, SMSG_HOUSING_SVCS_UPDATE_HOUSES_LEVEL_FAVOR, and
-    // SMSG_INITIATIVE_SERVICE_STATUS here as "wake-ups" to prime the client.
-    // Retail 66838 sniff analysis across 3 independent captures
+    // As on retail, no housing server packet is sent at login without being asked for:
+    // no SMSG_HOUSING_GET_CURRENT_HOUSE_INFO_RESPONSE, SMSG_HOUSING_CATALOG_STATE_SYNC,
+    // SMSG_HOUSING_SVCS_GET_PLAYER_HOUSES_INFO_RESPONSE,
+    // SMSG_HOUSING_SVCS_UPDATE_HOUSES_LEVEL_FAVOR or SMSG_INITIATIVE_SERVICE_STATUS.
+    // Three retail 12.0.1 (build 66838) captures
     // (floorplan_editor_rotation 2026-04-10, wall_floor_ceiling_customize
-    // 2026-04-12, interrior_exterrior_advanced_editor 2026-04-15) shows
-    // ZERO unprompted housing-specific SMSGs in the post-LVW window. The
+    // 2026-04-12, interrior_exterrior_advanced_editor 2026-04-15) show no
+    // housing packet the client did not ask for after the login verify world. The
     // client receives all housing state via the Player CREATE bundle's
     // UpdateField data and asks for anything else via CMSGs. The existing
     // reactive handlers (HandleHousingGetCurrentHouseInfo, HandleHousingSvcs
     // GetPlayerHousesInfo, HandleHousingHouseStatus, etc.) will respond
     // when queried.
     //
-    // CATALOG_STATE_SYNC at login has been removed too — retail emits it at
-    // ~LVW+988 in the advanced_editor sniff, well after login, as a
+    // In the advanced editor sniff retail sends CATALOG_STATE_SYNC well after login, as a
     // time-delayed server push. Not at map-entry time. If the client
     // actively needs it before the delayed push, CMSG_HOUSING_DECOR_REQUEST_
     // STORAGE also triggers catalog dispatch via HandleHousingDecorRequestStorage.
@@ -846,7 +815,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 return;
             }
 
-            // Retail pattern: send VALUES update on AT (with FHousingPlotAreaTrigger_C data)
+            // As retail does, send a VALUES update of the area trigger
             // at the same timestamp as ENTER_PLOT, ensuring the client entity table has fresh data.
             {
                 UpdateData atUpdate(p->GetMapId());
@@ -954,25 +923,17 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 session->GetBattlenetAccount().ClearUpdateMask(true);
                 houseEntity.ClearUpdateMask(true);
 
-                // Removed second PlayerHousesInfoResponse emission. The original
-                // rationale ("matching retail step 3 of CMSG_HOUSING_DECOR_REQUEST_STORAGE
-                // sequence") turns out to have been based on sniff analysis of our own
-                // TC server output, not real retail. Retail's pristine 66838 login
-                // sniffs (verified across 3 independent captures) show zero unprompted
-                // PlayerHousesInfo emissions. Per user's blizzlike guardrail this
-                // speculative re-emission is dropped.
+                // No PlayerHousesInfo reply is sent here: three retail 12.0.1 (build 66838)
+                // login captures show none that the client did not ask for.
 
                 TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: Sent Account CREATE + {} decor MeshObject CREATEs for player {}",
                     meshCreateCount, playerGuid.ToString());
 
-                // BLIZZLIKE: the 500 ms defer no longer emits housing
-                // response SMSGs. Retail 66838 sniff analysis across 3
-                // independent login captures shows ZERO unprompted housing
-                // emissions in the post-LVW window. Previous iterations
-                // emitted QueryNeighborhoodNameResponse + mirror VALUES_UPDATE
-                // + QueryPlayerNamesResponse as a speculative "roster-replay
-                // wake-up". All removed per user's blizzlike guardrail. The
-                // CMSG handlers emit the correct reactive responses when the
+                // The 500 ms defer sends no housing reply packets. Three retail
+                // 12.0.1 (build 66838) login captures show ZERO housing packets
+                // the client did not ask for after the login verify world, so no
+                // neighborhood name reply, mirror VALUES_UPDATE or player name
+                // reply is sent here. The CMSG handlers answer when the
                 // client queries. The mirror state was populated synchronously
                 // in Player::LoadFromDB and rides in the Player CREATE bundle.
                 (void)session;
@@ -1028,12 +989,11 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             // Post-tutorial + neighborhood-map-entry auras are now emitted
             // synchronously at the end of AddPlayerToMap (see below), immediately
             // after the initial UPDATE_OBJECT bundle flushes. They must not ride
-            // on the 500 ms defer, which caused the 2 min "update gap" observed
-            // by the user where the map/icons settled only after the delayed
-            // burst.
+            // on the 500 ms defer, which left a two-minute gap before the map and
+            // its icons settled.
             // NOTE: SendPlotEnterSpellPackets is emitted by the plot AT's OnUnitEnter
             // hook (at_housing_plot.cpp) when the player physically overlaps the plot
-            // AreaTrigger — the correct blizzlike trigger per the sniff (spells
+            // AreaTrigger — the trigger retail uses, per the sniff (spells
             // "In Plot"/1239847 and "Visiting Neighbor"/469226 are plot-overlap, not
             // map-entry auras). The previous deferred emission here fired it on map
             // entry regardless of whether the player's spawn position was inside a
@@ -1060,7 +1020,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     // aura trio and the 4-aura neighborhood-map-entry burst immediately after
     // the big UPDATE_OBJECT at map entry, not after a multi-second delay.
     // Emitting them synchronously here (instead of from the 500 ms deferred
-    // ENTER_PLOT callback) removes the ~2 min settle the user was seeing and
+    // ENTER_PLOT callback) removes a two-minute wait before the map settled and
     // fires the spell triples for visitors too (the deferred block was gated
     // on the player having a house).
     SendHousingPostTutorialAuras(player);
@@ -1097,10 +1057,9 @@ void HousingMap::RemovePlayerFromMap(Player* player, bool remove)
         SendPlotLeaveAuraRemoval(player);
     }
 
-    // H-20: plot tracking is cleared for EVERY player leaving, not just those who own
-    // a house here. It used to sit inside the branch above, so a visitor's entry
-    // survived their visit and lived as long as the map instance - which, since
-    // housing maps never unload, means forever.
+    // Plot tracking is cleared for EVERY player leaving, not just those who own a house
+    // here. Otherwise a visitor's entry would outlive the visit and last as long as the
+    // map instance - which, since housing maps never unload, means forever.
     ClearPlayerCurrentPlot(player->GetGUID());
 
     // Leaving the map, by a map change or a logout, ends her fixture edit and the exterior lock she holds. The edit's
@@ -1284,7 +1243,7 @@ void SendHousingPostTutorialAuras(Player* player)
 
 void HousingMap::SendNeighborhoodMapEntryAuras(Player* player)
 {
-    // Blizzlike map-entry aura burst — decoded from
+    // Retail's map-entry aura burst — decoded from
     // dump_12.0.1.66838_2026-04-15_09-35-59.pkt idx 9988/9994/9997/10000
     // and cross-checked against dump_12.0.1.66838_2026-04-10_08-45-23.pkt
     // idx 15676/15682/15685/15688. Each entry is one AURA_UPDATE +
@@ -1616,7 +1575,7 @@ HousingPlotOwnerType HousingMap::GetPlotOwnerTypeForPlayer(Player const* player,
 
 void HousingMap::SendPerPlayerPlotWorldStates(Player* player)
 {
-    // Blizzlike no-op: the per-plot occupancy worldstate is carried inside
+    // Nothing to send, as on retail: the per-plot occupancy worldstate is carried inside
     // SMSG_INIT_WORLD_STATES (set by SpawnPlotGameObjects via SetWorldStateValue),
     // and the regular-map icon + hover info come from the JamCliHouse[] array
     // in SMSG_HOUSING_SVCS_GET_HOUSE_FINDER_NEIGHBORHOOD_RESPONSE plus the
@@ -2157,7 +2116,7 @@ bool HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& anchorPos,
         roomComponentTextureID = 3;
     }
 
-    TC_LOG_ERROR("housing", "HousingMap::SpawnRoomForPlot: plot={} DB2 lookup: "
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnRoomForPlot: plot={} DB2 lookup: "
         "roomWmoDataID={} geobox=({:.2f},{:.2f},{:.2f})→({:.2f},{:.2f},{:.2f}) "
         "fileDataID={} compType={} optionID={} themeID={} field24={} textureID={}",
         plotIndex, roomWmoDataID,
@@ -2165,9 +2124,9 @@ bool HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& anchorPos,
         fileDataID, roomComponentType,
         roomComponentOptionID, houseThemeID, field24, roomComponentTextureID);
 
-    // --- Create entities (retail-matching blizzlike architecture) ---
+    // --- Create the entities as retail does ---
     //
-    // Retail idx 9984 (dump_12.0.1.66838_2026-04-15_09-35-59) architecture:
+    // Retail, packet idx 9984 of dump_12.0.1.66838_2026-04-15_09-35-59:
     //   - Housing/2 identity entity (HighGuid::Housing subType=2, objType=18)
     //     fragments: [FHousingRoom_C, FMirroredPositionData_C, Tag_HousingRoom]
     //     carries HouseGUID, HouseRoomID=18, Flags, FloorIndex, Doors, MeshObjects
@@ -2177,11 +2136,10 @@ bool HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& anchorPos,
     //     MovementUpdate.TransportGuid = Housing/2 identity GUID
     //     carries the Geobox (used by client for OutsidePlotBounds check)
     //
-    // The previous dual-MeshObject architecture (a roomEntity MeshObject with
-    // FHousingRoom_C AND a componentMesh with FHousingRoomComponentMesh_C) put
-    // two entities at the plot position both claiming HouseRoomID=18. Client
-    // room registry accepted only the first, dropping the other's Geobox chain
-    // → OutsidePlotBounds + ownership categorization breakage (audit 2026-04-22).
+    // Two MeshObjects (a room MeshObject with FHousingRoom_C AND a componentMesh with
+    // FHousingRoomComponentMesh_C) would put two entities at the plot position both
+    // claiming HouseRoomID=18. The client's room registry accepts only the first and
+    // drops the other's Geobox chain, which breaks OutsidePlotBounds and ownership.
 
     // 1. Housing/2 identity entity — the single authoritative room for this plot. Its GUID's counter is the plot
     // index: plot 13's room is 0xDC40000000000012 / 0x0D (hbcd3 1299598).
@@ -2205,7 +2163,7 @@ bool HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& anchorPos,
     roomIdentity->SetFlags(ROOM_FLAGS);
     roomIdentity->SetFloorIndex(0);
 
-    // CRITICAL (audit 2026-04-22 byte-for-byte retail comparison, idx 9984):
+    // Important (a byte-for-byte comparison with retail's packet idx 9984):
     // When AttachParent is Empty, retail sets PositionLocalSpace = the room's
     // WORLD position (not zero) and RotationLocalSpace = the house's facing
     // quaternion. The client uses this as the root of the attach chain — any
@@ -2284,12 +2242,11 @@ bool HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& anchorPos,
 
     _roomIdentityGuids[plotIndex] = roomIdentityGuid;
     _roomComponentMeshes[plotIndex] = componentMesh->GetGUID();
-    // _roomEntities[plotIndex] is intentionally NOT populated — the MeshObject
-    // "room entity" no longer exists in the unified architecture. Callers that
-    // used _roomEntities should now prefer _roomIdentityGuids.
-    _roomEntities[plotIndex] = roomIdentityGuid; // keep the map populated with the identity so legacy callers still see something sensible
+    // There is no separate room MeshObject; _roomEntities holds the same identity GUID
+    // for callers that read it. New code should read _roomIdentityGuids.
+    _roomEntities[plotIndex] = roomIdentityGuid;
 
-    TC_LOG_ERROR("housing", "HousingMap::SpawnRoomForPlot: plot={} identity={} component={} "
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnRoomForPlot: plot={} identity={} component={} "
         "at ({:.1f},{:.1f},{:.1f}) geobox=({:.2f},{:.2f},{:.2f})->({:.2f},{:.2f},{:.2f})",
         plotIndex, roomIdentityGuid.ToString(), componentMesh->GetGUID().ToString(),
         anchorPos.GetPositionX(), anchorPos.GetPositionY(), anchorPos.GetPositionZ(),
@@ -2317,8 +2274,7 @@ void HousingMap::DespawnRoomForPlot(uint8 plotIndex)
         _roomIdentityGuids.erase(identItr);
     }
 
-    // Legacy _roomEntities tracking — now points at the same identity GUID,
-    // entity already removed above; just clear the map.
+    // _roomEntities points at the same identity GUID, which was removed above; just clear it.
     _roomEntities.erase(plotIndex);
 }
 
@@ -3040,7 +2996,7 @@ bool HousingMap::SpawnDecorItem(uint8 plotIndex, Housing::PlacedDecor const& dec
                 _decorGuidToGoGuid[decor.Guid] = go->GetGUID();
                 _decorGuidToPlotIndex[decor.Guid] = plotIndex;
 
-                TC_LOG_INFO("housing", "HousingMap::SpawnDecorItem: Spawned functional-decor GameObject "
+                TC_LOG_DEBUG("housing", "HousingMap::SpawnDecorItem: Spawned functional-decor GameObject "
                     "entry={} goEntry={} goType={} goGuid={} decorGuid={} "
                     "at world({:.1f},{:.1f},{:.1f}) local({:.1f},{:.1f},{:.1f}) scale={:.2f} "
                     "room={} plot={}",
@@ -3108,7 +3064,7 @@ bool HousingMap::SpawnDecorItem(uint8 plotIndex, Housing::PlacedDecor const& dec
     _decorGuidToGoGuid[decor.Guid] = mesh->GetGUID();
     _decorGuidToPlotIndex[decor.Guid] = plotIndex;
 
-    TC_LOG_INFO("housing", "HousingMap::SpawnDecorItem: Spawned decor MeshObject fileDataID={} meshGuid={} decorGuid={} "
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnDecorItem: Spawned decor MeshObject fileDataID={} meshGuid={} decorGuid={} "
         "at world({:.1f},{:.1f},{:.1f}) local({:.1f},{:.1f},{:.1f}) scale={:.2f} room={} plot={}",
         fileDataID, mesh->GetGUID().ToString(), decor.Guid.ToString(),
         worldX, worldY, worldZ, localX, localY, localZ, decorScale,
@@ -3184,7 +3140,7 @@ void HousingMap::SpawnAllDecorForPlot(uint8 plotIndex, Housing const* housing)
 
     if (_decorSpawnedPlots.count(plotIndex))
     {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnAllDecorForPlot: Plot {} already in _decorSpawnedPlots — skipping respawn "
+        TC_LOG_DEBUG("housing", "HousingMap::SpawnAllDecorForPlot: Plot {} already in _decorSpawnedPlots — skipping respawn "
             "(decorGuidMap.size={} decorGOs[{}].size={})",
             plotIndex, uint32(_decorGuidToGoGuid.size()),
             plotIndex, _decorGameObjects.count(plotIndex) ? uint32(_decorGameObjects[plotIndex].size()) : 0);
@@ -3210,7 +3166,7 @@ void HousingMap::SpawnAllDecorForPlot(uint8 plotIndex, Housing const* housing)
 
     _decorSpawnedPlots.insert(plotIndex);
 
-    TC_LOG_ERROR("housing", "HousingMap::SpawnAllDecorForPlot: Spawned {}/{} exterior decor for plot {} "
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnAllDecorForPlot: Spawned {}/{} exterior decor for plot {} "
         "(failed={}, neighborhood='{}')",
         spawnCount, exteriorCount, plotIndex, failCount,
         _neighborhood ? _neighborhood->GetName() : "?");

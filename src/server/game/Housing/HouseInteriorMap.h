@@ -158,7 +158,7 @@ private:
     /// HousingRoomEntity instances (objectType=18, Housing/2 GUIDs) for the layout editor
     std::vector<HousingRoomEntity*> _roomEntities;
 
-    /// GUID of the interior plot AreaTrigger (entry 37358, FHousingPlotAreaTrigger_C).
+    /// GUID of the interior plot AreaTrigger (entry 37358).
     /// The client fires HOUSE_PLOT_ENTERED when it sees this AT, enabling housing CMSGs.
     ObjectGuid _interiorPlotAT;
 

@@ -60,7 +60,7 @@ HouseInteriorMap::HouseInteriorMap(uint32 id, time_t expiry, uint32 instanceId, 
         _originX = nmData->Origin[0];
         _originY = nmData->Origin[1];
         _originZ = nmData->Origin[2];
-        TC_LOG_INFO("housing", "HouseInteriorMap::CTOR: Using DB2 origin ({:.1f}, {:.1f}, {:.1f}) from "
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::CTOR: Using DB2 origin ({:.1f}, {:.1f}, {:.1f}) from "
             "NeighborhoodMap {} for map {}",
             _originX, _originY, _originZ, nmData->ID, id);
     }
@@ -71,7 +71,7 @@ HouseInteriorMap::HouseInteriorMap(uint32 id, time_t expiry, uint32 instanceId, 
             id, _originX, _originY, _originZ);
     }
 
-    TC_LOG_ERROR("housing", "HouseInteriorMap::CTOR: Created interior map {} instanceId {} for owner {} "
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::CTOR: Created interior map {} instanceId {} for owner {} "
         "(this={}, _roomsSpawned={}, InstanceType={}, Instanceable={}, IsNeighborhood={})",
         id, instanceId, owner.ToString(), (void*)this, _roomsSpawned,
         GetEntry()->InstanceType, GetEntry()->Instanceable(), GetEntry()->IsNeighborhood());
@@ -126,7 +126,7 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
 {
     if (rooms.empty())
     {
-        TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnRoomMeshObjects: No rooms to spawn for owner {} "
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnRoomMeshObjects: No rooms to spawn for owner {} "
             "(new house — rooms will appear when placed via editor)",
             _owner.ToString());
         return;
@@ -200,7 +200,7 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
         return bestGuid;
     };
 
-    TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Starting spawn for {} rooms "
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Starting spawn for {} rooms "
         "(owner={}, factionThemeID={}, houseGuid={})",
         uint32(rooms.size()), _owner.ToString(), factionThemeID, houseGuid.ToString());
 
@@ -254,7 +254,7 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
             continue;
         }
 
-        TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Room '{}' entry={} slot={} "
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Room '{}' entry={} slot={} "
             "roomWmoDataID={} has {} components, geobox=({:.2f},{:.2f},{:.2f})->({:.2f},{:.2f},{:.2f})",
             roomData->Name, room->RoomEntryId, room->SlotIndex,
             roomWmoDataID, uint32(components->size()),
@@ -288,11 +288,11 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
         int32 floorIndex = room->FloorIndex;
         ObjectGuid roomHousingGuid = room->Guid; // Housing/2 GUID for attach parent
 
-        // --- Phase 1: Create HousingRoomEntity FIRST ---
+        // --- First, create the HousingRoomEntity ---
         // Must exist on the map BEFORE component MeshObjects because components use
         // AttachParentGUID = roomHousingGuid. The client resolves this GUID during
         // entity creation — if the parent doesn't exist, it crashes (NULL+0x20).
-        // Door data is added after components are created (Phase 3).
+        // Door data is added after the components are created (below).
         HousingRoomEntity* housingRoom = new HousingRoomEntity();
         PhasingHandler::InitDbPhaseShift(housingRoom->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
         housingRoom->SetHouseGUID(houseGuid);
@@ -310,7 +310,7 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
         }
         _roomEntities.push_back(housingRoom);
 
-        // --- Phase 2: Create all component MeshObjects ---
+        // --- Then create all component MeshObjects ---
 
         std::vector<MeshObject*> componentMeshes;
         uint32 wallCount = 0, floorCount = 0, ceilingCount = 0, doorwayCount = 0;
@@ -344,7 +344,7 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
         bool isStairwellPartner = isStairwell && hasPartnerBelow;
 
         if (isStairwell)
-            TC_LOG_ERROR("housing", "  STAIRWELL ROOM entry={} roomWorldPos=({:.1f},{:.1f},{:.1f}) facing={:.2f} "
+            TC_LOG_DEBUG("housing", "  STAIRWELL ROOM entry={} roomWorldPos=({:.1f},{:.1f},{:.1f}) facing={:.2f} "
                 "geobox=({:.1f},{:.1f},{:.1f})->({:.1f},{:.1f},{:.1f}) components={}",
                 room->RoomEntryId, roomX, roomY, roomZ, roomFacing,
                 geoMinX, geoMinY, geoMinZ, geoMaxX, geoMaxY, geoMaxZ,
@@ -366,7 +366,7 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
 
             // Log stairwell component positions to diagnose ceiling height
             if (isStairwell)
-                TC_LOG_ERROR("housing", "  STAIRWELL comp ID={} Type={} ConnType={} LocalPos=({:.1f},{:.1f},{:.1f}) "
+                TC_LOG_DEBUG("housing", "  STAIRWELL comp ID={} Type={} ConnType={} LocalPos=({:.1f},{:.1f},{:.1f}) "
                     "WorldZ={:.1f} MSFID={} DefaultFDID={}",
                     comp.ID, comp.Type, comp.ConnectionType,
                     comp.OffsetPos[0], comp.OffsetPos[1], comp.OffsetPos[2],
@@ -516,7 +516,7 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
 
             // Debug: log stairwell spawns so we can see what FileDataID/option is chosen
             if (isStairwell)
-                TC_LOG_ERROR("housing", "  STAIRWELL SPAWN comp={} Type={} MSFID={} -> option={} optType={} optSubType={} "
+                TC_LOG_DEBUG("housing", "  STAIRWELL SPAWN comp={} Type={} MSFID={} -> option={} optType={} optSubType={} "
                     "FDID={} theme={} (lookupTheme={} factionTheme={})",
                     comp.ID, comp.Type, comp.MeshStyleFilterID,
                     roomComponentOptionID, uint32(field20), field24, compFileDataID,
@@ -561,12 +561,12 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
             }
         }
 
-        TC_LOG_ERROR("housing", "  Room '{}' component summary: walls={} floors={} ceilings={} "
+        TC_LOG_DEBUG("housing", "  Room '{}' component summary: walls={} floors={} ceilings={} "
             "doorways={} stairs={} pillars={} doorwayWalls={} other={} total={}",
             roomData->Name, wallCount, floorCount, ceilingCount, doorwayCount,
             stairsCount, pillarCount, doorwayWallCount, otherCount, uint32(components->size()));
 
-        // --- Phase 2: Add all component MeshObjects to map ---
+        // --- Add all component MeshObjects to the map ---
 
         for (MeshObject* componentMesh : componentMeshes)
         {
@@ -584,8 +584,8 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
             }
         }
 
-        // --- Phase 4: Populate HousingRoomEntity with component GUIDs + door data ---
-        // The entity was created in Phase 1 (before components) so it exists when
+        // --- Fill the HousingRoomEntity with the component GUIDs and door data ---
+        // The entity was created first (before the components) so it exists when
         // components reference it via AttachParentGUID. Now add the child list + doors.
         {
             for (MeshObject* comp : componentMeshes)
@@ -619,20 +619,20 @@ void HouseInteriorMap::SpawnRoomMeshObjectsFromList(std::vector<Housing::Room co
                 ++doorCount;
             }
 
-            TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Created HousingRoomEntity "
+            TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Created HousingRoomEntity "
                 "guid={} roomEntry={} slot={} meshObjects={} doors={}",
                 roomHousingGuid.ToString(), room->RoomEntryId, room->SlotIndex,
                 uint32(componentMeshes.size()), doorCount);
         }
 
-        TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Room '{}' (entry={}, slot={}) "
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Room '{}' (entry={}, slot={}) "
             "spawned {} component MeshObjects (themeID={}) at ({:.1f},{:.1f},{:.1f})",
             roomData->Name, room->RoomEntryId, room->SlotIndex,
             uint32(componentMeshes.size()), factionThemeID,
             roomX, roomY, roomZ);
     }
 
-    TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Spawned {} total MeshObjects for {} rooms "
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnRoomMeshObjects: Spawned {} total MeshObjects for {} rooms "
         "(owner={}, map={}, instanceId={}, faction={})",
         totalMeshes, uint32(rooms.size()), _owner.ToString(), GetId(), GetInstanceId(),
         factionRestriction == NEIGHBORHOOD_FACTION_ALLIANCE ? "Alliance" : "Horde");
@@ -899,7 +899,7 @@ void HouseInteriorMap::RespawnRoomComponentsForTheme(ObjectGuid roomGuid, int32 
         return;
     }
 
-    // Phase 1: Record existing mesh option Types before destroying.
+    // First record the existing mesh option Types before destroying them.
     // This preserves door vs plain wall state — we only spawn options whose Type
     // matches what was there before (prevents doors appearing on every wall).
     struct OldMeshInfo { ObjectGuid guid; int32 compID; uint8 optType; uint8 optSubType; int32 textureID; };
@@ -940,7 +940,7 @@ void HouseInteriorMap::RespawnRoomComponentsForTheme(ObjectGuid roomGuid, int32 
         guids.erase(std::remove(guids.begin(), guids.end(), info.guid), guids.end());
     }
 
-    // Phase 2: Create new meshes for each destroyed mesh, matching by (compID, Type, SubType)
+    // Then create new meshes for each destroyed mesh, matching by (compID, Type, SubType)
     // Build a per-compID list of (Type, SubType, TextureID) that need respawning
     struct RespawnSlot { uint8 optType; uint8 optSubType; int32 textureID; };
     std::unordered_map<int32, std::vector<RespawnSlot>> compTypeMap;
@@ -1072,7 +1072,7 @@ void HouseInteriorMap::RespawnRoomComponentsForTheme(ObjectGuid roomGuid, int32 
         }
     }
 
-    TC_LOG_INFO("housing", "RespawnRoomComponentsForTheme: room={} theme={} destroyed={} spawned={}",
+    TC_LOG_DEBUG("housing", "RespawnRoomComponentsForTheme: room={} theme={} destroyed={} spawned={}",
         roomGuid.ToString(), newThemeID, toDestroy.size(), spawnedCount);
 }
 
@@ -1093,14 +1093,14 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
     uint32 exteriorSkipped = 0;
     uint32 totalDecor = uint32(placedDecor.size());
 
-    TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnInteriorDecor: Starting — totalDecor={} "
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnInteriorDecor: Starting — totalDecor={} "
         "_roomMeshObjects entries={} owner={}",
         totalDecor, uint32(_roomMeshObjects.size()), _owner.ToString());
 
     // Log all room mesh object entries for cross-reference
     for (auto const& [roomGuid, meshGuids] : _roomMeshObjects)
     {
-        TC_LOG_ERROR("housing", "  _roomMeshObjects[{}] = {} entries (first={})",
+        TC_LOG_DEBUG("housing", "  _roomMeshObjects[{}] = {} entries (first={})",
             roomGuid.ToString(), uint32(meshGuids.size()),
             meshGuids.empty() ? "EMPTY" : meshGuids[0].ToString());
     }
@@ -1130,7 +1130,7 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
         if (_decorGuidToObjGuid.count(decor.Guid))
             continue;
 
-        TC_LOG_ERROR("housing", "  SpawnInteriorDecor: decor entry={} roomGuid={} pos=({:.1f},{:.1f},{:.1f})",
+        TC_LOG_DEBUG("housing", "  SpawnInteriorDecor: decor entry={} roomGuid={} pos=({:.1f},{:.1f},{:.1f})",
             decor.DecorEntryId, decor.RoomGuid.ToString(), decor.PosX, decor.PosY, decor.PosZ);
 
         ObjectGuid roomEntityGuid = decor.RoomGuid;
@@ -1220,7 +1220,7 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
                         _decorGuidToObjGuid[decor.Guid] = go->GetGUID();
                         ++spawnCount;
                         spawnedAsGo = true;
-                        TC_LOG_INFO("housing", "HouseInteriorMap::SpawnInteriorDecor: Spawned functional-decor "
+                        TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnInteriorDecor: Spawned functional-decor "
                             "GameObject entry={} goEntry={} goType={} goGuid={} at world({:.1f},{:.1f},{:.1f}) room={}",
                             decor.DecorEntryId, goEntry, uint32(goTemplate->type), go->GetGUID().ToString(),
                             worldX, worldY, worldZ, roomEntityGuid.ToString());
@@ -1277,7 +1277,7 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
         {
             _decorGuidToObjGuid[decor.Guid] = mesh->GetGUID();
             ++spawnCount;
-            TC_LOG_INFO("housing", "HouseInteriorMap::SpawnInteriorDecor: Spawned decor MeshObject fileDataID={} "
+            TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnInteriorDecor: Spawned decor MeshObject fileDataID={} "
                 "at world({:.1f},{:.1f},{:.1f}) local({:.1f},{:.1f},{:.1f}) room={}",
                 fileDataID, worldX, worldY, worldZ, localX, localY, localZ, roomEntityGuid.ToString());
         }
@@ -1288,7 +1288,7 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
         }
     }
 
-    TC_LOG_ERROR("housing", "HouseInteriorMap::SpawnInteriorDecor: Spawned {} decor entities for owner {} "
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnInteriorDecor: Spawned {} decor entities for owner {} "
         "(total={}, exteriorSkipped={})",
         spawnCount, _owner.ToString(), totalDecor, exteriorSkipped);
 }
@@ -1425,7 +1425,7 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
                 if (AddToMap(go))
                 {
                     _decorGuidToObjGuid[decor.Guid] = go->GetGUID();
-                    TC_LOG_INFO("housing", "HouseInteriorMap::SpawnSingleInteriorDecor: Spawned functional-decor "
+                    TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnSingleInteriorDecor: Spawned functional-decor "
                         "GameObject entry={} goEntry={} goType={} goGuid={} at world({:.1f},{:.1f},{:.1f}) room={}",
                         decor.DecorEntryId, goEntry, uint32(goTemplate->type), go->GetGUID().ToString(),
                         worldX, worldY, worldZ, roomEntityGuid.ToString());
@@ -1467,7 +1467,7 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
     if (AddToMap(mesh))
     {
         _decorGuidToObjGuid[decor.Guid] = mesh->GetGUID();
-        TC_LOG_INFO("housing", "HouseInteriorMap::SpawnSingleInteriorDecor: Spawned decor MeshObject fileDataID={} "
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::SpawnSingleInteriorDecor: Spawned decor MeshObject fileDataID={} "
             "at world({:.1f},{:.1f},{:.1f}) room={}",
             fileDataID, worldX, worldY, worldZ, roomEntityGuid.ToString());
     }
@@ -1531,7 +1531,7 @@ void HouseInteriorMap::DespawnDecorItem(ObjectGuid decorGuid)
 
 bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 {
-    TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: ENTER player={} owner={} isOwner={} "
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: ENTER player={} owner={} isOwner={} "
         "_roomsSpawned={} map={} instanceId={} this={}",
         player->GetGUID().ToString(), _owner.ToString(),
         IsHouseOwner(player), _roomsSpawned,
@@ -1582,7 +1582,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                 }
             }
 
-            TC_LOG_INFO("housing", "HouseInteriorMap::AddPlayerToMap: VISITOR pre-spawn for offline owner {} — {} rooms, {} decor",
+            TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: VISITOR pre-spawn for offline owner {} — {} rooms, {} decor",
                 _owner.ToString(), uint32(ownerPlot->Rooms.size()), uint32(ownerPlot->Decor.size()));
             break;
         }
@@ -1635,8 +1635,8 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
         // before Status+Permissions arrive. Retail sends the AT in a separate
         // UPDATE_OBJECT (#11752) AFTER the main entity data.
 
-        TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: PRE-SPAWNED rooms+decor+storage "
-            "(%u rooms, %u decor) before Map::AddPlayerToMap (AT deferred)",
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: PRE-SPAWNED rooms+decor+storage "
+            "({} rooms, {} decor) before Map::AddPlayerToMap (AT deferred)",
             uint32(_roomMeshObjects.size()), uint32(_decorGuidToObjGuid.size()));
     }
 
@@ -1645,18 +1645,18 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
     if (IsHouseOwner(player))
         _loadingPlayer = nullptr;
 
-    TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: Map::AddPlayerToMap returned {} for player={}",
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: Map::AddPlayerToMap returned {} for player={}",
         result, player->GetGUID().ToString());
 
     if (result)
     {
         Housing* housing = player->GetHousingByGuid(_houseGuid);
-        TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: housing={} for player={}",
+        TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: housing={} for player={}",
             housing ? "VALID" : "NULL", player->GetGUID().ToString());
 
         if (housing)
         {
-            TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: houseGuid={} rooms={} decor={} "
+            TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: houseGuid={} rooms={} decor={} "
                 "houseGuid.IsEmpty={}",
                 housing->GetHouseGuid().ToString(),
                 uint32(housing->GetRooms().size()),
@@ -1673,7 +1673,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                 // no longer exist in the current code). DespawnAll is safe here because the player
                 // hasn't received any entities yet (no DESTROY goes to the client).
                 //
-                // H-18: that justification holds for the owner arriving, who has received
+                // That justification holds for the owner arriving, who has received
                 // nothing yet - but not for anyone already standing in the interior.
                 // _roomsSpawned can be set by a visitor who pre-spawned the rooms through
                 // the offline-owner path, and that visitor HAS received the MeshObjects.
@@ -1704,11 +1704,11 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
                 if (spawnRooms)
                 {
-                    TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: === SPAWNING ROOMS ===");
+                    TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: === SPAWNING ROOMS ===");
 
                     for (Housing::Room const* room : housing->GetRooms())
                     {
-                        TC_LOG_ERROR("housing", "  Room: guid={} entryId={} slot={} grid=({},{}) orientation={} mirrored={}",
+                        TC_LOG_DEBUG("housing", "  Room: guid={} entryId={} slot={} grid=({},{}) orientation={} mirrored={}",
                             room->Guid.ToString(), room->RoomEntryId, room->SlotIndex,
                             room->GridX, room->GridY, room->Orientation, room->Mirrored);
                     }
@@ -1724,7 +1724,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
             // SpawnInteriorDecor skips already-spawned decor via _decorGuidToObjGuid check.
             SpawnInteriorDecor(housing);
 
-            TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: === SPAWN COMPLETE === "
+            TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: === SPAWN COMPLETE === "
                 "roomMeshObjects entries={} decorGuidToObj entries={}",
                 uint32(_roomMeshObjects.size()), uint32(_decorGuidToObjGuid.size()));
 
@@ -1738,7 +1738,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     float targetX = _originX + static_cast<float>(room->GridX);
                     float targetY = _originY;
                     float targetZ = _originZ;
-                    TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: Teleporting player to visual room "
+                    TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: Teleporting player to visual room "
                         "entry={} slot={} at ({:.1f},{:.1f},{:.1f})",
                         room->RoomEntryId, room->SlotIndex, targetX, targetY, targetZ);
                     player->NearTeleportTo(targetX, targetY, targetZ, player->GetOrientation());
@@ -1829,7 +1829,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         session->GetBattlenetAccount().ClearUpdateMask(true);
                         houseEntity.ClearUpdateMask(true);
 
-                        TC_LOG_ERROR("housing", "HouseInteriorMap deferred: Sent Account+budget for {}",
+                        TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Sent Account+budget for {}",
                             playerGuid.ToString());
                     }
 
@@ -1866,9 +1866,8 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         if (plotAt)
                         {
                             PhasingHandler::InitDbPhaseShift(plotAt->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-                            // 12.0.5: FHousingPlotAreaTrigger_C fragment removed. Plot ownership
-                            // propagates via PlayerHouseInfoComponentData.CurrentHouse; AT only
-                            // carries its own visual fields.
+                            // The area trigger carries only its own visual fields; plot ownership
+                            // reaches the client through PlayerHouseInfoComponentData.CurrentHouse.
                             plotAt->InitHousingPlotVisuals();
 
                             if (AddToMap(plotAt))
@@ -1885,7 +1884,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                                 atUpdate.BuildPacket(&atPacket);
                                 p->SendDirectMessage(&atPacket);
 
-                                TC_LOG_ERROR("housing", "HouseInteriorMap deferred: Created+sent interior plot AT "
+                                TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Created+sent interior plot AT "
                                     "guid={} at ({:.1f},{:.1f},{:.1f}) plotIndex={} for {}",
                                     plotAt->GetGUID().ToString(), atX, atY, atZ,
                                     housing->GetPlotIndex(), playerGuid.ToString());
@@ -1937,7 +1936,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                                         p->SendDirectMessage(au.Write());
                                     }
 
-                                    TC_LOG_ERROR("housing", "HouseInteriorMap deferred: Sent plot enter spells (slots 50+56) for {}",
+                                    TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Sent plot enter spells (slots 50+56) for {}",
                                         playerGuid.ToString());
                                 }
 
@@ -1948,7 +1947,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                                 if (Housing const* ownerHousingForCurrent = GetOwnerHousing())
                                     p->SetCurrentHouse(ownerHousingForCurrent->GetHouseGuid());
 
-                                TC_LOG_ERROR("housing", "HouseInteriorMap deferred: Set CurrentHouse for {} (Status+Perms reactive via CMSG handlers)",
+                                TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Set CurrentHouse for {} (Status+Perms reactive via CMSG handlers)",
                                     playerGuid.ToString());
                             }
                             else
@@ -1969,7 +1968,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         Housing* ownerHousing = GetOwnerHousing();
                         if (!ownerHousing)
                         {
-                            TC_LOG_ERROR("housing", "InteriorDoor: no character of the account of house {} is online, so the exit door "
+                            TC_LOG_DEBUG("housing", "InteriorDoor: no character of the account of house {} is online, so the exit door "
                                 "cannot be placed for {}", _houseGuid.ToString(), playerGuid.ToString());
                             return;
                         }
@@ -2073,7 +2072,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                             _exitDoorGuid.ToString(), decorGuid.ToString(), entryHallGuid.ToString(), interiorHouseGuid.ToString());
                     }
 
-                    TC_LOG_ERROR("housing", "HouseInteriorMap deferred: Complete — "
+                    TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Complete — "
                         "HouseInfo+Status+Perms+Auras+Account+Initiative+PlotAT+ENTER_PLOT+Door for {}",
                         playerGuid.ToString());
                 }, Milliseconds(500));
@@ -2081,11 +2080,11 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
         }
         else
         {
-            TC_LOG_ERROR("housing", "HouseInteriorMap::AddPlayerToMap: NO HOUSING for player {} — "
-                "cannot spawn rooms/decor", player->GetGUID().ToString());
+            TC_LOG_DEBUG("housing", "HouseInteriorMap::AddPlayerToMap: player {} is not an owner of this house, so "
+                "nothing is spawned for her here", player->GetGUID().ToString());
         }
 
-        TC_LOG_ERROR("housing", "HouseInteriorMap: Player {} entered house interior (owner={}, map={}, instanceId={})",
+        TC_LOG_DEBUG("housing", "HouseInteriorMap: Player {} entered house interior (owner={}, map={}, instanceId={})",
             player->GetGUID().ToString(), _owner.ToString(), GetId(), GetInstanceId());
     }
     else
@@ -2112,7 +2111,7 @@ void HouseInteriorMap::RemovePlayerFromMap(Player* player, bool remove)
     // Toggle WS[30906]=0 to signal the client that the player left the house interior.
     player->SendUpdateWorldState(WORLDSTATE_HOUSING_INTERIOR, 0);
 
-    TC_LOG_ERROR("housing", "HouseInteriorMap::RemovePlayerFromMap: Player {} leaving interior "
+    TC_LOG_DEBUG("housing", "HouseInteriorMap::RemovePlayerFromMap: Player {} leaving interior "
         "(owner={}, map={}, instanceId={}, _roomsSpawned={}, roomMeshEntries={}, decorEntries={}, this={})",
         player->GetGUID().ToString(), _owner.ToString(), GetId(), GetInstanceId(),
         _roomsSpawned, uint32(_roomMeshObjects.size()), uint32(_decorGuidToObjGuid.size()), (void*)this);
@@ -2142,14 +2141,14 @@ void HouseInteriorMap::GrantHousingTutorialProgress(Player* player)
     {
         if (!player->CanTakeQuest(quest, false) || !player->CanAddQuest(quest, false))
         {
-            TC_LOG_ERROR("housing", "GrantHousingTutorialProgress: player {} cannot take quest {} (log full or "
+            TC_LOG_DEBUG("housing", "GrantHousingTutorialProgress: player {} cannot take quest {} (log full or "
                 "requirements unmet) - housing editor stays locked",
                 player->GetGUID().ToString(), QUEST_HOUSING_TUTORIAL_COMPLETE);
             return;
         }
 
         player->AddQuestAndCheckCompletion(quest, nullptr);
-        TC_LOG_INFO("housing", "GrantHousingTutorialProgress: granted quest {} to player {}",
+        TC_LOG_DEBUG("housing", "GrantHousingTutorialProgress: granted quest {} to player {}",
             QUEST_HOUSING_TUTORIAL_COMPLETE, player->GetGUID().ToString());
     }
 
@@ -2166,7 +2165,7 @@ void HouseInteriorMap::GrantHousingTutorialProgress(Player* player)
             QUEST_HOUSING_TUTORIAL_COMPLETE, player->GetGUID().ToString());
     }
     else
-        TC_LOG_INFO("housing", "GrantHousingTutorialProgress: quest {} status for player {} is {} after credit {}",
+        TC_LOG_DEBUG("housing", "GrantHousingTutorialProgress: quest {} status for player {} is {} after credit {}",
             QUEST_HOUSING_TUTORIAL_COMPLETE, player->GetGUID().ToString(),
             uint32(player->GetQuestStatus(QUEST_HOUSING_TUTORIAL_COMPLETE)),
             NPC_HOUSING_TUTORIAL_HOUSE_ENTERED_CREDIT);

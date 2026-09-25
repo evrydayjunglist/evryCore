@@ -41,7 +41,7 @@
 
 namespace
 {
-    // M13: normalize a decor rotation quaternion to a unit quaternion before it
+    // Normalize a decor rotation quaternion to a unit quaternion before it
     // is stored. The client sends Euler angles which the handler converts to a
     // quaternion each place/move; normalizing removes any float drift so a decor
     // item at a cardinal angle (0/90/180/270) round-trips through the FLOAT
@@ -263,7 +263,7 @@ void Housing::InitializeDbIdGenerators()
         QueryResult result = CharacterDatabase.Query("SELECT COALESCE(MAX(guid), 0) FROM character_housing");
         uint64 maxHouseId = result ? (*result)[0].GetUInt64() : 0;
         s_nextHouseDbId.store(maxHouseId + 1);
-        TC_LOG_INFO("housing", "Housing::InitializeDbIdGenerators: House ID generator starting at {} (MAX in DB: {})",
+        TC_LOG_DEBUG("housing", "Housing::InitializeDbIdGenerators: House ID generator starting at {} (MAX in DB: {})",
             maxHouseId + 1, maxHouseId);
     }
     {
@@ -271,14 +271,14 @@ void Housing::InitializeDbIdGenerators()
         QueryResult result = CharacterDatabase.Query("SELECT COALESCE(MAX(guid), 0) FROM account_housing_decor");
         uint64 maxDecorId = result ? (*result)[0].GetUInt64() : 0;
         s_nextDecorDbId.store(maxDecorId + 1);
-        TC_LOG_INFO("housing", "Housing::InitializeDbIdGenerators: Decor ID generator starting at {} (MAX in DB: {})",
+        TC_LOG_DEBUG("housing", "Housing::InitializeDbIdGenerators: Decor ID generator starting at {} (MAX in DB: {})",
             maxDecorId + 1, maxDecorId);
     }
     {
         QueryResult result = CharacterDatabase.Query("SELECT COALESCE(MAX(id), 0) FROM character_housing_rooms");
         uint64 maxRoomId = result ? (*result)[0].GetUInt64() : 0;
         s_nextRoomDbId.store(maxRoomId + 1);
-        TC_LOG_INFO("housing", "Housing::InitializeDbIdGenerators: Room ID generator starting at {} (MAX in DB: {})",
+        TC_LOG_DEBUG("housing", "Housing::InitializeDbIdGenerators: Room ID generator starting at {} (MAX in DB: {})",
             maxRoomId + 1, maxRoomId);
     }
 }
@@ -337,7 +337,7 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
     _state->HouseType = fields[9].GetUInt32();
     _state->CreateTime = fields[10].GetUInt32();
 
-    TC_LOG_ERROR("housing", "Housing::LoadFromDB: Loaded house HouseGuid={} NeighborhoodGuid={} PlotIndex={} Level={} HouseType={} for player {}",
+    TC_LOG_DEBUG("housing", "Housing::LoadFromDB: Loaded house HouseGuid={} NeighborhoodGuid={} PlotIndex={} Level={} HouseType={} for player {}",
         _state->HouseGuid.ToString(), _state->NeighborhoodGuid.ToString(), _state->PlotIndex, _state->Level, _state->HouseType, _owner->GetGUID().ToString());
     _state->HousePosX = fields[11].GetFloat();
     _state->HousePosY = fields[12].GetFloat();
@@ -430,7 +430,7 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
             {
                 if (room.RoomEntryId == extGeoboxEntry)
                 {
-                    TC_LOG_ERROR("housing", "Housing::LoadFromDB: Migrating interior base room {} -> {} "
+                    TC_LOG_INFO("housing", "Housing::LoadFromDB: Migrating interior base room {} -> {} "
                         "in slot {} for house {} (entry hall fixup)",
                         extGeoboxEntry, entryHallEntry, room.SlotIndex, _state->HouseGuid.ToString());
                     room.RoomEntryId = entryHallEntry;
@@ -454,7 +454,7 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
         {
             uint32 entryHallRoomEntry = sHousingMgr.GetEntryHallRoomEntryId();
             HousingResult baseResult = PlaceRoom(entryHallRoomEntry, /*slotIndex*/ 0, /*orientation*/ 0, /*mirrored*/ false);
-            TC_LOG_ERROR("housing", "Housing::LoadFromDB: Auto-placed entry hall room (entry {}) in slot 0 "
+            TC_LOG_INFO("housing", "Housing::LoadFromDB: Auto-placed entry hall room (entry {}) in slot 0 "
                 "for house {} (migration fixup, result={})",
                 entryHallRoomEntry, _state->HouseGuid.ToString(), baseResult);
         }
@@ -499,7 +499,7 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
             }
 
             HousingResult placeResult = PlaceRoom(correctVisualRoom, nextSlot, /*orientation*/ 0, /*mirrored*/ false);
-            TC_LOG_ERROR("housing", "Housing::LoadFromDB: Auto-placed visual room entry {} in slot {} "
+            TC_LOG_INFO("housing", "Housing::LoadFromDB: Auto-placed visual room entry {} in slot {} "
                 "for house {} (migration fixup, result={})",
                 correctVisualRoom, nextSlot, _state->HouseGuid.ToString(), placeResult);
         }
@@ -549,7 +549,7 @@ bool Housing::LoadFromDB(Field* house, std::vector<Field*> const& decor, std::ve
         // Log all loaded fixtures for debugging
         for (auto const& [pointId, fix] : _state->Fixtures)
         {
-            TC_LOG_INFO("housing", "Housing::LoadFromDB: Fixture pointId={} optionId={}", fix.FixturePointId, fix.OptionId);
+            TC_LOG_DEBUG("housing", "Housing::LoadFromDB: Fixture pointId={} optionId={}", fix.FixturePointId, fix.OptionId);
         }
     }
 
@@ -773,7 +773,7 @@ HousingResult Housing::Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint
     _state->CosmeticOwnerGuid = _owner->GetGUID();
     _state->Loaded = true;
 
-    TC_LOG_ERROR("housing", "Housing::Create: Player {} (BNetAcct {}) created house on plot {} in neighborhood {} — HouseGuid={}",
+    TC_LOG_INFO("housing", "Housing::Create: Player {} (BNetAcct {}) created house on plot {} in neighborhood {} — HouseGuid={}",
         _owner->GetName(), _state->OwnerAccountId, plotIndex, _state->NeighborhoodGuid.ToString(), _state->HouseGuid.ToString());
 
     SyncUpdateFields();
@@ -792,7 +792,7 @@ HousingResult Housing::Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint
         HousingResult visualResult = PlaceRoom(visualRoom, /*slotIndex*/ 1, /*orientation*/ 0, /*mirrored*/ false, nullptr, /*gridX*/ 15, /*gridY*/ 0);
         if (visualResult == HOUSING_RESULT_SUCCESS)
         {
-            TC_LOG_ERROR("housing", "Housing::Create: Auto-placed visual room entry {} in slot 1 for player {}",
+            TC_LOG_DEBUG("housing", "Housing::Create: Auto-placed visual room entry {} in slot 1 for player {}",
                 visualRoom, _owner->GetName());
         }
         else
@@ -1126,7 +1126,7 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, float x, float y
     // see what retail sends.
     bool const isExterior = IsExteriorDecorPlacement(roomGuid);
 
-    // A4: enforce the outdoor "two lights cannot overlap" rule before charging.
+    // Enforce the outdoor "two lights cannot overlap" rule before charging.
     if (HousingResult overlap = CheckLightOverlap(decorEntryId, x, y, z, isExterior);
         overlap != HOUSING_RESULT_SUCCESS)
         return overlap;
@@ -1159,7 +1159,7 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, float x, float y
             return HOUSING_RESULT_MAX_PLACED_DECOR_REACHED;
     }
 
-    // M13: persist a normalized unit quaternion for a lossless cardinal round-trip.
+    // Save a normalized unit quaternion so a cardinal angle round-trips exactly.
     NormalizeDecorRotation(rotX, rotY, rotZ, rotW);
 
     // The piece leaves storage and stands in the house, with the same GUID, source and dyes.
@@ -1181,7 +1181,7 @@ HousingResult Housing::PlaceDecorWithGuid(ObjectGuid decorGuid, float x, float y
     decor.Locked = false;
     decor.PlacementTime = GameTime::GetGameTime();
 
-    // M2: charge the SAME budget the CHECK validated (exterior-plot rooms count
+    // Charge the SAME budget the CHECK validated (exterior-plot rooms count
     // as exterior, not interior).
     if (isExterior)
         _state->ExteriorDecorWeightUsed += weightCost;
@@ -1259,8 +1259,8 @@ std::vector<Housing::AcquiredDecor> Housing::PlaceStarterDecor(CharacterDatabase
     //    (hbcd3 1411644-1411650).
     //  - 10952 is the exit door's decor: (-2.2401733, 0.006225586, 0.019993) in the entry hall, not turned (hbcd3
     //    1402938-1402945). HouseInteriorMap stands the exit door on it.
-    //  - The windows 1700, the crate 2549 and the chandelier 8910 use the places of the port's starter table, which
-    //    has the fireplace at 81's captured place and turn to three decimals.
+    //  - The windows 1700, the crate 2549 and the chandelier 8910 use the places of the starter table in agatho's
+    //    housing code, which has the fireplace at 81's captured place and turn to three decimals.
     //  - The second crate: no capture or source on hand gives its place, so it goes into the account's storage
     //    instead of the house.
     // The Alliance set is not captured. An Alliance house gets only its exit door's decor, 9144 (Founder's Point
@@ -1371,21 +1371,20 @@ HousingResult Housing::MoveDecor(ObjectGuid decorGuid, float x, float y, float z
     if (itr == _state->PlacedDecorByGuid.end())
         return HOUSING_RESULT_DECOR_NOT_FOUND;
 
-    // M1: MoveDecor previously performed NO spatial validation. Route the move
-    // target through the same room/plot AABB check as placement so a moved item
-    // cannot be flung to arbitrary coordinates.
+    // Route the move target through the same room/plot AABB check as placement so a
+    // moved item cannot be flung to arbitrary coordinates.
     HousingResult validationResult = sHousingMgr.ValidateDecorPlacement(itr->second.DecorEntryId, Position(x, y, z), _state->Level);
     if (validationResult != HOUSING_RESULT_SUCCESS)
         return validationResult;
 
-    // A4: a moved light must also honour the "two lights cannot overlap" rule.
+    // A moved light must also honour the "two lights cannot overlap" rule.
     // Exclude the decor being moved so an in-place nudge never collides with itself.
     if (HousingResult overlap = CheckLightOverlap(itr->second.DecorEntryId, x, y, z,
             IsExteriorDecorPlacement(itr->second.RoomGuid), decorGuid);
         overlap != HOUSING_RESULT_SUCCESS)
         return overlap;
 
-    // M13: normalize the rotation quaternion for a lossless cardinal round-trip.
+    // Normalize the rotation quaternion so a cardinal angle round-trips exactly.
     NormalizeDecorRotation(rotX, rotY, rotZ, rotW);
 
     PlacedDecor& decor = itr->second;
@@ -1489,8 +1488,7 @@ HousingResult Housing::CommitDecorDyes(ObjectGuid decorGuid, std::array<uint32, 
     // NOTE: the client documents that dye slots "accept colors of any category"
     // (HousingDecorDyeSlot.dyeColorCategoryID has no functional use), so category is NOT
     // enforced here - only that the color is a real DyeColor record.
-    // (Per-account dye OWNERSHIP is a separate, currently wire-unrecovered gate - see
-    // HOUSING_DYE_SYSTEM_ANALYSIS_68275.md.)
+    // (Per-account dye OWNERSHIP is a separate check whose packets have not been worked out.)
     for (uint32 const dyeColorId : dyeSlots)
     {
         if (dyeColorId && !sDyeColorStore.LookupEntry(dyeColorId))
@@ -1660,7 +1658,7 @@ HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 or
     // Check room count limit
     if (_state->Rooms.size() >= MAX_HOUSING_ROOMS_PER_HOUSE)
     {
-        TC_LOG_ERROR("housing", "PlaceRoom: rejected entry {} - count limit ({}/{})",
+        TC_LOG_DEBUG("housing", "PlaceRoom: rejected entry {} - count limit ({}/{})",
             roomEntryId, uint32(_state->Rooms.size()), MAX_HOUSING_ROOMS_PER_HOUSE);
         return HOUSING_RESULT_GENERIC_FAILURE;
     }
@@ -1669,7 +1667,7 @@ HousingResult Housing::PlaceRoom(uint32 roomEntryId, uint32 slotIndex, uint32 or
     uint32 roomWeightCost = sHousingMgr.GetRoomWeightCost(roomEntryId);
     if (_state->RoomWeightUsed + roomWeightCost > GetMaxRoomBudget())
     {
-        TC_LOG_ERROR("housing", "PlaceRoom: rejected entry {} - weight budget exceeded (used={} + cost={} > max={})",
+        TC_LOG_DEBUG("housing", "PlaceRoom: rejected entry {} - weight budget exceeded (used={} + cost={} > max={})",
             roomEntryId, _state->RoomWeightUsed, roomWeightCost, GetMaxRoomBudget());
         return HOUSING_RESULT_GENERIC_FAILURE;
     }
@@ -2152,7 +2150,7 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
                 ExteriorComponentEntry const* existingComp = sExteriorComponentStore.LookupEntry(fixture.OptionId);
                 if (existingComp && existingComp->Type == HOUSING_FIXTURE_TYPE_DOOR)
                 {
-                    TC_LOG_INFO("housing", "SelectFixtureOption: replacing existing door at hook {} (comp {}) — moving entrance to hook {}",
+                    TC_LOG_DEBUG("housing", "SelectFixtureOption: replacing existing door at hook {} (comp {}) — moving entrance to hook {}",
                         pointId, fixture.OptionId, fixturePointId);
                     conflictHooks.push_back(pointId);
                 }
@@ -2164,7 +2162,7 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
         if (existingAtHook != _state->Fixtures.end() && existingAtHook->second.OptionId != 0
             && existingAtHook->second.OptionId != optionId)
         {
-            TC_LOG_INFO("housing", "SelectFixtureOption: removing existing fixture (comp {}) at hook {} to place new comp {}",
+            TC_LOG_DEBUG("housing", "SelectFixtureOption: removing existing fixture (comp {}) at hook {} to place new comp {}",
                 existingAtHook->second.OptionId, fixturePointId, optionId);
             conflictHooks.push_back(fixturePointId);
         }
@@ -2202,7 +2200,7 @@ HousingResult Housing::SelectFixtureOption(uint32 fixturePointId, uint32 optionI
                 ExteriorComponentEntry const* oldComp = sExteriorComponentStore.LookupEntry(fixture.FixturePointId);
                 if (oldComp && oldComp->Type == newType)
                 {
-                    TC_LOG_INFO("housing", "SelectFixtureOption: replacing root type {} — removing old comp {} in favor of new comp {}",
+                    TC_LOG_DEBUG("housing", "SelectFixtureOption: replacing root type {} — removing old comp {} in favor of new comp {}",
                         newType, pointId, fixturePointId);
                     toRemove.push_back(pointId);
                 }
@@ -2375,7 +2373,7 @@ std::unordered_map<uint8, uint32> Housing::GetRootComponentOverrides() const
             comp->Type, fixture.FixturePointId, comp->HouseExteriorWmoDataID, comp->ParentComponentID);
     }
 
-    TC_LOG_INFO("housing", "GetRootComponentOverrides: {} types resolved from {} fixtures (houseType={})",
+    TC_LOG_DEBUG("housing", "GetRootComponentOverrides: {} types resolved from {} fixtures (houseType={})",
         uint32(result.size()), uint32(_state->Fixtures.size()), _state->HouseType);
     return result;
 }
@@ -2574,7 +2572,7 @@ bool Housing::IsExteriorDecorPlacement(ObjectGuid roomGuid)
 HousingResult Housing::CheckLightOverlap(uint32 decorEntryId, float x, float y, float z,
     bool isExterior, ObjectGuid excludeGuid /*= ObjectGuid::Empty*/) const
 {
-    // A4 / 12.0.7 "two lights cannot overlap". The rule is scoped to the exterior
+    // The 12.0.7 rule "two lights cannot overlap". The rule is scoped to the exterior
     // (outdoor-lighting) placement scope and only Lighting-category decor (cat 4)
     // participates — non-lights and interior placements pass through untouched so
     // ordinary decorating is never affected.
@@ -2887,7 +2885,7 @@ void Housing::PopulateStarterFixtures(bool persistNow)
     {
         if (existingRootTypes.count(fixtureType))
         {
-            TC_LOG_INFO("housing", "Housing::PopulateStarterFixtures: type={} already has a root — skipping",
+            TC_LOG_DEBUG("housing", "Housing::PopulateStarterFixtures: type={} already has a root — skipping",
                 fixtureType);
             continue;
         }
@@ -2915,7 +2913,7 @@ void Housing::PopulateStarterFixtures(bool persistNow)
             CharacterDatabase.Execute(stmt);
         }
 
-        TC_LOG_INFO("housing", "Housing::PopulateStarterFixtures: Added type={} compID={} wmo={} for player {}",
+        TC_LOG_DEBUG("housing", "Housing::PopulateStarterFixtures: Added type={} compID={} wmo={} for player {}",
             fixtureType, compID, _state->HouseType, _owner->GetName());
     }
 
@@ -2986,7 +2984,7 @@ void Housing::PopulateStarterFixtures(bool persistNow)
                             CharacterDatabase.Execute(stmt);
                         }
 
-                        TC_LOG_INFO("housing", "Housing::PopulateStarterFixtures: Added starter door compID={} at hookID={} for player {}",
+                        TC_LOG_DEBUG("housing", "Housing::PopulateStarterFixtures: Added starter door compID={} at hookID={} for player {}",
                             doorCompID, doorHookID, _owner->GetName());
                     }
                     else

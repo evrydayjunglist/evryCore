@@ -21,6 +21,16 @@
 #include "Define.h"
 #include "SharedDefines.h"
 
+// Comments in the housing code cite retail packet captures by a short name and a line of the parsed dump, as in
+// "hbcd3 1442", or by packet number, as in "hbcd3 Number 13864". The short name is the last word of the capture's file
+// name. All five are from the retail 12.0.7.68887 client, recorded on 25 July 2026:
+//   hbcd3      dump_12.0.7.68887_2026-07-25_10-42-53 hbcd3_parsed.txt
+//   hf1        dump_12.0.7.68887_2026-07-25_11-03-11 hf1_parsed.txt
+//   hbst1      dump_12.0.7.68887_2026-07-25_12-07-53 hbst1_parsed.txt
+//   hled1      dump_12.0.7.68887_2026-07-25_20-46-56 hled1_parsed.txt
+//   erhousing  dump_12.0.7.68887_2026-07-25_01-00-26 erhousing_parsed.txt
+// Other captures are named by their whole file name where they are cited.
+
 // HousingResult enum - 12.1.0.69587 client values (Enum.HousingResult, 112 values). 12.1 inserted AccountBanned and the
 // Blueprint* results near the top, shifting every later value; the client's blueprint system itself returns 3, 7, 8,
 // 11, 12, 13, 87, 95 and 99 for CodeInvalid, LocationInvalid, NameInvalid, RoomPlacementRequired, TypeInvalid,
@@ -247,8 +257,8 @@ enum DecorSourceType : uint8
     DECOR_SOURCE_STARTER        = 2,
     // Owed decor turned into a piece by a redeem request; no value (hled1 789024).
     DECOR_SOURCE_REDEEMED       = 3,
-    // A grant from a spell not cast by an item, with the spell id as the value. The port's reading; none of the
-    // owner's captures has one.
+    // A grant from a spell not cast by an item, with the spell id as the value. How agatho's housing code read it; none
+    // of the owner's captures has one.
     DECOR_SOURCE_SPELL          = 5,
     // A grant from a spell an item cast, with the item's GUID as the value (hled1 789060-789062).
     DECOR_SOURCE_ITEM           = 6,
@@ -476,7 +486,7 @@ enum HousingRoomComponentFlags : uint32
 };
 
 // HousingDecorPlacementRestriction enum - 7 values (bitmask) - 12.0.7 (68275) client-verified,
-// server-sent placement-failure reasons. HOUSING_ENUMS_68275.md.
+// server-sent placement-failure reasons.
 enum HousingDecorPlacementRestriction : uint32
 {
     HOUSING_DECOR_PLACEMENT_RESTRICTION_TOO_FAR_AWAY          = 0x01,
@@ -794,7 +804,7 @@ enum HouseLevelRewardValueType : uint8
 };
 
 // Constants
-// M1/A4 spatial-validation bound. Decor positions are stored in local space
+// How far from its origin a decor placement may be. Decor positions are stored in local space
 // (relative to the room origin for interior placements, relative to the plot
 // origin for exterior). Legitimate placements sit well within a couple of dozen
 // units of the origin on every axis (a plot/interior is only a few tens of yards
@@ -803,19 +813,19 @@ enum HouseLevelRewardValueType : uint8
 // still slamming the door on arbitrary-coordinate GameObject spam that the old
 // Position::IsPositionValid() check (|coord| < ~64000) let straight through.
 static constexpr float HOUSING_MAX_DECOR_LOCAL_EXTENT  = 1024.0f;
-// #16 Outdoor Lighting (12.0.7): DecorCategory.db2 id 4 "Lighting" (subcategories
+// Outdoor lighting (12.0.7): DecorCategory.db2 id 4 "Lighting" (subcategories
 // 16-21: Large/Wall/Ceiling/Small/Misc Lights). 12.0.7 lets Lighting decor be
 // placed outdoors on the plot; the placement path classifies a decor as Lighting
 // through DecorXDecorSubcategory -> DecorSubcategory.DecorCategoryID.
 static constexpr uint32 HOUSING_DECOR_CATEGORY_LIGHTING = 4;
-// A4 / RETAIL PARITY-OUTDOOR-LIGHT-RADIUS: 12.0.7 rule "two lights cannot overlap".
-// The exact light-to-light overlap radius is NOT datamineable from DB2 or any
-// capture we hold (CAPTURE-BLOCKED). This is a documented default minimum
+// The 12.0.7 rule "two lights cannot overlap".
+// The exact light-to-light overlap radius is NOT in the DB2 files or in any
+// capture we hold, so it waits for a capture. This is a documented default minimum
 // separation between two exterior lights, in local decor space (yards) — replace
 // with the sniffed value once an outdoor-light placement capture exists.
 static constexpr float HOUSING_LIGHT_OVERLAP_RADIUS = 3.0f;
 
-// m3/A6 decoration throttle: at most BURST place/move/remove ops per WINDOW_MS.
+// Decor edit limit per session: at most BURST place/move/remove requests per WINDOW_MS.
 // Generous enough for rapid legitimate redecorating, tight enough to cap the
 // AddToMap + synchronous-DB-write amplification a scripted client can drive.
 static constexpr uint32 HOUSING_DECOR_THROTTLE_WINDOW_MS = 10000;
@@ -955,8 +965,8 @@ static constexpr uint32 WORLDSTATE_HOUSING_INTERIOR     = 30906;
 
 // Every plot's cornerstone is this one shared gameobject entry; the plot it stands for is in its cornerstone data
 // (PlotIndex) and in its CreatedBy. All 55 cornerstones retail created on Razorwind Shores are 457142 (hbcd3
-// 439189-615537, also hf1, hled1 and erhousing), and agatho's 12.0.1 world data (build 65940) has 457142 at every
-// plot of Founder's Point too.
+// 439189-615537, also hf1, hled1 and erhousing), and the 12.0.1 world data (build 65940) from agatho's housing branch
+// has 457142 at every plot of Founder's Point too.
 static constexpr uint32 GAMEOBJECT_HOUSING_CORNERSTONE = 457142;
 
 // A cornerstone's CreatedBy is a client actor: owner type 1, owner id the neighborhood's world map, and the plot's
@@ -978,7 +988,7 @@ static constexpr uint8 HOUSING_ATTACHMENT_FLAGS_PIECE = 3;
 static constexpr uint8 HOUSING_ATTACHMENT_FLAGS_DOOR  = 7;
 
 // A saved house placement is the root's pose inside the room. The room's geobox (RoomWmoData 172) spans 35 yards each
-// way along x and 30 along y; a saved pose outside it is not a placement on this plot (the port once saved world
+// way along x and 30 along y; a saved pose outside it is not a placement on this plot (agatho's housing code once saved world
 // coordinates there) and the house stands at the default placement instead.
 static constexpr float HOUSING_ROOT_MAX_LOCAL_X = 35.0f;
 static constexpr float HOUSING_ROOT_MAX_LOCAL_Y = 30.0f;

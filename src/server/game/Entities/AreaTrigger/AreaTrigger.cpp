@@ -367,11 +367,11 @@ AreaTrigger* AreaTrigger::CreateStaticAreaTrigger(AreaTriggerCreatePropertiesId 
     return at;
 }
 
-// 12.0.5 removed FHousingPlotAreaTrigger_C fragment. The previous InitHousingPlotData
-// stored PlotID + owner/house/bnet GUIDs per-AT; that mechanism is gone. Plot ownership
-// is now communicated via PlayerHouseInfoComponentData.CurrentHouse on the Player entity.
-// The AT still exists for editor-menu plot bounds + decal visuals, so this thin init
-// only touches the AreaTrigger's own visual fields.
+// The client has no plot fragment on the area trigger (FHousingPlotAreaTrigger_C is gone since
+// 12.0.5), so the area trigger carries no plot, owner or house. Plot ownership reaches the
+// client through PlayerHouseInfoComponentData.CurrentHouse on the Player entity. The area
+// trigger is still there for the editor's plot bounds and decal, so this only sets the
+// AreaTrigger's own visual fields.
 void AreaTrigger::InitHousingPlotVisuals()
 {
     // Force SpellForVisuals=1282351 and SpellXSpellVisualID=510142 for housing plot ATs.

@@ -141,7 +141,7 @@ void WorldSession::HandleNeighborhoodCharterOpenConfirmationUI(WorldPackets::Nei
     if (!player)
         return;
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_CHARTER_OPEN_CONFIRMATION_UI received for player {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_OPEN_CONFIRMATION_UI received for player {}",
         player->GetGUID().ToString());
 
     // If the player already has a charter in flight, push its full state first.
@@ -217,7 +217,7 @@ void WorldSession::HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::N
         return;
     }
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_CHARTER_CREATE NeighborhoodMapID: {}, FactionFlags: {}, Name: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_CREATE NeighborhoodMapID: {}, FactionFlags: {}, Name: {}",
         neighborhoodCharterCreate.NeighborhoodMapID, neighborhoodCharterCreate.FactionFlags,
         neighborhoodCharterCreate.Name);
 
@@ -228,7 +228,7 @@ void WorldSession::HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::N
         response.Result = static_cast<uint8>(HOUSING_RESULT_INVALID_NEIGHBORHOOD_NAME);
         SendPacket(response.Write());
 
-        TC_LOG_INFO("housing", "HandleNeighborhoodCharterCreate: Invalid name length for player {}",
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterCreate: Invalid name length for player {}",
             player->GetGUID().ToString());
         return;
     }
@@ -239,7 +239,7 @@ void WorldSession::HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::N
         response.Result = static_cast<uint8>(HOUSING_RESULT_FILTER_REJECTED);
         SendPacket(response.Write());
 
-        TC_LOG_INFO("housing", "HandleNeighborhoodCharterCreate: Name rejected by filter for player {}",
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterCreate: Name rejected by filter for player {}",
             player->GetGUID().ToString());
         return;
     }
@@ -259,12 +259,12 @@ void WorldSession::HandleNeighborhoodCharterCreate(WorldPackets::Neighborhood::N
     charter.SaveToDB(trans);
     CharacterDatabase.CommitTransaction(trans);
 
-    // M4: populate the success response so the client charter panel renders the
-    // charter GUID + name + signature progress (previously only Result was set,
-    // leaving CharterGuid/MapID/SignatureCount/Name default → blank panel, and
-    // the client never learned the charter GUID). CharterGuid is built the same
-    // way as the sign-request path. `Unknown` carries the required signature
-    // count (server policy MIN_CHARTER_SIGNATURES; retail rec 14982 shows 0x0a).
+    // Fill the success response so the client's charter panel shows the charter
+    // GUID, name and signature progress; with only Result set the panel is blank and
+    // the client never learns the charter GUID. CharterGuid is built the same way as
+    // in the sign-request path. `Unknown` carries the required signature count
+    // (server policy MIN_CHARTER_SIGNATURES; record 14982 of a retail capture that came
+    // with the imported housing source, not one of ours, shows 0x0a).
     // NOTE: leadByte/Result semantics left as documented (uint8 Result, client
     // tests != 0 for error); the sniff's 0x42 leadByte is unverified for the
     // success path and intentionally not hardcoded here.
@@ -297,7 +297,7 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
         return;
     }
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_CHARTER_EDIT NeighborhoodMapID: {}, FactionFlags: {}, Name: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_EDIT NeighborhoodMapID: {}, FactionFlags: {}, Name: {}",
         neighborhoodCharterEdit.NeighborhoodMapID, neighborhoodCharterEdit.FactionFlags,
         neighborhoodCharterEdit.Name);
 
@@ -308,7 +308,7 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
         response.Result = static_cast<uint8>(HOUSING_RESULT_INVALID_NEIGHBORHOOD_NAME);
         SendPacket(response.Write());
 
-        TC_LOG_INFO("housing", "HandleNeighborhoodCharterEdit: Invalid name length for player {}",
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterEdit: Invalid name length for player {}",
             player->GetGUID().ToString());
         return;
     }
@@ -319,7 +319,7 @@ void WorldSession::HandleNeighborhoodCharterEdit(WorldPackets::Neighborhood::Nei
         response.Result = static_cast<uint8>(HOUSING_RESULT_FILTER_REJECTED);
         SendPacket(response.Write());
 
-        TC_LOG_INFO("housing", "HandleNeighborhoodCharterEdit: Name rejected by filter for player {}",
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodCharterEdit: Name rejected by filter for player {}",
             player->GetGUID().ToString());
         return;
     }
@@ -407,7 +407,7 @@ void WorldSession::HandleNeighborhoodCharterFinalize(WorldPackets::Neighborhood:
         return;
     }
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_CHARTER_FINALIZE received for player {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_FINALIZE received for player {}",
         player->GetGUID().ToString());
 
     // Load charter from DB using player's GUID counter as charter ID
@@ -505,13 +505,13 @@ void WorldSession::HandleNeighborhoodCharterAddSignature(WorldPackets::Neighborh
         return;
     }
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_CHARTER_ADD_SIGNATURECharterGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_ADD_SIGNATURECharterGuid: {}",
         neighborhoodCharterAddSignature.CharterGuid.ToString());
 
     // CharterGuid counter maps to charter DB ID
     uint64 charterId = neighborhoodCharterAddSignature.CharterGuid.GetCounter();
 
-    // H-25: only sign a charter this session was invited to sign. Session-scoped, so a
+    // Only sign a charter this session was invited to sign. Session-scoped, so a
     // relog means the requester has to ask again - a signature request is an
     // in-the-moment offer, and nothing about it is persisted.
     if (!HasPendingCharterSignatureRequest(charterId))
@@ -584,7 +584,7 @@ void WorldSession::HandleNeighborhoodCharterAddSignature(WorldPackets::Neighborh
         return;
     }
 
-    // H-25: one invitation, one signature. Without consuming it, a signer whose
+    // One invitation, one signature. Without consuming it, a signer whose
     // signature is later dropped by a charter edit could re-sign unasked.
     ClearPendingCharterSignatureRequest(charterId);
 
@@ -612,7 +612,7 @@ void WorldSession::HandleNeighborhoodCharterSendSignatureRequest(WorldPackets::N
         return;
     }
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_CHARTER_SEND_SIGNATURE_REQUEST TargetPlayerGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CHARTER_SEND_SIGNATURE_REQUEST TargetPlayerGuid: {}",
         neighborhoodCharterSendSignatureRequest.TargetPlayerGuid.ToString());
 
     // Validate target player is online and reachable
@@ -631,7 +631,7 @@ void WorldSession::HandleNeighborhoodCharterSendSignatureRequest(WorldPackets::N
     signRequest.CharterGuid = ObjectGuid::Create<HighGuid::Housing>(0, 0, 0, charterId);
     targetPlayer->SendDirectMessage(signRequest.Write());
 
-    // H-25: record that this player was actually asked. ADD_SIGNATURE takes the charter
+    // Record that this player was actually asked. ADD_SIGNATURE takes the charter
     // id straight from the client and charter ids are creator GUID counters, so without
     // this the invite step is decorative and any charter can be signed by anyone who
     // enumerates ids.
@@ -668,7 +668,7 @@ void WorldSession::HandleNeighborhoodUpdateName(WorldPackets::Neighborhood::Neig
 
     ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_UPDATE_NAME NeighborhoodGuid: {}, NewName: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_UPDATE_NAME NeighborhoodGuid: {}, NewName: {}",
         neighborhoodGuid.ToString(), neighborhoodUpdateName.NewName);
 
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
@@ -776,7 +776,7 @@ void WorldSession::HandleNeighborhoodSetPublicFlag(WorldPackets::Neighborhood::N
     if (!player)
         return;
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_SET_PUBLIC_FLAGNeighborhoodGuid: {}, IsPublic: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_SET_PUBLIC_FLAGNeighborhoodGuid: {}, IsPublic: {}",
         neighborhoodSetPublicFlag.NeighborhoodGuid.ToString(), neighborhoodSetPublicFlag.IsPublic);
 
     Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(neighborhoodSetPublicFlag.NeighborhoodGuid, player);
@@ -832,7 +832,7 @@ void WorldSession::HandleNeighborhoodAddSecondaryOwner(WorldPackets::Neighborhoo
 
     ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_ADD_SECONDARY_OWNER NeighborhoodGuid: {}, PlayerGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_ADD_SECONDARY_OWNER NeighborhoodGuid: {}, PlayerGuid: {}",
         neighborhoodGuid.ToString(), neighborhoodAddSecondaryOwner.PlayerGuid.ToString());
 
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
@@ -896,7 +896,7 @@ void WorldSession::HandleNeighborhoodRemoveSecondaryOwner(WorldPackets::Neighbor
 
     ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_REMOVE_SECONDARY_OWNER NeighborhoodGuid: {}, PlayerGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_REMOVE_SECONDARY_OWNER NeighborhoodGuid: {}, PlayerGuid: {}",
         neighborhoodGuid.ToString(), neighborhoodRemoveSecondaryOwner.PlayerGuid.ToString());
 
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
@@ -960,7 +960,7 @@ void WorldSession::HandleNeighborhoodInviteResident(WorldPackets::Neighborhood::
 
     ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_INVITE_RESIDENT NeighborhoodGuid: {}, PlayerGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_INVITE_RESIDENT NeighborhoodGuid: {}, PlayerGuid: {}",
         neighborhoodGuid.ToString(), neighborhoodInviteResident.PlayerGuid.ToString());
 
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
@@ -1027,7 +1027,7 @@ void WorldSession::HandleNeighborhoodCancelInvitation(WorldPackets::Neighborhood
 
     ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_CANCEL_INVITATION NeighborhoodGuid: {}, InviteeGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_CANCEL_INVITATION NeighborhoodGuid: {}, InviteeGuid: {}",
         neighborhoodGuid.ToString(), neighborhoodCancelInvitation.InviteeGuid.ToString());
 
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
@@ -1072,7 +1072,7 @@ void WorldSession::HandleNeighborhoodPlayerDeclineInvite(WorldPackets::Neighborh
     if (!player)
         return;
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_PLAYER_DECLINE_INVITE NeighborhoodGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_PLAYER_DECLINE_INVITE NeighborhoodGuid: {}",
         neighborhoodPlayerDeclineInvite.NeighborhoodGuid.ToString());
 
     Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(neighborhoodPlayerDeclineInvite.NeighborhoodGuid, player);
@@ -1105,7 +1105,7 @@ void WorldSession::HandleNeighborhoodPlayerGetInvite(WorldPackets::Neighborhood:
     if (!player)
         return;
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_PLAYER_GET_INVITE for player {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_PLAYER_GET_INVITE for player {}",
         player->GetGUID().ToString());
 
     // Client sends empty packet — search all neighborhoods for a pending invite to this player
@@ -1148,7 +1148,7 @@ void WorldSession::HandleNeighborhoodGetInvites(WorldPackets::Neighborhood::Neig
     if (!player)
         return;
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_GET_INVITES for player {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_GET_INVITES for player {}",
         player->GetGUID().ToString());
 
     // Client sends empty packet — derive neighborhood from player's housing context
@@ -1219,7 +1219,7 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         return;
     }
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_BUY_HOUSE CornerstoneGuid: {}, HouseGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_BUY_HOUSE CornerstoneGuid: {}, HouseGuid: {}",
         neighborhoodBuyHouse.CornerstoneGuid.ToString(), neighborhoodBuyHouse.HouseGuid.ToString());
 
     // The buy packet names only the cornerstone. The plot comes from that
@@ -1583,7 +1583,7 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
         return;
     }
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_MOVE_HOUSE CornerstoneGuid: {}, HouseGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_MOVE_HOUSE CornerstoneGuid: {}, HouseGuid: {}",
         neighborhoodMoveHouse.CornerstoneGuid.ToString(), neighborhoodMoveHouse.HouseGuid.ToString());
 
     // The move packet names the cornerstone of the destination plot. It must be
@@ -1806,7 +1806,7 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
         if (!otherReserver.IsEmpty())
         {
             response.PurchaseStatus = static_cast<uint8>(HOUSING_RESULT_PLOT_RESERVED);
-            TC_LOG_INFO("housing",
+            TC_LOG_DEBUG("housing",
                 "OpenCornerstoneUI: plot {} is reserved by {}; marking PurchaseStatus=PLOT_RESERVED for viewer {}",
                 plotIdx, otherReserver.ToString(), player->GetGUID().ToString());
         }
@@ -1828,7 +1828,7 @@ void WorldSession::HandleNeighborhoodOpenCornerstoneUI(WorldPackets::Neighborhoo
     WorldPacket const* pkt = response.Write();
     SendPacket(pkt);
 
-    TC_LOG_DEBUG("housing", "=== SMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI_RESPONSE (0x5C000A) ===\n"
+    TC_LOG_DEBUG("network.opcode", "=== SMSG_NEIGHBORHOOD_OPEN_CORNERSTONE_UI_RESPONSE (0x5C000A) ===\n"
         "  PlotIndex={}, Cost={}, PurchaseStatus={}, CanPurchase={}, IsPlotOwned={}\n"
         "  PlotOwnerGuid: {} ({})\n"
         "  HouseGuid: {} ({})\n"
@@ -1860,7 +1860,7 @@ void WorldSession::HandleNeighborhoodOfferOwnership(WorldPackets::Neighborhood::
 
     ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_OFFER_OWNERSHIP NeighborhoodGuid: {}, NewOwnerGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_OFFER_OWNERSHIP NeighborhoodGuid: {}, NewOwnerGuid: {}",
         neighborhoodGuid.ToString(), neighborhoodOfferOwnership.NewOwnerGuid.ToString());
 
     Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
@@ -1917,7 +1917,7 @@ void WorldSession::HandleNeighborhoodGetRoster(WorldPackets::Neighborhood::Neigh
     if (!player)
         return;
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_GET_ROSTER NeighborhoodGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_GET_ROSTER NeighborhoodGuid: {}",
         neighborhoodGetRoster.NeighborhoodGuid.ToString());
 
     // ResolveNeighborhood handles both Housing GUIDs and bulletin board GO GUIDs
@@ -2004,7 +2004,7 @@ void WorldSession::HandleNeighborhoodGetRoster(WorldPackets::Neighborhood::Neigh
         }
     }
 
-    TC_LOG_DEBUG("housing", "=== SMSG_NEIGHBORHOOD_GET_ROSTER_RESPONSE (0x5C000F) [handler] ===\n"
+    TC_LOG_DEBUG("network.opcode", "=== SMSG_NEIGHBORHOOD_GET_ROSTER_RESPONSE (0x5C000F) [handler] ===\n"
         "  Result={}, Members={}, NeighborhoodName='{}'\n"
         "  GroupNeighborhoodGuid: {} ({})\n"
         "  GroupOwnerGuid: {} ({})\n"
@@ -2021,7 +2021,7 @@ void WorldSession::HandleNeighborhoodEvictPlot(WorldPackets::Neighborhood::Neigh
     if (!player)
         return;
 
-    TC_LOG_INFO("housing", "CMSG_NEIGHBORHOOD_EVICT_PLOT PlotIndex(raw): {}, NeighborhoodGuid: {}",
+    TC_LOG_DEBUG("housing", "CMSG_NEIGHBORHOOD_EVICT_PLOT PlotIndex(raw): {}, NeighborhoodGuid: {}",
         neighborhoodEvictPlot.PlotIndex, neighborhoodEvictPlot.NeighborhoodGuid.ToString());
 
     Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(neighborhoodEvictPlot.NeighborhoodGuid, player);
@@ -2290,14 +2290,13 @@ void WorldSession::HandleInitiativeUpdateActiveNeighborhood(WorldPackets::Neighb
 // 0x38xxxx NeighborhoodInitiative — generic Op-XX handlers
 // ============================================================================
 //
-// These 12 opcodes are sent by the client per IDA-decoded wire formats
-// (INITIATIVE_WIRE_FORMAT_AUTHORITATIVE_67186.md). Their 1:1 Lua API binding
-// requires runtime sniff data — vtable indirection in the client (hash
-// 0xBA8F5C5BC59E8E8E = INITIATIVE_TASKS_TRACKED_LIST_CHANGED) prevents static
-// resolution. Per the doc:
+// The 12.0.5 client (build 67186) sends these 12 requests in the wire formats read from
+// it. Which client function sends each one needs a capture: vtable indirection in the
+// client (hash 0xBA8F5C5BC59E8E8E = INITIATIVE_TASKS_TRACKED_LIST_CHANGED) hides it from
+// a reading of the binary. What the reading suggests:
 //   - 0x380001, 0x38000C: candidates for SetActiveNeighborhood / SetViewingNeighborhood
 //   - 0x380007, 0x38000A, 0x38000B: candidates for AddTrackedInitiativeTask /
-//     RemoveTrackedInitiativeTask (uint32 taskID); the doc indicates the user-callable
+//     RemoveTrackedInitiativeTask (uint32 taskID); the user-callable
 //     APIs flush via the BATCH path 0x38000E rather than these direct uint32 senders.
 //   - 0x380006, 0x380008: empty-payload candidates for RequestInitiativeActivityLog /
 //     RequestNeighborhoodInitiativeInfo (the dedicated 0x380003/0x380004 opcodes also
@@ -2314,9 +2313,9 @@ void WorldSession::HandleInitiativeUpdateActiveNeighborhood(WorldPackets::Neighb
 //   - returns silently (no SMSG response)
 // This matches how the client's other "fire-and-forget" senders behave in retail.
 //
-// TODO housing Stage 2 (protocol migration): guarded with the 12 NeighborhoodInitiativeOpXX
-// classes (HousingPackets.h) — none of the CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_* placeholder
-// opcodes exist in bare's 12.1 Opcodes.h; guessing renumbered values would fabricate wire opcodes.
+// Left out of the build with the 12 NeighborhoodInitiativeOpXX classes (HousingPackets.h): the 12.1
+// opcode list has none of the CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_* requests, and guessed values would
+// put made-up opcodes on the wire.
 #if 0
 void WorldSession::HandleNeighborhoodInitiativeOp01(WorldPackets::Neighborhood::NeighborhoodInitiativeOp01 const& packet)
 {
@@ -2418,17 +2417,6 @@ void WorldSession::HandleNeighborhoodInitiativeOp0F(WorldPackets::Neighborhood::
         TC_LOG_TRACE("housing", "  record: ({}, {}, {}, {})", r.A, r.B, r.C, r.D);
 }
 #endif
-
-// ============================================================
-// Phase 7 — Charter Handlers
-// ============================================================
-
-// Retired 2026-05-12: HandleNeighborhoodCharterSignResponse + HandleNeighborhoodCharterRemoveSignature
-// — fake CMSGs 0x370002 + 0x370005, no client senders in build 67186 (STUB-OK only).
-
-// ============================================================
-// Phase 7 — Neighborhood Handlers
-// ============================================================
 
 
 

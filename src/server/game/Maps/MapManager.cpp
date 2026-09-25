@@ -333,14 +333,11 @@ void MapManager::PreloadHousingMaps()
         // Load all grid cells so every entity (ATs, GOs, MeshObjects) is fully spawned.
         // This prevents crashes when other systems (GameEventMgr, etc.) iterate the map
         // and ensures all entities are ready before any player connects.
-        // 12.1 API: the housing branch's custom Map::LoadAllCells() (cell-granularity, called
-        // LoadGrid(x,y) per TOTAL_NUMBER_OF_CELLS_PER_MAP^2 cell) was dropped by the 12.0.7->12.1
-        // merge; bare's upstream 12.1 Map already ships the equivalent Map::LoadAllGrids()
-        // (grid-granularity, EnsureGridLoaded per GridCoord) — same effect, adapted call site.
+        // Map::LoadAllGrids loads every grid (EnsureGridLoaded per GridCoord).
         map->LoadAllGrids();
 
         ++count;
-        TC_LOG_INFO("housing", "MapManager::PreloadHousingMaps: Pre-loaded neighborhood '{}' (map={} instanceId={}) with all cells",
+        TC_LOG_DEBUG("housing", "MapManager::PreloadHousingMaps: Pre-loaded neighborhood '{}' (map={} instanceId={}) with all cells",
             neighborhood->GetName(), mapId, instanceId);
     }
 
@@ -516,10 +513,10 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
         {
             // Update source info on reuse — the player may re-enter from a different
             // neighborhood or plot each time.
-            // H-13: only the OWNER may write this. The interior instance is shared with
+            // Only the OWNER may write this. The interior instance is shared with
             // visitors, and the source map/plot is what HandleHouseInteriorLeaveHouse
             // reads to decide where to put someone on the way out. A visitor writing
-            // their own plot here sent the owner out onto the visitor's plot, or onto a
+            // their own plot here would send the owner out onto the visitor's plot, or onto a
             // different neighborhood map entirely.
             if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(map); interiorMap && !isVisit)
             {
@@ -549,7 +546,7 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
         else
         {
             map = CreateHouseInterior(mapId, newInstanceId, player, houseGuid);
-            TC_LOG_ERROR("housing", "MapManager::CreateMap: CREATED NEW HouseInteriorMap mapId={} instanceId={} "
+            TC_LOG_DEBUG("housing", "MapManager::CreateMap: CREATED NEW HouseInteriorMap mapId={} instanceId={} "
                 "for player {} (visit={} house={} map ptr={})",
                 mapId, newInstanceId, player->GetGUID().ToString(), isVisit, houseGuid.ToString(), (void*)map);
         }

@@ -257,7 +257,7 @@ public:
         float rotX, float rotY, float rotZ, float rotW, float scale = 1.0f);
     // Takes a placed piece out of the house into the account's storage.
     HousingResult RemoveDecor(ObjectGuid decorGuid);
-    // M2: single source of truth for exterior-vs-interior decor budget routing.
+    // The one place that decides whether decor counts against the exterior or the interior budget.
     // A placement is exterior (charged to the yard budget) when it has no room
     // (empty RoomGuid) OR its RoomGuid is the plot's base/exterior room identity
     // (HighGuid::Housing subType==2 whose low arg2 == base room entry id). Every
@@ -415,7 +415,7 @@ private:
     // loaded without them; a new house is saved whole by the purchase instead.
     void PopulateStarterFixtures(bool persistNow);
 
-    // #16 Outdoor Lighting (A4): enforce the 12.0.7 "two lights cannot overlap"
+    // Outdoor lighting: enforce the 12.0.7 "two lights cannot overlap"
     // rule. Only applies when placing/moving a Lighting-category decor on the
     // exterior/plot scope; rejects with HOUSING_RESULT_INVALID_LIGHT_OVERLAP if
     // another exterior light sits within HOUSING_LIGHT_OVERLAP_RADIUS. excludeGuid

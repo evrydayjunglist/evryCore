@@ -267,7 +267,7 @@ public:
     DecorCategoryData const* GetDecorCategoryData(uint32 id) const;
     DecorSubcategoryData const* GetDecorSubcategoryData(uint32 id) const;
 
-    // #16 Outdoor Lighting: classify a HouseDecor by its parent DecorCategory
+    // Outdoor lighting: classify a HouseDecor by its parent DecorCategory
     // (via DecorXDecorSubcategory -> DecorSubcategory.DecorCategoryID). Returns 0
     // when the decor has no category link. IsLightingDecor() == category 4.
     uint32 GetDecorCategoryForDecor(uint32 decorId) const;

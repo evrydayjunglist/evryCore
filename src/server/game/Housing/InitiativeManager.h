@@ -160,8 +160,6 @@ public:
     // Starts an endeavor in each public neighborhood that has none. Guild and charter neighborhoods wait for one of
     // their managers to pick one at the Steward.
     void CheckAndStartInitiatives();
-    // Retired 2026-05-11: SendInitiativeUpdateStatus / SendInitiativePointsUpdate /
-    // SendInitiativeMilestoneUpdate (speculative SMSGs the retail client drops).
 
 private:
     InitiativeManager() = default;

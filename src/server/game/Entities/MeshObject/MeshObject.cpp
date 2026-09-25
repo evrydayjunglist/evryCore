@@ -131,7 +131,7 @@ bool MeshObject::Create(Map* map, Position const& pos, QuaternionData const& rot
     _attachParentGUID = attachParent;
     _positionLocalSpace = pos;
 
-    TC_LOG_ERROR("housing", "MeshObject::Create: guid={} fileDataID={} COB: HasEntityPos={} Stationary={} MeshObj={} attachParent={}",
+    TC_LOG_DEBUG("housing", "MeshObject::Create: guid={} fileDataID={} COB: HasEntityPos={} Stationary={} MeshObj={} attachParent={}",
         GetGUID().ToString(), fileDataID,
         bool(m_updateFlag.HasEntityPosition), bool(m_updateFlag.Stationary), bool(m_updateFlag.MeshObject),
         attachParent.ToString());
@@ -386,7 +386,7 @@ void MeshObject::InitHousingRoomComponentData(ObjectGuid roomGuid,
     m_entityFragments.Add(WowCS::EntityFragment::FHousingRoomComponentMesh_C, IsInWorld(),
         WowCS::GetRawFragmentData(m_housingRoomComponentMeshData));
 
-    TC_LOG_ERROR("housing", "MeshObject::InitHousingRoomComponentData: guid={} roomGuid={} "
+    TC_LOG_DEBUG("housing", "MeshObject::InitHousingRoomComponentData: guid={} roomGuid={} "
         "compOptionID={} compID={} compType={} themeID={} "
         "geobox=({:.2f},{:.2f},{:.2f})→({:.2f},{:.2f},{:.2f})",
         GetGUID().ToString(), roomGuid.ToString(),
@@ -479,15 +479,15 @@ void MeshObject::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* targe
     data->AddUpdateBlock();
     std::size_t endPos = buf.wpos();
 
-    // Hex dump the FULL CREATE block for the first few interior MeshObjects
-    if (m_housingRoomComponentMeshData.has_value() && (endPos - startPos) > 0)
+    // The CREATE block of an interior room piece in hex, to check it byte by byte against a capture.
+    if (m_housingRoomComponentMeshData.has_value() && (endPos - startPos) > 0 && sLog->ShouldLog("network.opcode", LOG_LEVEL_DEBUG))
     {
         ByteBuffer const& buf = data->GetBuffer();
         std::string hex;
         std::size_t dumpLen = std::min(endPos - startPos, std::size_t(200));
         for (std::size_t i = startPos; i < startPos + dumpLen; ++i)
             hex += Trinity::StringFormat("{:02x} ", buf[i]);
-        TC_LOG_ERROR("housing", "MeshObject::BuildCreate guid={} compID={} FULL_HEX[{} bytes]: {}",
+        TC_LOG_DEBUG("network.opcode", "MeshObject::BuildCreate guid={} compID={} FULL_HEX[{} bytes]: {}",
             GetGUID().ToString(), int32(m_housingRoomComponentMeshData->RoomComponentID),
             endPos - startPos, hex);
     }

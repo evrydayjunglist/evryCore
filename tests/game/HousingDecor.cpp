@@ -215,7 +215,7 @@ TEST_CASE("Decor placement is read in either float layout", "[Housing][Decor][Pa
         REQUIRE(packet.AttachPoint == 25);
     }
 
-    SECTION("Eleven floats, as the port read the 12.1 client")
+    SECTION("Eleven floats, as agatho's housing code read the 12.1 client")
     {
         WorldPacket wire(CMSG_HOUSING_DECOR_PLACE);
         WriteDecorPlace(wire, true);

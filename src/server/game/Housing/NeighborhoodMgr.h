@@ -102,7 +102,7 @@ private:
 
     std::unordered_map<ObjectGuid, std::unique_ptr<Neighborhood>> _neighborhoods;
     // Counter -> neighborhood. _neighborhoods is keyed by the FULL ObjectGuid, so now that arg1 varies per
-    // neighborhood map, nothing may rebuild a lookup GUID from a bare persisted counter - the persisted tables
+    // neighborhood map, nothing may rebuild a lookup GUID from a persisted counter alone - the persisted tables
     // store only GetCounter(). Every such site resolves through GetNeighborhoodByCounter instead.
     std::unordered_map<uint64, Neighborhood*> _neighborhoodsByCounter;
     std::unordered_map<ObjectGuid, ObjectGuid> _ownerToNeighborhood; // owner guid -> neighborhood guid

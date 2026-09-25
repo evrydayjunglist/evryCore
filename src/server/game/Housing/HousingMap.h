@@ -204,7 +204,7 @@ public:
     void SendPlotEnterSpellPackets(Player* player, uint8 plotIndex);
     void SendPlotLeaveAuraRemoval(Player* player);
 
-    // Blizzlike neighborhood-map-entry aura burst. Sniff-decoded from
+    // Retail's neighborhood-map-entry aura burst. Sniff-decoded from
     // dump_12.0.1.66838_2026-04-15_09-35-59.pkt at idx 9985-10000 (and
     // cross-checked against the 2026-04-10 capture). Emits the four
     // housing-specific AURA_UPDATE+SPELL_START+SPELL_GO triples that retail

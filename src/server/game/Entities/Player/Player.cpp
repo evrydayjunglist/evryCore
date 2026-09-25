@@ -9705,7 +9705,7 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId) const
 
     WorldStateMgr::FillInitialWorldStates(packet, GetMap(), areaId);
 
-    TC_LOG_INFO("housing", "Player::SendInitWorldStates: Map={} Zone={} Area={} WorldStateCount={}",
+    TC_LOG_DEBUG("housing", "Player::SendInitWorldStates: Map={} Zone={} Area={} WorldStateCount={}",
         mapId, zoneId, areaId, uint32(packet.Worldstates.size()));
 
     SendDirectMessage(packet.Write());
@@ -19589,7 +19589,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
                 continue;
 
             nh->UpdatePlotHouseInfo(h->GetPlotIndex(), h->GetHouseGuid(), GetSession()->GetBattlenetAccountGUID(), h->GetDatabaseId());
-            TC_LOG_INFO("housing", "Player::LoadFromDB PRIMING: UpdatePlotHouseInfo plot={} HouseGuid={} (before mirror read)",
+            TC_LOG_DEBUG("housing", "Player::LoadFromDB PRIMING: UpdatePlotHouseInfo plot={} HouseGuid={} (before mirror read)",
                 h->GetPlotIndex(), h->GetHouseGuid().ToString());
 
             bool onLoginMap = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(nh->GetNeighborhoodMapID()) == GetMapId();
@@ -19617,19 +19617,17 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
             // Populate all 55 plot slots SYNCHRONOUSLY with real data at login.
             //
-            // Analysis agent 2026-04-23T07:30Z finding: the neighborhood map
-            // provider is pull-based, not push-based — Blizzard's
+            // The client's neighborhood map provider is pull-based, not push-based: Blizzard's
             // NeighborhoodMapDataProviderMixin calls GetNeighborhoodMapData()
             // every time the map is toggled open (verified via hooksecurefunc).
             // There is no server-side event we need to fire; the map refreshes
             // itself on show. So the blocker is simply that our mirror's Houses
             // array must be populated BEFORE the player opens the map.
             //
-            // Earlier experiment (commit 36b9052423) shipped Houses empty at
-            // login + populated via a 500ms deferred SendUpdateToPlayer. That
-            // created a race: if the user opened the map during the 500ms
-            // window, GetNeighborhoodMapData() returned all-unoccupied plots
-            // and the pins stayed wrong even after the defer completed (the
+            // Sending Houses empty at login and filling it by a 500ms deferred
+            // SendUpdateToPlayer races the player: if she opens the map during the
+            // 500ms window, GetNeighborhoodMapData() returns all-unoccupied plots
+            // and the pins stay wrong even after the defer completes (the
             // provider doesn't re-poll without explicit refresh triggers).
             //
             // Synchronous population here ensures the Player CREATE bundle
@@ -19646,9 +19644,9 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
                     bool ownPlot = plot.IsOwnedByAccount(GetSession()->GetBattlenetAccountGUID());
                     bool emptyHouse = plot.HouseGuid.IsEmpty();
                     bool matchesSession = ownPlot && !emptyHouse && plot.HouseGuid == sessionHouse3;
-                    TC_LOG_INFO("housing",
+                    TC_LOG_DEBUG("housing",
                         "Player::LoadFromDB mirror[{}]: OWN={} HouseGuid={} OwnerGuid={} OwnerBnetGuid={} "
-                        "SessionH3={} matchesSessionH3={} emptyHouseGuid={}",
+                        "SessionHouse={} matchesSessionHouse={} emptyHouseGuid={}",
                         plotIdx, ownPlot,
                         plot.HouseGuid.ToString(), plot.OwnerGuid.ToString(), plot.OwnerBnetGuid.ToString(),
                         sessionHouse3.ToString(), matchesSession, emptyHouse);
@@ -26035,7 +26033,7 @@ void Player::SendInitialPacketsBeforeAddToMap()
     WorldPacket const* wsiPkt = worldServerInfo.Write();
     SendDirectMessage(wsiPkt);
 
-    TC_LOG_ERROR("housing", "=== SMSG_WORLD_SERVER_INFO (login) ===\n"
+    TC_LOG_DEBUG("housing", "=== SMSG_WORLD_SERVER_INFO (login) ===\n"
         "  DifficultyID={}, IsTournament={}, XRealmPvp={}, BlockExit={}\n"
         "  HouseGUID: {} (lo={:016X} hi={:016X})\n"
         "  HouseOwnerAccountGUID: {} (lo={:016X} hi={:016X})\n"
@@ -26191,11 +26189,11 @@ void Player::SendInitialPacketsAfterAddToMap()
 
     // Housing state setup at neighborhood map entry.
     //
-    // PROVEN RETAIL BEHAVIOUR (sniff analysis across 3 retail 66838 captures:
+    // What retail does (three retail 12.0.1 build 66838 captures:
     // floorplan_editor_rotation, wall_floor_ceiling_customize,
     // interrior_exterrior_advanced_editor):
     //
-    //   Post-LVW unprompted window: ZERO housing-specific SMSGs.
+    //   After the login verify world, no other housing packet the client did not ask for.
     //   Housing state ships ENTIRELY inside the single Player CREATE bundle
     //   (UPDATE_OBJECT) as entity UpdateField data on Housing/4 (mirror),
     //   Housing/3 (PlayerHouseEntity), HighGuid::Entity mirrors, etc.
@@ -26203,16 +26201,13 @@ void Player::SendInitialPacketsAfterAddToMap()
     //   UpdateHousesLevelFavor, QueryNeighborhoodName, QueryPlayerNames,
     //   or NeighborhoodGetRoster is emitted unprompted.
     //
-    // Previous iterations emitted all of those at login as speculative
-    // "wake-ups" for client-side state machines. Per user's blizzlike
-    // guardrail ("system works on retail, we have to fully align with the
-    // Blizzard flow") all unprompted emissions have been removed. The CMSG
+    // So none of them is sent here. The CMSG
     // handlers (HandleHousingHouseStatus, HandleHousingGetPlayerPermissions,
     // HandleHousingGetCurrentHouseInfo, HandleHousingSvcsGetPlayerHousesInfo,
     // HandleNeighborhoodGetRoster, HandleQueryPlayerNames) already exist and
     // emit the correct reactive responses when the client sends the CMSGs.
     //
-    // Remaining work: keep the session-entity state populated so the Player
+    // What is left here: keep the session-entity state populated so the Player
     // CREATE bundle serialises correct UpdateField values. Set fields only;
     // no SendDirectMessage/SendCreateToPlayer calls in this block.
     if (HousingMap* housingMap = dynamic_cast<HousingMap*>(GetMap()))
@@ -26272,7 +26267,7 @@ void Player::SendInitialPacketsAfterAddToMap()
                 PushHousingDecorStorage();
             }
 
-            TC_LOG_INFO("housing", "Player {} entered neighborhood map {} - state set on session entities (blizzlike: no unprompted SMSGs emitted). Neighborhood='{}' {}, Members={}, Plots={}, HasHouse={}",
+            TC_LOG_DEBUG("housing", "Player {} entered neighborhood map {} - state set on session entities (no housing packet is sent unasked, as on retail). Neighborhood='{}' {}, Members={}, Plots={}, HasHouse={}",
                 GetGUID().ToString(), GetMapId(), neighborhood->GetName(), neighborhood->GetGuid().ToString(),
                 neighborhood->GetMembers().size(), neighborhood->GetOccupiedPlotCount(), housing ? "yes" : "no");
         }

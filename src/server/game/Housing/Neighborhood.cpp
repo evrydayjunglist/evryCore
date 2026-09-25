@@ -57,8 +57,8 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
     _factionRestriction = fields[4].GetInt32();
     _isPublic           = fields[5].GetBool();
     _createTime         = fields[6].GetUInt32();
-    // M8: guild→neighborhood link (0 = not a guild neighborhood). Without this
-    // load GetNeighborhoodByGuildId always returned nullptr after a restart.
+    // The guild the neighborhood belongs to (0 = not a guild neighborhood). Without this
+    // GetNeighborhoodByGuildId would find nothing after a restart.
     _guildId            = fields[7].GetUInt32();
 
     TC_LOG_DEBUG("housing", "Neighborhood::LoadFromDB: Loaded neighborhood '{}' (guid: {}), owner: {}, mapId: {}, members: loading...",
@@ -88,8 +88,8 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
         _members.size(), _name);
 
     // The houses standing in this neighborhood fill the plots. The owner shown on a plot is the house's cosmetic
-    // owner; the plot belongs to the house's Battle.net account, which the client also needs on the plot's
-    // area trigger (FHousingPlotAreaTrigger_C HouseOwnerBnetAccountGUID) to know who is inside their own plot.
+    // owner; the plot belongs to the house's Battle.net account. Plot ownership reaches the client through
+    // PlayerHouseInfoComponentData.CurrentHouse and NeighborhoodMirrorData.Houses, not through the area trigger.
     if (houses)
     {
         do
@@ -135,7 +135,7 @@ bool Neighborhood::LoadFromDB(PreparedQueryResult neighborhood, PreparedQueryRes
             plot.HasHousePlacement = plot.HousePlacement.GetPositionX() != 0.0f || plot.HousePlacement.GetPositionY() != 0.0f
                 || plot.HousePlacement.GetPositionZ() != 0.0f || plot.HousePlacement.GetOrientation() != 0.0f;
 
-            TC_LOG_INFO("housing", "Neighborhood::LoadFromDB plot[{}] house={} owner={} lvl={} favor={} name='{}'",
+            TC_LOG_DEBUG("housing", "Neighborhood::LoadFromDB plot[{}] house={} owner={} lvl={} favor={} name='{}'",
                 plotIndex, plot.HouseGuid.ToString(), plot.OwnerGuid.ToString(), plot.HouseLevel, plot.HouseFavor, plot.HouseName);
         } while (houses->NextRow());
     }
@@ -419,8 +419,8 @@ HousingResult Neighborhood::AddManager(ObjectGuid playerGuid)
     {
         TC_LOG_DEBUG("housing", "Neighborhood::AddManager: Neighborhood '{}' has reached max managers ({})",
             _name, MAX_NEIGHBORHOOD_MANAGERS);
-        // m7: was PLOT_NOT_VACANT, which the client rendered as a spurious plot
-        // error. HousingResult (build 68275) has no dedicated "too many managers"
+        // Not PLOT_NOT_VACANT, which the client shows as an unrelated plot error.
+        // HousingResult (build 68275) has no dedicated "too many managers"
         // value, so use PERMISSION_DENIED (the promotion is refused) until a
         // retail sniff confirms the exact enum for the manager-cap condition.
         return HOUSING_RESULT_PERMISSION_DENIED;
@@ -438,7 +438,7 @@ HousingResult Neighborhood::AddManager(ObjectGuid playerGuid)
     TC_LOG_DEBUG("housing", "Neighborhood::AddManager: Player {} promoted to manager in neighborhood '{}'",
         playerGuid.ToString(), _name);
 
-    // m4: roster broadcast happens in the handler layer
+    // The roster broadcast happens in the handler layer
     // (HandleNeighborhoodAddSecondaryOwner), which also refreshes mirror data.
     // Broadcasting here too produced two deltas per promote.
     return HOUSING_RESULT_SUCCESS;
@@ -476,7 +476,7 @@ HousingResult Neighborhood::RemoveManager(ObjectGuid playerGuid)
             TC_LOG_DEBUG("housing", "Neighborhood::RemoveManager: Player {} demoted to resident in neighborhood '{}'",
                 playerGuid.ToString(), _name);
 
-            // m4: roster broadcast happens in the handler layer
+            // The roster broadcast happens in the handler layer
             // (HandleNeighborhoodRemoveSecondaryOwner), which also refreshes
             // mirror data. Broadcasting here too produced two deltas per demote.
             return HOUSING_RESULT_SUCCESS;
@@ -559,9 +559,8 @@ HousingResult Neighborhood::InviteResident(ObjectGuid inviterGuid, ObjectGuid in
         }
     }
 
-    // M6: consume the invitee's auto-decline-neighborhood-invites flag. Setting
-    // PLAYER_FLAGS_EX_AUTO_DECLINE_NEIGHBORHOOD previously had no effect — the
-    // invite + notification were created regardless. If the invitee is online
+    // Honour the invitee's auto-decline-neighborhood-invites flag
+    // (PLAYER_FLAGS_EX_AUTO_DECLINE_NEIGHBORHOOD). If the invitee is online
     // with the flag set, skip the invite entirely and tell the inviter it was
     // auto-declined (their filter rejected it). Offline invitees fall through
     // (the flag is only observable while online).
@@ -763,11 +762,10 @@ HousingResult Neighborhood::DeclineInvitation(ObjectGuid playerGuid)
     TC_LOG_DEBUG("housing", "Neighborhood::DeclineInvitation: Player {} declined invite to neighborhood '{}'",
         playerGuid.ToString(), _name);
 
-    // M7: the invite was successfully erased — return SUCCESS. The response
-    // Result byte is a HousingResult enum (uint8) the client compares against
-    // Enum.HousingResult.Success(0); returning GENERIC_FAILURE here made the
-    // client render a successful decline as failed (sibling CancelInvitation
-    // already returns SUCCESS).
+    // The invite was erased, so return SUCCESS. The response Result byte is a
+    // HousingResult enum (uint8) the client compares against
+    // Enum.HousingResult.Success(0); GENERIC_FAILURE would make the client show a
+    // successful decline as failed (CancelInvitation returns SUCCESS too).
     return HOUSING_RESULT_SUCCESS;
 }
 
@@ -1566,7 +1564,7 @@ bool Neighborhood::ReservePlot(ObjectGuid playerGuid, uint8 plotIndex)
     {
         if (now >= it->second.ReserveTime + RESERVATION_EXPIRY_SECONDS)
         {
-            TC_LOG_INFO("housing", "Neighborhood::ReservePlot: expired reservation by {} on plot {} cleared",
+            TC_LOG_DEBUG("housing", "Neighborhood::ReservePlot: expired reservation by {} on plot {} cleared",
                 it->first.ToString(), it->second.PlotIndex);
             it = _plotReservations.erase(it);
         }
@@ -1587,7 +1585,7 @@ bool Neighborhood::ReservePlot(ObjectGuid playerGuid, uint8 plotIndex)
     reservation.PlotIndex = plotIndex;
     reservation.ReserveTime = now;
 
-    TC_LOG_INFO("housing",
+    TC_LOG_DEBUG("housing",
         "Neighborhood::ReservePlot: Player {} reserved plot {} in neighborhood '{}' (guid {}, expires in {}s)",
         playerGuid.ToString(), plotIndex, _name, _guid.ToString(), RESERVATION_EXPIRY_SECONDS);
     return true;

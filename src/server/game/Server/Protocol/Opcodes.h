@@ -1060,12 +1060,11 @@ enum OpcodeClient : uint32
     CMSG_WORLD_LOOT_OBJECT_CLICK                                    = 0x3D02D7,
     CMSG_WORLD_PORT_RESPONSE                                        = 0x430025,
     CMSG_WRAP_ITEM                                                  = 0x400000,
-    // TC-CUSTOM housing/neighborhood-initiative CMSG opcodes merged from ADV (e004d7a4bf).
-    // Values are UNKNOWN_OPCODE: ADV's raw 68275-era suffixes collide with real 12.1 opcodes in
-    // their families (CMSG_HOUSING_DECOR_SET_TRANSFORM_12_1's 0x320002
-    // collides with CMSG_HOUSING_DECOR_MOVE), and family 0x38 (neighborhood initiative) has no
-    // capacity reserved in GetOpcodeArrayIndex at all. Packet classes compile; IsValid() is false
-    // so nothing dispatches until each is re-derived from a verified 12.1 capture.
+    // Housing and neighborhood initiative requests that came with agatho's housing branch and are not in the 12.1
+    // opcode list. They are UNKNOWN_OPCODE: the 12.0.7 (build 68275) values collide with real 12.1 opcodes in
+    // their families (CMSG_HOUSING_DECOR_SET_TRANSFORM_12_1's 0x320002 is CMSG_HOUSING_DECOR_MOVE), and family
+    // 0x38 (neighborhood initiative) has no room in GetOpcodeArrayIndex at all. The packet classes compile;
+    // IsValid() is false, so nothing dispatches until each value is taken from a 12.1 capture.
     CMSG_HOUSING_DECOR_SET_TRANSFORM_12_1                           = UNKNOWN_OPCODE, // wire: pguid f32x11 pguid pguid pguid u32 u8 u8 bits<1>; unreferenced elsewhere in the tree
     CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_01                          = UNKNOWN_OPCODE, // wire: PackedGUID
     CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_05                          = UNKNOWN_OPCODE, // wire: uint32 + PackedGUID

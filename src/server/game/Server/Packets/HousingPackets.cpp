@@ -62,7 +62,7 @@ namespace
 {
 // CMSG_HOUSING_DECOR_PLACE carries seven floats after the decor GUID on 12.0.7: position, rotation and scale (hbcd3
 // 1443057 and 1443983, 54 and 53 bytes; hled1 805424, 68 bytes), and WowPacketParser's reader has not changed for
-// 12.1. No capture has a CMSG_HOUSING_DECOR_MOVE; it is read the same way by assumption. The port read eleven, a
+// 12.1. No capture has a CMSG_HOUSING_DECOR_MOVE; it is read the same way by assumption. agatho's housing code read eleven, a
 // quaternion between rotation and scale, from its reading of the 12.1.0.69587 client. No 12.1 capture of either
 // packet exists, so both are accepted: seven first, and eleven when reading seven does not end exactly at the end of
 // the packet. readTail reads what follows the scale.
@@ -195,8 +195,6 @@ void HousingDecorDeleteFromStorage::Read()
     TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_DECOR_DELETE_FROM_STORAGE Count: {}", count);
 }
 
-// Retired 2026-05-12: HousingDecorDeleteFromStorageById::Read (fake CMSG 0x30000A).
-
 void HousingDecorRequestStorage::Read()
 {
     _worldPacket >> BnetAccountGuid;
@@ -209,17 +207,8 @@ void HousingDecorRedeemDeferredDecor::Read()
     _worldPacket >> DeferredDecorID;
     _worldPacket >> RedemptionToken;
 
-    TC_LOG_INFO("network.opcode", "CMSG_HOUSING_DECOR_REDEEM_DEFERRED DeferredDecorID: {} RedemptionToken: {} (pktSize={})", DeferredDecorID, RedemptionToken, _worldPacket.size());
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_DECOR_REDEEM_DEFERRED DeferredDecorID: {} RedemptionToken: {} (pktSize={})", DeferredDecorID, RedemptionToken, _worldPacket.size());
 }
-
-// Retired 2026-05-11: HousingDecorStartPlacingNewDecor + HousingDecorCatalogCreateSearcher
-// Read() bodies deleted (see HousingPackets.h retirement markers).
-
-// Retired 2026-05-12: HousingDecorUpdateDyeSlot::Read (fake CMSG 0x300008, dup of SET_DYE_SLOTS).
-// Retired 2026-05-11: HousingDecorStartPlacingFromSource Read() body deleted.
-// Retired 2026-05-12: HousingDecorCleanupModeToggle::Read (fake CMSG 0x30000C).
-
-// Retired 2026-05-11: HousingDecorBatchOperation + HousingDecorPlacementPreview Read() bodies deleted.
 
 // --- Fixture System ---
 
@@ -236,7 +225,7 @@ void HousingFixtureSetCoreFixture::Read()
     _worldPacket >> ExteriorComponentID;
     _worldPacket >> Flags;
 
-    TC_LOG_INFO("housing", "CMSG_HOUSING_FIXTURE_SET_CORE_FIXTURE: FixtureGuid={} ExteriorComponentID={} Flags={}",
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_FIXTURE_SET_CORE_FIXTURE: FixtureGuid={} ExteriorComponentID={} Flags={}",
         FixtureGuid.ToString(), ExteriorComponentID, Flags);
 }
 
@@ -280,9 +269,6 @@ void HousingFixtureSetHouseType::Read()
 
     TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_FIXTURE_SET_HOUSE_TYPE HouseGuid: {} HouseExteriorWmoDataID: {} Flags: {}", HouseGuid.ToString(), HouseExteriorWmoDataID, Flags);
 }
-
-// Retired 2026-05-12: HousingFixtureCreateBasicHouse::Read (fake CMSG 0x310001).
-// Retired 2026-05-12: HousingFixtureDeleteHouse::Read (fake CMSG 0x310002, use RELINQUISH_HOUSE).
 
 void HouseExteriorLock::Read()
 {
@@ -463,11 +449,6 @@ void HousingSvcsTeleportToPlot::Read()
         NeighborhoodGuid.ToString(), HouseGuid.ToString(), PlotIndex, TeleportType);
 }
 
-// Removed 2026-04-24: HousingSvcsSetTutorialState / HousingSvcsCompleteTutorialStep
-// Read() — no matching C_Housing Lua API in 12.0.5.
-
-// Retired 2026-05-12: HousingDecorConfirmPreviewPlacement::Read (fake CMSG 0x300011).
-
 void HousingSvcsAcceptNeighborhoodOwnership::Read()
 {
     _worldPacket >> NeighborhoodGuid;
@@ -515,13 +496,8 @@ void HousingSvcsGetBnetFriendNeighborhoods::Read()
     TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_GET_BNET_FRIEND_NEIGHBORHOODS BnetAccountGuid: {}", BnetAccountGuid.ToString());
 }
 
-// Retired 2026-05-12 (batch 2): Read() bodies for 8 fake SVCS CMSGs deleted —
-// dual IDA + sniff cross-check confirmed no client senders in build 67186.
-
 // --- Housing Misc ---
 // HousingGetCurrentHouseInfo::Read() and HousingHouseStatus::Read() are empty (inline in header)
-
-// Retired 2026-05-11: HousingRequestEditorAvailability Read() deleted (Lua API is sync).
 
 void HousingGetPlayerPermissions::Read()
 {
@@ -539,10 +515,6 @@ void HousingSvcsGetPotentialHouseOwners::Read()
 
     TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_GET_POTENTIAL_HOUSE_OWNERS HouseGuid: {}", HouseGuid.ToString());
 }
-
-// Retired 2026-05-12: HousingSystemGetHouseInfoAlt / HousingSystemHouseSnapshot /
-// HousingSystemExportHouse / HousingSystemUpdateHouseInfo Read() bodies deleted —
-// IDA verification confirms no client senders in build 67186.
 
 // --- Other Housing CMSG ---
 
@@ -563,7 +535,7 @@ void QueryNeighborhoodInfo::Read()
 void InvitePlayerToNeighborhood::Read()
 {
     // 12.0.7 (build 68275): wire is a single 6-bit-length-prefixed player name (invite by name,
-    // not GUID). RE feedback 0x40019b.
+    // not GUID). Read from the client's handler for 0x40019b.
     _worldPacket >> SizedString::BitsSize<6>(PlayerName);
     _worldPacket >> SizedString::Data(PlayerName);
 
@@ -608,8 +580,8 @@ WorldPacket const* InvalidateNeighborhoodName::Write()
 // Housing Catalog State Sync (ClientMirrorSystem 0x56000E)
 // ============================================================
 
-// TODO housing Stage 2 (protocol migration): guarded with the HousingCatalogStateSync class
-// declaration in HousingPackets.h — opcode absent in 12.1 enum: SMSG_HOUSING_CATALOG_STATE_SYNC.
+// Left out of the build with the HousingCatalogStateSync class in HousingPackets.h: the 12.1 opcode list has no
+// SMSG_HOUSING_CATALOG_STATE_SYNC.
 #if 0
 WorldPacket const* HousingCatalogStateSync::Write()
 {
@@ -659,9 +631,8 @@ WorldPacket const* HouseExteriorSetHousePositionResponse::Write()
 // House Interior SMSG (0x2Fxxxx)
 // ============================================================
 
-// Removed 2026-04-24: HouseInteriorEnterHouse / HouseInteriorLeaveHouseResponse —
-// these SMSGs no longer exist in 12.0.5. House entry/leave is communicated via the
-// PlayerHouseInfoComponentData.CurrentHouse UpdateField (IDA-verified).
+// There is no server packet for entering or leaving a house: both show in the
+// PlayerHouseInfoComponentData.CurrentHouse update field.
 
 // ============================================================
 // Housing Decor SMSG Responses (0x51xxxx)
@@ -716,7 +687,7 @@ WorldPacket const* HousingDecorPlaceResponse::Write()
     _worldPacket << DecorGuid;
     _worldPacket << uint8(Result);
 
-    TC_LOG_INFO("network.opcode", "SMSG_HOUSING_DECOR_PLACE_RESPONSE PlayerGuid: {} Result: {} DecorGuid: {} Field_09: {}",
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_DECOR_PLACE_RESPONSE PlayerGuid: {} Result: {} DecorGuid: {} Field_09: {}",
         PlayerGuid.ToString(), Result, DecorGuid.ToString(), Field_09);
 
     return &_worldPacket;
@@ -730,7 +701,7 @@ WorldPacket const* HousingDecorRemoveResponse::Write()
     _worldPacket << uint32(Field_13);
     _worldPacket << uint8(Result);
 
-    TC_LOG_INFO("network.opcode", "SMSG_HOUSING_DECOR_REMOVE_RESPONSE DecorGuid: {} Result: {}",
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_DECOR_REMOVE_RESPONSE DecorGuid: {} Result: {}",
         DecorGuid.ToString(), Result);
 
     return &_worldPacket;
@@ -748,7 +719,7 @@ WorldPacket const* HousingDecorLockResponse::Write()
     if (Field_17) flags |= 0x40;
     _worldPacket << uint8(flags);
 
-    TC_LOG_INFO("network.opcode", "SMSG_HOUSING_DECOR_LOCK_RESPONSE DecorGuid: {} PlayerGuid: {} Result: {} Locked: {}",
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_DECOR_LOCK_RESPONSE DecorGuid: {} PlayerGuid: {} Result: {} Locked: {}",
         DecorGuid.ToString(), PlayerGuid.ToString(), Result, Locked);
 
     return &_worldPacket;
@@ -811,7 +782,7 @@ WorldPacket const* HousingRedeemDeferredDecorResponse::Write()
     _worldPacket << uint8(Result);
     _worldPacket << uint32(SequenceIndex);
 
-    TC_LOG_INFO("network.opcode", "SMSG_HOUSING_REDEEM_DEFERRED_DECOR_RESPONSE DecorGuid: {} Result: {} SequenceIndex: {}",
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_REDEEM_DEFERRED_DECOR_RESPONSE DecorGuid: {} Result: {} SequenceIndex: {}",
         DecorGuid.ToString(), Result, SequenceIndex);
 
     return &_worldPacket;
@@ -825,8 +796,6 @@ WorldPacket const* HousingFirstTimeDecorAcquisition::Write()
 
     return &_worldPacket;
 }
-
-// Retired 2026-05-11: 4 speculative Decor*Response Write() bodies deleted (see HousingPackets.h).
 
 // ============================================================
 // Housing Fixture SMSG Responses (0x52xxxx)
@@ -844,8 +813,6 @@ WorldPacket const* HousingFixtureSetEditModeResponse::Write()
 
     return &_worldPacket;
 }
-
-// Retired 2026-05-12: HousingFixtureDeleteHouseResponse::Write — orphaned after FIXTURE_DELETE_HOUSE CMSG retirement.
 
 WorldPacket const* HousingFixtureSetHouseSizeResponse::Write()
 {
@@ -1072,8 +1039,6 @@ WorldPacket const* HousingSvcsNeighborhoodReservePlotResponse::Write()
     return &_worldPacket;
 }
 
-// Retired 2026-05-12 (batch 2): HousingSvcsClearPlotReservationResponse::Write — orphaned.
-
 WorldPacket const* HousingSvcsRelinquishHouseResponse::Write()
 {
     // IDA case 5505031: uint8(Result) + PackedGUID + PackedGUID
@@ -1236,7 +1201,7 @@ WorldPacket const* HousingSvcsChangeHouseCosmeticOwner::Write()
 
 WorldPacket const* HousingSvcsUpdateHousesLevelFavor::Write()
 {
-    // 12.0.7 (build 68275) LIST form (dispatcher 0x7FF7291F1920), RE feedback 0x540011:
+    // 12.0.7 (build 68275) LIST form (dispatcher 0x7FF7291F1920), read from the client's handler for 0x540011:
     //   u8 Result + u32 ChangeAmount + u32 Reason + u32 count
     //   + count x { 3x PackedGUID, int64 NewFavorTotal, u8 Field3, u32 Reserved, u8(bit7 Flag) }
     // The 12.0.5 "flat record" was a 1-element list whose count was mislabeled Field2(=1);
@@ -1283,8 +1248,6 @@ WorldPacket const* HousingSvcsGuildRemoveHouseNotification::Write()
 
     return &_worldPacket;
 }
-
-// Retired 2026-05-12 (batch 2): HousingSvcsGuildAppendNeighborhoodNotification::Write — orphaned.
 
 WorldPacket const* HousingSvcsGuildRenameNeighborhoodNotification::Write()
 {
@@ -1415,7 +1378,7 @@ WorldPacket const* HousingSvcsGetHouseFinderInfoResponse::Write()
 {
     // IDA-verified wire (build 67186, sub_7FF75C1EA710 case 0x54001C):
     //   Bits<1>(Result) + FlushBits + uint32(count) + ParseHouseFinderNeighborhood[count]
-    // The leading bit is the success/failure flag; old TC missed it entirely. The
+    // The leading bit is the success/failure flag; an earlier writer missed it entirely. The
     // count is a raw uint32 (helper is misnamed CompressedUInt32 but reads 4 bytes).
     _worldPacket.WriteBit(Result != 0);
     _worldPacket.FlushBits();
@@ -1423,12 +1386,12 @@ WorldPacket const* HousingSvcsGetHouseFinderInfoResponse::Write()
     for (auto const& entry : Entries)
         WriteJamCliHouseFinderNeighborhood(_worldPacket, entry);
 
-    TC_LOG_INFO("housing", "SMSG_HOUSING_SVCS_GET_HOUSE_FINDER_INFO_RESPONSE EntryCount: {} PacketSize: {} (Result {} dropped — not on wire)",
-        Entries.size(), _worldPacket.size(), Result);
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_SVCS_GET_HOUSE_FINDER_INFO_RESPONSE Result: {} EntryCount: {} PacketSize: {}",
+        Result, Entries.size(), _worldPacket.size());
     for (size_t i = 0; i < Entries.size(); ++i)
     {
         auto const& e = Entries[i];
-        TC_LOG_INFO("housing", "  LIST_ENTRY[{}]: nbGuid={} houses={} Field1=0x{:016X} Field2={} ExtraFlags=0x{:02X}",
+        TC_LOG_DEBUG("network.opcode", "  LIST_ENTRY[{}]: nbGuid={} houses={} Field1=0x{:016X} Field2={} ExtraFlags=0x{:02X}",
             i, e.NeighborhoodGUID.ToString(), e.Houses.size(), e.Field1, e.Field2, e.ExtraFlags);
     }
 
@@ -1438,27 +1401,30 @@ WorldPacket const* HousingSvcsGetHouseFinderInfoResponse::Write()
 WorldPacket const* HousingSvcsGetHouseFinderNeighborhoodResponse::Write()
 {
     // IDA-verified wire (case 5505053): Bits<1>(Result) + FlushBits + ParseHouseFinderNeighborhood (single, 136 bytes)
-    // Old TC wrote uint8(Result); the leading byte is actually a single bit. Sending
+    // An earlier writer wrote uint8(Result); the leading byte is actually a single bit. Sending
     // Result=non-zero as 0x01 left bit 7 = 0, so the client always read "no error"
-    // regardless of actual Result. Same fix pattern as the charter responses.
+    // regardless of actual Result.
     _worldPacket.WriteBit(Result != 0);
     _worldPacket.FlushBits();
     WriteJamCliHouseFinderNeighborhood(_worldPacket, Neighborhood);
 
-    TC_LOG_INFO("housing", "SMSG_HOUSING_SVCS_GET_HOUSE_FINDER_NEIGHBORHOOD_RESPONSE Result: {} Houses: {} PacketSize: {}",
+    TC_LOG_DEBUG("network.opcode", "SMSG_HOUSING_SVCS_GET_HOUSE_FINDER_NEIGHBORHOOD_RESPONSE Result: {} Houses: {} PacketSize: {}",
         Result, Neighborhood.Houses.size(), _worldPacket.size());
 
-    // Hex dump of the first 256 bytes for wire format verification
-    std::string hexDump;
-    size_t dumpLen = std::min<size_t>(_worldPacket.size(), 256);
-    for (size_t i = 0; i < dumpLen; ++i)
+    // The first 256 bytes, to check the layout against a capture.
+    if (sLog->ShouldLog("network.opcode", LOG_LEVEL_DEBUG))
     {
-        char buf[4];
-        snprintf(buf, sizeof(buf), "%02X ", _worldPacket[i]);
-        hexDump += buf;
-        if ((i + 1) % 32 == 0) hexDump += "\n    ";
+        std::string hexDump;
+        size_t dumpLen = std::min<size_t>(_worldPacket.size(), 256);
+        for (size_t i = 0; i < dumpLen; ++i)
+        {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%02X ", _worldPacket[i]);
+            hexDump += buf;
+            if ((i + 1) % 32 == 0) hexDump += "\n    ";
+        }
+        TC_LOG_DEBUG("network.opcode", "  PACKET_HEX (first {} bytes):\n    {}", dumpLen, hexDump);
     }
-    TC_LOG_INFO("housing", "  PACKET_HEX (first {} bytes):\n    {}", dumpLen, hexDump);
 
     return &_worldPacket;
 }
@@ -1544,23 +1510,22 @@ WorldPacket const* HousingGetCurrentHouseInfoResponse::Write()
     return &_worldPacket;
 }
 
-// TODO housing Stage 2 (protocol migration): guarded with WorldPackets::Housing::HousingExportHouseResponse
-// (HousingPackets.h) — opcode absent in 12.1 enum: SMSG_HOUSING_EXPORT_HOUSE_RESPONSE (already documented
-// as retired/orphaned below; no live caller).
+// Left out of the build with WorldPackets::Housing::HousingExportHouseResponse (HousingPackets.h): the 12.1 opcode
+// list has no SMSG_HOUSING_EXPORT_HOUSE_RESPONSE. Nothing sends it.
 #if 0
 WorldPacket const* HousingExportHouseResponse::Write()
 {
-    // 12.0.7 (build 68275), parser sub_7FF7291D7160. RE feedback 0x550003.
+    // 12.0.7 (build 68275), parser sub_7FF7291D7160.
     _worldPacket << HouseGuid;
     _worldPacket << uint8(Status);
     // Optional name string: presence byte (bit7 = present). Empty-name path is exact; the
     // bit-packed length encoding of the present path is unconfirmed — flagged in the header.
     if (ExportName)
     {
-        // H-24: the length field carries 7 bits, so a name longer than 127 bytes used to
-        // write a masked-down length next to the full string - the client would then read
-        // the tail of the name as the start of BlobLen, desyncing every field after it.
-        // The encoding above 127 is not pinned by RE, so this does not invent a long form;
+        // The length field carries 7 bits, so a name longer than 127 bytes would be written with a
+        // masked-down length next to the full string - the client would then read the tail of the
+        // name as the start of BlobLen, desyncing every field after it. How the client reads a
+        // longer name was not worked out, so this does not invent a long form;
         // it truncates the payload to match the length actually written, which keeps the
         // stream parseable. If a capture ever shows the long form, encode it here.
         std::string_view name = *ExportName;
@@ -1580,8 +1545,6 @@ WorldPacket const* HousingExportHouseResponse::Write()
     return &_worldPacket;
 }
 #endif
-
-// Retired 2026-05-11: HousingSystemHouseSnapshotResponse Write() deleted (no C_HouseSnapshot in retail).
 
 WorldPacket const* HousingGetPlayerPermissionsResponse::Write()
 {
@@ -1620,16 +1583,6 @@ WorldPacket const* HousingResetHouseResponse::Write()
 
     return &_worldPacket;
 }
-
-// Retired 2026-05-11: HousingEditorAvailabilityResponse Write() deleted (Lua API is sync).
-
-// Retired 2026-05-12: HousingUpdateHouseInfo::Write — orphaned after UPDATE_HOUSE_INFO CMSG retirement.
-// SMSG 0x550004 is real per IDA, but the only emit-site was a handler with no client sender.
-
-// Retired 2026-05-11: SMSG_HOUSING_SET_HOUSE_NAME_RESPONSE class deleted (was using fake
-// opcode 0xF1000008 + had 0 emit-sites). IDA-derived real opcode is 0x550005 with wire:
-//   uint8 Result + uint64 NameLen + char[NameLen] Name
-// Recreate if/when the set-house-name response gets wired into a handler.
 
 // ============================================================
 // Account/Licensing SMSG (0x42xxxx / 0x5Fxxxx)
@@ -1927,10 +1880,6 @@ WorldPacket const* InitiativeRewardAvailable::Write()
     return &_worldPacket;
 }
 
-// Retired 2026-05-11: InitiativeUpdateStatus / InitiativePointsUpdate / InitiativeMilestoneUpdate
-// / InitiativeChestResult Write() bodies deleted (speculative 0xF1000018..0xF100001C opcodes).
-// See HousingPackets.h for the wire shapes (preserved as comments for future restoration).
-
 WorldPacket const* HousingPhotoSharingAuthorizationResult::Write()
 {
     // IDA-verified wire (build 67186, sub_7FF75C0F0160):
@@ -2052,9 +2001,6 @@ void NeighborhoodCharterSendSignatureRequest::Read()
     TC_LOG_DEBUG("network.opcode", "CMSG_NEIGHBORHOOD_CHARTER_SEND_SIGNATURE_REQUEST TargetPlayerGuid: {}", TargetPlayerGuid.ToString());
 }
 
-// Retired 2026-05-12: NeighborhoodCharterSignResponsePacket::Read (fake CMSG 0x370002).
-// Retired 2026-05-12: NeighborhoodCharterRemoveSignature::Read (fake CMSG 0x370005).
-
 // --- Neighborhood Management System ---
 
 void NeighborhoodUpdateName::Read()
@@ -2167,7 +2113,7 @@ void NeighborhoodEvictPlot::Read()
 WorldPacket const* NeighborhoodCharterUpdateResponse::Write()
 {
     // 12.0.7 (build 68275): leading field is a full uint8(Result) status code (the client
-    // reads a whole byte and tests != 0), NOT a single bit. RE feedback 0x5b0000.
+    // reads a whole byte and tests != 0), NOT a single bit, as the client's handler for 0x5b0000 reads it.
     //   uint8 Result + ObjectGuid CharterGuid + uint32 MapID + uint32 SignatureCount
     //   + uint32 SignersCount + uint32 Unknown + ObjectGuid[SignersCount]
     //   + uint8(NameLen) + StringData
@@ -2179,9 +2125,10 @@ WorldPacket const* NeighborhoodCharterUpdateResponse::Write()
     _worldPacket << uint32(Unknown);
     for (ObjectGuid const& signer : Signers)
         _worldPacket << signer;
-    // M5: charter name is length-prefixed size+1 with a trailing NUL
-    // (retail rec 14982 = 09 'Colombia' 00), matching the Roster/HouseFinder
-    // writers. The old uint8(size)+WriteString dropped the terminator.
+    // The charter name is length-prefixed size+1 with a trailing NUL (record 14982
+    // of a retail capture carries 09 'Colombia' 00; that capture came with the
+    // imported housing source and is not one of ours), matching the Roster/HouseFinder
+    // writers; uint8(size)+WriteString would drop the terminator.
     {
         uint8 charterNameLen = static_cast<uint8>(std::min<size_t>(NeighborhoodName.size() + 1, 255));
         _worldPacket << uint8(charterNameLen);
@@ -2197,7 +2144,7 @@ WorldPacket const* NeighborhoodCharterUpdateResponse::Write()
 WorldPacket const* NeighborhoodCharterOpenUIResponse::Write()
 {
     // 12.0.7 (build 68275): identical shape to 0x5B0000; leading field is a full uint8(Result),
-    // not a bit. RE feedback 0x5b0001.
+    // not a bit, as the client's handler for 0x5b0001 reads it.
     _worldPacket << uint8(Result);
     _worldPacket << CharterGuid;
     _worldPacket << uint32(MapID);
@@ -2206,9 +2153,10 @@ WorldPacket const* NeighborhoodCharterOpenUIResponse::Write()
     _worldPacket << uint32(Unknown);
     for (ObjectGuid const& signer : Signers)
         _worldPacket << signer;
-    // M5: charter name is length-prefixed size+1 with a trailing NUL
-    // (retail rec 14982 = 09 'Colombia' 00), matching the Roster/HouseFinder
-    // writers. The old uint8(size)+WriteString dropped the terminator.
+    // The charter name is length-prefixed size+1 with a trailing NUL (record 14982
+    // of a retail capture carries 09 'Colombia' 00; that capture came with the
+    // imported housing source and is not one of ours), matching the Roster/HouseFinder
+    // writers; uint8(size)+WriteString would drop the terminator.
     {
         uint8 charterNameLen = static_cast<uint8>(std::min<size_t>(NeighborhoodName.size() + 1, 255));
         _worldPacket << uint8(charterNameLen);
@@ -2228,9 +2176,10 @@ WorldPacket const* NeighborhoodCharterSignRequest::Write()
     _worldPacket << CharterGuid;
     _worldPacket << uint32(MapID);
     _worldPacket << uint32(Unknown);
-    // M5: charter name is length-prefixed size+1 with a trailing NUL
-    // (retail rec 14982 = 09 'Colombia' 00), matching the Roster/HouseFinder
-    // writers. The old uint8(size)+WriteString dropped the terminator.
+    // The charter name is length-prefixed size+1 with a trailing NUL (record 14982
+    // of a retail capture carries 09 'Colombia' 00; that capture came with the
+    // imported housing source and is not one of ours), matching the Roster/HouseFinder
+    // writers; uint8(size)+WriteString would drop the terminator.
     {
         uint8 charterNameLen = static_cast<uint8>(std::min<size_t>(NeighborhoodName.size() + 1, 255));
         _worldPacket << uint8(charterNameLen);
@@ -2261,9 +2210,10 @@ WorldPacket const* NeighborhoodCharterOpenConfirmationUIResponse::Write()
     _worldPacket << uint8(Result);
     _worldPacket << uint32(Field1);
     _worldPacket << uint32(Field2);
-    // M5: charter name is length-prefixed size+1 with a trailing NUL
-    // (retail rec 14982 = 09 'Colombia' 00), matching the Roster/HouseFinder
-    // writers. The old uint8(size)+WriteString dropped the terminator.
+    // The charter name is length-prefixed size+1 with a trailing NUL (record 14982
+    // of a retail capture carries 09 'Colombia' 00; that capture came with the
+    // imported housing source and is not one of ours), matching the Roster/HouseFinder
+    // writers; uint8(size)+WriteString would drop the terminator.
     {
         uint8 charterNameLen = static_cast<uint8>(std::min<size_t>(NeighborhoodName.size() + 1, 255));
         _worldPacket << uint8(charterNameLen);
@@ -2297,7 +2247,7 @@ WorldPacket const* NeighborhoodCharterSignatureRemovedNotification::Write()
 WorldPacket const* NeighborhoodEvictPlayerResponse::Write()
 {
     // UNVERIFIED — needs live sniff. 12.0.7 client consumes this body as opaque bytes[rest]
-    // without decoding fields, so the internal layout cannot be confirmed offline (RE 0x5c0000).
+    // without decoding fields (its handler for 0x5c0000), so the internal layout cannot be confirmed offline.
     _worldPacket << PlayerGuid;
 
     TC_LOG_DEBUG("network.opcode", "SMSG_NEIGHBORHOOD_EVICT_PLAYER_RESPONSE PlayerGuid: {}", PlayerGuid.ToString());
@@ -2428,7 +2378,7 @@ WorldPacket const* NeighborhoodCancelInvitationResponse::Write()
 WorldPacket const* NeighborhoodDeclineInvitationResponse::Write()
 {
     // 12.0.7 (build 68275): leading uint8(Result) read via ClientOpcode_helper_318EF90,
-    // THEN the GUID (the invited player's guid client-side). RE feedback 0x5c000a.
+    // THEN the GUID (the invited player's guid client-side), as the client's handler for 0x5c000a reads it.
     _worldPacket << uint8(Result);
     _worldPacket << NeighborhoodGuid;
 
@@ -2557,7 +2507,7 @@ WorldPacket const* NeighborhoodRosterResidentUpdate::Write()
 WorldPacket const* NeighborhoodInviteNameLookupResult::Write()
 {
     // 12.0.7 (build 68275): leading uint8(Result) via ClientOpcode_helper_318EF90, then the GUID.
-    // RE feedback 0x5c0011.
+    // As the client's handler for 0x5c0011 reads it.
     _worldPacket << uint8(Result);
     _worldPacket << PlayerGuid;
 
@@ -2570,7 +2520,7 @@ WorldPacket const* NeighborhoodInviteNameLookupResult::Write()
 WorldPacket const* NeighborhoodEvictPlotResponse::Write()
 {
     // 12.0.7 (build 68275): leading uint8(Result) via ClientOpcode_helper_318EF90, then the GUID
-    // (client treats it as the evicted plot/house guid). RE feedback 0x5c0012.
+    // (client treats it as the evicted plot/house guid), as the client's handler for 0x5c0012 reads it.
     _worldPacket << uint8(Result);
     _worldPacket << NeighborhoodGuid;
 
@@ -2626,9 +2576,8 @@ void InitiativeUpdateActiveNeighborhood::Read()
 // 0x38xxxx NeighborhoodInitiative — generic Op-XX read implementations
 // ============================================================================
 //
-// TODO housing Stage 2 (protocol migration): guarded with the 12 NeighborhoodInitiativeOpXX
-// class declarations in HousingPackets.h — none of the CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_*
-// placeholder opcodes exist in bare's 12.1 Opcodes.h.
+// Left out of the build with the 12 NeighborhoodInitiativeOpXX classes in HousingPackets.h: the 12.1 opcode list
+// has none of the CMSG_NEIGHBORHOOD_INITIATIVE_OPCODE_* requests.
 #if 0
 void NeighborhoodInitiativeOp01::Read()
 {

@@ -169,7 +169,7 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
         { "housingEnableMoveHouse"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_MOVE_HOUSE) ? "1"sv : "0"sv },
         { "housingEnableCreateCharterNeighborhood"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_CREATE_CHARTER_NEIGHBORHOOD) ? "1"sv : "0"sv },
         { "housingEnableCreateGuildNeighborhood"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_CREATE_GUILD_NEIGHBORHOOD) ? "1"sv : "0"sv },
-        // Blueprints are new in 12.1 and no capture names these three; they come from agatho's reading of the 12.1
+        // Blueprints are new in 12.1 and no capture names these three; they come from agatho's housing branch, read from the 12.1
         // client, which gates C_HousingBlueprint.GetFeatureAvailability, GetImportAvailability and
         // GetExportAvailability on them.
         { "housingBlueprintsEnabled"sv, "1"sv },

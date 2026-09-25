@@ -153,7 +153,7 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
 
     SendPacket(features.Write());
 
-    WorldPackets::System::MirrorVarSingle vars[] =
+    std::vector<WorldPackets::System::MirrorVarSingle> vars =
     {
         { "raidLockoutExtendEnabled"sv, "1"sv },
         { "sellAllJunkEnabled"sv, "1"sv },
@@ -162,53 +162,69 @@ void WorldSession::SendFeatureSystemStatusGlueScreen()
         { "bpayStoreEnable"sv, battlePayEnabled ? "1"sv : "0"sv },
         { "recentAlliesEnabledClient"sv, "0"sv },
         { "browserEnabled"sv, "0"sv },
-        // Advertise the supported housing services.
-        { "performHousingExpansionCheckClient"sv, "1"sv },
+        // Housing services, sent only at the character screen (hbcd3 1442).
         { "housingServiceEnabled"sv, "1"sv },
         { "housingEnableBuyHouse"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_BUY_HOUSE) ? "1"sv : "0"sv },
         { "housingEnableDeleteHouse"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_DELETE_HOUSE) ? "1"sv : "0"sv },
         { "housingEnableMoveHouse"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_MOVE_HOUSE) ? "1"sv : "0"sv },
         { "housingEnableCreateCharterNeighborhood"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_CREATE_CHARTER_NEIGHBORHOOD) ? "1"sv : "0"sv },
         { "housingEnableCreateGuildNeighborhood"sv, sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_CREATE_GUILD_NEIGHBORHOOD) ? "1"sv : "0"sv },
-        // Market
-        { "housingMarketEnabled"sv, "1"sv },
-        { "housingMarketShopEnabled"sv, "1"sv },
-        { "housingMarketCartFullRemoveEnabled"sv, "1"sv },
-        // Blueprints: the client gates C_HousingBlueprint.GetFeatureAvailability / GetImportAvailability /
-        // GetExportAvailability on these (registered at 0x7FF7CCEF81A0, default 0); retail 12.1 sends all three as 1.
+        // Blueprints are new in 12.1 and no capture names these three; they come from agatho's reading of the 12.1
+        // client, which gates C_HousingBlueprint.GetFeatureAvailability, GetImportAvailability and
+        // GetExportAvailability on them.
         { "housingBlueprintsEnabled"sv, "1"sv },
         { "housingBlueprintImportEnabled"sv, "1"sv },
         { "housingBlueprintExportEnabled"sv, "1"sv },
-        // Neighborhood & exterior
+    };
+    AppendHousingMirrorVars(vars, false);
+
+    WorldPackets::System::MirrorVars variables;
+    variables.Variables = vars;
+    SendPacket(variables.Write());
+}
+
+/*static*/ void WorldSession::AppendHousingMirrorVars(std::vector<WorldPackets::System::MirrorVarSingle>& vars, bool inWorld)
+{
+    // Retail sends these at the character screen (hbcd3 1442) and again in the world after login and after each map
+    // change (hbcd3 167415, 245836, 356261, 1344902, 1456481), with the same values.
+    vars.insert(vars.end(),
+    {
+        { "performHousingExpansionCheckClient"sv, "1"sv },
         { "housingExteriorTypeByNeighborhoodFactionRestriction"sv, "1"sv },
-        { "minNeighborhoodGroupMembers"sv, "3"sv },
-        // Decoration limits
+        { "housingExteriorLightsAllowed"sv, "1"sv },
+        { "housingExteriorLightsRadiusMultiplier"sv, "0.500000"sv },
         { "housingBasicDecor_MaxPreviewLimit"sv, "100"sv },
         { "housingCatalog_CartSizeLimit"sv, "20"sv },
-        // Decor scale limits
         { "housingExpertDecor_Scale_Indoor_Min"sv, "0.200000"sv },
         { "housingExpertDecor_Scale_Indoor_Max"sv, "2.000000"sv },
         { "housingExpertDecor_Scale_Outdoor_Min"sv, "0.200000"sv },
         { "housingExpertDecor_Scale_Outdoor_Max"sv, "2.000000"sv },
-        // Screenshot report thresholds
         { "housingDecorReportScreenshotFacingDotThreshold"sv, "0.500000"sv },
         { "housingDecorReportScreenshotDistanceThreshold"sv, "150.000000"sv },
-        // Market telemetry throttles — sniff-verified against build 12.0.1.66838,
-        // SMSG_MIRROR_VARS at packet idx 9976 (dump_12.0.1.66838_2026-04-15_09-35-59).
-        // The client reads these before it will send any SMSG_HOUSING_MARKET_*
-        // telemetry CMSGs; without them the market UI may throttle-fail silently.
+        { "housingMarketEnabled"sv, "1"sv },
+        { "housingMarketShopEnabled"sv, "1"sv },
+        { "housingMarketCartFullRemoveEnabled"sv, "1"sv },
         { "housingMarketViewInStoreTelemThrottle"sv, "5"sv },
         { "housingMarketViewBundleTelemThrottle"sv, "10"sv },
         { "housingMarketAddToCartTelemThrottle"sv, "15"sv },
         { "housingMarketClearCartTelemThrottle"sv, "5"sv },
         { "housingMarketRemoveFromCartTelemThrottle"sv, "20"sv },
         { "housingMarketThrottleTimePeriodMs"sv, "10000"sv },
-    };
+    });
+
+    // Sent in the world only; the character screen list does not have it.
+    if (inWorld)
+        vars.emplace_back("minNeighborhoodGroupMembers"sv, "3"sv);
+}
+
+void WorldSession::SendHousingMirrorVars()
+{
+    std::vector<WorldPackets::System::MirrorVarSingle> vars;
+    AppendHousingMirrorVars(vars, true);
 
     WorldPackets::System::MirrorVars variables;
     variables.Variables = vars;
     SendPacket(variables.Write());
-
 }
 
 void WorldSession::UpdateTimerunningSeason()

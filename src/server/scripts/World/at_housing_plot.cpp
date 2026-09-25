@@ -18,7 +18,6 @@
 #include "ScriptMgr.h"
 #include "AreaTrigger.h"
 #include "AreaTriggerAI.h"
-#include "EventProcessor.h"
 #include "Housing.h"
 #include "HousingDefines.h"
 #include "HousingMap.h"
@@ -27,8 +26,6 @@
 #include "WorldSession.h"
 #include "Neighborhood.h"
 #include "NeighborhoodMgr.h"
-#include "ObjectAccessor.h"
-#include "PhasingHandler.h"
 #include "Player.h"
 
 // 12.0.5 plot-entry mechanism:
@@ -69,7 +66,7 @@ struct at_housing_plot : AreaTriggerAI
         ObjectGuid houseGuid = plotInfo ? plotInfo->HouseGuid : ObjectGuid::Empty;
 
         // Any character of the house's Battle.net account is on its own plot; anyone else is a visitor, checked
-        // against the house's settings. The door uses the same check (Neighborhood::CheckHouseEntry).
+        // against the house's settings. Entering the house uses the same check (Neighborhood::CheckHouseEntry).
         bool isOwnPlot = false;
         if (!houseGuid.IsEmpty())
         {
@@ -106,26 +103,8 @@ struct at_housing_plot : AreaTriggerAI
             housingMap->SendPlotEnterSpellPackets(player, static_cast<uint8>(plotIdx));
         }
 
-        // Cosmetic phase shift: owner entering own plot removes 16 cosmetic phases
-        // after a ~10 second delay (sniff-verified retail behavior).
-        if (isOwnPlot)
-        {
-            ObjectGuid playerGuid = player->GetGUID();
-            player->m_Events.AddEventAtOffset([playerGuid]()
-            {
-                Player* p = ObjectAccessor::FindPlayer(playerGuid);
-                if (!p || !p->IsInWorld())
-                    return;
-
-                for (uint32 i = 0; i < HOUSING_COSMETIC_PHASE_COUNT; ++i)
-                    PhasingHandler::RemovePhase(p, HOUSING_COSMETIC_PHASES[i], false);
-
-                PhasingHandler::SendToPlayer(p);
-
-                TC_LOG_DEBUG("housing", "at_housing_plot: Removed {} cosmetic phases for plot owner {}",
-                    HOUSING_COSMETIC_PHASE_COUNT, playerGuid.ToString());
-            }, Milliseconds(HOUSING_COSMETIC_PHASE_DELAY_MS));
-        }
+        // Entering her own plot changes no phase: no capture shows that. Retail changes phases on tutorial quest
+        // steps instead (hbcd3 716276, after "(Quest) Let's go!").
 
         TC_LOG_DEBUG("housing", "at_housing_plot: Player {} entered plot {} AT {} (own={}, owner={}, dedup={})",
             player->GetGUID().ToString(), plotIdx, at->GetGUID().ToString(), isOwnPlot,
@@ -159,26 +138,6 @@ struct at_housing_plot : AreaTriggerAI
         // 12.0.5 plot-leave: clear PlayerHouseInfoComponent.CurrentHouse so the client's
         // NeighborhoodSystem TLS drops its "on plot" flag.
         player->SetCurrentHouse(ObjectGuid::Empty);
-
-        // Restore cosmetic phases when owner leaves.
-        if (isOwnPlot)
-        {
-            ObjectGuid playerGuid = player->GetGUID();
-            player->m_Events.AddEventAtOffset([playerGuid]()
-            {
-                Player* p = ObjectAccessor::FindPlayer(playerGuid);
-                if (!p || !p->IsInWorld())
-                    return;
-
-                for (uint32 i = 0; i < HOUSING_COSMETIC_PHASE_COUNT; ++i)
-                    PhasingHandler::AddPhase(p, HOUSING_COSMETIC_PHASES[i], false);
-
-                PhasingHandler::SendToPlayer(p);
-
-                TC_LOG_DEBUG("housing", "at_housing_plot: Restored {} cosmetic phases for plot owner {}",
-                    HOUSING_COSMETIC_PHASE_COUNT, playerGuid.ToString());
-            }, Milliseconds(HOUSING_COSMETIC_PHASE_DELAY_MS));
-        }
 
         TC_LOG_DEBUG("housing", "at_housing_plot: Player {} left plot AT {} (own={})",
             player->GetGUID().ToString(), at->GetGUID().ToString(), isOwnPlot);

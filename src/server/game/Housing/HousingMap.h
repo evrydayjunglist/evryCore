@@ -88,6 +88,10 @@ public:
     void DespawnDoorGO(uint8 plotIndex);
     GameObject* GetHouseGameObject(uint8 plotIndex);
     int8 GetPlotIndexForHouseGO(ObjectGuid goGuid) const;
+    // The house front door the player is using: of this map's house doors whose goober spell is gooberSpellId, the
+    // nearest one she can reach, with the plot of its house. The house is the one the door's CreatedBy names when it
+    // names one, otherwise the plot the door was spawned for. Null when she stands at none.
+    GameObject* FindHouseDoorInReach(Player const* player, uint32 gooberSpellId, uint8& plotIndex);
     uint32 GetHouseGameObjectCount() const { return static_cast<uint32>(_houseGameObjects.size()); }
 
     // House-exterior root mirror (HighGuid::Entity, objectType=18). Carries the

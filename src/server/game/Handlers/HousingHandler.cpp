@@ -51,6 +51,11 @@
 #include "Spell.h"
 #include "SpellAuraDefines.h"
 #include "SpellMgr.h"
+#include "SpellInfo.h"
+#include "GossipDef.h"
+#include "QuestDef.h"
+#include "StringFormat.h"
+#include "QueryCallback.h"
 #include "SpellPackets.h"
 #include "UpdateData.h"
 #include "World.h"
@@ -3879,21 +3884,8 @@ void WorldSession::HandleHousingSvcsTeleportToPlot(WorldPackets::Housing::Housin
     if (!player)
         return;
 
-    // If the player is currently inside a house interior, this dashboard teleport is also a way out of it. No house
-    // status goes out: retail sends that only in answer to the client's own request.
-    if (dynamic_cast<HouseInteriorMap*>(player->GetMap()))
-    {
-        if (Housing* interiorHousing = player->GetHousing())
-        {
-            interiorHousing->SetEditorMode(HOUSING_EDITOR_MODE_NONE);
-            interiorHousing->SetInInterior(false);
-
-            // 12.0.5: SMSG_HOUSE_INTERIOR_LEAVE_HOUSE_RESPONSE gone. Clear
-            // PlayerHouseInfoComponent.CurrentHouse so the client fires its
-            // house-exit callback via the UpdateField-change mechanism.
-            player->SetCurrentHouse(ObjectGuid::Empty);
-        }
-    }
+    // Leaving a house interior this way is handled when she leaves the interior map (HouseInteriorMap::
+    // RemovePlayerFromMap), once the cast has finished, not here: the cast can still be interrupted.
 
     Neighborhood* neighborhood = sNeighborhoodMgr.ResolveNeighborhood(housingSvcsTeleportToPlot.NeighborhoodGuid, player);
     if (!neighborhood)
@@ -3922,19 +3914,15 @@ void WorldSession::HandleHousingSvcsTeleportToPlot(WorldPackets::Housing::Housin
         }
     }
 
-    // The client sends the DB2 NeighborhoodPlot.PlotIndex directly (0-54 per map).
-    // Confirmed via IDA decompilation: C_Housing.TeleportHome() passes plotID from
-    // PushHouseFinderPlotInfo which reads the DB2 PlotIndex field. Sniff-verified:
-    // PlotIndex=41 in CMSG matches DB2 entry for NeighborhoodMapID=1.
+    // The client sends NeighborhoodPlot.PlotIndex (0-54 on each map).
     uint32 plotIndex = housingSvcsTeleportToPlot.PlotIndex;
 
-    TC_LOG_INFO("housing", "HandleHousingSvcsTeleportToPlot: PlotIndex={} OwnerGuid={} TeleportType={} NeighborhoodGUID={}",
-        plotIndex, housingSvcsTeleportToPlot.OwnerGuid.ToString(), housingSvcsTeleportToPlot.TeleportType,
+    TC_LOG_INFO("housing", "HandleHousingSvcsTeleportToPlot: PlotIndex={} HouseGuid={} TeleportType={} NeighborhoodGUID={}",
+        plotIndex, housingSvcsTeleportToPlot.HouseGuid.ToString(), housingSvcsTeleportToPlot.TeleportType,
         housingSvcsTeleportToPlot.NeighborhoodGuid.ToString());
 
-    // Look up the neighborhood map data for map ID and plot positions
-    NeighborhoodMapData const* mapData = sHousingMgr.GetNeighborhoodMapData(neighborhood->GetNeighborhoodMapID());
-    if (!mapData)
+    WorldLocation arrival;
+    if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS || !sHousingMgr.GetPlotArrival(neighborhood->GetNeighborhoodMapID(), uint8(plotIndex), arrival))
     {
         WorldPackets::Housing::HousingSvcsNotifyPermissionsFailure response;
         response.FailureType = static_cast<uint8>(HOUSING_RESULT_PLOT_NOT_FOUND);
@@ -3942,51 +3930,33 @@ void WorldSession::HandleHousingSvcsTeleportToPlot(WorldPackets::Housing::Housin
         return;
     }
 
-    // Find the DB2 plot matching the client's PlotIndex
-    std::vector<NeighborhoodPlotData const*> plots = sHousingMgr.GetPlotsForMap(neighborhood->GetNeighborhoodMapID());
-    NeighborhoodPlotData const* targetPlot = nullptr;
-    for (NeighborhoodPlotData const* plot : plots)
+    // Per-house access check: verify visitor has permission to access this plot.
+    // Owner can be offline — fall back to the persisted plotInfo->HouseSettingsFlags
+    // (mirrored from character_housing.settingsFlags at neighborhood preload).
+    if (!livesHere)
     {
-        if (plot->PlotIndex == static_cast<int32>(plotIndex))
+        Neighborhood::HouseEntry entry = neighborhood->CheckHouseEntry(player, static_cast<uint8>(plotIndex), false);
+        if (!entry.HouseGuid.IsEmpty() && !entry.Allowed)
         {
-            targetPlot = plot;
-            break;
+            WorldPackets::Housing::HousingSvcsNotifyPermissionsFailure denied;
+            denied.FailureType = static_cast<uint8>(HOUSING_RESULT_PERMISSION_DENIED);
+            SendPacket(denied.Write());
+            TC_LOG_DEBUG("housing", "HandleHousingSvcsTeleportToPlot: Player {} denied access to plot {} (settingsFlags=0x{:X})",
+                player->GetGUID().ToString(), plotIndex, entry.SettingsFlags);
+            return;
         }
     }
 
-    if (targetPlot)
-    {
-        // Per-house access check: verify visitor has permission to access this plot.
-        // Owner can be offline — fall back to the persisted plotInfo->HouseSettingsFlags
-        // (mirrored from character_housing.settingsFlags at neighborhood preload).
-        if (!livesHere)
-        {
-            Neighborhood::HouseEntry entry = neighborhood->CheckHouseEntry(player, static_cast<uint8>(plotIndex), false);
-            if (!entry.HouseGuid.IsEmpty() && !entry.Allowed)
-            {
-                WorldPackets::Housing::HousingSvcsNotifyPermissionsFailure denied;
-                denied.FailureType = static_cast<uint8>(HOUSING_RESULT_PERMISSION_DENIED);
-                SendPacket(denied.Write());
-                TC_LOG_DEBUG("housing", "HandleHousingSvcsTeleportToPlot: Player {} denied access to plot {} (settingsFlags=0x{:X})",
-                    player->GetGUID().ToString(), plotIndex, entry.SettingsFlags);
-                return;
-            }
-        }
+    // Retail casts Teleport Home on her, 10 seconds, with the plot's arrival point and the neighborhood as its target
+    // (hbcd3 2044258). The spell's teleport effect has no destination of its own.
+    SpellCastTargets targets;
+    targets.SetServerChosenDst(arrival);
+    targets.SetHousingTarget(neighborhood->GetGuid());
+    SpellCastResult result = player->CastSpell(CastSpellTargetArg(std::move(targets)), SPELL_HOUSING_TELEPORT_HOME);
 
-        player->TeleportTo(mapData->MapID, targetPlot->TeleportPosition[0], targetPlot->TeleportPosition[1],
-            targetPlot->TeleportPosition[2], 0.0f);
-
-        TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_TELEPORT_TO_PLOT: Teleporting player {} to plot {} on map {}",
-            player->GetGUID().ToString(), plotIndex, mapData->MapID);
-    }
-    else
-    {
-        player->TeleportTo(mapData->MapID, mapData->Origin[0], mapData->Origin[1],
-            mapData->Origin[2], 0.0f);
-
-        TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_TELEPORT_TO_PLOT: Plot {} not found in DB2, teleporting to neighborhood origin on map {}",
-            plotIndex, mapData->MapID);
-    }
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_TELEPORT_TO_PLOT: {} casts {} towards plot {} on map {} ({:.4f}, {:.4f}, {:.4f}, facing {:.7f}): result {}",
+        player->GetGUID().ToString(), SPELL_HOUSING_TELEPORT_HOME, plotIndex, arrival.GetMapId(), arrival.GetPositionX(),
+        arrival.GetPositionY(), arrival.GetPositionZ(), arrival.GetOrientation(), uint32(result));
 }
 
 void WorldSession::HandleHousingSvcsStartTutorial(WorldPackets::Housing::HousingSvcsStartTutorial const& /*housingSvcsStartTutorial*/)
@@ -4020,79 +3990,160 @@ void WorldSession::HandleHousingSvcsStartTutorial(WorldPackets::Housing::Housing
         return;
     }
 
-    // Step 1: Find or create a tutorial neighborhood for the player's faction.
-    // The tutorial only needs a neighborhood to exist so the map instance can be
-    // created. It does NOT grant membership — that happens when the player buys a plot.
+    // The district needs a neighborhood for its map instance. This does not make her a member; buying a plot does.
+    // It is looked up here, because this handler runs on the world thread and finding one can create one; the
+    // Warband query below answers on whichever thread updates her session, which can be a map's.
     Neighborhood* neighborhood = sNeighborhoodMgr.FindOrCreatePublicNeighborhood(player->GetTeam());
-
-    if (neighborhood)
-    {
-        TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: Player {} assigned to neighborhood '{}' ({})",
-            player->GetGUID().ToString(), neighborhood->GetName(), neighborhood->GetGuid().ToString());
-
-        // Send empty house status — the player has no house yet during tutorial.
-        // HouseStatus=1 would tell the client "you own a house" which prevents
-        // the Cornerstone purchase UI from showing. Neighborhood context is
-        // provided separately via SMSG_HOUSING_GET_CURRENT_HOUSE_INFO_RESPONSE
-        // when the player enters the HousingMap.
-        WorldPackets::Housing::HousingHouseStatusResponse statusResponse;
-        SendPacket(statusResponse.Write());
-    }
-    else
+    if (!neighborhood)
     {
         TC_LOG_ERROR("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: Failed to find/create tutorial neighborhood for player {}",
             player->GetGUID().ToString());
 
-        // Notify client of failure
         WorldPackets::Housing::HousingSvcsNotifyPermissionsFailure failResponse;
         failResponse.FailureType = static_cast<uint8>(HOUSING_RESULT_NEIGHBORHOOD_NOT_FOUND);
         SendPacket(failResponse.Write());
         return;
     }
 
-    // Step 2: Auto-accept the "My First Home" quest (91863) so the player can
-    // progress through the tutorial by interacting with the steward NPC.
-    // Skip if already completed (account-wide warband quest) or already in quest log.
-    static constexpr uint32 QUEST_MY_FIRST_HOME = 91863;
-    if (Quest const* quest = sObjectMgr->GetQuestTemplate(QUEST_MY_FIRST_HOME))
+    ObjectGuid neighborhoodGuid = neighborhood->GetGuid();
+    std::string neighborhoodName = neighborhood->GetName();
+
+    // Blizzard's dashboard offers Start Tutorial only while "My First Home" is not completed anywhere on the
+    // account (Blizzard_HousingTutorialsUtil.lua, line 54), so a request after that is refused. Her own turn-in may
+    // not be saved yet, so it is checked here first.
+    if (player->GetQuestRewardStatus(QUEST_HOUSING_MY_FIRST_HOME))
     {
-        QuestStatus status = player->GetQuestStatus(QUEST_MY_FIRST_HOME);
-        if (status == QUEST_STATUS_NONE)
-        {
-            // Quest not in log and not yet rewarded — safe to add
-            if (player->CanAddQuest(quest, true))
-            {
-                player->AddQuestAndCheckCompletion(quest, nullptr);
-                TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: Auto-accepted quest {} for player {}",
-                    QUEST_MY_FIRST_HOME, player->GetGUID().ToString());
-            }
-        }
-        else if (status == QUEST_STATUS_REWARDED)
-        {
-            TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: Quest {} already completed (warband) for player {}, skipping",
-                QUEST_MY_FIRST_HOME, player->GetGUID().ToString());
-        }
-        else
-        {
-            TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: Quest {} already in log (status {}) for player {}, skipping",
-                QUEST_MY_FIRST_HOME, uint32(status), player->GetGUID().ToString());
-        }
+        StartHousingTutorial(true, neighborhoodGuid, neighborhoodName);
+        return;
     }
 
-    // Step 3: Teleport the player to the housing neighborhood via faction-specific spell.
-    // Alliance: 1258476 -> Founder's Point (map 2735)
-    // Horde:    1258484 -> Razorwind Shores (map 2736)
-    static constexpr uint32 SPELL_HOUSING_TUTORIAL_ALLIANCE = 1258476;
-    static constexpr uint32 SPELL_HOUSING_TUTORIAL_HORDE    = 1258484;
+    QueryWarbandQuestRewarded(QUEST_HOUSING_MY_FIRST_HOME, [this, neighborhoodGuid, neighborhoodName](bool rewarded)
+    {
+        StartHousingTutorial(rewarded, neighborhoodGuid, neighborhoodName);
+    });
+}
 
-    uint32 spellId = player->GetTeam() == HORDE
-        ? SPELL_HOUSING_TUTORIAL_HORDE
-        : SPELL_HOUSING_TUTORIAL_ALLIANCE;
+void WorldSession::StartHousingTutorial(bool warbandCompletedMyFirstHome, ObjectGuid const& neighborhoodGuid, std::string const& neighborhoodName)
+{
+    Player* player = GetPlayer();
+    if (!player || !player->IsInWorld())
+        return;
 
-    player->CastSpell(player, spellId, false);
+    if (warbandCompletedMyFirstHome)
+    {
+        WorldPackets::Housing::HousingSvcsNotifyPermissionsFailure failResponse;
+        failResponse.FailureType = static_cast<uint8>(HOUSING_RESULT_GENERIC_FAILURE);
+        SendPacket(failResponse.Write());
 
-    TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: Player {} ({}) casting tutorial spell {}",
-        player->GetGUID().ToString(), player->GetTeam() == HORDE ? "Horde" : "Alliance", spellId);
+        TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: refused for {}, the Warband has completed quest {}",
+            player->GetGUID().ToString(), QUEST_HOUSING_MY_FIRST_HOME);
+        return;
+    }
+
+    // Retail sent nothing between the request and the move to the district: the 10 second cast, then NEW_WORLD
+    // (hbcd3 352402-356147). The cast takes her destination from the database; without the spell or that row there
+    // is no retail way there, so she stays where she is.
+    uint32 spellId = player->GetTeam() == HORDE ? SPELL_HOUSING_TELEPORT_TO_RAZORWIND_SHORES : SPELL_HOUSING_TELEPORT_TO_FOUNDERS_POINT;
+    if (!sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+    {
+        TC_LOG_ERROR("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: spell {} is missing, {} stays where she is",
+            spellId, player->GetGUID().ToString());
+        return;
+    }
+
+    if (!sSpellMgr->GetSpellTargetPosition(spellId, EFFECT_0))
+    {
+        TC_LOG_ERROR("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: spell {} has no spell_target_position row for effect 0, {} stays where she is",
+            spellId, player->GetGUID().ToString());
+        return;
+    }
+
+    SpellCastResult result = player->CastSpell(player, spellId);
+
+    TC_LOG_DEBUG("housing", "CMSG_HOUSING_SVCS_START_TUTORIAL: {} ({}) casts {} for neighborhood '{}' ({}): result {}",
+        player->GetGUID().ToString(), player->GetTeam() == HORDE ? "Horde" : "Alliance", spellId, neighborhoodName,
+        neighborhoodGuid.ToString(), uint32(result));
+}
+
+void WorldSession::QueryWarbandQuestRewarded(uint32 questId, std::function<void(bool)>&& callback)
+{
+    // A character's rewarded quests are in character_queststatus_rewarded, keyed by character; the Battle.net account
+    // reaches its characters through its game accounts.
+    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_GAME_ACCOUNT_IDS);
+    stmt->setUInt32(0, GetBattlenetAccountId());
+    std::shared_ptr<std::function<void(bool)>> done = std::make_shared<std::function<void(bool)>>(std::move(callback));
+    GetQueryProcessor().AddCallback(LoginDatabase.AsyncQuery(stmt)
+        .WithChainingPreparedCallback([questId, done](QueryCallback& chain, PreparedQueryResult gameAccounts)
+        {
+            std::string accountIds;
+            if (gameAccounts)
+            {
+                do
+                {
+                    if (!accountIds.empty())
+                        accountIds += ',';
+                    accountIds += std::to_string(gameAccounts->Fetch()[0].GetUInt32());
+                } while (gameAccounts->NextRow());
+            }
+
+            // No game account: ask for nothing that can match, so the answer is "not turned in".
+            if (accountIds.empty())
+                accountIds = "0";
+
+            chain.SetNextQuery(CharacterDatabase.AsyncQuery(Trinity::StringFormat(
+                "SELECT 1 FROM character_queststatus_rewarded r JOIN characters c ON c.guid = r.guid "
+                "WHERE r.quest = {} AND r.active = 1 AND c.account IN ({}) LIMIT 1", questId, accountIds).c_str()));
+        })
+        .WithCallback([done](QueryResult rewarded)
+        {
+            (*done)(rewarded != nullptr);
+        }));
+}
+
+void WorldSession::OfferHousingBreadcrumbQuest()
+{
+    Player* player = GetPlayer();
+    if (!player)
+        return;
+
+    // The same gates as Start Tutorial: no offer while housing tutorials are switched off, or while her account or
+    // level keeps her out of housing.
+    if (!sWorld->getBoolConfig(CONFIG_HOUSING_TUTORIALS_ENABLED) || ShouldShowHousingWarning(player) != HOUSING_WARNING_NONE)
+        return;
+
+    if (!sObjectMgr->GetQuestTemplate(QUEST_HOUSING_A_HOUSE_FOR_YOU))
+        return;
+
+    // Only a character who has neither quest yet; the Warband check below covers the other characters.
+    if (player->GetQuestStatus(QUEST_HOUSING_A_HOUSE_FOR_YOU) != QUEST_STATUS_NONE
+        || player->GetQuestStatus(QUEST_HOUSING_MY_FIRST_HOME) != QUEST_STATUS_NONE)
+        return;
+
+    // How retail hands out "A House For You" is not captured: the captured character already held "My First Home"
+    // (hbcd3 187000). It is offered at login, the way a quest-start spell offers an auto-accept quest, while no
+    // character of the Warband has turned in "My First Home". Entering either district completes it, and "My First
+    // Home" follows through its RewardNextQuest.
+    QueryWarbandQuestRewarded(QUEST_HOUSING_MY_FIRST_HOME, [this](bool rewarded)
+    {
+        Player* player = GetPlayer();
+        if (rewarded || !player || !player->IsInWorld())
+            return;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(QUEST_HOUSING_A_HOUSE_FOR_YOU);
+        if (!quest || player->GetQuestStatus(QUEST_HOUSING_A_HOUSE_FOR_YOU) != QUEST_STATUS_NONE
+            || player->GetQuestStatus(QUEST_HOUSING_MY_FIRST_HOME) != QUEST_STATUS_NONE || !player->CanTakeQuest(quest, false))
+            return;
+
+        if (quest->IsAutoAccept() && player->CanAddQuest(quest, false))
+        {
+            player->AddQuestAndCheckCompletion(quest, player);
+            player->PlayerTalkClass->SendQuestGiverQuestDetails(quest, player->GetGUID(), true, true);
+        }
+        else
+            player->PlayerTalkClass->SendQuestGiverQuestDetails(quest, player->GetGUID(), true, false);
+
+        TC_LOG_DEBUG("housing", "Offered quest {} to {} at login", QUEST_HOUSING_A_HOUSE_FOR_YOU, player->GetGUID().ToString());
+    });
 }
 
 // Removed 2026-04-24: HandleHousingSvcsSetTutorialState / CompleteTutorialStep /

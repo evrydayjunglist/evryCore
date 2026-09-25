@@ -19646,6 +19646,14 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     {
         SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
             .ModifyValue(&UF::PlayerHouseInfoComponentData::EditorMode), uint8(0));
+
+        // Every retail player create carries these charter values, a second character of the account as well
+        // (hbcd3 211188-211193, hf1 939207-939220).
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
+            .ModifyValue(&UF::PlayerHouseInfoComponentData::Charter).ModifyValue(&UF::NeighborhoodCharter::Field_0), 1);
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerHouseInfoComponentData, 0)
+            .ModifyValue(&UF::PlayerHouseInfoComponentData::Charter).ModifyValue(&UF::NeighborhoodCharter::Field_4), -1);
+
         m_entityFragments.Add(WowCS::EntityFragment::PlayerHouseInfoComponent_C, false,
             WowCS::GetRawFragmentData(m_playerHouseInfoComponentData));
     }
@@ -26147,6 +26155,10 @@ void Player::SendInitialPacketsBeforeAddToMap()
     }
 
     GetSession()->SendTimeSync();
+
+    // Retail repeats the housing mirror variables in the world after login and after each map change (hbcd3 167415,
+    // 356261, 1456481).
+    GetSession()->SendHousingMirrorVars();
 
     /// Pass 'this' as argument because we're not stored in ObjectAccessor yet
     GetSocial()->SendSocialList(this, SOCIAL_FLAG_ALL);

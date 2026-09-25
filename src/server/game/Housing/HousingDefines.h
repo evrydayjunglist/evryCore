@@ -839,6 +839,34 @@ constexpr char const HOUSING_WORLD_TEXT_NEIGHBORLY[] = "|cnYELLOW_FONT_COLOR:+Ne
 // 1248306 (kill credit 248858, "Acquire a house" of quest 91863), 1253658, 1253555 and the scene 1260705.
 static constexpr uint32 SPELL_HOUSE_PURCHASE_COVER      = 1253572;
 
+// Start Tutorial: a 10 second cast that takes the character to her faction's district. The destination is effect 0's
+// spell_target_position row (TELEPORT_UNITS towards TARGET_DEST_DB), and effect 1 force-casts 1262673, which keeps
+// where she came from (hbcd3 352402-356147).
+static constexpr uint32 SPELL_HOUSING_TELEPORT_TO_RAZORWIND_SHORES = 1258484;
+static constexpr uint32 SPELL_HOUSING_TELEPORT_TO_FOUNDERS_POINT   = 1258476;
+
+// Teleport Home: the 10 second cast retail answers CMSG_HOUSING_SVCS_TELEPORT_TO_PLOT with. Its teleport effect has
+// no database destination, so the server gives the cast the plot's arrival point (hbcd3 2044258).
+static constexpr uint32 SPELL_HOUSING_TELEPORT_HOME = 1233637;
+
+// The front door's goober spell, cast by the character on herself after the door opens (hbcd3 1343025-1343064).
+// Retail's client has no record of it; the world database supplies a server-side one.
+static constexpr uint32 SPELL_HOUSING_ENTER_HOUSE = 1234192;
+
+// "Exit House", the goober spell of the door inside the house (hbcd3 1456142-1456181).
+static constexpr uint32 SPELL_HOUSING_EXIT_HOUSE = 1234193;
+
+// Where a character lands inside a house interior (hbcd3 1344674, NEW_WORLD to map 2783).
+static constexpr float HOUSE_INTERIOR_ARRIVAL_X = -1000.0f;
+static constexpr float HOUSE_INTERIOR_ARRIVAL_Y = -1000.0f;
+static constexpr float HOUSE_INTERIOR_ARRIVAL_Z = 0.1f;
+static constexpr float HOUSE_INTERIOR_ARRIVAL_O = 0.0f;
+
+// "A House For You", an auto-accept breadcrumb completed by entering either district, and "My First Home", the
+// tutorial quest it leads to through RewardNextQuest.
+static constexpr uint32 QUEST_HOUSING_A_HOUSE_FOR_YOU = 93057;
+static constexpr uint32 QUEST_HOUSING_MY_FIRST_HOME   = 91863;
+
 // Spell applied during housing decor edit mode (creates "phased-out" visual effect)
 // Sniff: aura slot 51, Flags=NoCaster, ActiveFlags=15, CastLevel=36
 static constexpr uint32 SPELL_HOUSING_EDIT_MODE_AURA    = 1263303;
@@ -900,20 +928,6 @@ inline uint32 MakeHousingPlotWorldStateId(uint32 neighborhoodMapId, uint32 plotI
 {
     return WORLDSTATE_HOUSING_PLOT_BASE + (neighborhoodMapId * 100u) + plotIndex;
 }
-
-// Cosmetic phases removed when a player enters their own housing plot and
-// restored when they leave. Sniff-verified: 16 phases with ~10s delay.
-static constexpr uint32 HOUSING_COSMETIC_PHASES[] =
-{
-    25571, 26216, 27429, 27442, 27489, 27695,
-    28304, 28312, 28313, 28314, 28315, 28316,
-    28320, 28339, 28370, 28748
-};
-
-static constexpr uint32 HOUSING_COSMETIC_PHASE_COUNT = sizeof(HOUSING_COSMETIC_PHASES) / sizeof(HOUSING_COSMETIC_PHASES[0]);
-
-// Delay in milliseconds before cosmetic phase shifts take effect on plot enter/leave
-static constexpr uint32 HOUSING_COSMETIC_PHASE_DELAY_MS = 10000;
 
 // Room grid spacing for interior maps (sniff-verified: ~24 yards between room centers)
 static constexpr float HOUSING_ROOM_GRID_SPACING = 24.0f;
@@ -986,9 +1000,8 @@ static constexpr uint32 HOUSE_INTERIOR_MAP_ID = 2783;
 // room origin from FloorIndex lands on the wrong floor.
 static constexpr float HOUSE_INTERIOR_FLOOR_HEIGHT = 12.0f;
 
-// Interior front-door GameObjects, picked by faction in HouseInteriorMap. Unlike the exterior
-// doors these are NOT reachable from ExteriorComponent (Type 11), so HousingMgr has to bind the
-// go_housing_door script to them explicitly - without it the door inside the house is inert.
+// Doors inside the house, picked by faction in HouseInteriorMap. Unlike the exterior doors they are not reachable
+// from ExteriorComponent (Type 11). Using one casts its goober spell, Exit House.
 static constexpr uint32 INTERIOR_DOOR_GO_ALLIANCE = 575017; // displayId 113554
 static constexpr uint32 INTERIOR_DOOR_GO_HORDE    = 587318;
 

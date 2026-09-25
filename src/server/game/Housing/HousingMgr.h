@@ -274,6 +274,13 @@ public:
     // lowers the house onto the ground: NeighborhoodPlot.HousePosition, facing HouseRotation.z or, where the DB2 leaves
     // the rotation empty, towards the cornerstone. False when the map has no such plot.
     bool GetPlotHouseFrame(uint32 neighborhoodMapId, uint8 plotIndex, Position& frame) const;
+    // Where a character arrives on a plot: NeighborhoodPlot.TeleportPosition, facing CornerstoneRotation.z, on the
+    // neighborhood's world map. Retail lands her there after Teleport Home (hbcd3 2044258) and after Exit House
+    // (hbcd3 1456426), both at 902.6711, -542.7863, 1.9622 facing 4.5902157 for plot 13 of Razorwind Shores. The
+    // TeleportFacing column (1.570796 for that plot) is not what retail used.
+    static WorldLocation MakePlotArrival(NeighborhoodPlotData const& plot, uint32 worldMapId);
+    // False when the neighborhood map, its world map or the plot is unknown.
+    bool GetPlotArrival(uint32 neighborhoodMapId, uint8 plotIndex, WorldLocation& arrival) const;
 
     // Resolve the canonical DB2 PlotIndex from a client-supplied GUID.
     // The client sends the cornerstone GO GUID as "NeighborhoodGuid" in many CMSGs.

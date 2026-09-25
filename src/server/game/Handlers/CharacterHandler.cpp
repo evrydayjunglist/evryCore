@@ -1714,6 +1714,9 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     for (Neighborhood const* neighborhood : sNeighborhoodMgr.GetNeighborhoodsForAccount(pCurrChar))
         neighborhood->BroadcastMemberStatus(pCurrChar->GetGUID(), true);
 
+    // "A House For You" for a character whose Warband has not finished the housing tutorial.
+    OfferHousingBreadcrumbQuest();
+
     TC_METRIC_EVENT("player_events", "Login", pCurrChar->GetName());
 }
 

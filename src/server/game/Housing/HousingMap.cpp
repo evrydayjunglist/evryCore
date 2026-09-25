@@ -1219,8 +1219,7 @@ void HousingMap::RemovePlayerFromMap(Player* player, bool remove)
     // H-20: plot tracking is cleared for EVERY player leaving, not just those who own
     // a house here. It used to sit inside the branch above, so a visitor's entry
     // survived their visit and lived as long as the map instance - which, since
-    // housing maps never unload, means forever. It also fed a stale plot index to the
-    // go_housing_door fallback on a later visit.
+    // housing maps never unload, means forever.
     ClearPlayerCurrentPlot(player->GetGUID());
 
     RemovePlayerHousing(player);
@@ -2868,11 +2867,9 @@ uint32 HousingMap::SpawnExtCompTree(uint8 plotIndex, uint32 extCompID,
                 if (AddToMap(doorGo))
                 {
                     _houseGameObjects[plotIndex] = doorGo->GetGUID();
-                    // Door interaction lives entirely in go_housing_door::OnGossipHello, so a GO that
-                    // spawns without that AI is silently inert (click -> goober animation, no teleport).
-                    TC_LOG_INFO("housing", "SpawnExtCompTree: Door GO {} scriptId={} templateScriptId={} scriptedAI={}",
-                        doorGoEntry, doorGo->GetScriptId(), doorGo->GetGOInfo()->ScriptId,
-                        sScriptMgr->CanCreateGameObjectAI(doorGo->GetScriptId()));
+                    // Using the door casts its goober spell, which takes the character inside.
+                    TC_LOG_INFO("housing", "SpawnExtCompTree: Door GO {} goober spell {}",
+                        doorGoEntry, doorGo->GetGOInfo()->type == GAMEOBJECT_TYPE_GOOBER ? doorGo->GetGOInfo()->goober.spell : 0);
                     TC_LOG_INFO("housing", "SpawnExtCompTree: Door GO spawned blizzlike — entry={} guid={} "
                         "at ({:.1f},{:.1f},{:.1f}) for comp={} (hook local: {:.1f},{:.1f},{:.1f}) exitPt=({:.1f},{:.1f},{:.1f}) plot={}",
                         doorGoEntry, doorGo->GetGUID().ToString(),
@@ -3459,6 +3456,39 @@ int8 HousingMap::GetPlotIndexForHouseGO(ObjectGuid goGuid) const
             return static_cast<int8>(plotIndex);
     }
     return -1;
+}
+
+GameObject* HousingMap::FindHouseDoorInReach(Player const* player, uint32 gooberSpellId, uint8& plotIndex)
+{
+    GameObject* nearest = nullptr;
+    float nearestDistSq = 0.0f;
+    for (auto const& [doorPlotIndex, doorGuid] : _houseGameObjects)
+    {
+        GameObject* door = GetGameObject(doorGuid);
+        if (!door || door->GetGoType() != GAMEOBJECT_TYPE_GOOBER || door->GetGOInfo()->goober.spell != gooberSpellId)
+            continue;
+
+        if (!door->IsAtInteractDistance(player))
+            continue;
+
+        float distSq = door->GetExactDistSq(player);
+        if (nearest && distSq >= nearestDistSq)
+            continue;
+
+        nearest = door;
+        nearestDistSq = distSq;
+        plotIndex = doorPlotIndex;
+    }
+
+    if (nearest && _neighborhood)
+    {
+        ObjectGuid createdBy = nearest->GetCreatorGUID();
+        if (!createdBy.IsEmpty())
+            if (Neighborhood::PlotInfo const* plot = _neighborhood->GetPlotInfoByHouse(createdBy))
+                plotIndex = plot->PlotIndex;
+    }
+
+    return nearest;
 }
 
 // ============================================================

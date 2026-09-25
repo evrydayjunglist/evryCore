@@ -413,12 +413,12 @@ void HousingSvcsPlayerViewHousesByBnetAccount::Read()
 void HousingSvcsTeleportToPlot::Read()
 {
     _worldPacket >> NeighborhoodGuid;
-    _worldPacket >> OwnerGuid;
+    _worldPacket >> HouseGuid;
     _worldPacket >> PlotIndex;
     _worldPacket >> TeleportType;
 
-    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_TELEPORT_TO_PLOT NeighborhoodGuid: {} OwnerGuid: {} PlotIndex: {} TeleportType: {}",
-        NeighborhoodGuid.ToString(), OwnerGuid.ToString(), PlotIndex, TeleportType);
+    TC_LOG_DEBUG("network.opcode", "CMSG_HOUSING_SVCS_TELEPORT_TO_PLOT NeighborhoodGuid: {} HouseGuid: {} PlotIndex: {} TeleportType: {}",
+        NeighborhoodGuid.ToString(), HouseGuid.ToString(), PlotIndex, TeleportType);
 }
 
 // Removed 2026-04-24: HousingSvcsSetTutorialState / HousingSvcsCompleteTutorialStep

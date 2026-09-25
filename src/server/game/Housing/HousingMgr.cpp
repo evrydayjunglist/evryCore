@@ -583,6 +583,33 @@ bool HousingMgr::GetPlotHouseFrame(uint32 neighborhoodMapId, uint8 plotIndex, Po
     return false;
 }
 
+/*static*/ WorldLocation HousingMgr::MakePlotArrival(NeighborhoodPlotData const& plot, uint32 worldMapId)
+{
+    return WorldLocation(worldMapId, plot.TeleportPosition[0], plot.TeleportPosition[1], plot.TeleportPosition[2],
+        plot.CornerstoneRotation[2]);
+}
+
+bool HousingMgr::GetPlotArrival(uint32 neighborhoodMapId, uint8 plotIndex, WorldLocation& arrival) const
+{
+    uint32 worldMapId = GetWorldMapIdByNeighborhoodMapId(neighborhoodMapId);
+    if (!worldMapId)
+        return false;
+
+    auto itr = _plotsByMap.find(neighborhoodMapId);
+    if (itr == _plotsByMap.end())
+        return false;
+
+    for (NeighborhoodPlotData const* plot : itr->second)
+    {
+        if (!plot || plot->PlotIndex != int32(plotIndex))
+            continue;
+
+        arrival = MakePlotArrival(*plot, worldMapId);
+        return true;
+    }
+    return false;
+}
+
 NeighborhoodPlotData const* HousingMgr::GetPlotByCornerstoneEntry(uint32 neighborhoodMapId, uint32 cornerstoneGoEntry) const
 {
     auto itr = _plotsByMap.find(neighborhoodMapId);
@@ -1467,44 +1494,20 @@ void HousingMgr::EnsureDoorGameObjectTemplates()
     // clickable entrance GO. If the template doesn't exist, create one based on
     // the known working template (entry 586576, type 10/GOOBER).
     uint32 created = 0;
-    uint32 scripted = 0;
 
     GameObjectTemplate const* referenceTemplate = sObjectMgr->GetGameObjectTemplate(586576);
     uint32 referenceDisplayId = referenceTemplate ? referenceTemplate->displayId : 116973;
 
-    // Every door - whether it comes from the world DB or is synthesised below - must carry
-    // go_housing_door, because that script's OnGossipHello IS the "enter the house" handler.
-    // GameObject::Use() calls AI()->OnGossipHello() for every GO type, so with no ScriptName
-    // the click reaches the default AI, falls through to the GOOBER branch, plays the open
-    // animation and does nothing else: the door looked interactive (gear cursor, client sends
-    // CMSG_GAME_OBJ_USE) but never teleported anyone. The goober.spell fallback (1271876,
-    // spell_housing_door_open) cannot cover for it either - GO_JUST_DEACTIVATED self-casts it
-    // player->player, so the script's GetExplTargetWorldObject() is the player and its
-    // ToGameObject() is null, and it bails before re-entering Use().
-    uint32 const doorScriptId = sObjectMgr->GetScriptId("go_housing_door", false);
-
+    // A door needs no script: the stock goober use opens it and casts its goober spell, and the spell scripts on
+    // 1234192 (enter) and 1234193 (Exit House) move the character.
     for (ExteriorComponentEntry const* entry : sExteriorComponentStore)
     {
         if (!entry || entry->Type != 11 || entry->GameObjectID <= 0) // Type 11 = Door
             continue;
 
         uint32 goEntry = static_cast<uint32>(entry->GameObjectID);
-        if (GameObjectTemplate const* existing = sObjectMgr->GetGameObjectTemplate(goEntry))
-        {
-            // Present already (world DB). Attach the door script unless something
-            // deliberate is bound there - never clobber an explicit ScriptName.
-            if (!existing->ScriptId)
-            {
-                sObjectMgr->GetGameObjectTemplateStoreForHotfix()[goEntry].ScriptId = doorScriptId;
-                ++scripted;
-                TC_LOG_INFO("housing", "EnsureDoorGameObjectTemplates: bound go_housing_door (scriptId={}) to existing GO {} ('{}') comp {}",
-                    doorScriptId, goEntry, existing->name, entry->ID);
-            }
-            else
-                TC_LOG_INFO("housing", "EnsureDoorGameObjectTemplates: GO {} ('{}') already has scriptId={} - left alone",
-                    goEntry, existing->name, existing->ScriptId);
+        if (sObjectMgr->GetGameObjectTemplate(goEntry))
             continue;
-        }
 
         // Create a GOOBER template (type=10) — clickable interaction object for house entry
         std::string name = entry->Name[DEFAULT_LOCALE] ? entry->Name[DEFAULT_LOCALE] : "Housing Door";
@@ -1520,7 +1523,6 @@ void HousingMgr::EnsureDoorGameObjectTemplates()
         goTemplate.goober.open = 4296;          // Lock_ ID for "Opening" cast bar
         goTemplate.goober.autoClose = 3000;     // 3 seconds auto-close
         goTemplate.goober.startOpen = 1;        // start in open state
-        goTemplate.ScriptId = doorScriptId;
         goTemplate.InitializeQueryData();
 
         ++created;
@@ -1528,32 +1530,14 @@ void HousingMgr::EnsureDoorGameObjectTemplates()
             goEntry, name, entry->ID);
     }
 
-    // The INTERIOR doors are not reachable from ExteriorComponent - HouseInteriorMap picks them
-    // by faction in code (Alliance 575017 / Horde 587318), so the DB2 walk above never sees them
-    // and they stayed unscripted after the exterior doors were fixed: the front door worked, the
-    // one inside the house did nothing. Keep this list in step with HouseInteriorMap.
+    // The doors inside the house are not reachable from ExteriorComponent - HouseInteriorMap picks them by faction
+    // in code (Alliance 575017 / Horde 587318). Keep this list in step with HouseInteriorMap.
     for (uint32 goEntry : { INTERIOR_DOOR_GO_ALLIANCE, INTERIOR_DOOR_GO_HORDE })
-    {
-        GameObjectTemplate const* existing = sObjectMgr->GetGameObjectTemplate(goEntry);
-        if (!existing)
-        {
+        if (!sObjectMgr->GetGameObjectTemplate(goEntry))
             TC_LOG_ERROR("housing", "EnsureDoorGameObjectTemplates: interior door GO {} has no template - the interior door will not work", goEntry);
-            continue;
-        }
-
-        if (!existing->ScriptId)
-        {
-            sObjectMgr->GetGameObjectTemplateStoreForHotfix()[goEntry].ScriptId = doorScriptId;
-            ++scripted;
-            TC_LOG_INFO("housing", "EnsureDoorGameObjectTemplates: bound go_housing_door (scriptId={}) to interior door GO {} ('{}')",
-                doorScriptId, goEntry, existing->name);
-        }
-    }
 
     if (created)
         TC_LOG_INFO("server.loading", ">> Auto-created {} missing door GO templates from ExteriorComponent DB2", created);
-    if (scripted)
-        TC_LOG_INFO("server.loading", ">> Bound go_housing_door to {} door GO templates", scripted);
 }
 
 void HousingMgr::BuildExteriorComponentIndexes()

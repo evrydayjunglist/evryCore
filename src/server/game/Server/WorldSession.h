@@ -929,6 +929,11 @@ namespace WorldPackets
         class GrantLevel;
     }
 
+    namespace System
+    {
+        struct MirrorVarSingle;
+    }
+
     namespace Toy
     {
         class AccountToyUpdate;
@@ -1314,6 +1319,11 @@ class TC_GAME_API WorldSession
         void SendSetTimeZoneInformation();
         void SendFeatureSystemStatus();
         void SendFeatureSystemStatusGlueScreen();
+        // The housing mirror variables retail sends in the world, after login and after each map change.
+        void SendHousingMirrorVars();
+        // The housing mirror variables retail sends both at the character screen and in the world, and, in the world
+        // only, minNeighborhoodGroupMembers.
+        static void AppendHousingMirrorVars(std::vector<WorldPackets::System::MirrorVarSingle>& vars, bool inWorld);
         void UpdateTimerunningSeason();
 
         void BuildNameQueryData(ObjectGuid guid, WorldPackets::Query::NameCacheLookupResult& lookupData);
@@ -1799,6 +1809,13 @@ class TC_GAME_API WorldSession
         void HandleHousingSvcsGetPlayerHousesInfo(WorldPackets::Housing::HousingSvcsGetPlayerHousesInfo const& housingSvcsGetPlayerHousesInfo);
         void HandleHousingSvcsTeleportToPlot(WorldPackets::Housing::HousingSvcsTeleportToPlot const& housingSvcsTeleportToPlot);
         void HandleHousingSvcsStartTutorial(WorldPackets::Housing::HousingSvcsStartTutorial const& housingSvcsStartTutorial);
+        // Runs Start Tutorial once the Warband's "My First Home" state is known. The district's neighborhood was found
+        // by the handler on the world thread; only its name and guid come along, for the log.
+        void StartHousingTutorial(bool warbandCompletedMyFirstHome, ObjectGuid const& neighborhoodGuid, std::string const& neighborhoodName);
+        // Offers "A House For You" at login while no character of the Warband has completed "My First Home".
+        void OfferHousingBreadcrumbQuest();
+        // Tells the callback whether any character of this Battle.net account has turned in the quest.
+        void QueryWarbandQuestRewarded(uint32 questId, std::function<void(bool)>&& callback);
         // Removed 2026-04-24: HandleHousingSvcsSetTutorialState / CompleteTutorialStep /
         // SkipTutorial / QueryPendingInvites — no matching 12.0.5 Lua API exists.
         // Retired 2026-05-12: HandleHousingDecorConfirmPreviewPlacement (fake CMSG 0x300011).

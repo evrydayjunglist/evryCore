@@ -723,7 +723,7 @@ namespace WorldPackets::Housing
         void Read() override;
 
         ObjectGuid NeighborhoodGuid;
-        ObjectGuid OwnerGuid;
+        ObjectGuid HouseGuid; // the house on that plot (hbcd3 2044162)
         uint32 PlotIndex = 0;
         uint8 TeleportType = 0;
     };

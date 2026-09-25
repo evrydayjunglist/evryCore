@@ -17,15 +17,21 @@
 
 #include "ScriptMgr.h"
 #include "GameObject.h"
+#include "HouseInteriorMap.h"
+#include "Housing.h"
+#include "HousingDefines.h"
+#include "HousingMap.h"
+#include "HousingMgr.h"
 #include "Log.h"
+#include "Neighborhood.h"
+#include "NeighborhoodMgr.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellScript.h"
 
 enum HousingCornerstoneSpells
 {
-    SPELL_TRIGGER_CONVO_UNOWNED_PLOT = 1266097,
-    SPELL_HOUSING_DOOR_OPEN          = 1271876   // 12.0.5 retail housing-front-door open spell
+    SPELL_TRIGGER_CONVO_UNOWNED_PLOT = 1266097
 };
 
 enum HousingPurchaseQuests
@@ -61,67 +67,6 @@ class spell_housing_trigger_convo_unowned_plot : public SpellScript
     }
 };
 
-// 1271876 - Housing Door Open (12.0.5 retail)
-// Cast by client when a player clicks a housing front door GO. Sniff-decoded from
-// dump_12.0.5.67186_2026-04-28_*.pkt: bytes 0x15-0x18 of CMSG_CAST_SPELL body =
-// 0x00136644 = 1271876, with the door GO as the spell target. Both faction sniffs
-// agree on the spell ID (only the target PackedGUID differs).
-//
-// The spell row in spell_misc / spell_effect we ship for it (sql/updates/hotfixes/
-// master/2026_04_29_00_hotfixes.sql) is a minimal SPELL_EFFECT_DUMMY targeting
-// TARGET_GAMEOBJECT_TARGET so server-side validation accepts the cast and the
-// dummy hook fires. We intentionally do NOT use SPELL_EFFECT_OPEN_LOCK or
-// SPELL_EFFECT_USE_GAMEOBJECT — those would double-trigger Use() through the spell
-// effect machinery in addition to the explicit Use() this script issues. Routing
-// through one well-defined path keeps the door teleport semantics owned by the
-// existing go_housing_door::OnGossipHello (which already handles edit-mode gating,
-// visitor permissions, and the interior↔exterior round trip).
-class spell_housing_door_open : public SpellScript
-{
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return true;
-    }
-
-    void HandleDummy(SpellEffIndex /*effIndex*/) const
-    {
-        Player* caster = GetCaster()->ToPlayer();
-        if (!caster)
-            return;
-
-        WorldObject* target = GetExplTargetWorldObject();
-        if (!target)
-            target = GetHitGObj();
-        if (!target)
-        {
-            TC_LOG_DEBUG("housing", "spell_housing_door_open: Spell {} cast by {} but no GO target — ignored",
-                GetSpellInfo()->Id, caster->GetGUID().ToString());
-            return;
-        }
-
-        GameObject* doorGo = target->ToGameObject();
-        if (!doorGo)
-        {
-            TC_LOG_DEBUG("housing", "spell_housing_door_open: Spell {} cast by {} on non-GO target {} — ignored",
-                GetSpellInfo()->Id, caster->GetGUID().ToString(), target->GetGUID().ToString());
-            return;
-        }
-
-        TC_LOG_DEBUG("housing", "spell_housing_door_open: Player {} cast {} on door GO {} (entry={}) — invoking Use()",
-            caster->GetGUID().ToString(), GetSpellInfo()->Id, doorGo->GetGUID().ToString(), doorGo->GetEntry());
-
-        // Route to the standard interaction path so go_housing_door::OnGossipHello
-        // performs the teleport. Use() handles edit-mode gating + animation; the
-        // gossip script then resolves the destination plot/interior.
-        doorGo->Use(caster);
-    }
-
-    void Register() override
-    {
-        OnEffectHit += SpellEffectFn(spell_housing_door_open::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
-    }
-};
-
 // 1253555 - [DNT] Skip First Housing Tutorial
 // Cast on the buyer through 1253572 (House Purchase Cover Spell) when a house is bought. Its effect skips questline
 // 6063, which holds only "My First Home" (91863), so letting it through would complete that quest at the purchase.
@@ -146,9 +91,157 @@ class spell_housing_skip_first_housing_tutorial : public SpellScript
     }
 };
 
+// 1234192 - the front door's goober spell (server-side; retail's client has no record of it)
+// Retail: the client casts Opening (1271364) on the door, the door opens, and the character casts 1234192 on herself;
+// then TRANSFER_PENDING and NEW_WORLD take her to the house interior map 2783 at (-1000, -1000, 0.1)
+// (hbcd3 1342506-1344674). Any character of the house's Battle.net account enters as its owner; anyone else is a
+// visitor, let in by the house's settings (Neighborhood::CheckHouseEntry). Owner and visitor land in the house's one
+// interior instance, which MapManager picks from the house named here.
+class spell_housing_enter_house : public SpellScript
+{
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return SPELL_FAILED_DONT_REPORT;
+
+        HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap());
+        Neighborhood* neighborhood = housingMap ? housingMap->GetNeighborhood() : nullptr;
+        if (!neighborhood)
+        {
+            TC_LOG_DEBUG("housing", "spell_housing_enter_house: {} is not on a neighborhood map", player->GetGUID().ToString());
+            return SPELL_FAILED_DONT_REPORT;
+        }
+
+        uint8 plotIndex = INVALID_PLOT_INDEX;
+        GameObject* door = housingMap->FindHouseDoorInReach(player, GetSpellInfo()->Id, plotIndex);
+        if (!door)
+        {
+            TC_LOG_DEBUG("housing", "spell_housing_enter_house: {} stands at no house door", player->GetGUID().ToString());
+            return SPELL_FAILED_DONT_REPORT;
+        }
+
+        Neighborhood::HouseEntry entry = neighborhood->CheckHouseEntry(player, plotIndex, true);
+        if (entry.HouseGuid.IsEmpty() || !entry.Allowed)
+        {
+            TC_LOG_DEBUG("housing", "spell_housing_enter_house: {} may not enter the house on plot {} (house {}, settings 0x{:X})",
+                player->GetGUID().ToString(), plotIndex, entry.HouseGuid.ToString(), entry.SettingsFlags);
+            return SPELL_FAILED_DONT_REPORT;
+        }
+
+        _houseGuid = entry.HouseGuid;
+        return SPELL_CAST_OK;
+    }
+
+    void HandleEnter(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetHitPlayer();
+        if (!player || _houseGuid.IsEmpty())
+            return;
+
+        // MapManager picks the interior instance from the house named here, for owners and visitors alike.
+        player->SetHouseVisitTarget(_houseGuid);
+
+        // Marked before the teleport, so leaving the plot's area trigger on the way does not clear the house's
+        // editor state.
+        Housing* housing = player->GetHousingByGuid(_houseGuid);
+        if (housing)
+            housing->SetInInterior(true);
+
+        if (!player->TeleportTo(HOUSE_INTERIOR_MAP_ID, HOUSE_INTERIOR_ARRIVAL_X, HOUSE_INTERIOR_ARRIVAL_Y, HOUSE_INTERIOR_ARRIVAL_Z,
+            HOUSE_INTERIOR_ARRIVAL_O, TELE_TO_SPELL))
+        {
+            // She is still on the plot, so the house is not entered after all.
+            if (housing)
+                housing->SetInInterior(false);
+            player->ClearHouseVisitTarget();
+
+            TC_LOG_ERROR("housing", "spell_housing_enter_house: the teleport of {} into house {} on map {} was refused",
+                player->GetGUID().ToString(), _houseGuid.ToString(), HOUSE_INTERIOR_MAP_ID);
+            return;
+        }
+
+        TC_LOG_DEBUG("housing", "spell_housing_enter_house: {} enters house {}", player->GetGUID().ToString(), _houseGuid.ToString());
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_housing_enter_house::CheckCast);
+        OnEffectHitTarget += SpellEffectFn(spell_housing_enter_house::HandleEnter, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+
+    ObjectGuid _houseGuid;
+};
+
+// 1234193 - Exit House
+// Retail: the client casts Opening (1271364) on the door inside the house, the door opens, and the character casts
+// Exit House on herself, instantly; then TRANSFER_PENDING and NEW_WORLD put her at her plot's arrival point,
+// 902.6711, -542.7863, 1.9622 facing 4.5902157 for plot 13 (hbcd3 1455919-1456426). A visitor comes out on the plot
+// of the house she visited. Its only effect, 343, does nothing in the core, and what it does for other spells is not
+// known, so this script does the move for this spell alone.
+class spell_housing_exit_house : public SpellScript
+{
+    // SPELL_START for Exit House carries cast time 0 (hbcd3 1456142), though its record gives it one.
+    int32 CalcCastTime(int32 /*castTime*/) override
+    {
+        return 0;
+    }
+
+    void HandleExit(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetHitPlayer();
+        if (!player)
+            return;
+
+        HouseInteriorMap* interior = dynamic_cast<HouseInteriorMap*>(player->GetMap());
+        if (!interior)
+        {
+            TC_LOG_DEBUG("housing", "spell_housing_exit_house: {} is not inside a house", player->GetGUID().ToString());
+            return;
+        }
+
+        ObjectGuid houseGuid = interior->GetHouseGuid();
+        Neighborhood const* neighborhood = nullptr;
+        Neighborhood::PlotInfo const* plot = nullptr;
+        for (Neighborhood const* candidate : sNeighborhoodMgr.GetAllNeighborhoods())
+        {
+            plot = candidate->GetPlotInfoByHouse(houseGuid);
+            if (plot)
+            {
+                neighborhood = candidate;
+                break;
+            }
+        }
+
+        WorldLocation arrival;
+        if (!neighborhood || !sHousingMgr.GetPlotArrival(neighborhood->GetNeighborhoodMapID(), plot->PlotIndex, arrival))
+        {
+            TC_LOG_ERROR("housing", "spell_housing_exit_house: house {} of the interior {} is on no known plot",
+                houseGuid.ToString(), player->GetGUID().ToString());
+            return;
+        }
+
+        if (!player->TeleportTo(arrival, TELE_TO_SPELL))
+        {
+            TC_LOG_ERROR("housing", "spell_housing_exit_house: the teleport of {} out of house {} to plot {} on map {} was refused",
+                player->GetGUID().ToString(), houseGuid.ToString(), plot->PlotIndex, arrival.GetMapId());
+            return;
+        }
+
+        TC_LOG_DEBUG("housing", "spell_housing_exit_house: {} leaves house {} for plot {} on map {}",
+            player->GetGUID().ToString(), houseGuid.ToString(), plot->PlotIndex, arrival.GetMapId());
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_housing_exit_house::HandleExit, EFFECT_0, SPELL_EFFECT_343);
+    }
+};
+
 void AddSC_housing_spell_scripts()
 {
     RegisterSpellScript(spell_housing_trigger_convo_unowned_plot);
-    RegisterSpellScript(spell_housing_door_open);
+    RegisterSpellScript(spell_housing_enter_house);
+    RegisterSpellScript(spell_housing_exit_house);
     RegisterSpellScript(spell_housing_skip_first_housing_tutorial);
 }

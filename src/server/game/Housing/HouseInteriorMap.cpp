@@ -2148,9 +2148,15 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
 void HouseInteriorMap::RemovePlayerFromMap(Player* player, bool remove)
 {
+    // Every way out of the house passes here: Exit House, the Leave House button, Teleport Home once its cast
+    // finishes, a hearthstone. She takes no editor with her, and she is no longer in a house.
     Housing* housing = player->GetHousingByGuid(_houseGuid);
     if (housing)
+    {
+        housing->SetEditorMode(HOUSING_EDITOR_MODE_NONE);
         housing->SetInInterior(false);
+    }
+    player->SetCurrentHouse(ObjectGuid::Empty);
 
     // Toggle WS[30906]=0 to signal the client that the player left the house interior.
     player->SendUpdateWorldState(WORLDSTATE_HOUSING_INTERIOR, 0);

@@ -25,20 +25,20 @@
 
 enum HousingTutorialData
 {
-    // Quest IDs
-    QUEST_MY_FIRST_HOME             = 91863,
-
-    // Quest: "My First Home" (91863) kill credit NPCs
+    // Quest "My First Home" (91863): kill credit for its objective "Greet the steward"
     NPC_KILL_CREDIT_GREET_STEWARD   = 249851,
-    NPC_KILL_CREDIT_ASK_STEWARD     = 248857,
 
-    // Gossip actions
-    GOSSIP_ACTION_ASK_TO_JOIN       = 1001,
+    // Tocho's menu 40498 and its option "(Quest) Let's go!" (hbcd3 715686)
+    GOSSIP_MENU_TOCHO_LETS_GO       = 40498,
+    GOSSIP_OPTION_LETS_GO           = 135740,
+
+    // "[DNT] Tutorial Guardian Accepted": kill credit 248857 ("Ask the steward to join you"), 233708 and 233063
+    SPELL_TUTORIAL_GUARDIAN_ACCEPTED = 1250436,
+    // "[DNT] Tocho Guardian": summons the player's own Tocho, 249848, with SummonProperties 6478
+    SPELL_TOCHO_GUARDIAN            = 1250470,
 };
 
-// Lyssabel Dawnpetal (233063) / Tocho (233708) — Housing tutorial steward NPCs.
-// When the player interacts with the steward during the "My First Home" quest (91863),
-// the gossip grants quest kill credits for greeting the steward and asking them to join.
+// Lyssabel Dawnpetal (233063) and Tocho (233708), the stewards of the housing tutorial.
 struct npc_housing_steward : public CreatureAI
 {
     npc_housing_steward(Creature* creature) : CreatureAI(creature) { }
@@ -47,48 +47,33 @@ struct npc_housing_steward : public CreatureAI
 
     bool OnGossipHello(Player* player) override
     {
-        // Grant "Greet the steward" kill credit (quest objective 0: MONSTER 249851)
+        // Retail gave the "Greet the steward" credit through a spell: after the player talked to the steward she cast
+        // 1250475 on herself, and the credit followed that cast (hbcd3 688462-688657). What that spell's effect does
+        // in this client has not been checked, so the credit is given directly until it is. Talking also counts for
+        // the steward's talk-to objective of "My First Home". The menu itself comes from the database.
         player->KilledMonsterCredit(NPC_KILL_CREDIT_GREET_STEWARD);
-
-        // Satisfy "Talk to Lyssabel/Tocho" objective (quest objective 1/2: TALKTO with NPC entry)
         player->TalkedToCreature(me->GetEntry(), me->GetGUID());
-
-        TC_LOG_DEBUG("housing", "npc_housing_steward: Player {} greeted steward {} (kill credit {}, talkto {})",
-            player->GetGUID().ToString(), me->GetEntry(), NPC_KILL_CREDIT_GREET_STEWARD, me->GetEntry());
-
-        // Only show the custom "Ask the steward to join" gossip when the player is on
-        // "My First Home" (91863) and hasn't yet asked the steward (kill credit 248857).
-        // For all other interactions (including quest 94210 "Feathering the Nest" turn-in),
-        // return false to let the default QuestGiver / gossip pathway proceed.
-        if (player->GetQuestStatus(QUEST_MY_FIRST_HOME) == QUEST_STATUS_INCOMPLETE)
-        {
-            InitGossipMenuFor(player, 0);
-            if (me->IsQuestGiver())
-                player->PrepareQuestMenu(me->GetGUID());
-            AddGossipItemFor(player, GossipOptionNpc::None,
-                "Ask the steward to become your neighbor.",
-                GOSSIP_SENDER_MAIN, GOSSIP_ACTION_ASK_TO_JOIN);
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
-            return true;
-        }
-
         return false;
     }
 
-    bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
+    bool OnGossipSelect(Player* player, uint32 menuId, uint32 gossipListId) override
     {
-        uint32 action = GetGossipActionFor(player, gossipListId);
+        if (menuId != GOSSIP_MENU_TOCHO_LETS_GO)
+            return false;
+
+        GossipMenuItem const* item = player->PlayerTalkClass->GetGossipMenu().GetItemByIndex(gossipListId);
+        if (!item || item->GossipOptionID != GOSSIP_OPTION_LETS_GO)
+            return false;
+
+        // Retail: after "(Quest) Let's go!" the player casts 1250436, then 1248279, 1248280, 1282579 and 1266699,
+        // then 1250470 (hbcd3 715686-716335). What the four middle spells do for the tutorial is not known, so only
+        // the credit and the summon are cast.
         CloseGossipMenuFor(player);
+        player->CastSpell(player, SPELL_TUTORIAL_GUARDIAN_ACCEPTED, true);
+        player->CastSpell(player, SPELL_TOCHO_GUARDIAN, true);
 
-        if (action == GOSSIP_ACTION_ASK_TO_JOIN)
-        {
-            // Grant "Ask the steward to join you" kill credit (quest objective 3)
-            player->KilledMonsterCredit(NPC_KILL_CREDIT_ASK_STEWARD);
-
-            TC_LOG_DEBUG("housing", "npc_housing_steward: Player {} asked steward {} to join (kill credit {})",
-                player->GetGUID().ToString(), me->GetEntry(), NPC_KILL_CREDIT_ASK_STEWARD);
-        }
-
+        TC_LOG_DEBUG("housing", "npc_housing_steward: {} took {} along (spells {} and {})",
+            player->GetGUID().ToString(), me->GetEntry(), SPELL_TUTORIAL_GUARDIAN_ACCEPTED, SPELL_TOCHO_GUARDIAN);
         return true;
     }
 };

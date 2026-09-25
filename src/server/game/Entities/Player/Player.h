@@ -2930,23 +2930,31 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         ObjectGuid GetHouseVisitTarget() const { return _houseVisitTarget; }
         void ClearHouseVisitTarget() { _houseVisitTarget = ObjectGuid::Empty; }
 
-        // Buys a new house for this character's Battle.net account; the character becomes its shown owner. The
-        // account's other online characters are given the house too. Runs on the world thread, as the purchase
-        // handler does, because it changes those other characters.
-        Housing* CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex);
+        // Builds a new house for this character's Battle.net account, in memory only; the character becomes its shown
+        // owner. The caller saves it (Housing::SaveToDB) in the purchase's transaction. The account's other online
+        // characters are given the house too. Runs on the world thread, as the purchase handler does, because it
+        // changes those other characters.
+        Housing* CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
+        // Unpacks one of the account's packed houses onto a plot just bought for it, in memory only, and shows it
+        // again on the account's other online characters. The caller saves it in the purchase's transaction.
+        Housing* UnpackHousing(ObjectGuid houseGuid, ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
+        // Packs one of the account's houses when it is relinquished: it leaves its plot, keeps its layout, and stops
+        // being shown on every online character of the account. The row change goes into trans. World thread only.
+        void PackHousing(ObjectGuid houseGuid, CharacterDatabaseTransaction trans);
         // Deletes one of the account's houses, and takes it away from the account's other online characters.
         // World thread only, for the same reason.
         void DeleteHousing(ObjectGuid houseGuid);
         // The house the character is standing in or on: the interior's house, or the account's house in the
-        // neighborhood of the current housing map. Anywhere else it is the account's only house, and nothing when
-        // the account owns two, because nothing says which one is meant.
+        // neighborhood of the current housing map. Anywhere else it is the account's only standing house, and nothing
+        // when the account has two, because nothing says which one is meant. A packed house is never named here.
         Housing* GetHousing() const;
         // A house through which to reach the account's decor catalog and collections, which every house of the
         // account shares: the one GetHousing names, otherwise any house of the account. Nothing when it has none.
         Housing* GetAccountCatalogHousing() const;
-        // One of the account's houses by its GUID, or nothing when the account does not own that house.
+        // One of the account's houses by its GUID, packed or not, or nothing when the account does not own that house.
         Housing* GetHousingByGuid(ObjectGuid houseGuid) const;
         Housing* GetHousingForNeighborhood(ObjectGuid neighborhoodGuid) const;
+        // The account's houses that stand on a plot; packed houses are left out.
         std::vector<Housing const*> GetAllHousings() const;
         // Refreshes the house entity of the account's other online characters after a change they must see, such as
         // a new cosmetic owner. World thread only, because it touches characters on other maps.
@@ -2957,6 +2965,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         // go of one another character deleted.
         void AddAccountHousing(uint64 houseDatabaseId);
         void ForgetHousing(ObjectGuid houseGuid);
+        // Another character of the account packed or unpacked a house this character also holds.
+        void HideAccountHousing(ObjectGuid houseGuid);
+        void ShowAccountHousing(ObjectGuid houseGuid);
+        // Creates the house's entity on this character's client when she is in the world and it is not there yet.
+        void SendHousingEntityCreate(Housing const& housing);
         void ForgetHousingOnMap(Housing const* housing);
         void AddPlayerMirrorHouse(Housing const& housing);
         void RemovePlayerMirrorHouse(ObjectGuid houseGuid);

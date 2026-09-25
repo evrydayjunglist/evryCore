@@ -132,6 +132,20 @@ public:
     // included. 0 when every slot is taken.
     static uint8 FindFreeSlot(std::vector<uint8> const& usedSlots);
 
+    // What a purchase costs: nothing for the account's first house, the plot's cost once the account has any house,
+    // standing or packed.
+    static uint64 GetPurchasePrice(std::size_t accountHouseCount, uint64 plotCost);
+
+    // Which packed house a purchase in a district unpacks, as an index into packedHouseWorldMapIds (the world map of
+    // the district each packed house last stood in), or -1 to build a new house. The packed house from the same
+    // district is unpacked; when the account may not have another house, any packed house is.
+    static int32 ChoosePackedHouseToUnpack(std::vector<int32> const& packedHouseWorldMapIds, int32 districtWorldMapId, bool atHouseCap);
+
+    // Exterior decor is stored in world coordinates, so a house that changes plot has to take it along. This moves one
+    // piece so that it keeps its place and turn relative to the plot: fromPlot and toPlot are each plot's house
+    // position and facing (HousingMgr::GetPlotHouseFrame).
+    static void MoveDecorBetweenPlots(Position const& fromPlot, Position const& toPlot, PlacedDecor& decor);
+
     // One house of an account as the shared states hold it.
     struct AccountHouse
     {
@@ -139,6 +153,8 @@ public:
         uint8 Slot = 0;
         ObjectGuid HouseGuid;
         ObjectGuid NeighborhoodGuid;
+        // For a packed house, the neighborhood it last stood in; its district decides where it is unpacked.
+        ObjectGuid FormerNeighborhoodGuid;
         bool Packed = false;
     };
 
@@ -156,6 +172,10 @@ public:
     bool IsOwnedBy(Player const* player) const;
     bool IsDeleted() const { return _state->Deleted; }
     bool IsPacked() const { return _state->Packed; }
+    // The copper paid for the house, which is what relinquishing it pays back. 0 for a free first house.
+    uint64 GetRefundAmount() const { return _state->RefundAmount; }
+    // For a packed house, the neighborhood it stood in before it was packed.
+    ObjectGuid GetFormerNeighborhoodGuid() const { return _state->FormerNeighborhoodGuid; }
 
     // Global DB ID generators — must be called once during server startup
     // before any Housing objects are loaded, to prevent cross-player ID collisions.
@@ -171,8 +191,21 @@ public:
     void SaveToDB(CharacterDatabaseTransaction trans);
     static void DeleteFromDB(ObjectGuid::LowType houseDatabaseId, CharacterDatabaseTransaction trans);
 
-    HousingResult Create(ObjectGuid neighborhoodGuid, uint8 plotIndex);
+    // Builds a new house in memory only. The purchase saves it with SaveToDB in the same transaction as the plot
+    // claim and the money, so a crash cannot leave one without the others.
+    HousingResult Create(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
+    // Deletes the house's rows and frees its plot in one transaction.
     void Delete();
+    // Relinquishing packs a house instead of deleting it: rooms, decor, fixtures, level and favor are kept, the
+    // house leaves its plot, and the next purchase unpacks it. Pack appends the row change to trans; Unpack only
+    // changes memory, and the purchase saves the whole house in its transaction.
+    void Pack(CharacterDatabaseTransaction trans);
+    HousingResult Unpack(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount);
+    // Appends the house row's neighborhood, plot and packed flag, for a move.
+    void SavePlacement(CharacterDatabaseTransaction trans);
+    // Moves the placed exterior decor from one plot to another (MoveDecorBetweenPlots). Each piece's new position is
+    // appended to trans when one is given; an unpacked house is saved whole by the purchase instead.
+    void MoveExteriorDecorBetweenPlots(Position const& fromPlot, Position const& toPlot, CharacterDatabaseTransaction trans);
 
     // Getters
     Player* GetOwner() const { return _owner; }
@@ -360,8 +393,9 @@ private:
     void PersistRoomToDB(ObjectGuid roomGuid, Room const& room);
     void PersistFixtureToDB(uint32 fixturePointId, uint32 optionId);
 
-    // Populate starter fixtures (Base + Roof) on house creation
-    void PopulateStarterFixtures();
+    // Populate starter fixtures (Base + Roof) on house creation. persistNow writes each one at once, for a house
+    // loaded without them; a new house is saved whole by the purchase instead.
+    void PopulateStarterFixtures(bool persistNow);
 
     // #16 Outdoor Lighting (A4): enforce the 12.0.7 "two lights cannot overlap"
     // rule. Only applies when placing/moving a Lighting-category decor on the
@@ -389,7 +423,11 @@ private:
         bool Packed = false;
         ObjectGuid HouseGuid;
         ObjectGuid NeighborhoodGuid;
+        ObjectGuid FormerNeighborhoodGuid;
+        uint64 RefundAmount = 0;
         uint8 PlotIndex = INVALID_PLOT_INDEX;
+        // For a packed house, the plot it last stood on, so that unpacking can move its exterior decor to the new plot.
+        uint8 FormerPlotIndex = INVALID_PLOT_INDEX;
         uint32 Level = 1;
         uint32 Favor = 0;
         uint64 Favor64 = 0;

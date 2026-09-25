@@ -817,40 +817,61 @@ HousingResult Neighborhood::EvictPlayer(ObjectGuid playerGuid)
     return HOUSING_RESULT_SUCCESS;
 }
 
-bool Neighborhood::ReleasePlot(ObjectGuid ownerGuid)
+ObjectGuid Neighborhood::ReleasePlotByHouse(ObjectGuid houseGuid, CharacterDatabaseTransaction trans)
 {
-    bool freed = false;
+    if (houseGuid.IsEmpty())
+        return ObjectGuid::Empty;
 
-    // Free every plot recorded as owned by this player (normally one).
+    uint8 plotIndex = INVALID_PLOT_INDEX;
     for (uint8 i = 0; i < MAX_NEIGHBORHOOD_PLOTS; ++i)
     {
-        if (_plots[i].IsOccupied() && _plots[i].OwnerGuid == ownerGuid)
+        if (_plots[i].IsOccupied() && _plots[i].HouseGuid == houseGuid)
         {
-            _plots[i] = PlotInfo{};
-            freed = true;
+            plotIndex = i;
+            break;
         }
     }
 
-    // Clear the member's plot assignment (memory + DB) so they can buy again.
-    auto it = std::find_if(_members.begin(), _members.end(),
-        [&ownerGuid](Member const& member) { return member.PlayerGuid == ownerGuid; });
-    if (it != _members.end() && it->PlotIndex != INVALID_PLOT_INDEX)
-    {
-        it->PlotIndex = INVALID_PLOT_INDEX;
+    if (plotIndex == INVALID_PLOT_INDEX)
+        return ObjectGuid::Empty;
 
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
-        stmt->setUInt8(0, INVALID_PLOT_INDEX);
-        stmt->setUInt64(1, _guid.GetCounter());
-        stmt->setUInt64(2, ownerGuid.GetCounter());
-        CharacterDatabase.Execute(stmt);
-        freed = true;
+    _plots[plotIndex] = PlotInfo{};
+
+    // The roster entry that bought the plot may be any character of the house's account, not the one acting.
+    ObjectGuid holderGuid;
+    auto it = std::find_if(_members.begin(), _members.end(),
+        [plotIndex](Member const& member) { return member.PlotIndex == plotIndex; });
+    if (it != _members.end())
+    {
+        holderGuid = it->PlayerGuid;
+        if (it->Role == NEIGHBORHOOD_ROLE_OWNER)
+        {
+            it->PlotIndex = INVALID_PLOT_INDEX;
+
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
+            stmt->setUInt8(0, INVALID_PLOT_INDEX);
+            stmt->setUInt64(1, _guid.GetCounter());
+            stmt->setUInt64(2, holderGuid.GetCounter());
+            trans->Append(stmt);
+        }
+        else
+        {
+            _members.erase(it);
+
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_MEMBER);
+            stmt->setUInt64(0, _guid.GetCounter());
+            stmt->setUInt64(1, holderGuid.GetCounter());
+            trans->Append(stmt);
+        }
     }
 
-    if (freed)
-        TC_LOG_DEBUG("housing", "Neighborhood::ReleasePlot: Freed plot(s) owned by {} in neighborhood '{}'",
-            ownerGuid.ToString(), _name);
+    TC_LOG_DEBUG("housing", "Neighborhood::ReleasePlotByHouse: plot {} of house {} is free in neighborhood '{}' (roster entry {})",
+        plotIndex, houseGuid.ToString(), _name, holderGuid.ToString());
 
-    return freed;
+    // The plot's holder left the roster, or lost the plot: every online member's bulletin board needs it again.
+    BroadcastRoster();
+
+    return holderGuid;
 }
 
 HousingResult Neighborhood::TransferOwnership(ObjectGuid newOwnerGuid)
@@ -1002,11 +1023,13 @@ HousingResult Neighborhood::RejectOwnershipTransfer(ObjectGuid rejectorGuid)
     return HOUSING_RESULT_SUCCESS;
 }
 
-HousingResult Neighborhood::PurchasePlot(ObjectGuid playerGuid, uint8 plotIndex)
+HousingResult Neighborhood::TryReservePlot(ObjectGuid playerGuid, uint8 plotIndex, bool joinAsResident, PlotClaim& claim)
 {
+    claim = PlotClaim{};
+
     if (plotIndex >= MAX_NEIGHBORHOOD_PLOTS)
     {
-        TC_LOG_DEBUG("housing", "Neighborhood::PurchasePlot: Invalid plot index {} in neighborhood '{}'",
+        TC_LOG_DEBUG("housing", "Neighborhood::TryReservePlot: Invalid plot index {} in neighborhood '{}'",
             plotIndex, _name);
         return HOUSING_RESULT_PLOT_NOT_FOUND;
     }
@@ -1015,7 +1038,13 @@ HousingResult Neighborhood::PurchasePlot(ObjectGuid playerGuid, uint8 plotIndex)
     if (!GetPlotReserverOther(plotIndex, playerGuid).IsEmpty())
         return HOUSING_RESULT_PLOT_RESERVED;
 
-    // Check if player is a member
+    if (_plots[plotIndex].IsOccupied())
+    {
+        TC_LOG_DEBUG("housing", "Neighborhood::TryReservePlot: Plot {} is already occupied in neighborhood '{}' (house {})",
+            plotIndex, _name, _plots[plotIndex].HouseGuid.ToString());
+        return HOUSING_RESULT_PLOT_NOT_VACANT;
+    }
+
     Member* buyer = nullptr;
     for (Member& member : _members)
     {
@@ -1026,53 +1055,105 @@ HousingResult Neighborhood::PurchasePlot(ObjectGuid playerGuid, uint8 plotIndex)
         }
     }
 
+    if (buyer && buyer->PlotIndex != INVALID_PLOT_INDEX)
+    {
+        TC_LOG_DEBUG("housing", "Neighborhood::TryReservePlot: Player {} already holds plot {} in neighborhood '{}'; requested plot {}",
+            playerGuid.ToString(), buyer->PlotIndex, _name, plotIndex);
+        return HOUSING_RESULT_PLOT_NOT_VACANT;
+    }
+
     if (!buyer)
     {
-        TC_LOG_INFO("housing", "Neighborhood::PurchasePlot REJECT: Player {} is not a member of neighborhood '{}' (guid {})",
-            playerGuid.ToString(), _name, _guid.ToString());
-        return HOUSING_RESULT_NEIGHBORHOOD_NOT_FOUND;
+        if (!joinAsResident)
+        {
+            TC_LOG_DEBUG("housing", "Neighborhood::TryReservePlot: Player {} is not a member of neighborhood '{}'",
+                playerGuid.ToString(), _name);
+            return HOUSING_RESULT_NEIGHBORHOOD_NOT_FOUND;
+        }
+
+        if (_members.size() >= MAX_NEIGHBORHOOD_PLOTS)
+        {
+            TC_LOG_DEBUG("housing", "Neighborhood::TryReservePlot: Neighborhood '{}' is full ({} members)",
+                _name, _members.size());
+            return HOUSING_RESULT_PLOT_NOT_VACANT;
+        }
+
+        Member& newMember = _members.emplace_back();
+        newMember.PlayerGuid = playerGuid;
+        newMember.Role = NEIGHBORHOOD_ROLE_RESIDENT;
+        newMember.JoinTime = static_cast<uint32>(GameTime::GetGameTime());
+        buyer = &newMember;
+        claim.NewMember = true;
+        claim.JoinTime = newMember.JoinTime;
     }
 
-    // Check if player already has a plot
-    if (buyer->PlotIndex != INVALID_PLOT_INDEX)
-    {
-        TC_LOG_INFO("housing",
-            "Neighborhood::PurchasePlot REJECT (PLOT_NOT_VACANT, path 1/2): Player {} already owns plot {} "
-            "in neighborhood '{}' (guid {}); requested plot {}. _plots[{}].HouseGuid={}",
-            playerGuid.ToString(), buyer->PlotIndex, _name, _guid.ToString(), plotIndex,
-            buyer->PlotIndex, _plots[buyer->PlotIndex].HouseGuid.ToString());
-        return HOUSING_RESULT_PLOT_NOT_VACANT;
-    }
-
-    // Check if plot is already occupied
-    if (_plots[plotIndex].IsOccupied())
-    {
-        TC_LOG_INFO("housing",
-            "Neighborhood::PurchasePlot REJECT (PLOT_NOT_VACANT, path 2/2): Plot {} is already occupied "
-            "in neighborhood '{}' (guid {}). Owner={}, HouseGuid={}",
-            plotIndex, _name, _guid.ToString(),
-            _plots[plotIndex].OwnerGuid.ToString(),
-            _plots[plotIndex].HouseGuid.ToString());
-        return HOUSING_RESULT_PLOT_NOT_VACANT;
-    }
-
-    // Assign the plot
     buyer->PlotIndex = plotIndex;
+    _plots[plotIndex].PlotIndex = plotIndex;
+    _plots[plotIndex].OwnerGuid = playerGuid;
 
-    _plots[plotIndex].PlotIndex   = plotIndex;
-    _plots[plotIndex].OwnerGuid   = playerGuid;
-
-    // Persist the plot assignment to DB
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
-    stmt->setUInt8(0, plotIndex);
-    stmt->setUInt64(1, _guid.GetCounter());
-    stmt->setUInt64(2, playerGuid.GetCounter());
-    CharacterDatabase.Execute(stmt);
-
-    TC_LOG_ERROR("housing", "Neighborhood::PurchasePlot: Player {} purchased plot {} in neighborhood '{}' — _plots[{}].PlotIndex={}, _plots[{}].OwnerGuid={}",
-        playerGuid.ToString(), plotIndex, _name, plotIndex, _plots[plotIndex].PlotIndex, plotIndex, _plots[plotIndex].OwnerGuid.ToString());
-
+    claim.PlayerGuid = playerGuid;
+    claim.PlotIndex = plotIndex;
     return HOUSING_RESULT_SUCCESS;
+}
+
+void Neighborhood::AppendPlotClaim(PlotClaim const& claim, CharacterDatabaseTransaction trans) const
+{
+    if (claim.NewMember)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_NEIGHBORHOOD_MEMBER);
+        uint8 index = 0;
+        stmt->setUInt64(index++, _guid.GetCounter());
+        stmt->setUInt64(index++, claim.PlayerGuid.GetCounter());
+        stmt->setUInt8(index++, NEIGHBORHOOD_ROLE_RESIDENT);
+        stmt->setUInt32(index++, claim.JoinTime);
+        stmt->setUInt8(index++, claim.PlotIndex);
+        trans->Append(stmt);
+
+        // Joining uses up the buyer's invite to this neighborhood, if she had one.
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_NEIGHBORHOOD_INVITE);
+        stmt->setUInt64(0, _guid.GetCounter());
+        stmt->setUInt64(1, claim.PlayerGuid.GetCounter());
+        trans->Append(stmt);
+        return;
+    }
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
+    stmt->setUInt8(0, claim.PlotIndex);
+    stmt->setUInt64(1, _guid.GetCounter());
+    stmt->setUInt64(2, claim.PlayerGuid.GetCounter());
+    trans->Append(stmt);
+}
+
+void Neighborhood::UndoPlotClaim(PlotClaim const& claim)
+{
+    if (claim.PlotIndex >= MAX_NEIGHBORHOOD_PLOTS)
+        return;
+
+    _plots[claim.PlotIndex] = PlotInfo{};
+
+    auto it = std::find_if(_members.begin(), _members.end(),
+        [&claim](Member const& member) { return member.PlayerGuid == claim.PlayerGuid; });
+    if (it == _members.end())
+        return;
+
+    if (claim.NewMember)
+        _members.erase(it);
+    else
+        it->PlotIndex = INVALID_PLOT_INDEX;
+}
+
+void Neighborhood::CompletePlotClaim(PlotClaim const& claim)
+{
+    if (!claim.NewMember)
+        return;
+
+    auto inviteIt = std::find_if(_pendingInvites.begin(), _pendingInvites.end(),
+        [&claim](PendingInvite const& invite) { return invite.InviteeGuid == claim.PlayerGuid; });
+    if (inviteIt != _pendingInvites.end())
+        _pendingInvites.erase(inviteIt);
+
+    TC_LOG_DEBUG("housing", "Neighborhood::CompletePlotClaim: Player {} joined neighborhood '{}' as resident with plot {}",
+        claim.PlayerGuid.ToString(), _name, claim.PlotIndex);
 }
 
 void Neighborhood::UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, ObjectGuid ownerBnetGuid, uint64 houseDatabaseId /*= 0*/)
@@ -1100,6 +1181,31 @@ void Neighborhood::UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, Ob
 
     TC_LOG_DEBUG("housing", "Neighborhood::UpdatePlotHouseInfo: Plot {} updated with HouseGuid {} and BnetGuid {} in neighborhood '{}'",
         plotIndex, houseGuid.ToString(), ownerBnetGuid.ToString(), _name);
+}
+
+void Neighborhood::UpdatePlotHouseMirror(Housing const& housing)
+{
+    uint8 plotIndex = housing.GetPlotIndex();
+    if (housing.GetNeighborhoodGuid() != _guid || plotIndex >= MAX_NEIGHBORHOOD_PLOTS || !_plots[plotIndex].IsOccupied()
+        || _plots[plotIndex].HouseGuid != housing.GetHouseGuid())
+        return;
+
+    PlotInfo& plot = _plots[plotIndex];
+    plot.OwnerGuid = housing.GetCosmeticOwnerGuid();
+    plot.HouseLevel = static_cast<uint8>(std::max<uint32>(1, housing.GetLevel()));
+    plot.HouseFavor = housing.GetFavor64();
+    plot.HouseName = housing.GetHouseName();
+    plot.HouseType = housing.GetHouseType();
+    plot.HouseSettingsFlags = housing.GetSettingsFlags();
+    plot.Fixtures = housing.GetFixtureOverrideMap();
+
+    plot.Rooms.clear();
+    for (Housing::Room const* room : housing.GetRooms())
+        plot.Rooms.push_back(*room);
+
+    plot.Decor.clear();
+    for (Housing::PlacedDecor const* decor : housing.GetAllPlacedDecor())
+        plot.Decor.push_back(*decor);
 }
 
 void Neighborhood::UpdatePlotSettingsFlagsByHouse(ObjectGuid houseGuid, uint32 settingsFlags)
@@ -1168,7 +1274,7 @@ Neighborhood::PlotInfo const* Neighborhood::GetPlotInfoByHouse(ObjectGuid houseG
     return nullptr;
 }
 
-HousingResult Neighborhood::MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotIndex)
+HousingResult Neighborhood::MoveHouse(ObjectGuid houseGuid, ObjectGuid moverGuid, uint8 newPlotIndex, CharacterDatabaseTransaction trans)
 {
     if (newPlotIndex >= MAX_NEIGHBORHOOD_PLOTS)
     {
@@ -1178,7 +1284,7 @@ HousingResult Neighborhood::MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotI
     }
 
     // Another player's House Finder hold keeps the plot for them until it runs out.
-    if (!GetPlotReserverOther(newPlotIndex, sourcePlotOwner).IsEmpty())
+    if (!GetPlotReserverOther(newPlotIndex, moverGuid).IsEmpty())
         return HOUSING_RESULT_PLOT_RESERVED;
 
     // Check destination is not occupied
@@ -1189,11 +1295,11 @@ HousingResult Neighborhood::MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotI
         return HOUSING_RESULT_PLOT_NOT_VACANT;
     }
 
-    // Find the source plot by owner (still needs linear scan by OwnerGuid)
+    // The source plot is the one the house stands on, whichever character of its account asks.
     uint8 oldPlotIndex = INVALID_PLOT_INDEX;
     for (uint8 i = 0; i < MAX_NEIGHBORHOOD_PLOTS; ++i)
     {
-        if (_plots[i].IsOccupied() && _plots[i].OwnerGuid == sourcePlotOwner)
+        if (_plots[i].IsOccupied() && !houseGuid.IsEmpty() && _plots[i].HouseGuid == houseGuid)
         {
             oldPlotIndex = i;
             break;
@@ -1202,8 +1308,8 @@ HousingResult Neighborhood::MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotI
 
     if (oldPlotIndex == INVALID_PLOT_INDEX)
     {
-        TC_LOG_DEBUG("housing", "Neighborhood::MoveHouse: Player {} has no plot in neighborhood '{}'",
-            sourcePlotOwner.ToString(), _name);
+        TC_LOG_DEBUG("housing", "Neighborhood::MoveHouse: House {} stands on no plot in neighborhood '{}'",
+            houseGuid.ToString(), _name);
         return HOUSING_RESULT_PLOT_NOT_FOUND;
     }
 
@@ -1212,25 +1318,24 @@ HousingResult Neighborhood::MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotI
     _plots[newPlotIndex].PlotIndex = newPlotIndex;
     _plots[oldPlotIndex] = PlotInfo{};
 
-    // Update the member's plot index as well
+    // The roster entry that held the old plot holds the new one.
     for (Member& member : _members)
     {
-        if (member.PlayerGuid == sourcePlotOwner)
+        if (member.PlotIndex == oldPlotIndex)
         {
             member.PlotIndex = newPlotIndex;
+
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
+            stmt->setUInt8(0, newPlotIndex);
+            stmt->setUInt64(1, _guid.GetCounter());
+            stmt->setUInt64(2, member.PlayerGuid.GetCounter());
+            trans->Append(stmt);
             break;
         }
     }
 
-    // Persist the plot move to DB
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_MEMBER_PLOT);
-    stmt->setUInt8(0, newPlotIndex);
-    stmt->setUInt64(1, _guid.GetCounter());
-    stmt->setUInt64(2, sourcePlotOwner.GetCounter());
-    CharacterDatabase.Execute(stmt);
-
-    TC_LOG_DEBUG("housing", "Neighborhood::MoveHouse: Player {} moved house from plot {} to plot {} in neighborhood '{}'",
-        sourcePlotOwner.ToString(), oldPlotIndex, newPlotIndex, _name);
+    TC_LOG_DEBUG("housing", "Neighborhood::MoveHouse: house {} moved from plot {} to plot {} in neighborhood '{}' by {}",
+        houseGuid.ToString(), oldPlotIndex, newPlotIndex, _name, moverGuid.ToString());
 
     return HOUSING_RESULT_SUCCESS;
 }

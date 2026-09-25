@@ -270,6 +270,10 @@ public:
     std::vector<NeighborhoodPlotData const*> GetPlotsForMap(uint32 neighborhoodMapId) const;
     // Find a plot by its cornerstone GO entry within a specific neighborhood map
     NeighborhoodPlotData const* GetPlotByCornerstoneEntry(uint32 neighborhoodMapId, uint32 cornerstoneGoEntry) const;
+    // Where a house stands on a plot and which way it faces, as HousingMap::SpawnHouseForPlot places it before it
+    // lowers the house onto the ground: NeighborhoodPlot.HousePosition, facing HouseRotation.z or, where the DB2 leaves
+    // the rotation empty, towards the cornerstone. False when the map has no such plot.
+    bool GetPlotHouseFrame(uint32 neighborhoodMapId, uint8 plotIndex, Position& frame) const;
 
     // Resolve the canonical DB2 PlotIndex from a client-supplied GUID.
     // The client sends the cornerstone GO GUID as "NeighborhoodGuid" in many CMSGs.

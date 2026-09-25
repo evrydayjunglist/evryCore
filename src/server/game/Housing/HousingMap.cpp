@@ -1895,6 +1895,13 @@ void HousingMap::ForgetHousing(Housing const* housing)
         houseGuid.ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
 }
 
+void HousingMap::DropHouse(ObjectGuid houseGuid)
+{
+    if (_playerHousings.erase(houseGuid))
+        TC_LOG_DEBUG("housing", "HousingMap::DropHouse: House {} no longer listed on map {} instanceId {} (remaining: {})",
+            houseGuid.ToString(), GetId(), GetInstanceId(), static_cast<uint32>(_playerHousings.size()));
+}
+
 void HousingMap::HandPlayerHousingToAnotherCharacter(ObjectGuid houseGuid, Player const* leaving)
 {
     for (auto const& reference : GetPlayers())

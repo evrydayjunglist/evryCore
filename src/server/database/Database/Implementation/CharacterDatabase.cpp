@@ -884,8 +884,8 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_SEL_BATTLEPAY_CHARACTER, "SELECT account, class, level, race, inventorySlots FROM characters WHERE guid = ? AND deleteInfos_Name IS NULL", CONNECTION_SYNCH);
 
     // Housing
-    PrepareStatement(CHAR_SEL_ACCOUNT_HOUSING, "SELECT guid, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed FROM character_housing WHERE bnetAccountId = ? ORDER BY slot", CONNECTION_ASYNC);
-    PrepareStatement(CHAR_INS_CHARACTER_HOUSING, "INSERT INTO character_housing (guid, bnetAccountId, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_ACCOUNT_HOUSING, "SELECT guid, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed, refundAmount FROM character_housing WHERE bnetAccountId = ? ORDER BY slot", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_CHARACTER_HOUSING, "INSERT INTO character_housing (guid, bnetAccountId, slot, cosmeticOwnerGuid, neighborhoodGuid, plotIndex, houseLevel, favor, settingsFlags, exteriorLocked, houseSize, houseType, createTime, posX, posY, posZ, facing, houseName, houseDescription, packed, refundAmount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHARACTER_HOUSING, "DELETE FROM character_housing WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_ACCOUNT_HOUSING_DECOR, "SELECT d.id, d.houseDecorId, d.posX, d.posY, d.posZ, d.rotX, d.rotY, d.rotZ, d.rotW, d.scale, d.dyeSlot0, d.dyeSlot1, d.dyeSlot2, d.roomGuid, d.locked, d.placementTime, d.sourceType, d.sourceValue, d.petGuid, d.petFlag, d.houseGuid FROM character_housing_decor d INNER JOIN character_housing ch ON ch.guid = d.houseGuid WHERE ch.bnetAccountId = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_INS_CHARACTER_HOUSING_DECOR, "INSERT INTO character_housing_decor (houseGuid, id, houseDecorId, posX, posY, posZ, rotX, rotY, rotZ, rotW, scale, dyeSlot0, dyeSlot1, dyeSlot2, roomGuid, locked, placementTime, sourceType, sourceValue, petGuid, petFlag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
@@ -924,6 +924,7 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_NAME_DESC, "UPDATE character_housing SET houseName = ?, houseDescription = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_LEVEL_FAVOR, "UPDATE character_housing SET houseLevel = ?, favor = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_COSMETIC_OWNER, "UPDATE character_housing SET cosmeticOwnerGuid = ? WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_UPD_CHARACTER_HOUSING_PLACEMENT, "UPDATE character_housing SET neighborhoodGuid = ?, plotIndex = ?, packed = ? WHERE guid = ?", CONNECTION_ASYNC);
 
     // Neighborhoods
     PrepareStatement(CHAR_SEL_NEIGHBORHOOD, "SELECT guid, name, neighborhoodMapId, ownerGuid, factionRestriction, isPublic, createTime, guildId FROM neighborhoods WHERE guid = ?", CONNECTION_SYNCH);

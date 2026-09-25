@@ -776,9 +776,10 @@ void NeighborhoodMgr::MigrateWrongFactionResidents()
 
             // Check if the house this character is shown as owning already points to the correct neighborhood
             // (e.g., player bought a new house there before migration ran). character_housing.guid is the
-            // house's own id; the character is its cosmeticOwnerGuid.
+            // house's own id; the character is its cosmeticOwnerGuid. A packed house keeps the neighborhood it last
+            // stood in but stands on no plot, so it is left out.
             QueryResult housingResult = CharacterDatabase.Query(
-                Trinity::StringFormat("SELECT plotIndex FROM character_housing WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {}",
+                Trinity::StringFormat("SELECT plotIndex FROM character_housing WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {} AND packed = 0",
                     m.PlayerGuidLow, correctNbLow).c_str());
             if (housingResult)
                 newPlotIndex = housingResult->Fetch()[0].GetUInt8();
@@ -812,7 +813,7 @@ void NeighborhoodMgr::MigrateWrongFactionResidents()
 
             // Update character_housing to point to correct neighborhood (only if it still references the old one)
             CharacterDatabase.DirectExecute(
-                Trinity::StringFormat("UPDATE character_housing SET neighborhoodGuid = {}, plotIndex = {} WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {}",
+                Trinity::StringFormat("UPDATE character_housing SET neighborhoodGuid = {}, plotIndex = {} WHERE cosmeticOwnerGuid = {} AND neighborhoodGuid = {} AND packed = 0",
                     correctNbLow, newPlotIndex, m.PlayerGuidLow, m.NbGuidLow).c_str());
 
             TC_LOG_INFO("server.loading", ">> Migrated player {} from neighborhood {} to {} (plot {} -> {})",

@@ -1249,24 +1249,26 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         return;
     }
 
+    auto worldMapOf = [](Neighborhood const* n) -> int32
+    {
+        NeighborhoodMapData const* mapData = n ? sHousingMgr.GetNeighborhoodMapData(n->GetNeighborhoodMapID()) : nullptr;
+        return mapData ? mapData->MapID : 0;
+    };
+    int32 const districtWorldMapId = worldMapOf(neighborhood);
+
     // One house per district: a Battle.net account may own one house in Founder's Point and one in Razorwind Shores,
     // two in all (Blizzard Watch, https://blizzardwatch.com/2025/12/02/get-house-world-warcraft/; the wiki's Housing
     // page). A district is a neighborhood world map; guild and charter neighborhoods are on the same two maps.
     // The rule and the cap below count every house of the account, including one another game account of the same
-    // Battle.net account bought after this character logged in.
+    // Battle.net account bought after this character logged in. A packed house stands in no district.
     std::vector<Housing::AccountHouse> const accountHouses = Housing::GetAccountHouses(GetBattlenetAccountId());
     {
-        auto worldMapOf = [](Neighborhood const* n) -> int32
-        {
-            NeighborhoodMapData const* mapData = n ? sHousingMgr.GetNeighborhoodMapData(n->GetNeighborhoodMapID()) : nullptr;
-            return mapData ? mapData->MapID : 0;
-        };
-
         std::vector<int32> ownedHouseWorldMapIds;
         for (Housing::AccountHouse const& owned : accountHouses)
-            ownedHouseWorldMapIds.push_back(worldMapOf(sNeighborhoodMgr.GetNeighborhood(owned.NeighborhoodGuid)));
+            if (!owned.Packed)
+                ownedHouseWorldMapIds.push_back(worldMapOf(sNeighborhoodMgr.GetNeighborhood(owned.NeighborhoodGuid)));
 
-        if (Housing::AccountOwnsHouseInDistrict(ownedHouseWorldMapIds, worldMapOf(neighborhood)))
+        if (Housing::AccountOwnsHouseInDistrict(ownedHouseWorldMapIds, districtWorldMapId))
         {
             WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
             response.Result = static_cast<uint8>(HOUSING_RESULT_MORE_HOUSE_SLOTS_NEEDED);
@@ -1278,29 +1280,67 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         }
     }
 
+    // A relinquished house was packed with its layout, and the next purchase unpacks it onto the new plot: the
+    // relinquish dialog says "Your layout will be saved, and you can purchase a new House to automatically import it"
+    // (GlobalStrings HOUSING_HOUSE_SETTINGS_ABANDON_DESCRIPTION), and the cornerstone has an Import purchase mode.
+    // The account's packed house from this district is the one unpacked here.
     // Housing.MaxHousesPerAccount is a safety cap kept under the district rule, which already limits an account to
-    // two houses. 0 = no cap.
-    if (uint32 maxHouses = sWorld->getIntConfig(CONFIG_HOUSING_MAX_HOUSES_PER_ACCOUNT))
+    // two houses. 0 = no cap. Packed houses count, as each keeps its slot. At the cap, a packed house from the other
+    // district is unpacked here instead of building a new one, because unpacking adds no house.
+    uint32 const maxHouses = sWorld->getIntConfig(CONFIG_HOUSING_MAX_HOUSES_PER_ACCOUNT);
+    bool const atHouseCap = maxHouses && accountHouses.size() >= maxHouses;
+    Housing::AccountHouse const* packedHouse = nullptr;
     {
-        if (accountHouses.size() >= maxHouses)
+        std::vector<Housing::AccountHouse const*> packedHouses;
+        std::vector<int32> packedHouseWorldMapIds;
+        for (Housing::AccountHouse const& owned : accountHouses)
         {
-            WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-            response.Result = static_cast<uint8>(HOUSING_RESULT_MORE_HOUSE_SLOTS_NEEDED);
-            SendPacket(response.Write());
-
-            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} at the account house cap ({}/{})",
-                player->GetGUID().ToString(), accountHouses.size(), maxHouses);
-            return;
+            if (!owned.Packed)
+                continue;
+            packedHouses.push_back(&owned);
+            packedHouseWorldMapIds.push_back(worldMapOf(sNeighborhoodMgr.GetNeighborhood(owned.FormerNeighborhoodGuid)));
         }
+
+        int32 const unpack = Housing::ChoosePackedHouseToUnpack(packedHouseWorldMapIds, districtWorldMapId, atHouseCap);
+        if (unpack >= 0)
+            packedHouse = packedHouses[unpack];
     }
 
-    // Auto-join neighborhood if not already a member — buying a plot implies joining
-    if (!neighborhood->IsMember(player->GetGUID()))
+    if (!packedHouse && atHouseCap)
     {
-        // M9/A2: enforce faction restriction + private-neighborhood invite gating
-        // BEFORE auto-join. AddResident itself performs no such checks (unlike
-        // InviteResident), so a wrong-faction or uninvited player could otherwise
-        // join a private/faction-locked neighborhood simply by buying a plot.
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_MORE_HOUSE_SLOTS_NEEDED);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} at the account house cap ({}/{})",
+            player->GetGUID().ToString(), accountHouses.size(), maxHouses);
+        return;
+    }
+
+    // The first house of a Battle.net account is free: in the retail capture an established account bought its first
+    // house and its money did not drop (hbcd3 191596 and 399489: 15842437 copper; the next change, 1324289:
+    // 15873337, is the +30900 quest reward). Every other purchase costs the plot's price (the wiki: 1000 gold for a
+    // second house; NeighborhoodPlot Cost is 10,000,000 copper on every district plot). An account that has any
+    // house row, standing or packed, pays: buying back a packed first house costs the plot's price, as the owner
+    // chose, so buying and relinquishing cannot be repeated to gain anything.
+    uint64 const price = Housing::GetPurchasePrice(accountHouses.size(), plot->Cost);
+    if (!player->HasEnoughMoney(price))
+    {
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_CANNOT_AFFORD);
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} cannot afford house (need {} copper, has {})",
+            player->GetGUID().ToString(), price, player->GetMoney());
+        return;
+    }
+
+    // Buying a plot joins its neighborhood. AddResident performs no faction or invite checks (unlike
+    // InviteResident), so they are made here, before a wrong-faction or uninvited player could join a private or
+    // faction-locked neighborhood simply by buying a plot.
+    bool const joinAsResident = !neighborhood->IsMember(player->GetGUID());
+    if (joinAsResident)
+    {
         int32 faction = neighborhood->GetFactionRestriction();
         if (faction != NEIGHBORHOOD_FACTION_NONE)
         {
@@ -1333,258 +1373,215 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
                 player->GetGUID().ToString(), neighborhood->GetName());
             return;
         }
-
-        HousingResult joinResult = neighborhood->AddResident(player->GetGUID());
-        if (joinResult != HOUSING_RESULT_SUCCESS)
-        {
-            WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-            response.Result = static_cast<uint8>(joinResult);
-            SendPacket(response.Write());
-
-            TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Failed to add player {} to neighborhood {} (result {})",
-                player->GetGUID().ToString(), neighborhood->GetGuid().ToString(), static_cast<uint32>(joinResult));
-            return;
-        }
-        TC_LOG_INFO("housing", "HandleNeighborhoodBuyHouse: Auto-added player {} as resident of neighborhood '{}'",
-            player->GetGUID().ToString(), neighborhood->GetName());
     }
 
-    // Deduct gold cost (sniff-verified: 1000g = 10,000,000 copper)
-    if (!player->HasEnoughMoney(HOUSE_PURCHASE_COST_COPPER))
-    {
-        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_CANNOT_AFFORD);
-        SendPacket(response.Write());
-
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: Player {} cannot afford house (need {} copper, has {})",
-            player->GetGUID().ToString(), HOUSE_PURCHASE_COST_COPPER, player->GetMoney());
-        return;
-    }
-
-    HousingResult result = neighborhood->PurchasePlot(player->GetGUID(), resolvedPlotIndex);
-    if (result == HOUSING_RESULT_SUCCESS)
-    {
-        // Consume any 5-minute reservation hold the player placed via the House Finder.
-        neighborhood->ClearReservation(player->GetGUID());
-        player->ModifyMoney(-static_cast<int64>(HOUSE_PURCHASE_COST_COPPER));
-        // Use the server's canonical neighborhood GUID, NOT the client-supplied GUID.
-        // Client may send DB2 NeighborhoodID as counter while server uses internal counter.
-        // Update the PlotInfo with the newly created HouseGuid and Battle.net account GUID
-        if (Housing const* created = player->CreateHousing(neighborhood->GetGuid(), resolvedPlotIndex))
-        {
-            neighborhood->UpdatePlotHouseInfo(resolvedPlotIndex,
-                created->GetHouseGuid(), GetBattlenetAccountGUID(), created->GetDatabaseId());
-        }
-
-        // Grant the kill credit that satisfies quest 91863 objective 17 ("Acquire a house").
-        player->KilledMonsterCredit(NPC_KILL_CREDIT_BUY_HOME);
-
-        // Deliberately NOT marking the 256 server tutorial flags as seen here (it used to set all of them).
-        // Buying a house is precisely when the housing tutorial should START, so suppressing every tutorial at
-        // that moment was backwards. The client tracks its own progress via CMSG_TUTORIAL.
-
-        // Retail sequence: FirstTimeDecorAcquisition → BuyHouseResponse → LevelFavor updates
-
-        // 1a. Populate the server-side decor catalog with starter items (so edit mode works)
-        Housing* housing = player->GetHousing();
-        if (housing)
-        {
-            auto starterDecorWithQty = sHousingMgr.GetStarterDecorWithQuantities(player->GetTeam());
-            for (auto const& [decorId, qty] : starterDecorWithQty)
-            {
-                for (int32 i = 0; i < qty; ++i)
-                    housing->AddToCatalog(decorId);
-            }
-            TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: Populated catalog with {} unique decor types for player {}",
-                uint32(starterDecorWithQty.size()), player->GetGUID().ToString());
-
-            // 1a2. Auto-place starter decor in the visual room (sniff-verified: retail pre-places items).
-            // The "Welcome Home" quest requires the player to remove 3 of these items.
-            housing->PlaceStarterDecor();
-        }
-
-        // 1b. Send FirstTimeDecorAcquisition notifications (sniff: 7-8 unique decor IDs)
-        std::vector<uint32> starterDecorIds = sHousingMgr.GetStarterDecorIds(player->GetTeam());
-        for (uint32 decorId : starterDecorIds)
-        {
-            WorldPackets::Housing::HousingFirstTimeDecorAcquisition decorAcq;
-            decorAcq.DecorEntryID = decorId;
-            SendPacket(decorAcq.Write());
-        }
-        TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: Sent {} FirstTimeDecorAcquisition packets (unique decor IDs)",
-            uint32(starterDecorIds.size()));
-
-        // 2. Build buy response with HouseInfo
-        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-        if (Housing const* h = player->GetHousing())
-        {
-            response.House.HouseGUID = h->GetHouseGuid();
-            response.House.OwnerGUID = h->GetCosmeticOwnerGuid();
-            response.House.NeighborhoodGUID = neighborhood->GetGuid();
-            response.House.PlotIndex = resolvedPlotIndex;
-            response.House.HouseLevel = static_cast<uint8>(h->GetLevel()); // JamCliHouse carries level, not settings flags (RE 0x5c0005)
-        }
-        WorldPacket const* buyRespPkt = response.Write();
-        SendPacket(buyRespPkt);
-
-        TC_LOG_DEBUG("housing", "SMSG_NEIGHBORHOOD_BUY_HOUSE_RESPONSE Result={}, PlotId={}, HouseGuid={}, OwnerGuid={}",
-            uint32(response.Result), response.House.PlotIndex,
-            response.House.HouseGUID.ToString(), response.House.OwnerGUID.ToString());
-
-        // 3. Persist the starter favor server-side, then send the sniff-verified 2-packet
-        // sequence (initial=0, then delta=starter). emitUpdate=false suppresses AddFavor's
-        // own packet so the wire stays at 2 packets.
-        if (Housing* h = player->GetHousing())
-        {
-            h->AddFavor(HOUSE_PURCHASE_STARTER_FAVOR, HOUSING_FAVOR_SOURCE_NEW_HOUSE_DECOR, /*emitUpdate=*/false);
-
-            int64 const newTotal = static_cast<int64>(h->GetFavor());
-
-            // Packet 1: Initial level assignment (ChangeAmount=0 → "set absolute").
-            {
-                WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor levelFavor;
-                levelFavor.Result = 0;
-                levelFavor.ChangeAmount = 0;
-                levelFavor.Reason = 1;
-                auto& fav = levelFavor.Houses.emplace_back();
-                fav.HouseGUID = h->GetHouseGuid();
-                fav.HouseLevel = static_cast<int32>(newTotal);
-                SendPacket(levelFavor.Write());
-            }
-            // Packet 2: Favor delta (ChangeAmount=starter → "you gained N favor").
-            {
-                WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor levelFavor;
-                levelFavor.Result = 0;
-                levelFavor.ChangeAmount = h->GetFavor();
-                levelFavor.Reason = 1;
-                auto& fav = levelFavor.Houses.emplace_back();
-                fav.HouseGUID = h->GetHouseGuid();
-                fav.HouseLevel = static_cast<int32>(newTotal);
-                SendPacket(levelFavor.Write());
-            }
-        }
-
-        // The buyer now has a house on a plot: the other members' rosters need it.
-        neighborhood->BroadcastRoster(player->GetGUID());
-
-        // Send guild notification for house addition
-        if (Housing const* housing = player->GetHousing())
-        {
-            if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
-            {
-                WorldPackets::Housing::HousingSvcsGuildAddHouseNotification notification;
-                notification.House.HouseGUID = housing->GetHouseGuid();
-                notification.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
-                notification.House.HouseLevel = static_cast<uint8>(housing->GetLevel());
-                guild->BroadcastPacket(notification.Write());
-            }
-        }
-
-        // Mark the plot Cornerstone as owned (GOState 1 = READY)
-        if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-        {
-            housingMap->SetPlotOwnershipState(resolvedPlotIndex, true);
-
-            // Spawn the house using the player's Housing data
-            Housing const* buyHousing = player->GetHousing();
-            int32 buyExtCompID = buyHousing ? static_cast<int32>(buyHousing->GetCoreExteriorComponentID()) : 0;
-            int32 buyWmoDataID = buyHousing ? static_cast<int32>(buyHousing->GetHouseType()) : 0;
-            TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: Calling SpawnHouseForPlot for plot {} (extComp={}, wmoData={})",
-                resolvedPlotIndex, buyExtCompID, buyWmoDataID);
-            GameObject* houseGo = housingMap->SpawnHouseForPlot(resolvedPlotIndex, nullptr, buyExtCompID, buyWmoDataID);
-            TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: SpawnHouseForPlot result: {}",
-                houseGo ? houseGo->GetGUID().ToString() : "FAILED/NULL");
-
-            // The house is made of MeshObjects, which ordinary grid visibility does NOT deliver -
-            // every other site in this system transmits them by hand. SpawnHouseForPlot sends
-            // nothing, so a house bought while the buyer is standing on the plot existed only on
-            // the server: the cornerstone flipped to owned (a GameObject, sent normally) and no
-            // house appeared until the player re-entered the map and AddPlayerToMap pushed them.
-            housingMap->SendPlotMeshObjectsToPlayers(resolvedPlotIndex);
-        }
-        else
-        {
-            TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: Player map is NOT a HousingMap — cannot spawn house exterior!");
-        }
-
-        // Notify client that the basic house was created
-        if (player->GetHousing())
-        {
-            WorldPackets::Housing::HousingFixtureCreateBasicHouseResponse houseResponse;
-            houseResponse.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-            SendPacket(houseResponse.Write());
-        }
-
-        // Refresh NeighborhoodMirrorData (Houses[] changed) on all online members
-        neighborhood->RefreshMirrorDataForOnlineMembers();
-
-        // Proactively send DECOR_REQUEST_STORAGE_RESPONSE after purchase.
-        // The client requests storage at map entry (before purchase) and gets "no house".
-        // It does NOT re-request after purchase, so we must push the updated state.
-        // Retail flow: populate storage entries into Account entity THEN send update.
-        if (Housing* h = player->GetHousing())
-        {
-            h->PopulateCatalogStorageEntries();
-            h->SyncUpdateFields();
-
-            WorldPackets::Housing::HousingDecorRequestStorageResponse storageResp;
-            storageResp.ResultCode = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
-            SendPacket(storageResp.Write());
-
-            // Send Account + HousingPlayerHouseEntity together so budget data
-            // accompanies storage data for the client's decor count display.
-            {
-                HousingPlayerHouseEntity& houseEntity = GetHousingPlayerHouseEntity(h->GetHouseGuid());
-                GetBattlenetAccount().BuildUpdateChangesMask();
-                houseEntity.BuildUpdateChangesMask();
-
-                UpdateData updateData(player->GetMapId());
-                WorldPacket updatePacket;
-
-                if (player->HaveAtClient(&GetBattlenetAccount()))
-                    GetBattlenetAccount().BuildValuesUpdateBlockForPlayer(&updateData, player);
-                else
-                {
-                    GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&updateData, player);
-                    player->m_clientGUIDs.insert(GetBattlenetAccount().GetGUID());
-                }
-
-                if (player->HaveAtClient(&houseEntity))
-                    houseEntity.BuildValuesUpdateBlockForPlayer(&updateData, player);
-                else
-                {
-                    houseEntity.BuildCreateUpdateBlockForPlayer(&updateData, player);
-                    player->m_clientGUIDs.insert(houseEntity.GetGUID());
-                }
-
-                updateData.BuildPacket(&updatePacket);
-                player->SendDirectMessage(&updatePacket);
-
-                GetBattlenetAccount().ClearUpdateMask(true);
-                houseEntity.ClearUpdateMask(true);
-            }
-
-            TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: Sent proactive STORAGE_RSP + Account + HouseEntity update (CatalogEntries={})",
-                uint32(h->GetCatalogEntries().size()));
-        }
-
-        TC_LOG_ERROR("housing", "Player {} purchased plot {} in neighborhood '{}'",
-            player->GetGUID().ToString(), resolvedPlotIndex,
-            neighborhood->GetName());
-
-        // Check if neighborhoods need expansion after plot purchase
-        sNeighborhoodMgr.CheckAndExpandNeighborhoods();
-    }
-    else
+    // Every check is done. Take the plot and build the house in memory first; nothing is written until the plot,
+    // the money and the house are saved together in one transaction below.
+    Neighborhood::PlotClaim claim;
+    HousingResult result = neighborhood->TryReservePlot(player->GetGUID(), resolvedPlotIndex, joinAsResident, claim);
+    if (result != HOUSING_RESULT_SUCCESS)
     {
         WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
         response.Result = static_cast<uint8>(result);
         SendPacket(response.Write());
 
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: PurchasePlot result: {} for player {}",
-            uint32(result), player->GetGUID().ToString());
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: plot {} refused for player {} (result {})",
+            resolvedPlotIndex, player->GetGUID().ToString(), uint32(result));
+        return;
     }
+
+    // Use the server's canonical neighborhood GUID, NOT the client-supplied GUID.
+    Housing* housing = packedHouse
+        ? player->UnpackHousing(packedHouse->HouseGuid, neighborhood->GetGuid(), resolvedPlotIndex, price)
+        : player->CreateHousing(neighborhood->GetGuid(), resolvedPlotIndex, price);
+    if (!housing)
+    {
+        neighborhood->UndoPlotClaim(claim);
+
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_GENERIC_FAILURE);
+        SendPacket(response.Write());
+
+        TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: could not {} a house for player {} on plot {} of neighborhood {}",
+            packedHouse ? "unpack" : "build", player->GetGUID().ToString(), resolvedPlotIndex, neighborhood->GetGuid().ToString());
+        return;
+    }
+
+    // The plot, the money and the house as one unit, so a crash cannot leave the plot taken without a house, or the
+    // money gone without either.
+    neighborhood->ClearReservation(player->GetGUID());
+    player->ModifyMoney(-static_cast<int64>(price));
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        neighborhood->AppendPlotClaim(claim, trans);
+        player->SaveInventoryAndGoldToDB(trans);
+        housing->SaveToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+    neighborhood->CompletePlotClaim(claim);
+
+    neighborhood->UpdatePlotHouseInfo(resolvedPlotIndex, housing->GetHouseGuid(), GetBattlenetAccountGUID(), housing->GetDatabaseId());
+    neighborhood->UpdatePlotHouseMirror(*housing);
+
+    // Retail's order after a purchase (hbcd3 Numbers 13862-13869): the plot's world state, one update with the
+    // cornerstone and the house's room, the House Purchase Cover Spell, the buy reply, then the level and favor.
+    // Retail also sent first-time decor messages before these; that set comes with the per-instance decor work.
+    // Two places differ from retail here. The cornerstone's new state goes out with the map's next object update,
+    // after the buy reply, not in the same update as the house. And game's force cast runs the cover spell's child
+    // spells (and 1253555's refusal) before the buy reply, where retail sent them after the reply and the first
+    // level and favor packet (Numbers 13870-13917).
+    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()); housingMap && housingMap->GetNeighborhood() == neighborhood)
+    {
+        // NeighborhoodPlot.WorldState to 1 (29729 for plot 13, hbcd3 Number 13863) and the cornerstone to owned.
+        housingMap->SetPlotOwnershipState(resolvedPlotIndex, true);
+
+        // An unpacked house brings its fixtures and its placed decor with it.
+        std::unordered_map<uint32, uint32> const fixtureOverrides = packedHouse ? housing->GetFixtureOverrideMap() : std::unordered_map<uint32, uint32>();
+        GameObject* houseGo = housingMap->SpawnHouseForPlot(resolvedPlotIndex, nullptr,
+            static_cast<int32>(housing->GetCoreExteriorComponentID()), static_cast<int32>(housing->GetHouseType()),
+            fixtureOverrides.empty() ? nullptr : &fixtureOverrides);
+        if (packedHouse)
+            housingMap->SpawnAllDecorForPlot(resolvedPlotIndex, housing);
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: SpawnHouseForPlot for plot {}: {}",
+            resolvedPlotIndex, houseGo ? houseGo->GetGUID().ToString() : "FAILED/NULL");
+
+        // The house is made of MeshObjects, which ordinary grid visibility does NOT deliver -
+        // every other site in this system transmits them by hand. SpawnHouseForPlot sends
+        // nothing, so a house bought while the buyer is standing on the plot existed only on
+        // the server: the cornerstone flipped to owned (a GameObject, sent normally) and no
+        // house appeared until the player re-entered the map and AddPlayerToMap pushed them.
+        housingMap->SendPlotMeshObjectsToPlayers(resolvedPlotIndex);
+    }
+    else
+    {
+        TC_LOG_ERROR("housing", "HandleNeighborhoodBuyHouse: Player {} is not on the map of neighborhood {}; the house exterior is not spawned",
+            player->GetGUID().ToString(), neighborhood->GetGuid().ToString());
+    }
+
+    // Retail casts 1253572 on the buyer (hbcd3 Numbers 13866-13867). Its effects cast 1248306 "[DNT] House Purchased"
+    // (kill credit 248858, the "Acquire a house" objective of "My First Home", 91863), 1253658 (quest complete 92486),
+    // 1253555 (refused by its script, as retail refused it) and the scene 1260705.
+    player->CastSpell(player, SPELL_HOUSE_PURCHASE_COVER, true);
+
+    // Deliberately NOT marking the 256 server tutorial flags as seen here (it used to set all of them).
+    // Buying a house is precisely when the housing tutorial should START, so suppressing every tutorial at
+    // that moment was backwards. The client tracks its own progress via CMSG_TUTORIAL.
+
+    {
+        WorldPackets::Neighborhood::NeighborhoodBuyHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
+        response.House.HouseGUID = housing->GetHouseGuid();
+        response.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
+        response.House.NeighborhoodGUID = neighborhood->GetGuid();
+        response.House.PlotIndex = resolvedPlotIndex;
+        response.House.HouseLevel = static_cast<uint8>(housing->GetLevel()); // JamCliHouse carries the level, not the settings flags
+        SendPacket(response.Write());
+
+        TC_LOG_DEBUG("housing", "SMSG_NEIGHBORHOOD_BUY_HOUSE_RESPONSE Result={}, PlotId={}, HouseGuid={}, OwnerGuid={}",
+            uint32(response.Result), response.House.PlotIndex,
+            response.House.HouseGUID.ToString(), response.House.OwnerGUID.ToString());
+    }
+
+    // Level and favor in retail's two packets (hbcd3 1299772, Number 13869, and 1301305, Number 13925): first
+    // change -1 and reason -1 with the house at level -1 and its favor, then the favor as the change with reason 1
+    // and the house at -1 and -1. Retail carried 1080 as the favor; where that number comes from is not known, so the
+    // house's own favor is sent in its place.
+    {
+        int32 const favor = static_cast<int32>(housing->GetFavor());
+
+        WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor favorState;
+        favorState.Result = 0;
+        favorState.ChangeAmount = uint32(-1);
+        favorState.Reason = uint32(-1);
+        auto& stateHouse = favorState.Houses.emplace_back();
+        stateHouse.HouseGUID = housing->GetHouseGuid();
+        stateHouse.HouseLevel = -1;
+        stateHouse.FavorValue = favor;
+        SendPacket(favorState.Write());
+
+        WorldPackets::Housing::HousingSvcsUpdateHousesLevelFavor favorChange;
+        favorChange.Result = 0;
+        favorChange.ChangeAmount = uint32(favor);
+        favorChange.Reason = 1;
+        auto& changeHouse = favorChange.Houses.emplace_back();
+        changeHouse.HouseGUID = housing->GetHouseGuid();
+        changeHouse.HouseLevel = -1;
+        changeHouse.FavorValue = -1;
+        SendPacket(favorChange.Write());
+    }
+
+    // The buyer now has a house on a plot: the other members' rosters need it.
+    neighborhood->BroadcastRoster(player->GetGUID());
+
+    // Send guild notification for house addition
+    if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
+    {
+        WorldPackets::Housing::HousingSvcsGuildAddHouseNotification notification;
+        notification.House.HouseGUID = housing->GetHouseGuid();
+        notification.House.OwnerGUID = housing->GetCosmeticOwnerGuid();
+        notification.House.HouseLevel = static_cast<uint8>(housing->GetLevel());
+        guild->BroadcastPacket(notification.Write());
+    }
+
+    // Notify client that the basic house was created
+    {
+        WorldPackets::Housing::HousingFixtureCreateBasicHouseResponse houseResponse;
+        houseResponse.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
+        SendPacket(houseResponse.Write());
+    }
+
+    // Refresh NeighborhoodMirrorData (Houses[] changed) on all online members
+    neighborhood->RefreshMirrorDataForOnlineMembers();
+
+    // Proactively send DECOR_REQUEST_STORAGE_RESPONSE after purchase.
+    // The client requests storage at map entry (before purchase) and gets "no house".
+    // It does NOT re-request after purchase, so we must push the updated state.
+    // Retail flow: populate storage entries into Account entity THEN send update.
+    {
+        housing->PopulateCatalogStorageEntries();
+        housing->SyncUpdateFields();
+
+        WorldPackets::Housing::HousingDecorRequestStorageResponse storageResp;
+        storageResp.ResultCode = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
+        SendPacket(storageResp.Write());
+
+        // Send Account + HousingPlayerHouseEntity together so budget data
+        // accompanies storage data for the client's decor count display.
+        HousingPlayerHouseEntity& houseEntity = GetHousingPlayerHouseEntity(housing->GetHouseGuid());
+        GetBattlenetAccount().BuildUpdateChangesMask();
+        houseEntity.BuildUpdateChangesMask();
+
+        UpdateData updateData(player->GetMapId());
+        WorldPacket updatePacket;
+
+        if (player->HaveAtClient(&GetBattlenetAccount()))
+            GetBattlenetAccount().BuildValuesUpdateBlockForPlayer(&updateData, player);
+        else
+        {
+            GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&updateData, player);
+            player->m_clientGUIDs.insert(GetBattlenetAccount().GetGUID());
+        }
+
+        if (player->HaveAtClient(&houseEntity))
+            houseEntity.BuildValuesUpdateBlockForPlayer(&updateData, player);
+        else
+        {
+            houseEntity.BuildCreateUpdateBlockForPlayer(&updateData, player);
+            player->m_clientGUIDs.insert(houseEntity.GetGUID());
+        }
+
+        updateData.BuildPacket(&updatePacket);
+        player->SendDirectMessage(&updatePacket);
+
+        GetBattlenetAccount().ClearUpdateMask(true);
+        houseEntity.ClearUpdateMask(true);
+    }
+
+    TC_LOG_INFO("housing", "Player {} {} a house on plot {} in neighborhood '{}' for {} copper",
+        player->GetGUID().ToString(), packedHouse ? "unpacked" : "bought", resolvedPlotIndex, neighborhood->GetName(), price);
+
+    // Check if neighborhoods need expansion after plot purchase
+    sNeighborhoodMgr.CheckAndExpandNeighborhoods();
 }
 
 void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::NeighborhoodMoveHouse const& neighborhoodMoveHouse)
@@ -1655,19 +1652,13 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
         return;
     }
 
-    // Deduct gold cost for house move
-    if (!player->HasEnoughMoney(HOUSE_MOVE_COST_COPPER))
-    {
-        WorldPackets::Neighborhood::NeighborhoodMoveHouseResponse response;
-        response.Result = static_cast<uint8>(HOUSING_RESULT_CANNOT_AFFORD);
-        SendPacket(response.Write());
-
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodMoveHouse: Player {} cannot afford move (need {} copper, has {})",
-            player->GetGUID().ToString(), HOUSE_MOVE_COST_COPPER, player->GetMoney());
-        return;
-    }
-
-    HousingResult result = neighborhood->MoveHouse(player->GetGUID(), targetPlotIndex);
+    // A move charges nothing and pays nothing. Blizzard's 12.1 cornerstone code hides the cost in move mode because
+    // moves are always free, and says the move job would have to change to take a cost
+    // (Blizzard_HousingCornerstone.lua 130-131). The house keeps what was paid for it, since it is the same house.
+    // There is no cooldown on moving again: its length is not known.
+    // The roster entry's plot and the house row's plot are saved in one transaction.
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    HousingResult result = neighborhood->MoveHouse(housing->GetHouseGuid(), player->GetGUID(), targetPlotIndex, trans);
 
     WorldPackets::Neighborhood::NeighborhoodMoveHouseResponse response;
     response.Result = static_cast<uint8>(result);
@@ -1681,6 +1672,22 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
         // HouseInfo, SyncUpdateFields, etc.) use the correct DB2 PlotIndex.
         {
             housing->SetPlotIndex(targetPlotIndex);
+            housing->SavePlacement(trans);
+
+            // Exterior decor is stored where it stands in the world, so it moves with the house to keep its place on
+            // the plot, in the same transaction.
+            Position fromPlot;
+            Position toPlot;
+            if (sHousingMgr.GetPlotHouseFrame(neighborhood->GetNeighborhoodMapID(), oldPlotIndex, fromPlot)
+                && sHousingMgr.GetPlotHouseFrame(neighborhood->GetNeighborhoodMapID(), targetPlotIndex, toPlot))
+                housing->MoveExteriorDecorBetweenPlots(fromPlot, toPlot, trans);
+            else
+                TC_LOG_ERROR("housing", "HandleNeighborhoodMoveHouse: plot {} or plot {} of neighborhood {} is not in NeighborhoodPlot, so the exterior decor of house {} keeps its old place",
+                    oldPlotIndex, targetPlotIndex, neighborhood->GetGuid().ToString(), housing->GetHouseGuid().ToString());
+
+            CharacterDatabase.CommitTransaction(trans);
+            // The plot's copy of the house (used when the map loads the plot) takes the moved decor.
+            neighborhood->UpdatePlotHouseMirror(*housing);
             housing->SyncUpdateFields();
             // Push the Housing/3 entity (HousingPlayerHouseEntity) to the client
             // as CREATE — the regular world-map plot icon resolves via entity
@@ -1691,8 +1698,6 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
             // the new plot's icon stays "unowned" until the player re-logs.
             GetHousingPlayerHouseEntity(housing->GetHouseGuid()).SendCreateToPlayer(player);
         }
-
-        player->ModifyMoney(-static_cast<int64>(HOUSE_MOVE_COST_COPPER));
 
         // Despawn entities at old plot, respawn at new plot
         if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))

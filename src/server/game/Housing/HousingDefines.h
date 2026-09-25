@@ -808,8 +808,6 @@ static constexpr uint32 MAX_PENDING_INVITES             = 20;
 static constexpr uint32 MIN_CHARTER_SIGNATURES          = 4;
 static constexpr uint8  INVALID_PLOT_INDEX              = 255;
 static constexpr uint32 HOUSING_MAX_NAME_LENGTH         = 64;
-static constexpr uint64 HOUSE_PURCHASE_COST_COPPER      = 1000ULL * 10000ULL;      // 1000g (sniff: 0x989680 = 10,000,000 copper)
-static constexpr uint64 HOUSE_MOVE_COST_COPPER          = 500ULL * 10000ULL;       // 500g move cost
 static constexpr uint32 MAX_HOUSE_LEVEL                 = 20;
 
 // Starter favor granted on house purchase (sniff: ChangeAmount=910, NewFavorTotal=910 in the
@@ -837,8 +835,9 @@ static constexpr float INITIATIVE_MILESTONE_SCALE       = 100.0f;
 // localized — retail presumably sends the client's locale here.
 constexpr char const HOUSING_WORLD_TEXT_NEIGHBORLY[] = "|cnYELLOW_FONT_COLOR:+Neighborly|r";
 
-// Quest 91863 objective 17 ("Acquire a house") kill credit, granted on successful purchase.
-static constexpr uint32 NPC_KILL_CREDIT_BUY_HOME        = 248858;
+// House Purchase Cover Spell, cast on the buyer after a purchase (hbcd3 Numbers 13866-13867). Its effects cast
+// 1248306 (kill credit 248858, "Acquire a house" of quest 91863), 1253658, 1253555 and the scene 1260705.
+static constexpr uint32 SPELL_HOUSE_PURCHASE_COVER      = 1253572;
 
 // Spell applied during housing decor edit mode (creates "phased-out" visual effect)
 // Sniff: aura slot 51, Flags=NoCaster, ActiveFlags=15, CastLevel=36

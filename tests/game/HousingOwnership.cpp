@@ -18,6 +18,7 @@
 #include "tc_catch2.h"
 #include "Housing.h"
 #include "ObjectGuid.h"
+#include <cmath>
 #include <vector>
 
 TEST_CASE("A house GUID matches the one retail sends", "[Housing][Ownership]")
@@ -98,5 +99,109 @@ TEST_CASE("A new house takes the first slot none of the account's houses uses", 
         for (uint32 slot = 1; slot <= 255; ++slot)
             all.push_back(uint8(slot));
         REQUIRE(Housing::FindFreeSlot(all) == 0);
+    }
+}
+
+TEST_CASE("The first house of an account is free and every other purchase costs the plot", "[Housing][Purchase]")
+{
+    // NeighborhoodPlot Cost is 10,000,000 copper (1000 gold) on every district plot in the 12.1 data.
+    uint64 constexpr PlotCost = UI64LIT(10000000);
+
+    SECTION("An account with no house pays nothing (hbcd3: no money drop at the purchase)")
+    {
+        REQUIRE(Housing::GetPurchasePrice(0, PlotCost) == 0);
+    }
+
+    SECTION("A second house costs the plot's price")
+    {
+        REQUIRE(Housing::GetPurchasePrice(1, PlotCost) == PlotCost);
+    }
+
+    SECTION("Buying back a packed house costs the plot's price, because its row still counts")
+    {
+        REQUIRE(Housing::GetPurchasePrice(1, PlotCost) == PlotCost);
+        REQUIRE(Housing::GetPurchasePrice(2, PlotCost) == PlotCost);
+    }
+}
+
+TEST_CASE("A purchase unpacks the account's packed house from the same district", "[Housing][Purchase]")
+{
+    int32 constexpr FoundersPoint = 2735;
+    int32 constexpr RazorwindShores = 2736;
+
+    SECTION("Without a packed house a new house is built")
+    {
+        REQUIRE(Housing::ChoosePackedHouseToUnpack({}, RazorwindShores, false) == -1);
+        REQUIRE(Housing::ChoosePackedHouseToUnpack({}, RazorwindShores, true) == -1);
+    }
+
+    SECTION("The packed house from this district is unpacked")
+    {
+        REQUIRE(Housing::ChoosePackedHouseToUnpack({ RazorwindShores }, RazorwindShores, false) == 0);
+        REQUIRE(Housing::ChoosePackedHouseToUnpack({ FoundersPoint, RazorwindShores }, RazorwindShores, false) == 1);
+    }
+
+    SECTION("A packed house from the other district stays packed while another house may be built")
+    {
+        REQUIRE(Housing::ChoosePackedHouseToUnpack({ FoundersPoint }, RazorwindShores, false) == -1);
+    }
+
+    SECTION("At the house cap, a packed house from the other district is unpacked instead")
+    {
+        REQUIRE(Housing::ChoosePackedHouseToUnpack({ FoundersPoint }, RazorwindShores, true) == 0);
+    }
+}
+
+TEST_CASE("A house that changes plot takes its exterior decor along", "[Housing][Purchase]")
+{
+    float constexpr QuarterTurn = 1.57079632679f;
+    Position const fromPlot(100.0f, 200.0f, 10.0f, 0.0f);
+    Position const toPlot(300.0f, 400.0f, 20.0f, QuarterTurn);
+
+    Housing::PlacedDecor original;
+    original.PosX = 105.0f;
+    original.PosY = 202.0f;
+    original.PosZ = 11.0f;
+
+    SECTION("It keeps its place and height relative to the plot and turns with it")
+    {
+        Housing::PlacedDecor decor = original;
+        Housing::MoveDecorBetweenPlots(fromPlot, toPlot, decor);
+
+        // Five yards ahead of the house and two to its left, one yard up, on a plot facing a quarter turn further.
+        REQUIRE(decor.PosX == Catch::Approx(298.0f).margin(0.001));
+        REQUIRE(decor.PosY == Catch::Approx(405.0f).margin(0.001));
+        REQUIRE(decor.PosZ == Catch::Approx(21.0f).margin(0.001));
+        REQUIRE(decor.RotationX == Catch::Approx(0.0f).margin(0.0001));
+        REQUIRE(decor.RotationY == Catch::Approx(0.0f).margin(0.0001));
+        REQUIRE(decor.RotationZ == Catch::Approx(std::sin(QuarterTurn / 2.0f)).margin(0.0001));
+        REQUIRE(decor.RotationW == Catch::Approx(std::cos(QuarterTurn / 2.0f)).margin(0.0001));
+    }
+
+    SECTION("Moving it back puts it where it was")
+    {
+        Housing::PlacedDecor decor = original;
+        decor.RotationZ = std::sin(0.3f);
+        decor.RotationW = std::cos(0.3f);
+        Housing::PlacedDecor const before = decor;
+        Housing::MoveDecorBetweenPlots(fromPlot, toPlot, decor);
+        Housing::MoveDecorBetweenPlots(toPlot, fromPlot, decor);
+
+        REQUIRE(decor.PosX == Catch::Approx(before.PosX).margin(0.001));
+        REQUIRE(decor.PosY == Catch::Approx(before.PosY).margin(0.001));
+        REQUIRE(decor.PosZ == Catch::Approx(before.PosZ).margin(0.001));
+        REQUIRE(decor.RotationZ == Catch::Approx(before.RotationZ).margin(0.0001));
+        REQUIRE(decor.RotationW == Catch::Approx(before.RotationW).margin(0.0001));
+    }
+
+    SECTION("On the same plot nothing changes")
+    {
+        Housing::PlacedDecor decor = original;
+        Housing::MoveDecorBetweenPlots(fromPlot, fromPlot, decor);
+
+        REQUIRE(decor.PosX == Catch::Approx(original.PosX).margin(0.001));
+        REQUIRE(decor.PosY == Catch::Approx(original.PosY).margin(0.001));
+        REQUIRE(decor.PosZ == Catch::Approx(original.PosZ).margin(0.001));
+        REQUIRE(decor.RotationW == Catch::Approx(1.0f).margin(0.0001));
     }
 }

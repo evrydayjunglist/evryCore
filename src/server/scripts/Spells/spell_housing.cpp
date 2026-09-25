@@ -28,6 +28,11 @@ enum HousingCornerstoneSpells
     SPELL_HOUSING_DOOR_OPEN          = 1271876   // 12.0.5 retail housing-front-door open spell
 };
 
+enum HousingPurchaseQuests
+{
+    QUEST_MY_FIRST_HOME              = 91863
+};
+
 // 1266097 - [DNT] Trigger Convo for Unowned Plot
 // Cast by Cornerstone GO (entry 457142, type UILink) when a player clicks it.
 // The SMSG_NPC_INTERACTION_OPEN_RESULT with CornerstoneInteraction (type 70) is
@@ -117,8 +122,33 @@ class spell_housing_door_open : public SpellScript
     }
 };
 
+// 1253555 - [DNT] Skip First Housing Tutorial
+// Cast on the buyer through 1253572 (House Purchase Cover Spell) when a house is bought. Its effect skips questline
+// 6063, which holds only "My First Home" (91863), so letting it through would complete that quest at the purchase.
+// Retail refused it with SPELL_FAILED_DONT_REPORT while the buyer had 91863 in her log (hbcd3 1299941), and she
+// turned the quest in herself later (hbcd3 1318088). A purchase by a character without 91863 in her log was not
+// captured; it is refused as well, so no purchase skips the tutorial quest.
+class spell_housing_skip_first_housing_tutorial : public SpellScript
+{
+    SpellCastResult CheckCast() const
+    {
+        Unit* caster = GetCaster();
+        TC_LOG_DEBUG("housing", "spell_housing_skip_first_housing_tutorial: refused spell {} for {} (quest {} {})",
+            GetSpellInfo()->Id, caster ? caster->GetGUID().ToString() : std::string("<no caster>"), QUEST_MY_FIRST_HOME,
+            caster && caster->IsPlayer() && caster->ToPlayer()->FindQuestSlot(QUEST_MY_FIRST_HOME) < MAX_QUEST_LOG_SIZE
+                ? "is in her log" : "is not in her log");
+        return SPELL_FAILED_DONT_REPORT;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_housing_skip_first_housing_tutorial::CheckCast);
+    }
+};
+
 void AddSC_housing_spell_scripts()
 {
     RegisterSpellScript(spell_housing_trigger_convo_unowned_plot);
     RegisterSpellScript(spell_housing_door_open);
+    RegisterSpellScript(spell_housing_skip_first_housing_tutorial);
 }

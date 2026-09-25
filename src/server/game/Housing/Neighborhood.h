@@ -118,6 +118,16 @@ public:
         uint32 OfferTime = 0;
     };
 
+    // A plot taken for a purchase in memory, before the purchase's transaction is committed.
+    struct PlotClaim
+    {
+        ObjectGuid PlayerGuid;
+        uint8 PlotIndex = INVALID_PLOT_INDEX;
+        // The buyer was not on the roster and joins it as a resident with this purchase.
+        bool NewMember = false;
+        uint32 JoinTime = 0;
+    };
+
     explicit Neighborhood(ObjectGuid guid);
 
     // DB persistence
@@ -169,19 +179,30 @@ public:
     Optional<PendingOwnershipTransfer> const& GetPendingTransfer() const { return _pendingTransfer; }
 
     // Plot management
-    HousingResult PurchasePlot(ObjectGuid playerGuid, uint8 plotIndex);
+    // A purchase takes its plot in three steps, so the plot, the money and the house are saved as one unit.
+    // TryReservePlot checks the plot and takes it in memory (joining the buyer to the roster when joinAsResident is
+    // set and she is not on it yet); AppendPlotClaim adds the roster rows to the purchase's transaction; UndoPlotClaim
+    // gives the plot back when the purchase fails before it is committed. After the commit, CompletePlotClaim drops
+    // the invite the buyer joined with.
+    HousingResult TryReservePlot(ObjectGuid playerGuid, uint8 plotIndex, bool joinAsResident, PlotClaim& claim);
+    void AppendPlotClaim(PlotClaim const& claim, CharacterDatabaseTransaction trans) const;
+    void UndoPlotClaim(PlotClaim const& claim);
+    void CompletePlotClaim(PlotClaim const& claim);
     void UpdatePlotHouseInfo(uint8 plotIndex, ObjectGuid houseGuid, ObjectGuid ownerBnetGuid, uint64 houseDatabaseId = 0);
+    // Copies what neighbours see of a house onto its plot (owner shown, level, favor, name, type, settings, fixtures,
+    // rooms and decor), for a house that was just bought or unpacked onto it.
+    void UpdatePlotHouseMirror(Housing const& housing);
     // Keep the plot's copy of a house's settings and shown owner current, found by the house, not by a character.
     void UpdatePlotSettingsFlagsByHouse(ObjectGuid houseGuid, uint32 settingsFlags);
     void UpdatePlotCosmeticOwnerByHouse(ObjectGuid houseGuid, ObjectGuid cosmeticOwnerGuid);
-    HousingResult MoveHouse(ObjectGuid sourcePlotOwner, uint8 newPlotIndex);
+    // Moves a house to another vacant plot of this neighborhood. The roster entry that held the old plot is
+    // updated in trans; moverGuid is the character asking, whose House Finder hold on the plot is allowed.
+    HousingResult MoveHouse(ObjectGuid houseGuid, ObjectGuid moverGuid, uint8 newPlotIndex, CharacterDatabaseTransaction trans);
     void SetPlotAreaTriggerGuid(uint8 plotIndex, ObjectGuid atGuid);
-    // m2/A5: free the plot owned by `ownerGuid` on house delete / kiosk reset so
-    // it becomes vacant (IsOccupied()==false) and re-purchasable, and clear the
-    // member's plot assignment in memory + DB. The player stays a member of the
-    // neighborhood — only the plot ownership is released. Returns true if a plot
-    // was actually freed.
-    bool ReleasePlot(ObjectGuid ownerGuid);
+    // Frees the plot a house stands on, found by the house rather than by a character, so it is vacant and can be
+    // bought again at once. The roster entry that held the plot leaves the roster, except the neighborhood's owner,
+    // who only loses the plot. Its rows change in trans. Returns the character whose roster entry held the plot.
+    ObjectGuid ReleasePlotByHouse(ObjectGuid houseGuid, CharacterDatabaseTransaction trans);
 
     PlotInfo const* GetPlotInfo(uint8 plotIndex) const
     {

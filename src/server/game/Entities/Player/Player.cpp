@@ -19273,7 +19273,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     // refuses the interior, which sends her to the go-back trigger or her homebind.
     if (mapEntry && mapEntry->IsHouseInterior() && instanceId)
         for (std::unique_ptr<Housing> const& housing : _housings)
-            if (housing && housing->GetDatabaseId() == instanceId)
+            if (housing && housing->GetDatabaseId() == instanceId && !housing->IsPacked())
                 SetHouseVisitTarget(housing->GetHouseGuid());
 
     // NOW player must have valid map
@@ -19763,7 +19763,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             // Add house GUIDs to the Houses set
             for (auto const& h : _housings)
             {
-                if (h && !h->GetHouseGuid().IsEmpty())
+                if (h && !h->IsPacked() && !h->GetHouseGuid().IsEmpty())
                     InsertSetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerInitiativeComponentData, 0)
                         .ModifyValue(&UF::PlayerInitiativeComponentData::Houses), h->GetHouseGuid());
             }
@@ -31985,7 +31985,7 @@ void Player::DeleteGarrison()
     }
 }
 
-Housing* Player::CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex)
+Housing* Player::CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount)
 {
     // A house belongs to a Battle.net account; a session without one cannot own a house.
     if (!GetSession() || !GetSession()->GetBattlenetAccountId())
@@ -32005,14 +32005,11 @@ Housing* Player::CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex)
     if (!slot)
         return nullptr;
 
+    // A house that fails to build is never marked loaded, and destroying it here takes its shared entry with it, so
+    // nothing of it stays behind.
     std::unique_ptr<Housing> housing = std::make_unique<Housing>(this, /*databaseId*/ 0, slot);
-    if (housing->Create(neighborhoodGuid, plotIndex) != HOUSING_RESULT_SUCCESS)
+    if (housing->Create(neighborhoodGuid, plotIndex, refundAmount) != HOUSING_RESULT_SUCCESS)
         return nullptr;
-
-    // Immediately persist to DB so housing survives server restarts
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    housing->SaveToDB(trans);
-    CharacterDatabase.CommitTransaction(trans);
 
     // Update PlayerHouseInfoComponentData::Houses UpdateField so dashboard works mid-session
     AddPlayerMirrorHouse(*housing);
@@ -32025,6 +32022,74 @@ Housing* Player::CreateHousing(ObjectGuid neighborhoodGuid, uint8 plotIndex)
         other->AddAccountHousing(created->GetDatabaseId());
 
     return created;
+}
+
+Housing* Player::UnpackHousing(ObjectGuid houseGuid, ObjectGuid neighborhoodGuid, uint8 plotIndex, uint64 refundAmount)
+{
+    Housing* housing = GetHousingByGuid(houseGuid);
+    if (!housing || housing->Unpack(neighborhoodGuid, plotIndex, refundAmount) != HOUSING_RESULT_SUCCESS)
+        return nullptr;
+
+    AddPlayerMirrorHouse(*housing);
+
+    for (Player* other : GetOtherOnlineAccountCharacters())
+        other->ShowAccountHousing(houseGuid);
+
+    return housing;
+}
+
+void Player::PackHousing(ObjectGuid houseGuid, CharacterDatabaseTransaction trans)
+{
+    Housing* housing = GetHousingByGuid(houseGuid);
+    if (!housing || housing->IsPacked())
+        return;
+
+    housing->Pack(trans);
+    HideAccountHousing(houseGuid);
+
+    for (Player* other : GetOtherOnlineAccountCharacters())
+        other->HideAccountHousing(houseGuid);
+}
+
+void Player::HideAccountHousing(ObjectGuid houseGuid)
+{
+    Housing* housing = GetHousingByGuid(houseGuid);
+    if (!housing)
+        return;
+
+    // The house no longer stands on a plot of the map she is on, so that map's index of live houses drops it. The
+    // Housing itself stays: a packed house is still the account's.
+    if (HousingMap* housingMap = dynamic_cast<HousingMap*>(FindMap()))
+        housingMap->DropHouse(houseGuid);
+    RemovePlayerMirrorHouse(houseGuid);
+}
+
+void Player::ShowAccountHousing(ObjectGuid houseGuid)
+{
+    Housing* housing = GetHousingByGuid(houseGuid);
+    if (!housing || housing->IsPacked())
+        return;
+
+    if (m_playerHouseInfoComponentData.has_value())
+        AddPlayerMirrorHouse(*housing);
+
+    SendHousingEntityCreate(*housing);
+    housing->SyncUpdateFields();
+}
+
+void Player::SendHousingEntityCreate(Housing const& housing)
+{
+    // A character already in the world was sent her house entities with her own create, so a house new to her needs
+    // its entity created before any values update for it can go out; at login the character's create carries it.
+    if (!IsInWorld())
+        return;
+
+    HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity(housing.GetHouseGuid());
+    if (!HaveAtClient(&houseEntity))
+    {
+        houseEntity.SendCreateToPlayer(this);
+        m_clientGUIDs.insert(houseEntity.GetGUID());
+    }
 }
 
 void Player::DeleteHousing(ObjectGuid houseGuid)
@@ -32058,18 +32123,7 @@ void Player::AddAccountHousing(uint64 houseDatabaseId)
     if (m_playerHouseInfoComponentData.has_value())
         AddPlayerMirrorHouse(*housing);
 
-    // A character already in the world was sent her house entities with her own create, so this house's entity is new
-    // to her client. Create it there before any values update for it can go out; at login the character's create
-    // carries it.
-    if (IsInWorld())
-    {
-        HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity(housing->GetHouseGuid());
-        if (!HaveAtClient(&houseEntity))
-        {
-            houseEntity.SendCreateToPlayer(this);
-            m_clientGUIDs.insert(houseEntity.GetGUID());
-        }
-    }
+    SendHousingEntityCreate(*housing);
 
     TC_LOG_DEBUG("housing", "Player::AddAccountHousing: {} now holds house {} of her Battle.net account",
         GetGUID().ToString(), housing->GetHouseGuid().ToString());
@@ -32094,7 +32148,8 @@ void Player::ForgetHousing(ObjectGuid houseGuid)
 
 void Player::AddPlayerMirrorHouse(Housing const& housing)
 {
-    if (housing.GetHouseGuid().IsEmpty())
+    // A packed house stands on no plot, so there is nothing for this list to show; it comes back when it is unpacked.
+    if (housing.GetHouseGuid().IsEmpty() || housing.IsPacked())
         return;
 
     UF::PlayerMirrorHouse& mirrorHouse = AddDynamicUpdateFieldValue(
@@ -32172,9 +32227,12 @@ Housing* Player::GetHousing() const
 
     if (IsInWorld())
     {
-        // Inside a house: that house, when the account owns it.
+        // Inside a house: that house, when the account owns it and it has not been packed since.
         if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(GetMap()))
-            return GetHousingByGuid(interiorMap->GetHouseGuid());
+        {
+            Housing* housing = GetHousingByGuid(interiorMap->GetHouseGuid());
+            return housing && !housing->IsPacked() ? housing : nullptr;
+        }
 
         // In a neighborhood: the account's house there, if it has one.
         if (HousingMap* housingMap = dynamic_cast<HousingMap*>(GetMap()))
@@ -32185,8 +32243,17 @@ Housing* Player::GetHousing() const
         }
     }
 
-    // Anywhere else only an account with a single house has an obvious one.
-    return _housings.size() == 1 ? _housings[0].get() : nullptr;
+    // Anywhere else only an account with a single standing house has an obvious one.
+    Housing* standing = nullptr;
+    for (auto const& h : _housings)
+    {
+        if (!h || h->IsPacked())
+            continue;
+        if (standing)
+            return nullptr;
+        standing = h.get();
+    }
+    return standing;
 }
 
 Housing* Player::GetAccountCatalogHousing() const
@@ -32227,7 +32294,7 @@ std::vector<Housing const*> Player::GetAllHousings() const
     std::vector<Housing const*> result;
     result.reserve(_housings.size());
     for (auto const& h : _housings)
-        if (h)
+        if (h && !h->IsPacked())
             result.push_back(h.get());
     return result;
 }

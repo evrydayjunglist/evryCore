@@ -66,6 +66,8 @@ public:
     void AddPlayerHousing(Housing* housing);
     void RemovePlayerHousing(Player* player);
     void ForgetHousing(Housing const* housing);
+    // A packed house stands on no plot of this map any more: stop listing it, without handing it to anyone.
+    void DropHouse(ObjectGuid houseGuid);
 
     // Fixture override map: hookID → ExteriorComponentID from player's fixture selections.
     // When provided, SpawnExtCompTree uses these instead of the DB2 default component at each hook.

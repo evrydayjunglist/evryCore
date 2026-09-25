@@ -39,6 +39,7 @@
 #include "Timer.h"
 #include "World.h"
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 namespace
@@ -559,6 +560,27 @@ std::vector<NeighborhoodPlotData const*> HousingMgr::GetPlotsForMap(uint32 neigh
         TC_LOG_ERROR("housing", "  neighborhoodMapId={} ({} plots)", id, uint32(vec.size()));
 
     return {};
+}
+
+bool HousingMgr::GetPlotHouseFrame(uint32 neighborhoodMapId, uint8 plotIndex, Position& frame) const
+{
+    auto itr = _plotsByMap.find(neighborhoodMapId);
+    if (itr == _plotsByMap.end())
+        return false;
+
+    for (NeighborhoodPlotData const* plot : itr->second)
+    {
+        if (!plot || plot->PlotIndex != int32(plotIndex))
+            continue;
+
+        float facing = plot->HouseRotation[2];
+        if (plot->HouseRotation[0] == 0.0f && plot->HouseRotation[1] == 0.0f && plot->HouseRotation[2] == 0.0f)
+            facing = std::atan2(plot->CornerstonePosition[1] - plot->HousePosition[1], plot->CornerstonePosition[0] - plot->HousePosition[0]);
+
+        frame.Relocate(plot->HousePosition[0], plot->HousePosition[1], plot->HousePosition[2], facing);
+        return true;
+    }
+    return false;
 }
 
 NeighborhoodPlotData const* HousingMgr::GetPlotByCornerstoneEntry(uint32 neighborhoodMapId, uint32 cornerstoneGoEntry) const

@@ -129,16 +129,43 @@ namespace
         return houseGuid.IsEmpty() ? player->GetHousing() : player->GetHousingByGuid(houseGuid);
     }
 
-    // Tear a house down: despawn everything it owns on the map, free the plot, drop
-    // the neighborhood membership and delete the rows. Returns the house GUID that was
-    // destroyed (empty if there was nothing to destroy) so callers can fill responses
-    // and notifications.
-    //
-    // H-08: relinquish did all of this and kiosk reset did none of it - kiosk reset was
-    // six lines that called DeleteHousing() and returned, leaving the ten MeshObjects
-    // and the door GO standing on a plot the server then considered vacant, and
-    // ignoring CONFIG_HOUSING_ENABLE_DELETE_HOUSE entirely. Two implementations of one
-    // operation is how they drifted apart, so there is now one.
+    // Take a house's exterior, rooms and decor off its plot on its neighborhood's map, wherever the character acting
+    // is: a house is often relinquished from the dashboard, away from its plot. Each neighborhood has its own map
+    // instance, numbered by the neighborhood; the same plot index on another neighborhood's map is someone else's.
+    // That map also stops listing the house among its live houses, since the house no longer stands there.
+    void DespawnHouseFromPlot(Neighborhood const* neighborhood, uint8 plotIndex, ObjectGuid houseGuid)
+    {
+        if (!neighborhood || plotIndex == INVALID_PLOT_INDEX)
+            return;
+
+        uint32 const worldMapId = sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID());
+        HousingMap* housingMap = dynamic_cast<HousingMap*>(sMapMgr->FindMap(worldMapId, uint32(neighborhood->GetGuid().GetCounter())));
+        if (!housingMap || housingMap->GetNeighborhood() != neighborhood)
+            return;
+
+        housingMap->DespawnAllDecorForPlot(plotIndex);
+        housingMap->DespawnAllMeshObjectsForPlot(plotIndex);
+        housingMap->DespawnRoomForPlot(plotIndex);
+        housingMap->DespawnHouseForPlot(plotIndex);
+        housingMap->SetPlotOwnershipState(plotIndex, false);
+        housingMap->DropHouse(houseGuid);
+    }
+
+    void SendGuildRemoveHouseNotification(Player* player, ObjectGuid houseGuid, ObjectGuid cosmeticOwnerGuid)
+    {
+        if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
+        {
+            WorldPackets::Housing::HousingSvcsGuildRemoveHouseNotification notification;
+            notification.House.HouseGUID = houseGuid;
+            notification.House.OwnerGUID = cosmeticOwnerGuid;
+            guild->BroadcastPacket(notification.Write());
+        }
+    }
+
+    // Tear a house down for CMSG_HOUSING_RESET_KIOSK_MODE: despawn everything it owns on the map, free the plot by
+    // the house, drop the plot holder from the roster and delete the rows. Returns the house GUID that was destroyed
+    // (empty if there was nothing to destroy) so the caller can fill its response. Relinquishing does not come here:
+    // it packs the house instead.
     ObjectGuid DestroyPlayerHousing(Player* player, Housing const* housing)
     {
         if (!housing)
@@ -152,37 +179,17 @@ namespace
         Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
 
         // Despawn map entities BEFORE the housing data goes away.
-        if (plotIndex != INVALID_PLOT_INDEX)
-        {
-            if (HousingMap* housingMap = dynamic_cast<HousingMap*>(player->GetMap()))
-            {
-                housingMap->DespawnAllDecorForPlot(plotIndex);
-                housingMap->DespawnAllMeshObjectsForPlot(plotIndex);
-                housingMap->DespawnRoomForPlot(plotIndex);
-                housingMap->DespawnHouseForPlot(plotIndex);
-                housingMap->SetPlotOwnershipState(plotIndex, false);
-            }
-        }
+        DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
 
-        if (neighborhood)
-        {
-            // EvictPlayer sends the remaining members the new roster.
-            neighborhood->EvictPlayer(player->GetGUID());
-            neighborhood->RefreshMirrorDataForOnlineMembers();
-        }
-
+        // Housing::Delete frees the plot by the house and drops the plot holder from the roster, in the same
+        // transaction as the rows.
         player->DeleteHousing(houseGuid);
 
+        if (neighborhood)
+            neighborhood->RefreshMirrorDataForOnlineMembers();
+
         if (!houseGuid.IsEmpty())
-        {
-            if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
-            {
-                WorldPackets::Housing::HousingSvcsGuildRemoveHouseNotification notification;
-                notification.House.HouseGUID = houseGuid;
-                notification.House.OwnerGUID = cosmeticOwnerGuid;
-                guild->BroadcastPacket(notification.Write());
-            }
-        }
+            SendGuildRemoveHouseNotification(player, houseGuid, cosmeticOwnerGuid);
 
         TC_LOG_INFO("housing", "DestroyPlayerHousing: Player {} destroyed house {} on plot {} in neighborhood {}",
             player->GetGUID().ToString(), houseGuid.ToString(), plotIndex, neighborhoodGuid.ToString());
@@ -3608,12 +3615,11 @@ void WorldSession::HandleHousingSvcsNeighborhoodReservePlot(WorldPackets::Housin
     //   - the actual purchase/move is a separate action via the cornerstone UI
     //     (CMSG_NEIGHBORHOOD_BUY_HOUSE / CMSG_NEIGHBORHOOD_MOVE_HOUSE)
     //
-    // Earlier TC implementation called Neighborhood::PurchasePlot here, which
-    // permanently assigned the plot AND created a Housing object — the wrong
-    // semantics for a reservation. The whole buy-side flow (Housing creation,
-    // starter-decor placement, plot spawn, guild notification, kill credit,
-    // CURRENT_HOUSE_INFO refresh, spell cast) belongs in HandleNeighborhoodBuyHouse,
-    // not here.
+    // An earlier implementation bought the plot here, which permanently assigned
+    // the plot AND created a Housing object — the wrong semantics for a reservation.
+    // The whole buy-side flow (the house, the plot spawn, the guild notification,
+    // the House Purchase Cover Spell and the replies) belongs in
+    // HandleNeighborhoodBuyHouse, not here.
 
     if (!sWorld->getBoolConfig(CONFIG_HOUSING_ENABLE_BUY_HOUSE))
     {
@@ -3684,9 +3690,10 @@ void WorldSession::HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::Housi
         return;
     }
 
-    // The house the packet names, when the character's Battle.net account owns it.
-    Housing* housing = ResolveRequestedHousing(player, housingSvcsRelinquishHouse.HouseGuid);
-    if (!housing)
+    // The house the packet names (Blizzard's 12.1 RelinquishHouse takes one house GUID), when the character's
+    // Battle.net account owns it and it still stands on a plot.
+    Housing* housing = player->GetHousingByGuid(housingSvcsRelinquishHouse.HouseGuid);
+    if (!housing || housing->IsPacked())
     {
         WorldPackets::Housing::HousingSvcsRelinquishHouseResponse response;
         response.Result = static_cast<uint8>(HOUSING_RESULT_HOUSE_NOT_FOUND);
@@ -3694,10 +3701,45 @@ void WorldSession::HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::Housi
         return;
     }
 
-    // Full teardown: despawn the structure, free the plot, drop membership, delete the
-    // rows, notify roster and guild. Shared with CMSG_HOUSING_RESET_KIOSK_MODE, which
-    // destroys a house by the same definition and used to do none of it (H-08).
-    ObjectGuid houseGuid = DestroyPlayerHousing(player, housing);
+    // Relinquishing packs the house rather than deleting it: "Your layout will be saved, and you can purchase a new
+    // House to automatically import it" (GlobalStrings HOUSING_HOUSE_SETTINGS_ABANDON_DESCRIPTION). Rooms, decor,
+    // fixtures, level and favor are kept. As the owner chose, the plot is free at once, with no time to move back in
+    // and no cooldown on buying again, since no source gives either length. What was paid for the house is paid
+    // back, which the 12.1 relinquish dialog shows (C_Housing.GetCurrentHouseRefundAmount); a free first house pays
+    // back nothing.
+    ObjectGuid const houseGuid = housing->GetHouseGuid();
+    ObjectGuid const cosmeticOwnerGuid = housing->GetCosmeticOwnerGuid();
+    uint8 const plotIndex = housing->GetPlotIndex();
+    uint64 const refund = housing->GetRefundAmount();
+    Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhood(housing->GetNeighborhoodGuid());
+
+    // A refund that would take her over the gold limit is refused before anything changes (ModifyMoney sends the
+    // too-much-gold error).
+    if (refund && !player->ModifyMoney(static_cast<int64>(refund)))
+    {
+        WorldPackets::Housing::HousingSvcsRelinquishHouseResponse response;
+        response.Result = static_cast<uint8>(HOUSING_RESULT_GENERIC_FAILURE);
+        response.HouseGuid = houseGuid;
+        SendPacket(response.Write());
+        return;
+    }
+
+    DespawnHouseFromPlot(neighborhood, plotIndex, houseGuid);
+
+    // The plot, the packed house and the refund as one unit.
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        if (neighborhood)
+            neighborhood->ReleasePlotByHouse(houseGuid, trans);
+        player->PackHousing(houseGuid, trans);
+        player->SaveInventoryAndGoldToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+
+    if (neighborhood)
+        neighborhood->RefreshMirrorDataForOnlineMembers();
+
+    SendGuildRemoveHouseNotification(player, houseGuid, cosmeticOwnerGuid);
 
     WorldPackets::Housing::HousingSvcsRelinquishHouseResponse response;
     response.Result = static_cast<uint8>(HOUSING_RESULT_SUCCESS);
@@ -3708,8 +3750,8 @@ void WorldSession::HandleHousingSvcsRelinquishHouse(WorldPackets::Housing::Housi
     WorldPackets::Housing::HousingSvcRequestPlayerReloadData reloadData;
     SendPacket(reloadData.Write());
 
-    TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_RELINQUISH_HOUSE: Player {} relinquished house {}",
-        player->GetGUID().ToString(), houseGuid.ToString());
+    TC_LOG_INFO("housing", "CMSG_HOUSING_SVCS_RELINQUISH_HOUSE: Player {} relinquished house {}; it is packed, plot {} is free, {} copper paid back",
+        player->GetGUID().ToString(), houseGuid.ToString(), plotIndex, refund);
 }
 
 void WorldSession::HandleHousingSvcsUpdateHouseSettings(WorldPackets::Housing::HousingSvcsUpdateHouseSettings const& housingSvcsUpdateHouseSettings)
@@ -4902,10 +4944,9 @@ void WorldSession::HandleHousingResetKioskMode(WorldPackets::Housing::HousingRes
         return;
     }
 
-    // Full teardown, shared with relinquish: despawn the structure, free the plot,
-    // drop membership, delete the rows. This used to call DeleteHousing() alone,
-    // which left the ten MeshObjects and the door GO standing on a plot the server
-    // now considered vacant and re-purchasable.
+    // Full teardown: despawn the structure, free the plot, drop the plot holder from the roster, delete the rows.
+    // This used to call DeleteHousing() alone, which left the ten MeshObjects and the door GO standing on a plot the
+    // server then considered vacant and re-purchasable.
     // The kiosk request names no house: it acts on the house the character stands in or on.
     ObjectGuid destroyedHouseGuid = DestroyPlayerHousing(player, player->GetHousing());
 

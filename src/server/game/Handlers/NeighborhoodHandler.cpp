@@ -2031,35 +2031,9 @@ void WorldSession::HandleNeighborhoodGetRoster(WorldPackets::Neighborhood::Neigh
     SendPacket(rosterPkt);
 
     // Populate the Housing/4 entity with this neighborhood's mirror data so the
-    // client's internal house list stays in sync for plot resolution.
-    HousingNeighborhoodMirrorEntity& mirrorEntity = GetHousingNeighborhoodMirrorEntity();
-    mirrorEntity.SetName(neighborhood->GetName());
-    mirrorEntity.SetOwnerGUID(neighborhood->GetOwnerGuid());
-
-    mirrorEntity.ClearHouses();
-    for (auto const& plot : neighborhood->GetPlots())
-    {
-        if (plot.IsOccupied() && !plot.HouseGuid.IsEmpty())
-            mirrorEntity.AddHouse(plot.HouseGuid, plot.OwnerGuid);
-        else
-            mirrorEntity.AddHouse(ObjectGuid::Empty, ObjectGuid::Empty);
-    }
-
-    mirrorEntity.ClearManagers();
-    for (auto const& member : neighborhood->GetMembers())
-    {
-        if (member.Role == NEIGHBORHOOD_ROLE_MANAGER || member.Role == NEIGHBORHOOD_ROLE_OWNER)
-        {
-            ObjectGuid bnetGuid;
-            if (Player* mgr = ObjectAccessor::FindPlayer(member.PlayerGuid))
-                bnetGuid = mgr->GetSession()->GetBattlenetAccountGUID();
-            mirrorEntity.AddManager(bnetGuid, member.PlayerGuid);
-        }
-    }
-    // Wholesale re-push (ClearHouses + 55 AddHouse + ClearManagers + AddManagers).
-    // Retail emits CREATE_OBJECT here (sniff-verified). The client's map-icon
-    // refresh path only fires on CREATE.
-    mirrorEntity.SendCreateToPlayer(player);
+    // client's internal house list stays in sync for plot resolution, while she is on this neighborhood's map; the entity
+    // names that neighborhood only (Neighborhood::SendMirrorTo).
+    neighborhood->SendMirrorTo(player);
 
     // Pre-push player names for all plot owners so the client can format
     // plot names via HOUSING_HOUSE_NAME_FORMAT without waiting for async name queries.

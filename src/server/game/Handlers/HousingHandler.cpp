@@ -3743,6 +3743,12 @@ void WorldSession::HandleHousingSvcsTeleportToPlot(WorldPackets::Housing::Housin
         }
     }
 
+    // The neighborhood's own map instance must exist when the cast ends, because spell_housing_teleport_home sends her
+    // into that instance and a world port to an instance id finds a map, it does not make one. Neighborhoods loaded at
+    // startup are already there; a guild or charter neighborhood made since is loaded here, on the world thread.
+    if (!sMapMgr->LoadNeighborhoodMap(neighborhood))
+        TC_LOG_ERROR("housing", "HandleHousingSvcsTeleportToPlot: the map of neighborhood {} could not be loaded", neighborhood->GetGuid().ToString());
+
     // Retail casts Teleport Home on her, 10 seconds, with the plot's arrival point and the neighborhood as its target
     // (hbcd3 2044258). The spell's teleport effect has no destination of its own.
     SpellCastTargets targets;
@@ -4321,48 +4327,11 @@ void WorldSession::HandleHousingSvcsGetHouseFinderNeighborhood(WorldPackets::Hou
     SendPacket(response.Write());
 
     // Populate the Housing/4 entity with this neighborhood's mirror data so the
-    // client's internal house list stays in sync for plot resolution.
-    HousingNeighborhoodMirrorEntity& mirrorEntity = GetHousingNeighborhoodMirrorEntity();
-    mirrorEntity.SetName(neighborhood->GetName());
-    mirrorEntity.SetOwnerGUID(neighborhood->GetOwnerGuid());
-
-    mirrorEntity.ClearHouses();
-    for (auto const& plot : neighborhood->GetPlots())
-    {
-        if (plot.IsOccupied() && !plot.HouseGuid.IsEmpty())
-            mirrorEntity.AddHouse(plot.HouseGuid, plot.OwnerGuid);
-        else
-            mirrorEntity.AddHouse(ObjectGuid::Empty, ObjectGuid::Empty);
-    }
-
-    // Count what we're sending on the mirror entity
-    uint32 mirrorOccupied = 0;
-    uint32 mirrorEmpty = 0;
-    for (auto const& plot : neighborhood->GetPlots())
-    {
-        if (plot.IsOccupied() && !plot.HouseGuid.IsEmpty())
-            ++mirrorOccupied;
-        else
-            ++mirrorEmpty;
-    }
-    TC_LOG_DEBUG("housing", "  MIRROR: sending {} occupied + {} empty = {} total slots",
-        mirrorOccupied, mirrorEmpty, mirrorOccupied + mirrorEmpty);
-
-    mirrorEntity.ClearManagers();
-    for (auto const& member : neighborhood->GetMembers())
-    {
-        if (member.Role == NEIGHBORHOOD_ROLE_MANAGER || member.Role == NEIGHBORHOOD_ROLE_OWNER)
-        {
-            ObjectGuid bnetGuid;
-            if (Player* mgr = ObjectAccessor::FindPlayer(member.PlayerGuid))
-                bnetGuid = mgr->GetSession()->GetBattlenetAccountGUID();
-            mirrorEntity.AddManager(bnetGuid, member.PlayerGuid);
-        }
-    }
-    // Wholesale re-push; retail uses CREATE for this (sniff-verified).
-    mirrorEntity.SendCreateToPlayer(player);
-
-    TC_LOG_DEBUG("housing", "  MIRROR: update sent to player {}", player->GetName());
+    // client's internal house list stays in sync for plot resolution, while she is on this neighborhood's map; the entity
+    // names that neighborhood only (Neighborhood::SendMirrorTo).
+    bool const mirrorSent = neighborhood->SendMirrorTo(player);
+    TC_LOG_DEBUG("housing", "  MIRROR: {} to player {}", mirrorSent ? "update sent" : "not sent (she is not on this neighborhood's map)",
+        player->GetName());
 }
 
 void WorldSession::HandleHousingSvcsGetBnetFriendNeighborhoods(WorldPackets::Housing::HousingSvcsGetBnetFriendNeighborhoods const& housingSvcsGetBnetFriendNeighborhoods)

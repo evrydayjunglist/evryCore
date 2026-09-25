@@ -277,71 +277,78 @@ void MapManager::PreloadHousingMaps()
     uint32 count = 0;
 
     for (Neighborhood* neighborhood : sNeighborhoodMgr.GetAllNeighborhoods())
-    {
-        // Neighborhood::GetNeighborhoodMapID() is a NeighborhoodMap.db2 id (1, 2, 4, 7), NOT a Map.db2 id -
-        // the world map lives in that row's MapID column (1 -> 2735, 2 -> 2736, 4 -> 2640, 7 -> 2783). Every
-        // other consumer resolves it through sHousingMgr.GetNeighborhoodMapData() first; this one used the raw
-        // id as a map id, so it looked up Map 1 "Kalimdor" and Map 2 "Outland", found InstanceType 0 instead of
-        // MAP_HOUSE_NEIGHBORHOOD, and skipped BOTH public neighborhoods at startup. With neither map preloaded
-        // a player could not be placed into a neighborhood at all - which presented as "cannot choose a
-        // neighborhood" even though the rows existed and the faction seed was correct.
-        NeighborhoodMapData const* nmData = sHousingMgr.GetNeighborhoodMapData(neighborhood->GetNeighborhoodMapID());
-        if (!nmData)
-        {
-            TC_LOG_ERROR("housing", "MapManager::PreloadHousingMaps: neighborhood '{}' references NeighborhoodMap id {} which is not in NeighborhoodMap.db2 - skipping",
-                neighborhood->GetName(), neighborhood->GetNeighborhoodMapID());
-            continue;
-        }
-
-        uint32 mapId = uint32(nmData->MapID);
-        uint32 instanceId = static_cast<uint32>(neighborhood->GetGuid().GetCounter());
-
-        if (FindMap_i(mapId, instanceId))
-            continue; // already loaded
-
-        // Validate map exists in DB2 and is actually a housing neighborhood map
-        MapEntry const* mapEntry = sMapStore.LookupEntry(mapId);
-        if (!mapEntry)
-        {
-            TC_LOG_ERROR("housing", "MapManager::PreloadHousingMaps: Map {} does not exist in Map.db2 — skipping neighborhood '{}' (instanceId={})",
-                mapId, neighborhood->GetName(), instanceId);
-            continue;
-        }
-
-        if (mapEntry->InstanceType != MAP_HOUSE_NEIGHBORHOOD)
-        {
-            TC_LOG_ERROR("housing", "MapManager::PreloadHousingMaps: Map {} '{}' is type {} (expected {}=MAP_HOUSE_NEIGHBORHOOD) — skipping neighborhood '{}'. Fix the neighborhoodMapID in the database!",
-                mapId, mapEntry->MapName[DEFAULT_LOCALE], mapEntry->InstanceType, MAP_HOUSE_NEIGHBORHOOD, neighborhood->GetName());
-            continue;
-        }
-
-        HousingMap* map = CreateHousing(mapId, instanceId, instanceId);
-        if (!map)
-        {
-            TC_LOG_ERROR("housing", "MapManager::PreloadHousingMaps: Failed to create map {} instanceId {} for neighborhood '{}'",
-                mapId, instanceId, neighborhood->GetName());
-            continue;
-        }
-
-        // Register in the map store (same as CreateMap does)
-        Trinity::unique_trackable_ptr<Map>& ptr = i_maps[{ map->GetId(), map->GetInstanceId() }];
-        ptr.reset(map);
-        map->SetWeakPtr(ptr);
-
-        sScriptMgr->OnCreateMap(map);
-
-        // Load all grid cells so every entity (ATs, GOs, MeshObjects) is fully spawned.
-        // This prevents crashes when other systems (GameEventMgr, etc.) iterate the map
-        // and ensures all entities are ready before any player connects.
-        // Map::LoadAllGrids loads every grid (EnsureGridLoaded per GridCoord).
-        map->LoadAllGrids();
-
-        ++count;
-        TC_LOG_DEBUG("housing", "MapManager::PreloadHousingMaps: Pre-loaded neighborhood '{}' (map={} instanceId={}) with all cells",
-            neighborhood->GetName(), mapId, instanceId);
-    }
+        if (LoadNeighborhoodMap(neighborhood))
+            ++count;
 
     TC_LOG_INFO("server.loading", ">> Pre-loaded {} housing neighborhood maps in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+}
+
+HousingMap* MapManager::LoadNeighborhoodMap(Neighborhood const* neighborhood)
+{
+    if (!neighborhood)
+        return nullptr;
+
+    // Neighborhood::GetNeighborhoodMapID() is a NeighborhoodMap.db2 id (1, 2, 4, 7), NOT a Map.db2 id -
+    // the world map lives in that row's MapID column (1 -> 2735, 2 -> 2736, 4 -> 2640, 7 -> 2783). Every
+    // other consumer resolves it through sHousingMgr.GetNeighborhoodMapData() first; this one used the raw
+    // id as a map id, so it looked up Map 1 "Kalimdor" and Map 2 "Outland", found InstanceType 0 instead of
+    // MAP_HOUSE_NEIGHBORHOOD, and skipped BOTH public neighborhoods at startup. With neither map preloaded
+    // a player could not be placed into a neighborhood at all - which presented as "cannot choose a
+    // neighborhood" even though the rows existed and the faction seed was correct.
+    NeighborhoodMapData const* nmData = sHousingMgr.GetNeighborhoodMapData(neighborhood->GetNeighborhoodMapID());
+    if (!nmData)
+    {
+        TC_LOG_ERROR("housing", "MapManager::LoadNeighborhoodMap: neighborhood '{}' references NeighborhoodMap id {} which is not in NeighborhoodMap.db2 - skipping",
+            neighborhood->GetName(), neighborhood->GetNeighborhoodMapID());
+        return nullptr;
+    }
+
+    uint32 mapId = uint32(nmData->MapID);
+    uint32 instanceId = static_cast<uint32>(neighborhood->GetGuid().GetCounter());
+
+    std::scoped_lock lock(_mapsLock);
+
+    if (Map* loaded = FindMap_i(mapId, instanceId))
+        return dynamic_cast<HousingMap*>(loaded);
+
+    // Validate map exists in DB2 and is actually a housing neighborhood map
+    MapEntry const* mapEntry = sMapStore.LookupEntry(mapId);
+    if (!mapEntry)
+    {
+        TC_LOG_ERROR("housing", "MapManager::LoadNeighborhoodMap: Map {} does not exist in Map.db2 — skipping neighborhood '{}' (instanceId={})",
+            mapId, neighborhood->GetName(), instanceId);
+        return nullptr;
+    }
+
+    if (mapEntry->InstanceType != MAP_HOUSE_NEIGHBORHOOD)
+    {
+        TC_LOG_ERROR("housing", "MapManager::LoadNeighborhoodMap: Map {} '{}' is type {} (expected {}=MAP_HOUSE_NEIGHBORHOOD) — skipping neighborhood '{}'. Fix the neighborhoodMapID in the database!",
+            mapId, mapEntry->MapName[DEFAULT_LOCALE], mapEntry->InstanceType, MAP_HOUSE_NEIGHBORHOOD, neighborhood->GetName());
+        return nullptr;
+    }
+
+    HousingMap* map = CreateHousing(mapId, instanceId, instanceId);
+    if (!map)
+    {
+        TC_LOG_ERROR("housing", "MapManager::LoadNeighborhoodMap: Failed to create map {} instanceId {} for neighborhood '{}'",
+            mapId, instanceId, neighborhood->GetName());
+        return nullptr;
+    }
+
+    // Register in the map store (same as CreateMap does)
+    Trinity::unique_trackable_ptr<Map>& ptr = i_maps[{ map->GetId(), map->GetInstanceId() }];
+    ptr.reset(map);
+    map->SetWeakPtr(ptr);
+
+    sScriptMgr->OnCreateMap(map);
+
+    // Only the grids of the plots are loaded, by CreateHousing (the cornerstones and plot triggers are put on them, and
+    // LockPlotGrids keeps them loaded). The rest of the map loads around the characters who come, as on any other map;
+    // loading every one of the map's 64 by 64 grids up front made thousands of empty grids for each neighborhood.
+
+    TC_LOG_DEBUG("housing", "MapManager::LoadNeighborhoodMap: Loaded neighborhood '{}' (map={} instanceId={})",
+        neighborhood->GetName(), mapId, instanceId);
+    return map;
 }
 
 HouseInteriorMap* MapManager::CreateHouseInterior(uint32 mapId, uint32 instanceId, Player* creator, ObjectGuid houseGuid)

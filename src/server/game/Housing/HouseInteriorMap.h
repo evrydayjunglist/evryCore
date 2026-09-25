@@ -147,6 +147,12 @@ public:
     void GrantHousingTutorialProgress(Player* player);
 
 private:
+    // Whether the character is still in this interior, for events scheduled on her, which run on whichever map she is on.
+    static bool IsStillInHouse(Player const* player, Map const* interior, uint32 instanceId);
+
+    // Stands the house's exit door on its entry hall, once for the house, for owners and visitors alike.
+    void SpawnExitDoor();
+
     ObjectGuid _owner;
     ObjectGuid _houseGuid;
     Player* _loadingPlayer; ///< @workaround Player not in ObjectAccessor during login

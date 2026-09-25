@@ -28,6 +28,7 @@
 #include "NeighborhoodMgr.h"
 #include "Player.h"
 #include "SpellInfo.h"
+#include "SpellPackets.h"
 #include "SpellScript.h"
 
 enum HousingPurchaseQuests
@@ -217,9 +218,125 @@ class spell_housing_exit_house : public SpellScript
     }
 };
 
+// 1233637 - Teleport Home
+// Retail casts it on the character for ten seconds, with the plot's arrival point as the destination and the
+// neighborhood as the cast's housing target (hbcd3 2044258, HousingGUID). Its teleport effect, effect 1, has no
+// destination of its own. The core teleport would keep her in the instance she is in when she stands in another
+// neighborhood of the same district, putting her on that neighborhood's copy of the plot, and from another map the map
+// change would pick a neighborhood from her own houses and memberships. So this script teleports her into the instance of
+// the neighborhood the cast names, as Exit House does, after checking again that she may still go there: the cast lasts
+// ten seconds and access can change meanwhile.
+class spell_housing_teleport_home : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } })
+            && spellInfo->GetEffect(EFFECT_1).IsEffect(SPELL_EFFECT_TELEPORT_UNITS);
+    }
+
+    static Optional<uint8> FindPlotOfArrival(Neighborhood const* neighborhood, WorldLocation const& arrival)
+    {
+        for (uint8 plotIndex = 0; plotIndex < MAX_NEIGHBORHOOD_PLOTS; ++plotIndex)
+        {
+            WorldLocation plotArrival;
+            if (sHousingMgr.GetPlotArrival(neighborhood->GetNeighborhoodMapID(), plotIndex, plotArrival)
+                && plotArrival.GetMapId() == arrival.GetMapId() && plotArrival.GetExactDistSq(arrival) < 0.01f)
+                return plotIndex;
+        }
+        return {};
+    }
+
+    void HandleTeleport(SpellEffIndex effIndex)
+    {
+        PreventHitDefaultEffect(effIndex);
+
+        Player* player = GetHitPlayer();
+        WorldLocation const* arrival = GetExplTargetDest();
+        if (!player || !arrival)
+            return;
+
+        Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(GetSpell()->m_targets.GetHousingTargetGUID());
+        if (!neighborhood)
+        {
+            TC_LOG_ERROR("housing", "spell_housing_teleport_home: the cast of {} names no known neighborhood ({})",
+                player->GetGUID().ToString(), GetSpell()->m_targets.GetHousingTargetGUID().ToString());
+            return;
+        }
+
+        Optional<uint8> plotIndex = FindPlotOfArrival(neighborhood, *arrival);
+        if (!plotIndex)
+        {
+            TC_LOG_ERROR("housing", "spell_housing_teleport_home: the destination of {} is no plot of neighborhood {}",
+                player->GetGUID().ToString(), neighborhood->GetGuid().ToString());
+            return;
+        }
+
+        // The same checks as HandleHousingSvcsTeleportToPlot made when the cast began.
+        bool const livesHere = neighborhood->IsMember(player->GetGUID()) || player->GetHousingForNeighborhood(neighborhood->GetGuid());
+        if (!livesHere)
+        {
+            if (!neighborhood->IsPublic())
+            {
+                TC_LOG_DEBUG("housing", "spell_housing_teleport_home: {} may no longer go to private neighborhood {}",
+                    player->GetGUID().ToString(), neighborhood->GetGuid().ToString());
+                return;
+            }
+
+            Neighborhood::HouseEntry entry = neighborhood->CheckHouseEntry(player, *plotIndex, false);
+            if (!entry.HouseGuid.IsEmpty() && !entry.Allowed)
+            {
+                TC_LOG_DEBUG("housing", "spell_housing_teleport_home: {} may no longer go to plot {} of neighborhood {} (settings 0x{:X})",
+                    player->GetGUID().ToString(), *plotIndex, neighborhood->GetGuid().ToString(), entry.SettingsFlags);
+                return;
+            }
+        }
+
+        // The neighborhood's own instance. HandleHousingSvcsTeleportToPlot loaded it before the cast, and neighborhood maps
+        // are not unloaded. Should it still be missing, the map change picks the neighborhood as it does for any arrival.
+        Optional<uint32> instanceId;
+        uint32 const neighborhoodInstanceId = uint32(neighborhood->GetGuid().GetCounter());
+        if (sMapMgr->FindMap(arrival->GetMapId(), neighborhoodInstanceId))
+            instanceId = neighborhoodInstanceId;
+        else
+            TC_LOG_ERROR("housing", "spell_housing_teleport_home: neighborhood {} has no map instance loaded, so {} arrives where the map "
+                "change puts her", neighborhood->GetGuid().ToString(), player->GetGUID().ToString());
+
+        // What the core teleport effect does besides the move: the effect's loading screen, and the options it would
+        // pass for a character teleporting herself.
+        if (uint32 customLoadingScreenId = GetEffectInfo(effIndex).MiscValue)
+            if (arrival->GetMapId() != player->GetMapId() || !player->IsInDist2d(arrival, TELEPORT_MIN_LOAD_SCREEN_DISTANCE))
+                player->SendDirectMessage(WorldPackets::Spells::CustomLoadScreen(GetSpellInfo()->Id, customLoadingScreenId).Write());
+
+        TeleportToOptions options = TELE_TO_SPELL;
+        if (arrival->GetMapId() == player->GetMapId())
+        {
+            options |= TELE_TO_NOT_LEAVE_COMBAT;
+            if (player->GetTransGUID().IsEmpty())
+                options |= TELE_TO_NOT_LEAVE_TRANSPORT;
+        }
+
+        if (!player->TeleportTo(*arrival, options, instanceId, GetSpellInfo()->Id))
+        {
+            TC_LOG_ERROR("housing", "spell_housing_teleport_home: the teleport of {} to plot {} of neighborhood {} was refused",
+                player->GetGUID().ToString(), *plotIndex, neighborhood->GetGuid().ToString());
+            return;
+        }
+
+        TC_LOG_DEBUG("housing", "spell_housing_teleport_home: {} goes to plot {} of neighborhood {} (instance {})",
+            player->GetGUID().ToString(), *plotIndex, neighborhood->GetGuid().ToString(),
+            instanceId ? std::to_string(*instanceId) : std::string("picked by the map change"));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_housing_teleport_home::HandleTeleport, EFFECT_1, SPELL_EFFECT_TELEPORT_UNITS);
+    }
+};
+
 void AddSC_housing_spell_scripts()
 {
     RegisterSpellScript(spell_housing_enter_house);
     RegisterSpellScript(spell_housing_exit_house);
     RegisterSpellScript(spell_housing_skip_first_housing_tutorial);
+    RegisterSpellScript(spell_housing_teleport_home);
 }

@@ -17,6 +17,8 @@
 
 #include "tc_catch2.h"
 #include "DB2Structure.h"
+#include "GridNotifiers.h"
+#include "HousingDecorEntity.h"
 #include "HousingDefines.h"
 #include "HousingMgr.h"
 #include "ObjectGuid.h"
@@ -259,4 +261,30 @@ TEST_CASE("Decor has to stand inside its room's geobox where the room stands on 
         Position const hall(-1000.0f, -1000.0f, 0.1f, 0.0f);
         REQUIRE_FALSE(HousingMgr::IsInsideRoomGeobox(hall, min, max, Position(std::nanf(""), -1000.0f, 0.1f), HOUSING_DECOR_BOUNDS_MARGIN));
     }
+}
+
+TEST_CASE("The decor entity the house's exit door rides is kept on the map's grids", "[Housing][Interior]")
+{
+    // Without a grid container of its own the map's visibility never met it, so it was sent out of range to the
+    // character who saw it made and never to anyone who came in later, and taking it off the map would have hit the
+    // grid assertion in RemoveFromGrid.
+    constexpr bool inGridContainer = GridTypeMapContainer::TypeExists<HousingDecorEntity>;
+    REQUIRE(inGridContainer);
+
+    constexpr uint32 decorMask = Trinity::GridMapTypeMaskForType<HousingDecorEntity>::value;
+    REQUIRE(decorMask == GRID_MAP_TYPE_MASK_HOUSING_DECOR_ENTITY);
+    REQUIRE((GRID_MAP_TYPE_MASK_ALL & decorMask) == decorMask);
+
+    // Every grid object type has its own bit, and the full mask is exactly all of them.
+    constexpr uint32 masks[] = { GRID_MAP_TYPE_MASK_CORPSE, GRID_MAP_TYPE_MASK_CREATURE, GRID_MAP_TYPE_MASK_DYNAMICOBJECT,
+        GRID_MAP_TYPE_MASK_GAMEOBJECT, GRID_MAP_TYPE_MASK_PLAYER, GRID_MAP_TYPE_MASK_AREATRIGGER, GRID_MAP_TYPE_MASK_SCENEOBJECT,
+        GRID_MAP_TYPE_MASK_CONVERSATION, GRID_MAP_TYPE_MASK_MESHOBJECT, GRID_MAP_TYPE_MASK_HOUSING_ROOM_ENTITY,
+        GRID_MAP_TYPE_MASK_HOUSING_DECOR_ENTITY };
+    uint32 all = 0;
+    for (uint32 mask : masks)
+    {
+        REQUIRE((all & mask) == 0);
+        all |= mask;
+    }
+    REQUIRE(all == uint32(GRID_MAP_TYPE_MASK_ALL));
 }

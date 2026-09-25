@@ -32,6 +32,7 @@ class Player;
 class AreaTrigger;
 class SceneObject;
 class Conversation;
+class HousingDecorEntity;
 class HousingRoomEntity;
 class MeshObject;
 
@@ -74,6 +75,7 @@ typedef GridRefManager<SceneObject>     SceneObjectMapType;
 typedef GridRefManager<Conversation>    ConversationMapType;
 typedef GridRefManager<MeshObject>      MeshObjectMapType;
 typedef GridRefManager<HousingRoomEntity> HousingRoomEntityMapType;
+typedef GridRefManager<HousingDecorEntity> HousingDecorEntityMapType;
 
 enum GridMapTypeMask
 {
@@ -86,15 +88,16 @@ enum GridMapTypeMask
     GRID_MAP_TYPE_MASK_SCENEOBJECT         = 0x40,
     GRID_MAP_TYPE_MASK_CONVERSATION        = 0x80,
     GRID_MAP_TYPE_MASK_MESHOBJECT          = 0x100,
-    GRID_MAP_TYPE_MASK_HOUSING_ROOM_ENTITY = 0x200,
-    GRID_MAP_TYPE_MASK_ALL                 = 0x3FF
+    GRID_MAP_TYPE_MASK_HOUSING_ROOM_ENTITY  = 0x200,
+    GRID_MAP_TYPE_MASK_HOUSING_DECOR_ENTITY = 0x400,
+    GRID_MAP_TYPE_MASK_ALL                  = 0x7FF
 };
 
 // Creature used instead pet to simplify *::Visit templates (not required duplicate code for Creature->Pet case)
-extern template struct TypeListContainer<GridRefManagerContainer, GameObject, Creature/*except pets*/, DynamicObject, Corpse/*Bones*/, AreaTrigger, SceneObject, Conversation, HousingRoomEntity, MeshObject>;
+extern template struct TypeListContainer<GridRefManagerContainer, GameObject, Creature/*except pets*/, DynamicObject, Corpse/*Bones*/, AreaTrigger, SceneObject, Conversation, HousingRoomEntity, MeshObject, HousingDecorEntity>;
 extern template struct TypeListContainer<GridRefManagerContainer, Player, Creature/*pets*/, Corpse/*resurrectable*/, DynamicObject/*farsight target*/>;
 
-typedef TypeListContainer<GridRefManagerContainer, GameObject, Creature/*except pets*/, DynamicObject, Corpse/*Bones*/, AreaTrigger, SceneObject, Conversation, HousingRoomEntity, MeshObject> GridTypeMapContainer;
+typedef TypeListContainer<GridRefManagerContainer, GameObject, Creature/*except pets*/, DynamicObject, Corpse/*Bones*/, AreaTrigger, SceneObject, Conversation, HousingRoomEntity, MeshObject, HousingDecorEntity> GridTypeMapContainer;
 typedef TypeListContainer<GridRefManagerContainer, Player, Creature/*pets*/, Corpse/*resurrectable*/, DynamicObject/*farsight target*/> WorldTypeMapContainer;
 
 extern template class Grid<WorldTypeMapContainer, GridTypeMapContainer>;

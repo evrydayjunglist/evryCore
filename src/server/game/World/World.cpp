@@ -1973,8 +1973,9 @@ bool World::SetInitialWorldSettings()
     /// default AI and are never revisited - at_housing_plot::OnUnitEnter (which calls
     /// SetCurrentHouse, the value the client's C_Housing.IsInsidePlot reads) never runs.
     /// The symptom was "out of plot bounds" on decor placement.
-    /// Only bites when a house already exists at startup; houses bought mid-session spawn
-    /// on demand, after this point, and worked - which is what made it look intermittent.
+    /// Only bites for plots owned at startup. A plot bought, unpacked onto or moved to later gets
+    /// its trigger and house when that happens (HousingMap::SetPlotOwnershipState and the buy and
+    /// move handlers), after the scripts are registered.
     TC_LOG_INFO("server.loading", "Pre-loading housing neighborhood maps...");
     sMapMgr->PreloadHousingMaps();
 

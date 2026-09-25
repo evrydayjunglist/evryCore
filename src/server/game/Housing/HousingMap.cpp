@@ -94,15 +94,15 @@ void HousingMap::InitVisibilityDistance()
     // With MAX_VISIBILITY_DISTANCE (533y) this map sent about twenty times as many creates
     // as retail: every player received CREATE_OBJECT for every decor / mesh / fixture on
     // the map regardless of where they stood.
-    // Retail uses a bounded distance and relies on the client's entity registry
-    // already holding the persistent infra entities (plot ATs, cornerstone GOs,
-    // room identities) at any distance. We mirror that: the persistent ones are
-    // marked setActive(true) + SetFarVisible(true) at spawn time (see
-    // SpawnPlotGameObjects + HousingRoomEntity::Create), so their CREATEs always
-    // reach the player; everything else (decor, fixtures, component meshes)
-    // streams via grid visibility once the player is within 200y. 200y is wide
-    // enough that adjacent plots remain visible while keeping per-player update
-    // traffic bounded.
+    // Retail uses a bounded distance too, and it sends plot area triggers, cornerstones and a house's rooms out of range
+    // like any other object (hbcd3: plot triggers at 850898 and 858758, a cornerstone first at 478045, a house's root
+    // entity and rooms at 545900, 584813 and 584822). This core still marks those SetFarVisible(true) at spawn time
+    // (SpawnPlotGameObjects, SpawnPlotAreaTrigger and HousingRoomEntity::Create), so they are seen from farther away than
+    // the rest. That is our own choice, not retail's, made because the client finds the plot she stands on (IsInsidePlot)
+    // and the cornerstones for the house finder by looking them up among the objects it holds; whether it is still
+    // needed is for a playtest to show. Everything else (decor, fixtures, component meshes) streams via grid visibility
+    // once the player is within 200y. 200y is wide enough that adjacent plots remain visible while keeping per-player
+    // update traffic bounded.
     m_VisibleDistance = 200.0f;
     m_VisibilityNotifyPeriod = sWorld->getIntConfig(CONFIG_VISIBILITY_NOTIFY_PERIOD_INSTANCE);
 }
@@ -206,12 +206,9 @@ void HousingMap::SpawnPlotGameObjects()
             continue;
         }
 
-        // Always keep cornerstone GOs streamed to every player on the map regardless of
-        // distance — the house finder UI, OPEN_CORNERSTONE_UI, and the world-map icon
-        // resolver all rely on the GO being in the entity registry. Without this, dropping
-        // the map's visibility distance below MAX would hide cornerstones at far plots
-        // and break the finder/buy flow when players are anywhere except next to the GO.
-        go->setActive(true);
+        // Far visible, so a character sees cornerstones from farther away than the map's visibility distance. It is not an
+        // active object: its grid is kept loaded by LockPlotGrids, and a cornerstone has nothing to do while nobody is near
+        // it, so it does not have to be updated every tick with the cells around it.
         go->SetFarVisible(true);
 
         // Track the plot GO for later swap (purchase/eviction)
@@ -222,89 +219,9 @@ void HousingMap::SpawnPlotGameObjects()
 
         ++goCount;
 
-        // Spawn plot AreaTrigger (entry 37358) above the plot's room anchor.
-        // Sniff-verified: Box shape 35x30x94, DecalPropertiesId=621 (plot boundary visual),
-        // SpellForVisuals=1282351.
-        // The AT is required for the client to show the edit menu and plot boundary decal.
-        //
-        // OWNED PLOTS ONLY. Retail never creates this AreaTrigger for an unsold plot: across four
-        // WowPacketParser-decoded housing sniffs (builds 65940 x2 and 11.2.7 x2, maps 2735 and 2736) there are
-        // 55 CreateObject1 blocks for entry 37358 and HouseGUID is non-zero in 55 of 55 - none for an unsold
-        // plot. The creation is caused by the purchase: CMSG_NEIGHBORHOOD_BUY_HOUSE -> worldstate 0->1 ->
-        // cornerstone State 1->0 -> the AT appears -> HousingRoom appears. It is not a visibility artifact
-        // either; the observed player was standing at the cornerstone, well inside the AT's 46 yd bounds.
-        //
-        // Spawning it unconditionally is what painted a 70x60 brown slab (DecalPropertiesId 621, half-extents
-        // 35x30) across every empty plot. The 70x60 marker a player SHOULD see on an unsold plot is drawn by
-        // the client itself from its own GameObjects.db2 row (PlotGameObjectID, DisplayID 113004, GeoBox
-        // 70x60x0), gated on the plot worldstate - the server neither sends nor spawns it.
-        Position roomAnchor;
-        if (isOwned && !sHousingMgr.GetPlotRoomAnchor(neighborhoodMapId, static_cast<uint8>(plot->PlotIndex), roomAnchor))
-            TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: plot {} has no \"Plot - Plot N\" row in GameObjects.db2 on map {}, "
-                "so it gets no plot area trigger", plot->PlotIndex, GetId());
-        else if (isOwned)
-        {
-            // Retail's trigger stands at the room anchor, turned like the room, HOUSING_PLOT_AREATRIGGER_HEIGHT higher.
-            float hx = roomAnchor.GetPositionX();
-            float hy = roomAnchor.GetPositionY();
-            float hz = roomAnchor.GetPositionZ() + HOUSING_PLOT_AREATRIGGER_HEIGHT;
-
-            LoadGrid(hx, hy);
-
-            Position atPos(hx, hy, hz, roomAnchor.GetOrientation());
-            // Create with addToMap=false so we can set up ALL housing data (entity
-            // fragment, SpellForVisuals, SpellXSpellVisualID) BEFORE the CREATE_OBJECT
-            // packet is sent. The client needs the visual fields and
-            // DecalPropertiesId=621 in the initial create to render the plot border decal.
-            AreaTrigger* plotAt = AreaTrigger::CreateStaticAreaTrigger({ .Id = 37358, .IsCustom = false }, this, atPos, -1, false);
-            if (plotAt)
-            {
-                PhasingHandler::InitDbPhaseShift(plotAt->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-
-                TC_LOG_DEBUG("housing", "  PlotAT[{}] spawn (plotInfo={} hasOwner={})",
-                    plot->PlotIndex,
-                    plotInfo ? "present" : "null",
-                    plotInfo ? !plotInfo->OwnerGuid.IsEmpty() : false);
-
-                // 12.0.5: no per-AT housing fragment. Only set the AT's own visual fields
-                // (SpellForVisuals, PeriodModifier, ExtraScaleCurve). Plot ownership is
-                // now propagated via PlayerHouseInfoComponentData.CurrentHouse on the Player.
-                plotAt->InitHousingPlotVisuals();
-
-                if (!AddToMap(plotAt))
-                {
-                    TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: AddToMap failed for plot AT (entry 37358) plot {} at ({:.1f},{:.1f},{:.1f})",
-                        plot->PlotIndex, hx, hy, hz);
-                    delete plotAt;
-                    plotAt = nullptr;
-                }
-
-                if (plotAt)
-                {
-                    // Always keep plot ATs streamed regardless of player distance. The
-                    // ENTER_PLOT / IsInsidePlot path looks up the AT in the client's
-                    // entity registry; if the AT is not streamed, IsInsidePlot returns
-                    // false and decor placement / plot ownership UI breaks. With the
-                    // active flag + far visibility, the AT is in the registry for every
-                    // player on the map, so we can safely drop the map's visibility
-                    // distance below MAX without re-introducing the lookup-fail bug.
-                    plotAt->setActive(true);
-                    plotAt->SetFarVisible(true);
-
-                    _plotAreaTriggers[static_cast<uint8>(plot->PlotIndex)] = plotAt->GetGUID();
-
-                    std::string ownerDesc = (plotInfo && !plotInfo->OwnerGuid.IsEmpty())
-                        ? plotInfo->OwnerGuid.ToString() : std::string("none");
-                    TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} AT entry=37358 guid={} at ({:.1f},{:.1f},{:.1f}) owner={} DecalPropertiesID=621",
-                        plot->PlotIndex, plotAt->GetGUID().ToString(), hx, hy, hz, ownerDesc);
-                }
-            }
-            else
-            {
-                TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: Failed to create plot AT (entry 37358) for plot {} at ({:.1f},{:.1f},{:.1f})",
-                    plot->PlotIndex, hx, hy, hz);
-            }
-        }
+        // The plot's area trigger stands on owned plots only (SpawnPlotAreaTrigger says why).
+        if (isOwned)
+            SpawnPlotAreaTrigger(static_cast<uint8>(plot->PlotIndex));
     }
 
     // The per-plot WorldState from NeighborhoodPlot.db2 is a BINARY occupancy flag that retail
@@ -528,6 +445,127 @@ void HousingMap::LockPlotGrids()
         lockedGrids.size(), plots.size(), _neighborhood->GetName());
 }
 
+bool HousingMap::SpawnPlotAreaTrigger(uint8 plotIndex)
+{
+    if (GetPlotAreaTrigger(plotIndex))
+        return true;
+
+    // Spawn plot AreaTrigger (entry 37358) above the plot's room anchor.
+    // Sniff-verified: Box shape 35x30x94, DecalPropertiesId=621 (plot boundary visual),
+    // SpellForVisuals=1282351.
+    // The AT is required for the client to show the edit menu and plot boundary decal.
+    //
+    // OWNED PLOTS ONLY. Retail never creates this AreaTrigger for an unsold plot: across four
+    // WowPacketParser-decoded housing sniffs (builds 65940 x2 and 11.2.7 x2, maps 2735 and 2736) there are
+    // 55 CreateObject1 blocks for entry 37358 and HouseGUID is non-zero in 55 of 55 - none for an unsold
+    // plot. The creation is caused by the purchase: CMSG_NEIGHBORHOOD_BUY_HOUSE -> worldstate 0->1 ->
+    // cornerstone State 1->0 -> the AT appears -> HousingRoom appears. It is not a visibility artifact
+    // either; the observed player was standing at the cornerstone, well inside the AT's 46 yd bounds.
+    //
+    // Spawning it unconditionally is what painted a 70x60 brown slab (DecalPropertiesId 621, half-extents
+    // 35x30) across every empty plot. The 70x60 marker a player SHOULD see on an unsold plot is drawn by
+    // the client itself from its own GameObjects.db2 row (PlotGameObjectID, DisplayID 113004, GeoBox
+    // 70x60x0), gated on the plot worldstate - the server neither sends nor spawns it.
+    //
+    // So it is made whenever a plot becomes owned (SetPlotOwnershipState) and when the map is made for plots owned then,
+    // and taken away when the plot is freed (DespawnPlotAreaTrigger).
+    uint32 const neighborhoodMapId = _neighborhood ? _neighborhood->GetNeighborhoodMapID() : 0;
+    Position roomAnchor;
+    if (!sHousingMgr.GetPlotRoomAnchor(neighborhoodMapId, plotIndex, roomAnchor))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnPlotAreaTrigger: plot {} has no \"Plot - Plot N\" row in GameObjects.db2 on map {}, "
+            "so it gets no plot area trigger", plotIndex, GetId());
+        return false;
+    }
+
+    // Retail's trigger stands at the room anchor, turned like the room, HOUSING_PLOT_AREATRIGGER_HEIGHT higher.
+    float hx = roomAnchor.GetPositionX();
+    float hy = roomAnchor.GetPositionY();
+    float hz = roomAnchor.GetPositionZ() + HOUSING_PLOT_AREATRIGGER_HEIGHT;
+
+    LoadGrid(hx, hy);
+
+    Position atPos(hx, hy, hz, roomAnchor.GetOrientation());
+    // Create with addToMap=false so we can set up ALL housing data (entity
+    // fragment, SpellForVisuals, SpellXSpellVisualID) BEFORE the CREATE_OBJECT
+    // packet is sent. The client needs the visual fields and
+    // DecalPropertiesId=621 in the initial create to render the plot border decal.
+    AreaTrigger* plotAt = AreaTrigger::CreateStaticAreaTrigger({ .Id = 37358, .IsCustom = false }, this, atPos, -1, false);
+    if (!plotAt)
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnPlotAreaTrigger: Failed to create plot AT (entry 37358) for plot {} at ({:.1f},{:.1f},{:.1f})",
+            plotIndex, hx, hy, hz);
+        return false;
+    }
+
+    PhasingHandler::InitDbPhaseShift(plotAt->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+
+    // 12.0.5: no per-AT housing fragment. Only set the AT's own visual fields
+    // (SpellForVisuals, PeriodModifier, ExtraScaleCurve). Plot ownership is
+    // now propagated via PlayerHouseInfoComponentData.CurrentHouse on the Player.
+    plotAt->InitHousingPlotVisuals();
+
+    if (!AddToMap(plotAt))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnPlotAreaTrigger: AddToMap failed for plot AT (entry 37358) plot {} at ({:.1f},{:.1f},{:.1f})",
+            plotIndex, hx, hy, hz);
+        delete plotAt;
+        return false;
+    }
+
+    // Far visible, so a character's client holds the trigger from farther away than the map's visibility distance. The
+    // client looks the trigger up among the objects it holds to decide whether she is inside a plot (IsInsidePlot), and
+    // decor placement and the plot owner's menus need that. Retail does not do this: it sends plot triggers out of range
+    // like other objects (hbcd3 850898, 858758, and her own bought plot's trigger at 1577921 and 2127635). It is this
+    // core's choice until a playtest shows it can go.
+    // Separately, the trigger stays an active object, updated every tick, so it notices a character who leaves it by a
+    // teleport to a far part of the map, where no cell around her would update it any more.
+    plotAt->setActive(true);
+    plotAt->SetFarVisible(true);
+
+    _plotAreaTriggers[plotIndex] = plotAt->GetGUID();
+
+    Neighborhood::PlotInfo const* plotInfo = _neighborhood ? _neighborhood->GetPlotInfo(plotIndex) : nullptr;
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotAreaTrigger: Plot {} AT entry=37358 guid={} at ({:.1f},{:.1f},{:.1f}) owner={} DecalPropertiesID=621",
+        plotIndex, plotAt->GetGUID().ToString(), hx, hy, hz,
+        plotInfo && !plotInfo->OwnerGuid.IsEmpty() ? plotInfo->OwnerGuid.ToString() : std::string("none"));
+    return true;
+}
+
+void HousingMap::DespawnPlotAreaTrigger(uint8 plotIndex)
+{
+    auto itr = _plotAreaTriggers.find(plotIndex);
+    if (itr == _plotAreaTriggers.end())
+        return;
+
+    ObjectGuid const atGuid = itr->second;
+    // Taken out of the plot list first, so the trigger no longer stands for the plot while it is being removed.
+    _plotAreaTriggers.erase(itr);
+
+    // Whoever stands on the freed plot leaves it as she would by walking off it (at_housing_plot's OnUnitExit). The
+    // trigger's own removal does not do this: the script only acts on a character who walks out of it.
+    std::vector<ObjectGuid> onPlot;
+    for (auto const& [playerGuid, currentPlot] : _playerCurrentPlot)
+        if (currentPlot == plotIndex)
+            onPlot.push_back(playerGuid);
+
+    for (ObjectGuid const& playerGuid : onPlot)
+    {
+        ClearPlayerCurrentPlot(playerGuid);
+        if (Player* player = GetPlayer(playerGuid))
+        {
+            SendPlotLeaveAuraRemoval(player);
+            player->SetCurrentHouse(ObjectGuid::Empty);
+        }
+    }
+
+    if (AreaTrigger* plotAt = GetAreaTrigger(atGuid))
+        plotAt->Remove();
+
+    TC_LOG_DEBUG("housing", "HousingMap::DespawnPlotAreaTrigger: plot {} lost its area trigger {} ({} character(s) taken off the plot)",
+        plotIndex, atGuid.ToString(), uint32(onPlot.size()));
+}
+
 AreaTrigger* HousingMap::GetPlotAreaTrigger(uint8 plotIndex)
 {
     auto itr = _plotAreaTriggers.find(plotIndex);
@@ -595,7 +633,14 @@ void HousingMap::SetPlotOwnershipState(uint8 plotIndex, bool owned)
 
     // The area trigger carries no ownership. Plot ownership is communicated
     // via PlayerHouseInfoComponentData.CurrentHouse on each Player — updated by
-    // the enter/leave-plot code paths (see HousingMap::OnPlayerEnterPlotArea).
+    // the enter/leave-plot code paths (at_housing_plot).
+    // An owned plot has the trigger and a free one has none, so a plot bought, unpacked onto or moved to while the map is
+    // loaded gets it now, and a relinquished, evicted, packed or vacated plot loses it. A character already standing in
+    // the new trigger's box enters it at its first update.
+    if (owned)
+        SpawnPlotAreaTrigger(plotIndex);
+    else
+        DespawnPlotAreaTrigger(plotIndex);
 
     // Update the plot's world state, which late joiners get in their INIT state and every
     // player already on the map gets as an UPDATE.
@@ -722,8 +767,31 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             player->GetGUID().ToString());
     }
 
+    // The neighborhood mirror entity names the neighborhood of the map she is arriving on, with its data, before her own
+    // create is built: retail creates it on the neighborhood map with the neighborhood's GUID (hbcd3 458453, Housing/
+    // Neighborhood 0xDC80000200000000000000000000A584, the NeighborhoodGUID of the later house packets), whether or not
+    // she has a house there. She is not in the world yet, so the entity is not either, and a far teleport has cleared the
+    // client's objects, so a GUID she had before needs no destroy.
+    if (WorldSession* session = player->GetSession())
+    {
+        HousingNeighborhoodMirrorEntity& mirrorEntity = session->GetHousingNeighborhoodMirrorEntity();
+        if (!mirrorEntity.IsInWorld())
+            mirrorEntity.ResetGuid(_neighborhood->GetGuid());
+
+        // This neighborhood's houses and managers only ever go onto a mirror that names this neighborhood.
+        if (mirrorEntity.GetGUID() == _neighborhood->GetGuid())
+            _neighborhood->FillMirrorEntity(mirrorEntity);
+        else
+            TC_LOG_ERROR("housing", "HousingMap::AddPlayerToMap: the neighborhood mirror entity of {} is still in the world, so it keeps GUID {} and its data",
+                player->GetGUID().ToString(), mirrorEntity.GetGUID().ToString());
+    }
+
     if (!Map::AddPlayerToMap(player, initPlayer))
+    {
+        // She is not on the map, so no RemovePlayerFromMap will take her house out of the index.
+        RemovePlayerHousing(player);
         return false;
+    }
 
     // The neighborhood she is in, so that a later entry to this map without a neighborhood of her own brings her back
     // here instead of to another public one (MapManager::CreateMap). It lasts until she logs out.
@@ -798,14 +866,17 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
         ObjectGuid houseGuid = housing->GetHouseGuid();
         ObjectGuid neighborhoodGuid = housing->GetNeighborhoodGuid();
         uint8 deferredPlotIndex = plotIndex;
-        player->m_Events.AddEventAtOffset([playerGuid, deferredPlotIndex, houseGuid, neighborhoodGuid]()
+        uint32 const mapId = GetId();
+        uint32 const instanceId = GetInstanceId();
+        player->m_Events.AddEventAtOffset([playerGuid, deferredPlotIndex, houseGuid, neighborhoodGuid, mapId, instanceId]()
         {
             Player* p = ObjectAccessor::FindPlayer(playerGuid);
             if (!p || !p->IsInWorld())
                 return;
 
+            // The event runs on whichever map she is on by then; it belongs to this neighborhood only.
             HousingMap* hMap = dynamic_cast<HousingMap*>(p->GetMap());
-            if (!hMap)
+            if (!hMap || hMap->GetId() != mapId || hMap->GetInstanceId() != instanceId)
                 return;
 
             AreaTrigger* plotAt = hMap->GetPlotAreaTrigger(deferredPlotIndex);
@@ -867,7 +938,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             // The client correlates MeshObject FHousingDecor_C.DecorGUID with Account
             // FHousingStorage_C entries to build the Placed Decor list. If they arrive in
             // separate packets, the client may not retroactively associate them.
-            if (Housing* housing = p->GetHousing())
+            if (Housing* housing = p->GetHousingByGuid(houseGuid))
             {
                 p->PushHousingDecorStorage();
                 housing->SyncUpdateFields();

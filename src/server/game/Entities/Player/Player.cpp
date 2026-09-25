@@ -78,6 +78,7 @@
 #include "Housing.h"
 #include "HousingDecorStore.h"
 #include "HousingMap.h"
+#include "HousingDecorEntity.h"
 #include "HousingRoomEntity.h"
 #include "HousingMgr.h"
 #include "HousingPackets.h"
@@ -3705,6 +3706,32 @@ Mail* Player::GetMail(uint64 id)
     return nullptr;
 }
 
+namespace
+{
+// Which housing session entities of the account go in the character's own create, by the map she is on. Retail sends
+// them nowhere else: a login on another map by a Warband that owns a house carries no house or neighborhood entity
+// (hbst1: the login create at 199462 on map 1 and the whole session after it, although Houses[] names the account's house
+// at 223132), and the login create of hbcd3 (185592) holds only the active player. The neighborhood entity comes on the
+// neighborhood map only (hbcd3 458453); the house map has the account's house entity (hbcd3 1411470) and no neighborhood
+// entity (hbcd3 1344674 to 1456426).
+struct HousingSessionEntitiesInCreate
+{
+    bool Houses = false;
+    bool Neighborhood = false;
+};
+
+HousingSessionEntitiesInCreate GetHousingSessionEntitiesInCreate(Map const* map)
+{
+    if (!map)
+        return {};
+    if (map->GetEntry()->IsNeighborhood())
+        return { .Houses = true, .Neighborhood = true };
+    if (map->GetEntry()->IsHouseInterior())
+        return { .Houses = true, .Neighborhood = false };
+    return {};
+}
+}
+
 void Player::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) const
 {
     if (target == this)
@@ -3714,9 +3741,12 @@ void Player::BuildCreateUpdateBlockForPlayer(UpdateData* data, Player* target) c
                 item->BuildCreateUpdateBlockForPlayer(data, target);
 
         GetSession()->GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(data, target);
-        for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
-            houseEntity->BuildCreateUpdateBlockForPlayer(data, target);
-        GetSession()->GetHousingNeighborhoodMirrorEntity().BuildCreateUpdateBlockForPlayer(data, target);
+        HousingSessionEntitiesInCreate const housingEntities = GetHousingSessionEntitiesInCreate(FindMap());
+        if (housingEntities.Houses)
+            for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
+                houseEntity->BuildCreateUpdateBlockForPlayer(data, target);
+        if (housingEntities.Neighborhood)
+            GetSession()->GetHousingNeighborhoodMirrorEntity().BuildCreateUpdateBlockForPlayer(data, target);
 
         // The account's own houses go through the session entities above, one per house, on the house GUID
         // Housing::MakeHouseGuid builds. Rooms, exterior roots and the houses of other accounts are grid objects on a
@@ -19587,16 +19617,13 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     // later (hf1 211469, then 223043); here it is in the create.
     UpdateInitiativeComponent();
 
-    // Pre-populate Housing/4 (NeighborhoodMirrorEntity) and Housing/3 (HousingPlayerHouseEntity)
-    // BEFORE BuildCreateUpdateBlockForPlayer runs. The CREATE block must include the full Houses
-    // array so the client sees occupied plots at the correct indices. If we only populate these
-    // during SendInitialPacketsAfterAddToMap (after CREATE), the client receives an empty Houses
-    // array in CREATE and a DynamicUpdateField UPDATE that grows the array — causing it to map
-    // houses to indices 0,1,2 instead of their real PlotIndex values (e.g. 7,9,47,51).
+    // Pre-populate Housing/3 (HousingPlayerHouseEntity) BEFORE BuildCreateUpdateBlockForPlayer runs, for a character
+    // who logs in where her own create carries it.
     //
     // Every house of the account primes its own plot, so each plot carries its house GUID and account before any
-    // mirror is read. The neighborhood mirror is built from the house whose neighborhood is on the map the
-    // character logs in on, and from the first house when she logs in anywhere else.
+    // mirror is read. The house entity filled here is that of the house whose neighborhood is on the map the character
+    // logs in on, and of the first house when she logs in anywhere else. The neighborhood mirror entity (Housing/4) is
+    // named and filled when she arrives on a neighborhood map (HousingMap::AddPlayerToMap), the only place retail has it.
     Housing* mirrorHousing = nullptr;
     bool mirrorOnLoginMap = false;
     if (GetSession())
@@ -19628,74 +19655,6 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(mirrorHousing->GetNeighborhoodGuid());
         if (neighborhood)
         {
-            // --- Housing/4: NeighborhoodMirrorEntity ---
-            // The entity GUID must match the neighborhood's actual GUID so the client
-            // can associate it with NeighborhoodGUID references in JamCliHouse packets.
-            // WorldSession creates it with battlenetAccountId as placeholder; fix it here.
-            HousingNeighborhoodMirrorEntity& mirrorEntity = GetSession()->GetHousingNeighborhoodMirrorEntity();
-            mirrorEntity.ResetGuid(neighborhood->GetGuid());
-            mirrorEntity.SetName(neighborhood->GetName());
-            mirrorEntity.SetOwnerGUID(neighborhood->GetOwnerGuid());
-
-            // Populate all 55 plot slots SYNCHRONOUSLY with real data at login.
-            //
-            // The client's neighborhood map provider is pull-based, not push-based: Blizzard's
-            // NeighborhoodMapDataProviderMixin calls GetNeighborhoodMapData()
-            // every time the map is toggled open (verified via hooksecurefunc).
-            // There is no server-side event we need to fire; the map refreshes
-            // itself on show. So the blocker is simply that our mirror's Houses
-            // array must be populated BEFORE the player opens the map.
-            //
-            // Sending Houses empty at login and filling it by a 500ms deferred
-            // SendUpdateToPlayer races the player: if she opens the map during the
-            // 500ms window, GetNeighborhoodMapData() returns all-unoccupied plots
-            // and the pins stay wrong even after the defer completes (the
-            // provider doesn't re-poll without explicit refresh triggers).
-            //
-            // Synchronous population here ensures the Player CREATE bundle
-            // ships with real Houses data in the FNeighborhoodMirrorData_C
-            // fragment on the first frame — correct pins paint on first map
-            // open, no interaction required.
-            ObjectGuid const sessionHouse3 = mirrorHousing->GetHouseGuid();
-            mirrorEntity.ClearHouses();
-            uint8 plotIdx = 0;
-            for (auto const& plot : neighborhood->GetPlots())
-            {
-                if (plot.IsOccupied())
-                {
-                    bool ownPlot = plot.IsOwnedByAccount(GetSession()->GetBattlenetAccountGUID());
-                    bool emptyHouse = plot.HouseGuid.IsEmpty();
-                    bool matchesSession = ownPlot && !emptyHouse && plot.HouseGuid == sessionHouse3;
-                    TC_LOG_DEBUG("housing",
-                        "Player::LoadFromDB mirror[{}]: OWN={} HouseGuid={} OwnerGuid={} OwnerBnetGuid={} "
-                        "SessionHouse={} matchesSessionHouse={} emptyHouseGuid={}",
-                        plotIdx, ownPlot,
-                        plot.HouseGuid.ToString(), plot.OwnerGuid.ToString(), plot.OwnerBnetGuid.ToString(),
-                        sessionHouse3.ToString(), matchesSession, emptyHouse);
-                }
-                if (plot.IsOccupied() && !plot.HouseGuid.IsEmpty())
-                    mirrorEntity.AddHouse(plot.HouseGuid, plot.OwnerGuid);
-                else
-                    mirrorEntity.AddHouse(ObjectGuid::Empty, ObjectGuid::Empty);
-                ++plotIdx;
-            }
-
-            // Add managers
-            mirrorEntity.ClearManagers();
-            for (auto const& member : neighborhood->GetMembers())
-            {
-                if (member.Role == NEIGHBORHOOD_ROLE_MANAGER || member.Role == NEIGHBORHOOD_ROLE_OWNER)
-                {
-                    ObjectGuid bnetGuid;
-                    if (Player* managerPlayer = ObjectAccessor::FindPlayer(member.PlayerGuid))
-                        bnetGuid = managerPlayer->GetSession()->GetBattlenetAccountGUID();
-                    mirrorEntity.AddManager(bnetGuid, member.PlayerGuid);
-                }
-            }
-
-            TC_LOG_DEBUG("housing", "Player::LoadFromDB: Pre-populated Housing/4 mirror entity with {} plots from neighborhood {}",
-                MAX_NEIGHBORHOOD_PLOTS, neighborhood->GetName());
-
             // --- Housing/3: HousingPlayerHouseEntity ---
             Housing* housing = mirrorHousing;
             if (housing && !housing->GetHouseGuid().IsEmpty())
@@ -25623,7 +25582,12 @@ void Player::UpdateVisibilityOf(Trinity::IteratorPair<WorldObject**> targets)
                 UpdateVisibilityOf(target->ToMeshObject(), udata, newVisibleObjects);
                 break;
             case TYPEID_HOUSING_ENTITY:
-                UpdateVisibilityOf(static_cast<HousingRoomEntity*>(target), udata, newVisibleObjects);
+                // Two map object classes share this type: the house's rooms and roots, and the decor entity the house
+                // interior's exit door rides.
+                if (HousingRoomEntity* room = dynamic_cast<HousingRoomEntity*>(target))
+                    UpdateVisibilityOf(room, udata, newVisibleObjects);
+                else if (HousingDecorEntity* decor = dynamic_cast<HousingDecorEntity*>(target))
+                    UpdateVisibilityOf(decor, udata, newVisibleObjects);
                 break;
             default:
                 break;
@@ -25812,6 +25776,7 @@ template void Player::UpdateVisibilityOf(SceneObject*   target, UpdateData& data
 template void Player::UpdateVisibilityOf(Conversation*  target, UpdateData& data, std::set<WorldObject*>& visibleNow);
 template void Player::UpdateVisibilityOf(MeshObject*           target, UpdateData& data, std::set<WorldObject*>& visibleNow);
 template void Player::UpdateVisibilityOf(HousingRoomEntity*    target, UpdateData& data, std::set<WorldObject*>& visibleNow);
+template void Player::UpdateVisibilityOf(HousingDecorEntity*   target, UpdateData& data, std::set<WorldObject*>& visibleNow);
 
 void Player::UpdateObjectVisibility(bool forced)
 {
@@ -26123,9 +26088,12 @@ void Player::SendInitialPacketsAfterAddToMap()
     // with every create of the character, which carries them all.
     m_clientSessionEntityGUIDs.clear();
     m_clientSessionEntityGUIDs.insert(GetSession()->GetBattlenetAccount().GetGUID());
-    for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
-        m_clientSessionEntityGUIDs.insert(houseGuid);
-    m_clientSessionEntityGUIDs.insert(GetSession()->GetHousingNeighborhoodMirrorEntity().GetGUID());
+    HousingSessionEntitiesInCreate const housingEntities = GetHousingSessionEntitiesInCreate(GetMap());
+    if (housingEntities.Houses)
+        for (auto const& [houseGuid, houseEntity] : GetSession()->GetHousingPlayerHouseEntities())
+            m_clientSessionEntityGUIDs.insert(houseGuid);
+    if (housingEntities.Neighborhood)
+        m_clientSessionEntityGUIDs.insert(GetSession()->GetHousingNeighborhoodMirrorEntity().GetGUID());
 
     // Send map wide vignettes before UpdateZone, that will send zone wide vignettes
     // But first send on new map will wipe all vignettes on client
@@ -26241,31 +26209,8 @@ void Player::SendInitialPacketsAfterAddToMap()
         {
             Housing* housing = GetHousingForNeighborhood(neighborhood->GetGuid());
 
-            // FNeighborhoodMirrorData_C on the Housing/4 session entity.
-            // Idempotent when LoadFromDB already populated — matches no dirty
-            // bits, no wire change.
-            HousingNeighborhoodMirrorEntity& mirrorEntity = GetSession()->GetHousingNeighborhoodMirrorEntity();
-            mirrorEntity.SetName(neighborhood->GetName());
-            mirrorEntity.SetOwnerGUID(neighborhood->GetOwnerGuid());
-            mirrorEntity.ClearHouses();
-            for (auto const& plot : neighborhood->GetPlots())
-            {
-                if (plot.IsOccupied() && !plot.HouseGuid.IsEmpty())
-                    mirrorEntity.AddHouse(plot.HouseGuid, plot.OwnerGuid);
-                else
-                    mirrorEntity.AddHouse(ObjectGuid::Empty, ObjectGuid::Empty);
-            }
-            mirrorEntity.ClearManagers();
-            for (auto const& member : neighborhood->GetMembers())
-            {
-                if (member.Role == NEIGHBORHOOD_ROLE_MANAGER || member.Role == NEIGHBORHOOD_ROLE_OWNER)
-                {
-                    ObjectGuid bnetGuid;
-                    if (Player* managerPlayer = ObjectAccessor::FindPlayer(member.PlayerGuid))
-                        bnetGuid = managerPlayer->GetSession()->GetBattlenetAccountGUID();
-                    mirrorEntity.AddManager(bnetGuid, member.PlayerGuid);
-                }
-            }
+            // FNeighborhoodMirrorData_C on the Housing/4 session entity was named and filled before her create was
+            // built (HousingMap::AddPlayerToMap), so it is not filled again here.
 
             // FHousingPlayerHouse_C on the Housing/3 session entity.
             if (housing)
@@ -31929,7 +31874,11 @@ void Player::SendHousingEntityCreate(Housing const& housing)
 {
     // A character already in the world was sent her house entities with her own create, so a house new to her needs
     // its entity created before any values update for it can go out; at login the character's create carries it.
-    if (!IsInWorld())
+    // Only on the maps whose create carries house entities (GetHousingSessionEntitiesInCreate): retail sends none
+    // elsewhere (hbst1 has no house entity on map 1 for the whole capture), so a character of the account standing in
+    // a city gets it with her create when she next arrives on a neighborhood or house map, or from a handler that needs
+    // it before then.
+    if (!IsInWorld() || !GetHousingSessionEntitiesInCreate(GetMap()).Houses)
         return;
 
     HousingPlayerHouseEntity& houseEntity = GetSession()->GetHousingPlayerHouseEntity(housing.GetHouseGuid());

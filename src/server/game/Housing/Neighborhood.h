@@ -29,6 +29,8 @@
 #include <unordered_map>
 #include <vector>
 
+class HousingNeighborhoodMirrorEntity;
+
 class Player;
 class WorldPacket;
 
@@ -305,9 +307,15 @@ public:
     void BroadcastMemberStatus(ObjectGuid playerGuid, bool isOnline) const;
     void BroadcastMemberStatus(ObjectGuid playerGuid) const;
 
-    // Rebuild NeighborhoodMirrorData on every online member's Account entity.
+    // Rebuild the neighborhood mirror entity of every online member who is on this neighborhood's map, and send it to her.
     // Call after any mutation to name, owner, managers, or houses.
     void RefreshMirrorDataForOnlineMembers() const;
+    // Fills a neighborhood mirror entity with this neighborhood's name, owner, houses (one entry per plot) and managers.
+    void FillMirrorEntity(HousingNeighborhoodMirrorEntity& mirrorEntity) const;
+    // Fills the character's neighborhood mirror entity with this neighborhood and sends it to her, but only while the
+    // entity names this neighborhood and her client holds it, which is while she is on this neighborhood's map. The
+    // entity has one GUID, so another neighborhood's data never goes onto it. Returns whether it was sent.
+    bool SendMirrorTo(Player* player) const;
 
 private:
     ObjectGuid _guid;

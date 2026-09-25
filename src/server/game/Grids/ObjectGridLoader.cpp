@@ -25,6 +25,7 @@
 #include "DynamicObject.h"
 #include "GameObject.h"
 #include "GameTime.h"
+#include "HousingDecorEntity.h"
 #include "HousingRoomEntity.h"
 #include "Log.h"
 #include "MeshObject.h"
@@ -187,6 +188,7 @@ template void ObjectGridUnloader::Visit(SceneObjectMapType&);
 template void ObjectGridUnloader::Visit(ConversationMapType&);
 template void ObjectGridUnloader::Visit(MeshObjectMapType&);
 template void ObjectGridUnloader::Visit(HousingRoomEntityMapType&);
+template void ObjectGridUnloader::Visit(HousingDecorEntityMapType&);
 
 template void ObjectGridCleaner::Visit(CreatureMapType &);
 template void ObjectGridCleaner::Visit<GameObject>(GameObjectMapType &);
@@ -197,3 +199,4 @@ template void ObjectGridCleaner::Visit<SceneObject>(SceneObjectMapType &);
 template void ObjectGridCleaner::Visit<Conversation>(ConversationMapType &);
 template void ObjectGridCleaner::Visit<MeshObject>(MeshObjectMapType &);
 template void ObjectGridCleaner::Visit<HousingRoomEntity>(HousingRoomEntityMapType &);
+template void ObjectGridCleaner::Visit<HousingDecorEntity>(HousingDecorEntityMapType &);

@@ -47,7 +47,9 @@ void HousingPlayerHouseEntity::BuildUpdate(UpdateDataMapType& data_map)
 {
     BuildUpdateChangesMask();
 
-    if (Player* owner = _session->GetPlayer())
+    // Only while the client holds the entity: the character's own create carries it only on the housing maps, and a
+    // values update for an entity she was never sent would name an object she does not know.
+    if (Player* owner = _session->GetPlayer(); owner && owner->HaveAtClient(this))
         BuildFieldsUpdate(owner, data_map);
 
     ClearUpdateMask(false);

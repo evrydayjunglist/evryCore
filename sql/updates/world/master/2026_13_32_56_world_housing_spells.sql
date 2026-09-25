@@ -25,3 +25,10 @@ DELETE FROM `spell_script_names` WHERE `spell_id` IN (1234192, 1234193) AND `Scr
 INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 (1234192, 'spell_housing_enter_house'),
 (1234193, 'spell_housing_exit_house');
+
+-- 1233637 "Teleport Home" is cast by the server for the plot teleport of the housing dashboard, with the plot's arrival
+-- point and the neighborhood as its targets. Its teleport effect would keep the character in the instance she is in, so
+-- spell_housing_teleport_home sends her into the instance of the neighborhood the cast names.
+DELETE FROM `spell_script_names` WHERE `spell_id`=1233637 AND `ScriptName`='spell_housing_teleport_home';
+INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
+(1233637, 'spell_housing_teleport_home');

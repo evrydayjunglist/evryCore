@@ -51,7 +51,12 @@ public:
     // Returns the plot whose cornerstone this map spawned with `cornerstoneGuid`, or -1 when none.
     int8 GetPlotIndexForCornerstone(ObjectGuid cornerstoneGuid) const;
     GameObject* GetPlotGameObject(uint8 plotIndex);
+    // Sets a plot owned or free: its cornerstone, its world state and its area trigger.
     void SetPlotOwnershipState(uint8 plotIndex, bool owned);
+    // The area trigger an owned plot has (entry 37358). Spawning does nothing when the plot already has one; despawning
+    // takes whoever stands on the plot off it first.
+    bool SpawnPlotAreaTrigger(uint8 plotIndex);
+    void DespawnPlotAreaTrigger(uint8 plotIndex);
     HousingPlotOwnerType GetPlotOwnerTypeForPlayer(Player const* player, uint8 plotIndex) const;
     void SendPerPlayerPlotWorldStates(Player* player);
     Neighborhood* GetNeighborhood() const { return _neighborhood; }

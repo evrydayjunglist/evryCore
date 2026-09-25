@@ -923,6 +923,30 @@ static constexpr uint32 GAMEOBJECT_HOUSING_CORNERSTONE = 457142;
 // NeighborhoodPlot.CornerstoneGameObjectID as its counter. Retail's high half is 0x5000042AC0000000 on map 2736.
 static constexpr uint16 HOUSING_CORNERSTONE_CREATOR_OWNER_TYPE = 1;
 
+// ------------------------------------------------------------------
+// The house exterior on a plot (hbcd3 1299598-1311080, hled1 257038-282103)
+// ------------------------------------------------------------------
+// The room, at the plot's anchor, carries one exterior root Entity whose local pose is the house's placement. The
+// house's structural pieces hang on that root, a piece on a hook hangs on the piece that owns the hook, and the front
+// door rides an Entity placed at its entry's EntryOffset.
+
+// Counters of exterior root Entity GUIDs start here, above the counters a map hands out to other entities.
+static constexpr uint64 HOUSING_EXTERIOR_ROOT_GUID_COUNTER_BASE = UI64LIT(0x100000000);
+
+// Attachment flags retail sends: 3 on the root, the pieces and the entry-offset Entity, 7 on the door that rides it.
+static constexpr uint8 HOUSING_ATTACHMENT_FLAGS_PIECE = 3;
+static constexpr uint8 HOUSING_ATTACHMENT_FLAGS_DOOR  = 7;
+
+// A saved house placement is the root's pose inside the room. The room's geobox (RoomWmoData 172) spans 35 yards each
+// way along x and 30 along y; a saved pose outside it is not a placement on this plot (the port once saved world
+// coordinates there) and the house stands at the default placement instead.
+static constexpr float HOUSING_ROOT_MAX_LOCAL_X = 35.0f;
+static constexpr float HOUSING_ROOT_MAX_LOCAL_Y = 30.0f;
+
+// The plot's area trigger stands this far above the room anchor, turned like the room: 31.5 yards on plots 31, 44 and
+// 54 (hbcd3 815084, 820799, 1019792) and plot 1 (hled1).
+static constexpr float HOUSING_PLOT_AREATRIGGER_HEIGHT = 31.5f;
+
 // Room grid spacing for interior maps (sniff-verified: ~24 yards between room centers)
 static constexpr float HOUSING_ROOM_GRID_SPACING = 24.0f;
 

@@ -536,25 +536,74 @@ std::vector<NeighborhoodPlotData const*> HousingMgr::GetPlotsForMap(uint32 neigh
     return {};
 }
 
-bool HousingMgr::GetPlotHouseFrame(uint32 neighborhoodMapId, uint8 plotIndex, Position& frame) const
+/*static*/ bool HousingMgr::GetRoomAnchor(GameObjectsEntry const* plotRow, uint32 worldMapId, Position& position, QuaternionData& rotation)
 {
-    auto itr = _plotsByMap.find(neighborhoodMapId);
-    if (itr == _plotsByMap.end())
+    if (!plotRow || plotRow->OwnerID != worldMapId)
         return false;
 
-    for (NeighborhoodPlotData const* plot : itr->second)
-    {
-        if (!plot || plot->PlotIndex != int32(plotIndex))
-            continue;
+    QuaternionData const rowRotation(plotRow->Rot[0], plotRow->Rot[1], plotRow->Rot[2], plotRow->Rot[3]);
+    float rowOrientation = 0.0f, pitch = 0.0f, roll = 0.0f;
+    rowRotation.toEulerAnglesZYX(rowOrientation, pitch, roll);
 
-        float facing = plot->HouseRotation[2];
-        if (plot->HouseRotation[0] == 0.0f && plot->HouseRotation[1] == 0.0f && plot->HouseRotation[2] == 0.0f)
-            facing = std::atan2(plot->CornerstonePosition[1] - plot->HousePosition[1], plot->CornerstonePosition[0] - plot->HousePosition[0]);
+    // The rows of both neighborhoods turn about the vertical axis only, so the room is too.
+    float const orientation = Position::NormalizeOrientation(rowOrientation + float(M_PI));
+    position.Relocate(plotRow->Pos.X, plotRow->Pos.Y, plotRow->Pos.Z, orientation);
+    rotation = QuaternionData::fromEulerAnglesZYX(orientation, 0.0f, 0.0f);
+    return true;
+}
 
-        frame.Relocate(plot->HousePosition[0], plot->HousePosition[1], plot->HousePosition[2], facing);
-        return true;
-    }
-    return false;
+bool HousingMgr::GetPlotRoomAnchor(uint32 neighborhoodMapId, uint8 plotIndex, Position& position, QuaternionData& rotation) const
+{
+    NeighborhoodPlotData const* plot = GetPlot(neighborhoodMapId, plotIndex);
+    uint32 const worldMapId = GetWorldMapIdByNeighborhoodMapId(neighborhoodMapId);
+    if (!plot || !worldMapId || plot->PlotGameObjectID <= 0)
+        return false;
+
+    return GetRoomAnchor(sGameObjectsStore.LookupEntry(uint32(plot->PlotGameObjectID)), worldMapId, position, rotation);
+}
+
+bool HousingMgr::GetPlotRoomAnchor(uint32 neighborhoodMapId, uint8 plotIndex, Position& position) const
+{
+    QuaternionData unusedRotation;
+    return GetPlotRoomAnchor(neighborhoodMapId, plotIndex, position, unusedRotation);
+}
+
+/*static*/ void HousingMgr::ComposeAttachment(Position const& parentPos, QuaternionData const& parentRot,
+    Position const& localPos, QuaternionData const& localRot, Position& worldPos, QuaternionData& worldRot)
+{
+    // The offset turned by the parent's rotation: v + 2w(q x v) + 2(q x (q x v)), with q the rotation's vector part.
+    float const qx = parentRot.x, qy = parentRot.y, qz = parentRot.z, qw = parentRot.w;
+    float const vx = localPos.GetPositionX(), vy = localPos.GetPositionY(), vz = localPos.GetPositionZ();
+    float const tx = 2.0f * (qy * vz - qz * vy);
+    float const ty = 2.0f * (qz * vx - qx * vz);
+    float const tz = 2.0f * (qx * vy - qy * vx);
+    float const ox = vx + qw * tx + (qy * tz - qz * ty);
+    float const oy = vy + qw * ty + (qz * tx - qx * tz);
+    float const oz = vz + qw * tz + (qx * ty - qy * tx);
+
+    // The parent's rotation followed by the local one.
+    worldRot = QuaternionData(
+        qw * localRot.x + qx * localRot.w + qy * localRot.z - qz * localRot.y,
+        qw * localRot.y - qx * localRot.z + qy * localRot.w + qz * localRot.x,
+        qw * localRot.z + qx * localRot.y - qy * localRot.x + qz * localRot.w,
+        qw * localRot.w - qx * localRot.x - qy * localRot.y - qz * localRot.z);
+
+    float orientation = 0.0f, pitch = 0.0f, roll = 0.0f;
+    worldRot.toEulerAnglesZYX(orientation, pitch, roll);
+    worldPos.Relocate(parentPos.GetPositionX() + ox, parentPos.GetPositionY() + oy, parentPos.GetPositionZ() + oz,
+        Position::NormalizeOrientation(orientation));
+}
+
+/*static*/ QuaternionData HousingMgr::GetHookRotation(ExteriorComponentHookEntry const& hook)
+{
+    constexpr float DegreesToRadians = float(M_PI / 180.0);
+    return QuaternionData::fromEulerAnglesZYX(-hook.Rotation[2] * DegreesToRadians, -hook.Rotation[1] * DegreesToRadians,
+        -hook.Rotation[0] * DegreesToRadians);
+}
+
+/*static*/ ObjectGuid HousingMgr::MakeExteriorRootGuid(uint32 worldMapId, uint8 plotIndex)
+{
+    return ObjectGuid::Create<HighGuid::Entity>(uint16(worldMapId), 0, HOUSING_EXTERIOR_ROOT_GUID_COUNTER_BASE + plotIndex);
 }
 
 /*static*/ WorldLocation HousingMgr::MakePlotArrival(NeighborhoodPlotData const& plot, uint32 worldMapId)
@@ -1489,55 +1538,64 @@ int32 HousingMgr::GetTextureIdForComponentType(uint8 componentType) const
 
 void HousingMgr::EnsureDoorGameObjectTemplates()
 {
-    // Auto-create missing GO templates for door components referenced in DB2.
-    // ExteriorComponent entries with Type=11 (Door) have a GameObjectID for the
-    // clickable entrance GO. If the template doesn't exist, create one based on
-    // the known working template (entry 586576, type 10/GOOBER).
+    // Retail's door templates are known for three doors only, all Horde: the front doors 602705 and 602706 and the
+    // exit door 587318 (hbcd3 1311088-1311140, and the Razorwind Shores world data built from the captures). Those come
+    // from the world database and are never made here; without their rows the house has no usable door and an error
+    // says so.
+    //
+    // Every other door an ExteriorComponent names, and the Alliance exit door 575017, has no template in the world
+    // database. Those are made here in the shape of the Horde doors, so that using one casts the same goober spell as
+    // the Horde door does: a goober with lock 4296 (Opening), closing again after 3000 ms, casting 1234192 (enter) for a
+    // front door or 1234193 (Exit House) for an exit door, cast by the player, not fuzzy-hit, and an exit door open to
+    // several players at once. This is not retail data
+    // for those doors: no capture shows them, and their display is the Horde door's.
+    static constexpr uint32 CapturedDoors[] = { 602705, 602706, INTERIOR_DOOR_GO_HORDE };
+    static constexpr uint32 HordeFrontDoorDisplayId = 116974;   // 602705, hbcd3 1311088
+    // 587318, from the Razorwind Shores world data built from the captures.
+    static constexpr uint32 HordeExitDoorDisplayId = 114699;
+
     uint32 created = 0;
-
-    GameObjectTemplate const* referenceTemplate = sObjectMgr->GetGameObjectTemplate(586576);
-    uint32 referenceDisplayId = referenceTemplate ? referenceTemplate->displayId : 116973;
-
-    // A door needs no script: the stock goober use opens it and casts its goober spell, and the spell scripts on
-    // 1234192 (enter) and 1234193 (Exit House) move the character.
-    for (ExteriorComponentEntry const* entry : sExteriorComponentStore)
+    auto makeDoor = [&](uint32 goEntry, std::string name, bool exitDoor)
     {
-        if (!entry || entry->Type != 11 || entry->GameObjectID <= 0) // Type 11 = Door
-            continue;
-
-        uint32 goEntry = static_cast<uint32>(entry->GameObjectID);
         if (sObjectMgr->GetGameObjectTemplate(goEntry))
-            continue;
+            return;
 
-        // Create a GOOBER template (type=10) — clickable interaction object for house entry
-        std::string name = entry->Name[DEFAULT_LOCALE] ? entry->Name[DEFAULT_LOCALE] : "Housing Door";
+        if (std::find(std::begin(CapturedDoors), std::end(CapturedDoors), goEntry) != std::end(CapturedDoors))
+        {
+            TC_LOG_ERROR("housing", "HousingMgr::EnsureDoorGameObjectTemplates: door {} has no gameobject_template row; "
+                "it comes from the Razorwind Shores world data, and until it is there that house door cannot be used", goEntry);
+            return;
+        }
 
-        // Insert directly into ObjectMgr's in-memory store (no DB write needed — these are derived from DB2)
-        // Sniff-verified retail values: Lock=4296 (Opening cast bar), autoClose=3000ms, startOpen=1
         GameObjectTemplate& goTemplate = sObjectMgr->GetGameObjectTemplateStoreForHotfix()[goEntry];
         goTemplate.entry = goEntry;
         goTemplate.type = GAMEOBJECT_TYPE_GOOBER;
-        goTemplate.displayId = referenceDisplayId;
-        goTemplate.name = name;
+        goTemplate.displayId = exitDoor ? HordeExitDoorDisplayId : HordeFrontDoorDisplayId;
+        goTemplate.name = std::move(name);
         goTemplate.size = 1.0f;
-        goTemplate.goober.open = 4296;          // Lock_ ID for "Opening" cast bar
-        goTemplate.goober.autoClose = 3000;     // 3 seconds auto-close
-        goTemplate.goober.startOpen = 1;        // start in open state
+        goTemplate.goober.open = 4296;
+        goTemplate.goober.autoClose = 3000;
+        goTemplate.goober.spell = exitDoor ? SPELL_HOUSING_EXIT_HOUSE : SPELL_HOUSING_ENTER_HOUSE;
+        goTemplate.goober.AllowMultiInteract = exitDoor ? 1 : 0;
+        goTemplate.goober.playerCast = 1;
+        goTemplate.goober.NoFuzzyHit = 1;
         goTemplate.InitializeQueryData();
 
         ++created;
-        TC_LOG_INFO("housing", "HousingMgr::EnsureDoorGameObjectTemplates: Created GO template {} ('{}') for door comp {}",
-            goEntry, name, entry->ID);
-    }
+        TC_LOG_DEBUG("housing", "HousingMgr::EnsureDoorGameObjectTemplates: made template {} ('{}') in the Horde door's shape",
+            goEntry, goTemplate.name);
+    };
 
-    // The doors inside the house are not reachable from ExteriorComponent - HouseInteriorMap picks them by faction
-    // in code (Alliance 575017 / Horde 587318). Keep this list in step with HouseInteriorMap.
-    for (uint32 goEntry : { INTERIOR_DOOR_GO_ALLIANCE, INTERIOR_DOOR_GO_HORDE })
-        if (!sObjectMgr->GetGameObjectTemplate(goEntry))
-            TC_LOG_ERROR("housing", "EnsureDoorGameObjectTemplates: interior door GO {} has no template - the interior door will not work", goEntry);
+    for (ExteriorComponentEntry const* entry : sExteriorComponentStore)
+        if (entry && entry->Type == HOUSING_FIXTURE_TYPE_DOOR && entry->GameObjectID > 0)
+            makeDoor(uint32(entry->GameObjectID), entry->Name[DEFAULT_LOCALE] ? entry->Name[DEFAULT_LOCALE] : "Front Door", false);
+
+    // The doors inside the house are not reachable from ExteriorComponent: HouseInteriorMap picks them by faction.
+    makeDoor(INTERIOR_DOOR_GO_ALLIANCE, "Front Door", true);
+    makeDoor(INTERIOR_DOOR_GO_HORDE, "Razorwind Shores Front Door", true);
 
     if (created)
-        TC_LOG_INFO("server.loading", ">> Auto-created {} missing door GO templates from ExteriorComponent DB2", created);
+        TC_LOG_INFO("server.loading", ">> Made {} house door templates that the world database lacks, in the Horde doors' shape", created);
 }
 
 void HousingMgr::BuildExteriorComponentIndexes()

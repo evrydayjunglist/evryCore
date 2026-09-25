@@ -471,11 +471,25 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         UF::OptionalUpdateField<UF::HousingCornerstoneData, int32(WowCS::EntityFragment::FJamHousingCornerstone_C), 0> m_housingCornerstoneData;
         void InitHousingCornerstoneData(uint64 cost, int32 plotIndex);
 
-        // Housing decor entity fragment (optional - only set on decor item GameObjects)
+        // Housing decor entity fragment, on a decor item that is itself a game object (a chair, a chest). Retail sends
+        // such an object with FHousingDecor_C and FMirroredPositionData_C, no decor proxy tag, TargetGameObjectGUID
+        // empty, and riding the room it stands in (hbcd3 1411570-1411650); SetHousingTransport gives it that ride.
         UF::OptionalUpdateField<UF::HousingDecorData, int32(WowCS::EntityFragment::FHousingDecor_C), 0> m_housingDecorData;
         void InitHousingDecorData(ObjectGuid decorGuid, ObjectGuid houseGuid,
             uint8 flags, ObjectGuid attachParent = ObjectGuid::Empty,
             uint8 sourceType = 0, std::string sourceValue = {});
+
+        // A game object that stands in for a housing entity: a house's front door riding the Entity at its entry's
+        // EntryOffset, or an exit door riding its decor entity. Retail sends it with FMirroredPositionData_C (parent
+        // the entity, local zero, attachment flags 7), Tag_HousingDecorProxyGameObject, no FHousingDecor_C, and the
+        // entity as its transport at position zero (hbcd3 1310790-1310861, 1411652-1411700).
+        void InitHousingDecorProxy(ObjectGuid parentEntity);
+
+        // Sends the object riding a housing entity: the create block's transport is parent at localPos, seat 0. No
+        // transport object moves it on the server; its world position is where the attachment chain puts it. The
+        // seat retail sends varies (0, 1, 32, 104 and 216 on 602705 and 602706 in hbcd3 and hled1) with no known
+        // meaning, so 0 goes out.
+        void SetHousingTransport(ObjectGuid parent, Position const& localPos);
 
         // Housing decor mirrored position (FMirroredPositionData_C fragment)
         // Set on functional-decor GameObjects (chairs, chests, mailboxes, etc.) so the client

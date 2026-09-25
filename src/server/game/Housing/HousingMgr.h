@@ -283,10 +283,36 @@ public:
     // CornerstoneRotation.z plus a half turn.
     static void GetCornerstonePlacement(NeighborhoodPlotData const& plot, uint32 worldMapId, GameObjectsEntry const* clientRow,
         Position& position, QuaternionData& rotation);
-    // Where a house stands on a plot and which way it faces, as HousingMap::SpawnHouseForPlot places it before it
-    // lowers the house onto the ground: NeighborhoodPlot.HousePosition, facing HouseRotation.z or, where the DB2 leaves
-    // the rotation empty, towards the cornerstone. False when the map has no such plot.
-    bool GetPlotHouseFrame(uint32 neighborhoodMapId, uint8 plotIndex, Position& frame) const;
+    // Where a plot's house room stands and how it is turned. Everything of a house on the plot hangs on that room. The
+    // anchor is the plot's "Plot - Plot N" row in GameObjects.db2 (NeighborhoodPlot.PlotGameObjectID), turned half a
+    // turn further than the row: every room retail sent in the captures stands there to the digit, plot 13 of
+    // Razorwind Shores at 886.38367, -577.75696, 1.4168056 facing 0.05236292 (hbcd3 1299610), and plots 1, 5, 31, 36,
+    // 44, 48, 49, 53 and 54 the same way (hbcd3, hled1). NeighborhoodPlot.HousePosition is not used: for 53 of the 55
+    // Razorwind Shores plots it lies 290 to 2200 yards away from the plot. `plotRow` must be on `worldMapId`; false
+    // when it is missing or on another map.
+    static bool GetRoomAnchor(GameObjectsEntry const* plotRow, uint32 worldMapId, Position& position, QuaternionData& rotation);
+    // The same for a plot of a neighborhood map. False when the neighborhood map, its world map, the plot or its
+    // GameObjects.db2 row is unknown.
+    bool GetPlotRoomAnchor(uint32 neighborhoodMapId, uint8 plotIndex, Position& position, QuaternionData& rotation) const;
+    bool GetPlotRoomAnchor(uint32 neighborhoodMapId, uint8 plotIndex, Position& position) const;
+    // Where something attached to a parent stands in the world: the parent's position and rotation, then the local
+    // offset turned by the parent's rotation, and the two rotations one after the other. The orientation of worldPos is
+    // the turn about the vertical axis of worldRot. Retail's client places a house's pieces this way: room, exterior
+    // root, wall, entry and entry offset give the front door's position to the digit (hbcd3 1310816, hled1 282003).
+    static void ComposeAttachment(Position const& parentPos, QuaternionData const& parentRot,
+        Position const& localPos, QuaternionData const& localRot, Position& worldPos, QuaternionData& worldRot);
+    // How a piece hanging on an exterior hook is turned. ExteriorComponentHook stores the turn in degrees, and retail
+    // sends the opposite turn: hook 17262 holds 22.6199 about the vertical axis and the entry on it arrives turned by
+    // -22.6199 (z -0.1961155, w 0.9805808, hbcd3 1310953). Hooks 17265 and 17222 agree (hled1). Those turn about the
+    // vertical axis only; 19 of the 1812 hooks also tilt, and no capture shows how retail orders those tilts, so they
+    // are applied as the turn, then the tilt about y, then about x, each negated.
+    static QuaternionData GetHookRotation(ExteriorComponentHookEntry const& hook);
+    // The GUID of a house's exterior root on its neighborhood map: an Entity with entry 0, as retail sends it. The
+    // counter is this server's own choice, made from the plot so that every character of the house's account can name
+    // the root without being on that map; retail's root carries a counter it shares with the house's pieces and front
+    // door (hbcd3 1310328 and Number 14144, all 6616838). The counter stays clear of the ones the map hands out to
+    // other entities, which start at 1. The same plot of another neighborhood of the same world map gets the same GUID.
+    static ObjectGuid MakeExteriorRootGuid(uint32 worldMapId, uint8 plotIndex);
     // Where a character arrives on a plot: NeighborhoodPlot.TeleportPosition, facing CornerstoneRotation.z, on the
     // neighborhood's world map. Retail lands her there after Teleport Home (hbcd3 2044258) and after Exit House
     // (hbcd3 1456426), both at 902.6711, -542.7863, 1.9622 facing 4.5902157 for plot 13 of Razorwind Shores. The

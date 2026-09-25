@@ -143,8 +143,8 @@ public:
     static int32 ChoosePackedHouseToUnpack(std::vector<int32> const& packedHouseWorldMapIds, int32 districtWorldMapId, bool atHouseCap);
 
     // Exterior decor is stored in world coordinates, so a house that changes plot has to take it along. This moves one
-    // piece so that it keeps its place and turn relative to the plot: fromPlot and toPlot are each plot's house
-    // position and facing (HousingMgr::GetPlotHouseFrame).
+    // piece so that it keeps its place and turn relative to the plot: fromPlot and toPlot are each plot's room anchor
+    // (HousingMgr::GetPlotRoomAnchor).
     static void MoveDecorBetweenPlots(Position const& fromPlot, Position const& toPlot, PlacedDecor& decor);
 
     // One house of an account as the shared states hold it.
@@ -361,10 +361,20 @@ public:
     void SetHouseType(uint32 typeId);
     uint32 GetHouseType() const { return _state->HouseType; }
 
-    // House position persistence (player can reposition house on plot)
+    // The house's placement on its plot: the pose of its exterior root Entity inside the plot's room, position and
+    // turn about the vertical axis (hbcd3 1310359: -3.557434, 4.4353027, 0 after a purchase on plot 13; hled1 645930
+    // after the owner dragged it). Without one the house stands at the default placement.
     bool HasCustomPosition() const { return _state->HasCustomPosition; }
     Position GetHousePosition() const { return Position(_state->HousePosX, _state->HousePosY, _state->HousePosZ, _state->HouseFacing); }
     void SetHousePosition(float x, float y, float z, float facing);
+    // The Entity GUID of the house's exterior root on its neighborhood map (HousingMgr::MakeExteriorRootGuid). Empty
+    // for a packed house or one whose neighborhood is unknown.
+    ObjectGuid GetExteriorRootGuid() const;
+    // What the house entity's EntityGUID names for a character: the exterior root while she is in the house's own
+    // neighborhood (hbcd3 1310364-1310395), nothing anywhere else, including another neighborhood of the same world
+    // map, whose root on the same plot has the same GUID. Retail sent nothing there while she was inside the house
+    // (hbcd3 1411470-1411507); no capture shows another map, and those are treated like the house.
+    ObjectGuid GetHouseEntityTargetFor(Player const* viewer) const;
 
     // Direct access to placed decor map (for GO spawning)
     std::unordered_map<ObjectGuid, PlacedDecor> const& GetPlacedDecorMap() const { return _state->PlacedDecorByGuid; }

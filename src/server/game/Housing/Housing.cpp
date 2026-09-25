@@ -22,6 +22,7 @@
 #include "DB2Stores.h"
 #include "DBCEnums.h"
 #include "GameTime.h"
+#include "HousingMap.h"
 #include "HousingMgr.h"
 #include "Neighborhood.h"
 #include "NeighborhoodMgr.h"
@@ -1029,8 +1030,8 @@ HousingResult Housing::Unpack(ObjectGuid neighborhoodGuid, uint8 plotIndex, uint
         Neighborhood const* former = sNeighborhoodMgr.GetNeighborhood(_state->FormerNeighborhoodGuid);
         Neighborhood const* target = sNeighborhoodMgr.GetNeighborhood(neighborhoodGuid);
         if (former && target
-            && sHousingMgr.GetPlotHouseFrame(former->GetNeighborhoodMapID(), _state->FormerPlotIndex, fromPlot)
-            && sHousingMgr.GetPlotHouseFrame(target->GetNeighborhoodMapID(), plotIndex, toPlot))
+            && sHousingMgr.GetPlotRoomAnchor(former->GetNeighborhoodMapID(), _state->FormerPlotIndex, fromPlot)
+            && sHousingMgr.GetPlotRoomAnchor(target->GetNeighborhoodMapID(), plotIndex, toPlot))
         {
             if (former->GetNeighborhoodMapID() != target->GetNeighborhoodMapID() || _state->FormerPlotIndex != plotIndex)
                 MoveExteriorDecorBetweenPlots(fromPlot, toPlot, nullptr);
@@ -3059,7 +3060,7 @@ void Housing::SyncUpdateFields()
     HousingPlayerHouseEntity& houseEntity = _owner->GetSession()->GetHousingPlayerHouseEntity(_state->HouseGuid);
     houseEntity.SetBnetAccount(_owner->GetSession()->GetBattlenetAccountGUID());
     houseEntity.SetCosmeticOwner(_state->CosmeticOwnerGuid);
-    houseEntity.SetEntityGUID(_state->HouseGuid);
+    houseEntity.SetEntityGUID(GetHouseEntityTargetFor(_owner));
     // HouseType and HouseSize are NOT part of this fragment (IDA-verified).
     houseEntity.SetPlotIndex(static_cast<int32>(_state->PlotIndex));
     houseEntity.SetLevel(_state->Level);
@@ -3292,6 +3293,36 @@ void Housing::SetHouseType(uint32 typeId)
 
     TC_LOG_DEBUG("housing", "Housing::SetHouseType: Player {} set house {} type to {}",
         _owner->GetName(), _state->HouseGuid.ToString(), typeId);
+}
+
+ObjectGuid Housing::GetExteriorRootGuid() const
+{
+    if (IsPacked() || GetPlotIndex() == INVALID_PLOT_INDEX)
+        return ObjectGuid::Empty;
+
+    Neighborhood const* neighborhood = sNeighborhoodMgr.GetNeighborhood(GetNeighborhoodGuid());
+    uint32 const worldMapId = neighborhood ? sHousingMgr.GetWorldMapIdByNeighborhoodMapId(neighborhood->GetNeighborhoodMapID()) : 0;
+    if (!worldMapId)
+        return ObjectGuid::Empty;
+
+    return HousingMgr::MakeExteriorRootGuid(worldMapId, GetPlotIndex());
+}
+
+ObjectGuid Housing::GetHouseEntityTargetFor(Player const* viewer) const
+{
+    ObjectGuid const root = GetExteriorRootGuid();
+    if (root.IsEmpty() || !viewer)
+        return ObjectGuid::Empty;
+
+    // Every neighborhood of a world map is its own instance of that map, and the root's GUID is made from the world
+    // map and the plot alone, so the same GUID names another house's root in another neighborhood. Only the house's
+    // own neighborhood counts.
+    HousingMap const* housingMap = dynamic_cast<HousingMap const*>(viewer->FindMap());
+    if (!housingMap || housingMap->GetId() != root.GetMapId() || !housingMap->GetNeighborhood()
+        || housingMap->GetNeighborhood()->GetGuid() != GetNeighborhoodGuid())
+        return ObjectGuid::Empty;
+
+    return root;
 }
 
 void Housing::SetHousePosition(float x, float y, float z, float facing)

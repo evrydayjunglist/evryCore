@@ -116,8 +116,8 @@ Frame InteriorRoomFrame(int32 gridX, int32 gridY, int32 floorIndex, uint32 orien
     return frame;
 }
 
-// The plot a house stands on, as HousingMap places it: NeighborhoodPlot.HousePosition, facing HouseRotation.z or, where
-// the DB2 leaves the rotation empty, towards the cornerstone.
+// The plot a house stands on: the plot's room anchor, where HousingMap places the house's room
+// (HousingMgr::GetPlotRoomAnchor).
 Frame PlotFrame(Housing const& housing)
 {
     Frame frame;
@@ -125,18 +125,13 @@ Frame PlotFrame(Housing const& housing)
     if (!neighborhood)
         return frame;
 
-    for (NeighborhoodPlotData const* plot : sHousingMgr.GetPlotsForMap(neighborhood->GetNeighborhoodMapID()))
+    Position anchor;
+    if (sHousingMgr.GetPlotRoomAnchor(neighborhood->GetNeighborhoodMapID(), housing.GetPlotIndex(), anchor))
     {
-        if (!plot || plot->PlotIndex != int32(housing.GetPlotIndex()))
-            continue;
-
-        frame.X = plot->HousePosition[0];
-        frame.Y = plot->HousePosition[1];
-        frame.Z = plot->HousePosition[2];
-        frame.Facing = plot->HouseRotation[2];
-        if (plot->HouseRotation[0] == 0.0f && plot->HouseRotation[1] == 0.0f && plot->HouseRotation[2] == 0.0f)
-            frame.Facing = std::atan2(plot->CornerstonePosition[1] - frame.Y, plot->CornerstonePosition[0] - frame.X);
-        break;
+        frame.X = anchor.GetPositionX();
+        frame.Y = anchor.GetPositionY();
+        frame.Z = anchor.GetPositionZ();
+        frame.Facing = anchor.GetOrientation();
     }
     return frame;
 }
@@ -678,17 +673,15 @@ HousingResult HousingBlueprintMgr::Snapshot(Housing const& housing, HousingBluep
             if (uint32 coreComponent = housing.GetCoreExteriorComponentID())
                 content.Fixtures.push_back({ coreComponent, 0 });
 
+        // A saved placement is already the house's pose inside its plot's room.
         if (housing.HasCustomPosition())
         {
-            Frame const plot = PlotFrame(housing);
             Position const pos = housing.GetHousePosition();
-            HousingBlueprintDecor local;
-            ToLocal(plot, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), Yaw(pos.GetOrientation()), local);
             content.HasHousePosition = true;
-            content.HousePosX = local.PosX;
-            content.HousePosY = local.PosY;
-            content.HousePosZ = local.PosZ;
-            content.HouseFacing = pos.GetOrientation() - plot.Facing;
+            content.HousePosX = pos.GetPositionX();
+            content.HousePosY = pos.GetPositionY();
+            content.HousePosZ = pos.GetPositionZ();
+            content.HouseFacing = pos.GetOrientation();
         }
     }
 
@@ -954,16 +947,7 @@ HousingResult HousingBlueprintMgr::ApplyLayout(Player* player, Housing* housing,
         housing->ReplaceFixtures(fixtures);
 
         if (content.HasHousePosition)
-        {
-            HousingBlueprintDecor local;
-            local.PosX = content.HousePosX;
-            local.PosY = content.HousePosY;
-            local.PosZ = content.HousePosZ;
-            float x, y, z;
-            Quat rot;
-            ToWorld(plotFrame, local, x, y, z, rot);
-            housing->SetHousePosition(x, y, z, content.HouseFacing + plotFrame.Facing);
-        }
+            housing->SetHousePosition(content.HousePosX, content.HousePosY, content.HousePosZ, content.HouseFacing);
 
         result.ExteriorChanged = true;
     }

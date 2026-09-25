@@ -613,83 +613,21 @@ void WorldSession::HandleHouseInteriorLeaveHouse(WorldPackets::Housing::HouseInt
     if (neighborhoodMapId == 0)
         neighborhoodMapId = sHousingMgr.GetNeighborhoodMapIdByWorldMap(worldMapId);
 
-    // Compute exit position: house center + door hook offset + exit point offset.
-    // This places the player in front of the door they entered through.
+    // Where she comes out: the plot's arrival point, NeighborhoodPlot.TeleportPosition facing the cornerstone, which is
+    // where retail put her after Exit House (hbcd3 1456426), the same spot as after Teleport Home.
     float exitX = 0.0f, exitY = 0.0f, exitZ = 0.0f, exitO = 0.0f;
     bool foundExitPoint = false;
 
-    if (neighborhoodMapId != 0)
+    if (neighborhoodMapId != 0 && plotIndex != INVALID_PLOT_INDEX)
     {
-        std::vector<NeighborhoodPlotData const*> plots = sHousingMgr.GetPlotsForMap(neighborhoodMapId);
-        for (NeighborhoodPlotData const* plot : plots)
+        if (NeighborhoodPlotData const* plot = sHousingMgr.GetPlot(neighborhoodMapId, plotIndex))
         {
-            if (plot->PlotIndex != static_cast<int32>(plotIndex))
-                continue;
-
-            float hx = plot->HousePosition[0];
-            float hy = plot->HousePosition[1];
-            float hz = plot->HousePosition[2];
-
-            // Compute house facing (same as SpawnHouseForPlot / RespawnDoorGOAtHook)
-            float hFacing = plot->HouseRotation[2];
-            if (plot->HouseRotation[0] == 0.0f && plot->HouseRotation[1] == 0.0f && plot->HouseRotation[2] == 0.0f)
-                hFacing = std::atan2(plot->CornerstonePosition[1] - hy, plot->CornerstonePosition[0] - hx);
-
-            // Find the door hook + exit point from the fixture overrides of the house
-            // being left. Without an exitHousing (visitor whose host is offline, or a
-            // player who owns no house at all) the door hook is unresolvable — skip
-            // straight to the plot's TeleportPosition fallback below.
-            std::unordered_map<uint32, uint32> fixtureOverrides;
-            std::vector<ExteriorComponentHookEntry const*> const* baseHooks = nullptr;
-            if (exitHousing)
-            {
-                fixtureOverrides = exitHousing->GetFixtureOverrideMap();
-                baseHooks = sHousingMgr.GetHooksOnComponent(static_cast<uint32>(exitHousing->GetCoreExteriorComponentID()));
-            }
-            if (baseHooks)
-            {
-                for (ExteriorComponentHookEntry const* hook : *baseHooks)
-                {
-                    if (!hook || hook->ExteriorComponentTypeID != HOUSING_FIXTURE_TYPE_DOOR)
-                        continue;
-                    auto ovrItr = fixtureOverrides.find(hook->ID);
-                    if (ovrItr == fixtureOverrides.end())
-                        continue;
-
-                    // Door hook found — use hook position + exit point offset
-                    float localX = hook->Position[0];
-                    float localY = hook->Position[1];
-                    float localZ = hook->Position[2];
-
-                    ExteriorComponentExitPointEntry const* exitPt = sHousingMgr.GetExitPoint(ovrItr->second);
-                    if (exitPt)
-                    {
-                        localX += exitPt->Position[0];
-                        localY += exitPt->Position[1];
-                        localZ += exitPt->Position[2];
-                    }
-
-                    float cosFacing = std::cos(hFacing);
-                    float sinFacing = std::sin(hFacing);
-                    exitX = hx + localX * cosFacing - localY * sinFacing;
-                    exitY = hy + localX * sinFacing + localY * cosFacing;
-                    exitZ = hz + localZ;
-                    exitO = hFacing;
-                    foundExitPoint = true;
-                    break;
-                }
-            }
-
-            // Fallback: use plot's TeleportPosition if no door exit point found
-            if (!foundExitPoint)
-            {
-                exitX = plot->TeleportPosition[0];
-                exitY = plot->TeleportPosition[1];
-                exitZ = plot->TeleportPosition[2];
-                exitO = plot->TeleportFacing;
-                foundExitPoint = true;
-            }
-            break;
+            WorldLocation const arrival = HousingMgr::MakePlotArrival(*plot, worldMapId);
+            exitX = arrival.GetPositionX();
+            exitY = arrival.GetPositionY();
+            exitZ = arrival.GetPositionZ();
+            exitO = arrival.GetOrientation();
+            foundExitPoint = true;
         }
     }
 
@@ -887,7 +825,7 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
             // properly convey the new entries to the client. CREATE includes all current values.
             // The client handles receiving a second CREATE for an existing entity gracefully.
             GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&updateData, player);
-            player->m_clientGUIDs.insert(GetBattlenetAccount().GetGUID());
+            player->m_clientSessionEntityGUIDs.insert(GetBattlenetAccount().GetGUID());
 
             // ALWAYS send CREATE for HousingPlayerHouseEntity when entering edit mode.
             // Same reasoning as Account entity above: the initial CREATE during login may
@@ -895,7 +833,7 @@ void WorldSession::HandleHousingDecorSetEditMode(WorldPackets::Housing::HousingD
             // changed fields — which may be empty if the values haven't changed since last
             // sync. CREATE includes ALL current field values (budgets, level, favor, etc.).
             GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildCreateUpdateBlockForPlayer(&updateData, player);
-            player->m_clientGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
+            player->m_clientSessionEntityGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
 
             // Include CREATE for ALL decor MeshObjects in this same UPDATE_OBJECT packet.
             // The client correlates MeshObject FHousingDecor_C.DecorGUID with Account
@@ -1576,7 +1514,7 @@ void WorldSession::HandleHousingDecorRequestStorage(WorldPackets::Housing::Housi
 
         // Account as CREATE (full FHousingStorage_C with Decor map)
         GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&updateData, player);
-        player->m_clientGUIDs.insert(GetBattlenetAccount().GetGUID());
+        player->m_clientSessionEntityGUIDs.insert(GetBattlenetAccount().GetGUID());
 
         // HousingPlayerHouseEntity (budgets)
         if (player->HaveAtClient(&GetHousingPlayerHouseEntity(housing->GetHouseGuid())))
@@ -1584,7 +1522,7 @@ void WorldSession::HandleHousingDecorRequestStorage(WorldPackets::Housing::Housi
         else
         {
             GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildCreateUpdateBlockForPlayer(&updateData, player);
-            player->m_clientGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
+            player->m_clientSessionEntityGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
         }
 
         // Bundle ALL decor MeshObject CREATEs
@@ -1774,7 +1712,7 @@ void WorldSession::SendFixtureUpdateObject(Player* player, Housing* housing)
     else
     {
         GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildCreateUpdateBlockForPlayer(&updateData, player);
-        player->m_clientGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
+        player->m_clientSessionEntityGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
     }
 
     // Include CREATE for any new MeshObjects spawned by the mutation
@@ -1867,7 +1805,7 @@ void WorldSession::HandleHousingFixtureSetEditMode(WorldPackets::Housing::Housin
             for (ObjectGuid const& meshGuid : meshItr->second)
             {
                 MeshObject* meshObj = housingMap->GetMeshObject(meshGuid);
-                if (meshObj && meshObj->IsExteriorRoot())
+                if (meshObj && meshObj->IsCorePiece())
                 {
                     fixtureEntityGuid = meshGuid;
                     break;
@@ -2677,7 +2615,7 @@ void WorldSession::HandleHousingRoomSetLayoutEditMode(WorldPackets::Housing::Hou
             else
             {
                 GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&updateData, player);
-                player->m_clientGUIDs.insert(GetBattlenetAccount().GetGUID());
+                player->m_clientSessionEntityGUIDs.insert(GetBattlenetAccount().GetGUID());
             }
 
             if (player->HaveAtClient(&GetHousingPlayerHouseEntity(housing->GetHouseGuid())))
@@ -2685,7 +2623,7 @@ void WorldSession::HandleHousingRoomSetLayoutEditMode(WorldPackets::Housing::Hou
             else
             {
                 GetHousingPlayerHouseEntity(housing->GetHouseGuid()).BuildCreateUpdateBlockForPlayer(&updateData, player);
-                player->m_clientGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
+                player->m_clientSessionEntityGUIDs.insert(GetHousingPlayerHouseEntity(housing->GetHouseGuid()).GetGUID());
             }
         }
 

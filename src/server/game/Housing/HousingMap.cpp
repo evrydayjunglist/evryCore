@@ -17,7 +17,6 @@
 
 #include "HousingMap.h"
 #include "Account.h"
-#include "HousingMirrorEntity.h"
 #include "HousingNeighborhoodMirrorEntity.h"
 #include "HousingPlayerHouseEntity.h"
 #include "HousingRoomEntity.h"
@@ -165,9 +164,8 @@ void HousingMap::SpawnPlotGameObjects()
         uint32(plots.size()), neighborhoodMapId);
     for (NeighborhoodPlotData const* plot : plots)
     {
-        TC_LOG_DEBUG("housing", "  DB2 ID={} PlotIndex={} CornerstoneGameObjectID={} Cost={} WorldState={} HousePos=({:.1f},{:.1f},{:.1f})",
-            plot->ID, plot->PlotIndex, plot->CornerstoneGameObjectID, plot->Cost, plot->WorldState,
-            plot->HousePosition[0], plot->HousePosition[1], plot->HousePosition[2]);
+        TC_LOG_DEBUG("housing", "  DB2 ID={} PlotIndex={} CornerstoneGameObjectID={} Cost={} WorldState={} PlotGameObjectID={}",
+            plot->ID, plot->PlotIndex, plot->CornerstoneGameObjectID, plot->Cost, plot->WorldState, plot->PlotGameObjectID);
     }
 
     for (NeighborhoodPlotData const* plot : plots)
@@ -247,7 +245,7 @@ void HousingMap::SpawnPlotGameObjects()
 
         ++goCount;
 
-        // Spawn plot AreaTrigger (entry 37358) at the house position (plot center).
+        // Spawn plot AreaTrigger (entry 37358) above the plot's room anchor.
         // Sniff-verified: Box shape 35x30x94, DecalPropertiesId=621 (plot boundary visual),
         // SpellForVisuals=1282351, FHousingPlotAreaTrigger_C entity fragment with owner data.
         // The AT is required for the client to show the edit menu and plot boundary decal.
@@ -263,20 +261,20 @@ void HousingMap::SpawnPlotGameObjects()
         // 35x30) across every empty plot. The 70x60 marker a player SHOULD see on an unsold plot is drawn by
         // the client itself from its own GameObjects.db2 row (PlotGameObjectID, DisplayID 113004, GeoBox
         // 70x60x0), gated on the plot worldstate - the server neither sends nor spawns it.
-        if (isOwned)
+        Position roomAnchor;
+        if (isOwned && !sHousingMgr.GetPlotRoomAnchor(neighborhoodMapId, static_cast<uint8>(plot->PlotIndex), roomAnchor))
+            TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: plot {} has no \"Plot - Plot N\" row in GameObjects.db2 on map {}, "
+                "so it gets no plot area trigger", plot->PlotIndex, GetId());
+        else if (isOwned)
         {
-            float hx = plot->HousePosition[0];
-            float hy = plot->HousePosition[1];
-            float hz = plot->HousePosition[2];
-
-            // Compute facing toward cornerstone (DB2 HouseRotation is (0,0,0) for all plots)
-            float hFacing = plot->HouseRotation[2];
-            if (plot->HouseRotation[0] == 0.0f && plot->HouseRotation[1] == 0.0f && plot->HouseRotation[2] == 0.0f)
-                hFacing = std::atan2(plot->CornerstonePosition[1] - hy, plot->CornerstonePosition[0] - hx);
+            // Retail's trigger stands at the room anchor, turned like the room, HOUSING_PLOT_AREATRIGGER_HEIGHT higher.
+            float hx = roomAnchor.GetPositionX();
+            float hy = roomAnchor.GetPositionY();
+            float hz = roomAnchor.GetPositionZ() + HOUSING_PLOT_AREATRIGGER_HEIGHT;
 
             LoadGrid(hx, hy);
 
-            Position atPos(hx, hy, hz, hFacing);
+            Position atPos(hx, hy, hz, roomAnchor.GetOrientation());
             // Create with addToMap=false so we can set up ALL housing data (entity
             // fragment, SpellForVisuals, SpellXSpellVisualID) BEFORE the CREATE_OBJECT
             // packet is sent. The client needs FHousingPlotAreaTrigger_C and
@@ -386,9 +384,8 @@ void HousingMap::SpawnPlotGameObjects()
         if (!plotInfo || plotInfo->OwnerGuid.IsEmpty())
             continue;
 
-        TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} is owned by {} - attempting house spawn (HousePos: {:.1f}, {:.1f}, {:.1f})",
-            plotIdx, plotInfo->OwnerGuid.ToString(),
-            plot->HousePosition[0], plot->HousePosition[1], plot->HousePosition[2]);
+        TC_LOG_DEBUG("housing", "HousingMap::SpawnPlotGameObjects: Plot {} is owned by {} - attempting house spawn",
+            plotIdx, plotInfo->OwnerGuid.ToString());
 
         // Spawn data comes from the DB via Neighborhood::LoadFromDB regardless of
         // whether the plot's owner is currently online. The live `Housing*` is
@@ -480,18 +477,20 @@ void HousingMap::SpawnPlotGameObjects()
         FixtureOverrideMap const* overridesPtr = fixtureOverrides.empty() ? nullptr : &fixtureOverrides;
         RootOverrideMap const* rootOvrPtr = rootOverrides.empty() ? nullptr : &rootOverrides;
 
-        GameObject* houseGo = nullptr;
+        // An offline owner's placement is not in the plot's copy of the house, so her house stands at the default
+        // placement until she is on the map.
+        bool built = false;
         if (housing && housing->HasCustomPosition())
         {
             Position customPos = housing->GetHousePosition();
-            houseGo = SpawnHouseForPlot(plotIdx, &customPos, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
+            built = SpawnHouseForPlot(plotIdx, &customPos, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
         }
         else
         {
-            houseGo = SpawnHouseForPlot(plotIdx, nullptr, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
+            built = SpawnHouseForPlot(plotIdx, nullptr, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
         }
         ++houseCount;
-        if (houseGo)
+        if (built)
             ++houseSuccessCount;
         else
             TC_LOG_ERROR("housing", "HousingMap::SpawnPlotGameObjects: FAILED to spawn house for plot {} owned by {}",
@@ -540,10 +539,14 @@ void HousingMap::LockPlotGrids()
         if (lockedGrids.insert({ cornerstoneGrid.x_coord, cornerstoneGrid.y_coord }).second)
             GridMarkNoUnload(cornerstoneGrid.x_coord, cornerstoneGrid.y_coord);
 
-        // Lock grid for house position (may be a different grid)
-        GridCoord houseGrid = Trinity::ComputeGridCoord(plot->HousePosition[0], plot->HousePosition[1]);
-        if (lockedGrids.insert({ houseGrid.x_coord, houseGrid.y_coord }).second)
-            GridMarkNoUnload(houseGrid.x_coord, houseGrid.y_coord);
+        // Lock grid for the plot's room anchor, where its house stands (may be a different grid)
+        Position roomAnchor;
+        if (sHousingMgr.GetPlotRoomAnchor(neighborhoodMapId, static_cast<uint8>(plot->PlotIndex), roomAnchor))
+        {
+            GridCoord houseGrid = Trinity::ComputeGridCoord(roomAnchor.GetPositionX(), roomAnchor.GetPositionY());
+            if (lockedGrids.insert({ houseGrid.x_coord, houseGrid.y_coord }).second)
+                GridMarkNoUnload(houseGrid.x_coord, houseGrid.y_coord);
+        }
     }
 
     TC_LOG_DEBUG("housing", "HousingMap::LockPlotGrids: Locked {} grids for {} plots in neighborhood '{}'",
@@ -725,98 +728,20 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
         // entry, also in the sessions that opened the fixture editor on the plot (hled1 226129, 816931) and the decor
         // editor in the house (hbcd3 1431555), so the current map is not written into it here.
 
-        // Spawn house GO if not already present (handles offline → online transition)
-        bool alreadySpawned = _houseGameObjects.find(plotIdx) != _houseGameObjects.end();
-        TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: House GO for plot {}: alreadySpawned={} _houseGameObjects.size={}",
-            plotIdx, alreadySpawned, uint32(_houseGameObjects.size()));
-
-        if (!alreadySpawned)
+        // Build the house when it is not standing yet (its owner was offline when the map loaded, or it was bought
+        // since).
+        if (!IsHouseSpawned(plotIdx))
         {
-            // Read exterior data from Housing — no hardcoded fallbacks
-            int32 exteriorComponentID = static_cast<int32>(housing->GetCoreExteriorComponentID());
-            int32 houseExteriorWmoDataID = static_cast<int32>(housing->GetHouseType());
-            if (!exteriorComponentID || !houseExteriorWmoDataID)
-            {
-                TC_LOG_ERROR("housing", "HousingMap::AddPlayerToMap: Plot {} has invalid data: ExteriorComponentID={}, WmoDataID={} — skipping spawn",
-                    plotIdx, exteriorComponentID, houseExteriorWmoDataID);
-            }
-            else
-            {
-            TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Plot {} spawning house with ExteriorComponentID={}, WmoDataID={}",
-                plotIdx, exteriorComponentID, houseExteriorWmoDataID);
-
-            auto fixtureOverrides = housing->GetFixtureOverrideMap();
-            FixtureOverrideMap const* overridesPtr = fixtureOverrides.empty() ? nullptr : &fixtureOverrides;
-            auto rootOverrides = housing->GetRootComponentOverrides();
-            RootOverrideMap const* rootOvrPtr = &rootOverrides;
-
-            GameObject* go = nullptr;
-            if (housing->HasCustomPosition())
-            {
-                Position customPos = housing->GetHousePosition();
-                go = SpawnHouseForPlot(plotIdx, &customPos, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
-            }
-            else
-                go = SpawnHouseForPlot(plotIdx, nullptr, exteriorComponentID, houseExteriorWmoDataID, overridesPtr, rootOvrPtr);
-
-            TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: SpawnHouseForPlot result for plot {}: {}",
-                plotIdx, go ? "spawned" : "FAILED");
-            } // else (valid exteriorComponentID && houseExteriorWmoDataID)
-        }
-        else
-        {
-            // House GO was spawned during map init (before HouseGuid was available).
-            // Apply fixture data and spawn MeshObject if not yet done.
-            bool hasMeshObjects = _meshObjects.find(plotIdx) != _meshObjects.end() && !_meshObjects[plotIdx].empty();
-            if (!hasMeshObjects && !housing->GetHouseGuid().IsEmpty())
-            {
-                // Get the house GO position for the MeshObject
-                if (GameObject* houseGo = GetHouseGameObject(plotIdx))
-                {
-                    // Fixture data lives only on the mesh object, never on the house game object.
-                    // In retail, only MeshObjects carry FHousingFixture_C — attaching it to a GO
-                    // causes a client crash at +0x64 (GO entity factory doesn't allocate a housing
-                    // fixture component, so the GUID resolver returns null and dereferences it).
-
-                    Position pos = houseGo->GetPosition();
-                    QuaternionData rot = houseGo->GetLocalRotation();
-                    int32 faction = _neighborhood ? _neighborhood->GetFactionRestriction()
-                        : NEIGHBORHOOD_FACTION_ALLIANCE;
-
-                    int32 lateExtCompID = static_cast<int32>(housing->GetCoreExteriorComponentID());
-                    int32 lateWmoDataID = static_cast<int32>(housing->GetHouseType());
-
-                    auto lateFixtureOvr = housing->GetFixtureOverrideMap();
-                    FixtureOverrideMap const* lateFixturePtr = lateFixtureOvr.empty() ? nullptr : &lateFixtureOvr;
-                    auto lateRootOvr = housing->GetRootComponentOverrides();
-                    RootOverrideMap const* lateRootPtr = &lateRootOvr;
-
-                    SpawnFullHouseMeshObjects(plotIdx, pos, rot,
-                        housing->GetHouseGuid(), lateExtCompID, lateWmoDataID, faction,
-                        lateFixturePtr, lateRootPtr);
-
-                    // Also spawn room entity + Geobox if not already present
-                    if (_roomEntities.find(plotIdx) == _roomEntities.end())
-                        SpawnRoomForPlot(plotIdx, pos, rot, housing->GetHouseGuid());
-
-                    TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: Late-spawned MeshObjects for plot {} (house GO {} already existed)",
-                        plotIdx, houseGo->GetGUID().ToString());
-                }
-            }
+            bool const built = SpawnHouseFromState(plotIdx, *housing);
+            TC_LOG_DEBUG("housing", "HousingMap::AddPlayerToMap: SpawnHouseFromState result for plot {}: {}",
+                plotIdx, built ? "spawned" : "FAILED");
         }
 
         // Spawn decor GOs if not already spawned for this plot
         SpawnAllDecorForPlot(plotIdx, housing);
 
-        // The session HousingPlayerHouseEntity keeps EntityGUID=Empty as set
-        // in Player::LoadFromDB. Sniff-verified (dump_12.0.1.66838_2026-04-15
-        // _09-35-59 idx 9984): among 47 retail Housing/3 CREATE blocks, the
-        // one with EntityGUID=Empty is the owner's own-plot block. Proxy
-        // Housing/3 blocks for other plots use non-empty mirror-pattern GUIDs
-        // (most of which dangle — the client doesn't need them to resolve).
-        // The icon picker at sub_7FF624BB1880 classifies own vs friend vs
-        // stranger by comparing FHousingPlayerHouse_C.BnetAccount against the
-        // player's local BnetGuid, not via EntityGUID resolution.
+        // The session's house entity names this house's exterior root in EntityGUID while she is on this map
+        // (Housing::GetHouseEntityTargetFor).
     }
     else
     {
@@ -950,43 +875,8 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
             TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: proactive PLAYER_ENTER_PLOT + FIXTURE_CREATE_BASIC_HOUSE suppressed for player {}",
                 playerGuid.ToString());
 
-            // Re-CREATE ALL fixture MeshObjects for this plot AFTER the rebuild.
-            // The rebuild (triggered by CREATE_BASIC_HOUSE_RESPONSE above) sets the
-            // fixture manager's house GUID. The CREATE callback then compares each
-            // entity's HouseGUID against it — if they match, it registers the entity
-            // at its hook point. Without this re-CREATE, entities that were already
-            // sent during the initial map load are never re-processed.
-            // (Same pattern as the decor fix: re-CREATE after the system is ready.)
-            {
-                auto const& meshMap = hMap->GetPlotMeshObjects();
-                auto meshItr = meshMap.find(deferredPlotIndex);
-                if (meshItr != meshMap.end())
-                {
-                    UpdateData fixtureUpdate(p->GetMapId());
-                    uint32 fixtureCreateCount = 0;
-
-                    for (ObjectGuid const& meshGuid : meshItr->second)
-                    {
-                        MeshObject* meshObj = hMap->GetMeshObject(meshGuid);
-                        if (meshObj && meshObj->IsInWorld() && meshObj->m_housingFixtureData.has_value())
-                        {
-                            meshObj->BuildCreateUpdateBlockForPlayer(&fixtureUpdate, p);
-                            p->m_clientGUIDs.insert(meshGuid);
-                            ++fixtureCreateCount;
-                        }
-                    }
-
-                    if (fixtureCreateCount > 0)
-                    {
-                        WorldPacket fixturePacket;
-                        fixtureUpdate.BuildPacket(&fixturePacket);
-                        p->SendDirectMessage(&fixturePacket);
-                    }
-
-                    TC_LOG_DEBUG("housing", "HousingMap deferred ENTER_PLOT: Re-CREATE {} fixture MeshObjects for plot {} (post-rebuild)",
-                        fixtureCreateCount, deferredPlotIndex);
-                }
-            }
+            // The house's pieces are not created again here. They are grid objects and reached her through the map's
+            // visibility, and retail never sends a second create for a GUID the client already holds.
 
             // Proactively populate FHousingStorage_C (decor list) and budget fields.
             // At login, PopulateCatalogStorageEntries() is NOT called to avoid crashes when
@@ -1028,7 +918,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 
                 // Account entity as CREATE (includes full FHousingStorage_C with Decor map)
                 session->GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
-                p->m_clientGUIDs.insert(session->GetBattlenetAccount().GetGUID());
+                p->m_clientSessionEntityGUIDs.insert(session->GetBattlenetAccount().GetGUID());
 
                 // HousingPlayerHouseEntity (budgets)
                 HousingPlayerHouseEntity& houseEntity = session->GetHousingPlayerHouseEntity(housing->GetHouseGuid());
@@ -1037,7 +927,7 @@ bool HousingMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
                 else
                 {
                     houseEntity.BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
-                    p->m_clientGUIDs.insert(houseEntity.GetGUID());
+                    p->m_clientSessionEntityGUIDs.insert(houseEntity.GetGUID());
                 }
 
                 // Bundle ALL decor MeshObject CREATEs so the client can correlate
@@ -1805,300 +1695,241 @@ void HousingMap::HandPlayerHousingToAnotherCharacter(ObjectGuid houseGuid, Playe
 // House Structure GO Management
 // ============================================================
 
-GameObject* HousingMap::SpawnHouseForPlot(uint8 plotIndex, Position const* customPos,
+bool HousingMap::SpawnHouseFromState(uint8 plotIndex, Housing const& housing)
+{
+    int32 const exteriorComponentID = static_cast<int32>(housing.GetCoreExteriorComponentID());
+    int32 const houseExteriorWmoDataID = static_cast<int32>(housing.GetHouseType());
+    if (!exteriorComponentID || !houseExteriorWmoDataID)
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseFromState: house {} on plot {} has no core component ({}) or no style ({}), so it "
+            "is not built", housing.GetHouseGuid().ToString(), plotIndex, exteriorComponentID, houseExteriorWmoDataID);
+        return false;
+    }
+
+    // The fixture choices carry the pieces on hooks, the front door among them (a new house gets its starter door in
+    // Housing::Create), and the root choices say which structural pieces the house has.
+    FixtureOverrideMap const fixtureOverrides = housing.GetFixtureOverrideMap();
+    RootOverrideMap const rootOverrides = housing.GetRootComponentOverrides();
+    Position const placement = housing.GetHousePosition();
+    return SpawnHouseForPlot(plotIndex, housing.HasCustomPosition() ? &placement : nullptr,
+        exteriorComponentID, houseExteriorWmoDataID,
+        fixtureOverrides.empty() ? nullptr : &fixtureOverrides,
+        rootOverrides.empty() ? nullptr : &rootOverrides);
+}
+
+bool HousingMap::SpawnHouseForPlot(uint8 plotIndex, Position const* customPos,
     int32 exteriorComponentID, int32 houseExteriorWmoDataID,
     FixtureOverrideMap const* fixtureOverrides /*= nullptr*/,
     RootOverrideMap const* rootOverrides /*= nullptr*/)
 {
     if (!_neighborhood)
-        return nullptr;
+        return false;
 
-    uint32 neighborhoodMapId = _neighborhood->GetNeighborhoodMapID();
-    std::vector<NeighborhoodPlotData const*> plots = sHousingMgr.GetPlotsForMap(neighborhoodMapId);
-
-    NeighborhoodPlotData const* targetPlot = nullptr;
-    for (NeighborhoodPlotData const* plot : plots)
+    Neighborhood::PlotInfo const* plotInfo = _neighborhood->GetPlotInfo(plotIndex);
+    if (!plotInfo || plotInfo->HouseGuid.IsEmpty())
     {
-        if (static_cast<uint8>(plot->PlotIndex) == plotIndex)
-        {
-            targetPlot = plot;
-            break;
-        }
-    }
-
-    if (!targetPlot)
-    {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: No plot data for plotIndex {} in neighborhood '{}'",
+        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: plot {} of neighborhood '{}' holds no house",
             plotIndex, _neighborhood->GetName());
-        return nullptr;
+        return false;
     }
 
-    // Determine position: use customPos (persisted player position) or DB2 defaults
-    float x, y, z, facing;
+    Position anchorPos;
+    QuaternionData anchorRot;
+    if (!sHousingMgr.GetPlotRoomAnchor(_neighborhood->GetNeighborhoodMapID(), plotIndex, anchorPos, anchorRot))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: plot {} of neighborhood map {} has no \"Plot - Plot N\" row in "
+            "GameObjects.db2 on map {}, so its house has no room to stand in",
+            plotIndex, _neighborhood->GetNeighborhoodMapID(), GetId());
+        return false;
+    }
+
+    // The house's placement is its exterior root's pose inside the room. No DB2 field is known that gives the pose
+    // retail picks for a new house: after the purchase on plot 13 the root arrived at (-3.557434, 4.4353027, 0) turned
+    // 1.774 radians (hbcd3 1310359), and none of plot 13's NeighborhoodPlot or GameObjects.db2 fields gives that. The
+    // other root Entities in the captures (plots 1, 5, 31, 36, 44, 48, 53 and 54) stand where their owners put them.
+    // Until a source is found, a house without a saved placement stands at the room's centre, turned with the room.
+    Position rootLocalPos;
+    QuaternionData rootLocalRot(0.0f, 0.0f, 0.0f, 1.0f);
     if (customPos)
     {
-        x = customPos->GetPositionX();
-        y = customPos->GetPositionY();
-        z = customPos->GetPositionZ();
-        facing = customPos->GetOrientation();
-    }
-    else
-    {
-        x = targetPlot->HousePosition[0];
-        y = targetPlot->HousePosition[1];
-        z = targetPlot->HousePosition[2];
-
-        // DB2 HouseRotation is (0,0,0) for all plots — compute facing so the
-        // entrance points toward the cornerstone (the plot's interaction point).
-        float hRotX = targetPlot->HouseRotation[0];
-        float hRotY = targetPlot->HouseRotation[1];
-        float hRotZ = targetPlot->HouseRotation[2];
-        if (hRotX == 0.0f && hRotY == 0.0f && hRotZ == 0.0f)
+        if (customPos->IsPositionValid() && std::fabs(customPos->GetPositionX()) <= HOUSING_ROOT_MAX_LOCAL_X
+            && std::fabs(customPos->GetPositionY()) <= HOUSING_ROOT_MAX_LOCAL_Y)
         {
-            float dx = targetPlot->CornerstonePosition[0] - x;
-            float dy = targetPlot->CornerstonePosition[1] - y;
-            facing = std::atan2(dy, dx);
+            rootLocalPos.Relocate(customPos->GetPositionX(), customPos->GetPositionY(), customPos->GetPositionZ());
+            rootLocalRot = QuaternionData::fromEulerAnglesZYX(customPos->GetOrientation(), 0.0f, 0.0f);
         }
         else
-            facing = hRotZ;
+            TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: the saved placement ({:.2f}, {:.2f}, {:.2f}) of house {} lies outside "
+                "the room of plot {}; the house stands at the default placement", customPos->GetPositionX(), customPos->GetPositionY(),
+                customPos->GetPositionZ(), plotInfo->HouseGuid.ToString(), plotIndex);
     }
 
-    LoadGrid(x, y);
+    LoadGrid(anchorPos.GetPositionX(), anchorPos.GetPositionY());
 
-    // Ground-clamp the house Z to the platform surface. The static platform WMO spawns
-    // (GO entry 574432) are loaded from the gameobject table by LoadGrid and registered
-    // in the DynamicMapTree. GetGameObjectFloor finds the platform top surface, which is
-    // the correct elevation for the house. DB2 HousePosition.Z alone places the house
-    // slightly below the platform surface.
+    // A house whose core piece is unknown gets nothing, not a room and a root with no pieces on them, which would
+    // count as a standing house.
+    ExteriorComponentEntry const* coreComp = sExteriorComponentStore.LookupEntry(uint32(exteriorComponentID));
+    if (!coreComp || coreComp->ModelFileDataID <= 0 || coreComp->HouseExteriorWmoDataID <= 0)
     {
-        PhaseShift tempPhase;
-        PhasingHandler::InitDbPhaseShift(tempPhase, PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-        float groundZ = GetHeight(tempPhase, x, y, z + 50.0f, true, 100.0f);
-        if (groundZ > INVALID_HEIGHT && groundZ > z - 5.0f)
-        {
-            TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseForPlot: plot {} ground-clamped Z from {:.2f} to {:.2f}",
-                plotIndex, z, groundZ);
-            z = groundZ;
-        }
-        else
-        {
-            TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseForPlot: plot {} using DB2 Z={:.2f} (no ground-clamp, height={:.2f})",
-                plotIndex, z, groundZ);
-        }
+        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: ExteriorComponent {} of house {} is missing or has no model, so the "
+            "house on plot {} is not built", exteriorComponentID, plotInfo->HouseGuid.ToString(), plotIndex);
+        return false;
     }
 
-    // Build rotation quaternion from the facing angle (yaw only for housing plots,
-    // since DB2 HouseRotation X/Y are always 0 and the computed facing is a pure yaw).
-    QuaternionData rot = QuaternionData::fromEulerAnglesZYX(facing, 0.0f, 0.0f);
+    // Retail's order after a purchase: the room (hbcd3 Number 13864), then the exterior root and the house (Number
+    // 14127), then the door and the house's pieces (Number 14144).
+    if (!SpawnRoomForPlot(plotIndex, anchorPos, anchorRot, plotInfo->HouseGuid))
+        return false;
 
-    // Platform WMO (GO entry 574432) is loaded from the static gameobject table (sniff data).
-    // Do NOT dynamically spawn a second platform — it renders visibly on top of the static
-    // one and the static spawn already provides DynamicMapTree collision for ground-clamping.
+    Position rootWorldPos;
+    QuaternionData rootWorldRot;
+    HousingMgr::ComposeAttachment(anchorPos, anchorRot, rootLocalPos, rootLocalRot, rootWorldPos, rootWorldRot);
+    ObjectGuid const rootGuid = SpawnExteriorRoot(plotIndex, rootLocalPos, rootLocalRot, rootWorldPos);
+    if (rootGuid.IsEmpty())
+        return false;
 
-    Position pos(x, y, z, facing);
-    Neighborhood::PlotInfo const* plotInfo = _neighborhood->GetPlotInfo(plotIndex);
+    SpawnPlotHouseEntity(plotIndex, *plotInfo, rootGuid, rootWorldPos);
 
-    TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: plot={} pos=({:.2f}, {:.2f}, {:.2f}) facing={:.3f} "
-        "rot=({:.3f}, {:.3f}, {:.3f}, {:.3f}) hasPlotInfo={} hasHouseGuid={} extCompID={} wmoDataID={}",
-        plotIndex, x, y, z, facing, rot.x, rot.y, rot.z, rot.w,
-        plotInfo != nullptr, plotInfo && !plotInfo->HouseGuid.IsEmpty(),
-        exteriorComponentID, houseExteriorWmoDataID);
+    SpawnFullHouseMeshObjects(plotIndex, rootGuid, rootWorldPos, rootWorldRot, plotInfo->HouseGuid,
+        exteriorComponentID, houseExteriorWmoDataID, fixtureOverrides, rootOverrides);
 
-    if (!plotInfo)
-    {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: plotInfo is NULL for plot {} — "
-            "skipping MeshObject spawn (IsOccupied check failed?)", plotIndex);
-    }
-    else if (plotInfo->HouseGuid.IsEmpty())
-    {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: HouseGuid is EMPTY for plot {} — "
-            "skipping MeshObject spawn (UpdatePlotHouseInfo not called?)", plotIndex);
-    }
-
-    // Spawn all house MeshObjects (sniff-verified: 10 structural pieces for alliance, different for horde)
-    // Pieces have a parent-child hierarchy: base piece (0) and door piece (1) are roots,
-    // other pieces attach to them with local-space positions/rotations.
-    if (plotInfo && !plotInfo->HouseGuid.IsEmpty())
-    {
-        int32 faction = _neighborhood ? _neighborhood->GetFactionRestriction()
-            : NEIGHBORHOOD_FACTION_ALLIANCE;
-        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: Spawning MeshObjects for plot {} — "
-            "HouseGuid={} faction={} ({})",
-            plotIndex, plotInfo->HouseGuid.ToString(), faction,
-            faction == NEIGHBORHOOD_FACTION_ALLIANCE ? "Alliance" : "Horde");
-
-        SpawnFullHouseMeshObjects(plotIndex, pos, rot, plotInfo->HouseGuid,
-            exteriorComponentID, houseExteriorWmoDataID, faction, fixtureOverrides, rootOverrides);
-
-        // Spawn room entity + component mesh with Geobox for this plot.
-        // The client uses the MeshObject Geobox to validate decor placement bounds.
-        // Without this, ALL placement attempts fail with OutsidePlotBounds.
-        SpawnRoomForPlot(plotIndex, pos, rot, plotInfo->HouseGuid);
-
-        // Group A house-exterior Entity mirrors — one per visible exterior
-        // fixture MeshObject (Base/Roof/Door/Window — ExteriorComponent Type
-        // 9/10/11/12). All four share AttachParent = Housing/2 room identity
-        // (sniff idx 9984 in dump_12.0.1.66838_2026-04-15_09-35-59 decoded
-        // every Group A mirror's AttachParent as `01 c1 XX 12 40 dc` —
-        // subType=2 HousingRoom, arg2=18 HouseRoomID). The Type-9 root piece
-        // (pieceIndex 0) carries Tag_HouseExteriorPiece + Tag_HouseExteriorRoot
-        // and its GUID is the canonical "house mirror GUID" referenced by
-        // FHousingPlayerHouse_C.EntityGUID; the others carry Piece only.
-        //
-        // The HousingPlayerHouse has no position itself; the room entity
-        // carries the plot's world position so chaining via AttachParent
-        // resolves to real coordinates for the world-map icon picker.
-        // SpawnRoomForPlot was just called above and registered the room
-        // identity in _roomIdentityGuids[plotIndex].
-        {
-            ObjectGuid roomParentGuid = GetRoomIdentityGuid(plotIndex);
-            if (roomParentGuid.IsEmpty())
-            {
-                roomParentGuid = plotInfo->HouseGuid;
-                TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: no Housing/2 identity for plot {}; "
-                    "mirror AttachParent falls back to HouseGuid (icon may not render)", plotIndex);
-            }
-
-            std::vector<std::unique_ptr<HousingMirrorEntity>>& mirrors = _houseMirrorEntities[plotIndex];
-            mirrors.clear();
-            uint32 const bnetId = static_cast<uint32>(plotInfo->OwnerBnetGuid.GetCounter());
-            uint8 pieceIndex = 0;
-            QuaternionData identity;
-            identity.x = identity.y = identity.z = 0.0f;
-            identity.w = 1.0f;
-            // All Group A mirrors share the room identity as AttachParent and
-            // use (0,0,0) local pos — the room is positioned at the plot
-            // centre, so the chain resolves there for every piece. Without a
-            // fresh sniff parse showing exact non-root offsets, sharing the
-            // root's pos preserves the icon-resolution behaviour we already
-            // have for index 0; the additional pieces are pure registry
-            // entries used by the client for spatial categorisation.
-            Position const localPos(0.0f, 0.0f, 0.0f, 0.0f);
-
-            auto meshItr = _meshObjects.find(plotIndex);
-            if (meshItr != _meshObjects.end())
-            {
-                for (ObjectGuid const& meshGuid : meshItr->second)
-                {
-                    MeshObject* mesh = GetMeshObject(meshGuid);
-                    if (!mesh || !mesh->m_housingFixtureData.has_value())
-                        continue;
-                    UF::HousingFixtureData const& fd = *mesh->m_housingFixtureData;
-                    uint8 const compType = uint8(fd.ExteriorComponentType);
-                    if (compType < 9 || compType > 12)
-                        continue;
-
-                    ObjectGuid mirrorGuid = MakeHouseMirrorGuid(plotIndex, bnetId, pieceIndex);
-                    auto mirror = std::make_unique<HousingMirrorEntity>(this, mirrorGuid);
-                    HousingMirrorEntity::Tagging const tagging = (compType == 9)
-                        ? HousingMirrorEntity::Tagging::PieceAndRoot
-                        : HousingMirrorEntity::Tagging::Piece;
-                    mirror->InitPositionData(roomParentGuid,
-                        localPos, identity, /*scale*/ 1.0f, /*attachmentFlags*/ 3,
-                        tagging);
-                    TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseForPlot: spawned Group A mirror[{}] {} "
-                        "for plot {} (attach={} [room], type={}, tag={})",
-                        pieceIndex, mirrorGuid.ToString(), plotIndex, roomParentGuid.ToString(),
-                        compType, compType == 9 ? "PieceAndRoot" : "Piece");
-                    mirrors.push_back(std::move(mirror));
-                    ++pieceIndex;
-                }
-            }
-
-            if (mirrors.empty())
-            {
-                TC_LOG_ERROR("housing", "HousingMap::SpawnHouseForPlot: no fixture MeshObjects found for plot {}; "
-                    "Group A mirrors skipped — FHousingPlayerHouse_C.EntityGUID will dangle and the "
-                    "world-map icon will not resolve", plotIndex);
-            }
-            else
-            {
-                TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseForPlot: emitted {} Group A mirrors for plot {} "
-                    "(plotWorldPos=({:.2f},{:.2f},{:.2f}))",
-                    mirrors.size(), plotIndex,
-                    pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ());
-            }
-        }
-
-        // Group B Entity mirrors — FMirroredPositionData_C only (no tags),
-        // one per visible exterior fixture MeshObject (Base/Roof/Door/Window —
-        // ExteriorComponent Type 9/10/11/12). AttachParent = the piece's own
-        // MeshObject. Sniff idx 9984 shows 4 Group B mirrors per plot, one
-        // anchored to each fixture mesh. Without these per-piece anchors the
-        // client lacks spatial hooks for door-hover detection and expert-mode
-        // placement preview off non-root meshes.
-        {
-            std::vector<std::unique_ptr<HousingMirrorEntity>>& mirrors = _houseMeshMirrorEntities[plotIndex];
-            mirrors.clear();
-            uint32 const bnetId = static_cast<uint32>(plotInfo->OwnerBnetGuid.GetCounter());
-            uint8 pieceIndex = 0;
-            QuaternionData identity;
-            identity.x = identity.y = identity.z = 0.0f;
-            identity.w = 1.0f;
-            Position const localPos(0.0f, 0.0f, 0.0f, 0.0f);
-
-            auto meshItr = _meshObjects.find(plotIndex);
-            if (meshItr != _meshObjects.end())
-            {
-                for (ObjectGuid const& meshGuid : meshItr->second)
-                {
-                    MeshObject* mesh = GetMeshObject(meshGuid);
-                    if (!mesh || !mesh->m_housingFixtureData.has_value())
-                        continue;
-                    UF::HousingFixtureData const& fd = *mesh->m_housingFixtureData;
-                    uint8 const compType = uint8(fd.ExteriorComponentType);
-                    // Pair Group B mirrors with the visible fixture types only:
-                    // 9=Base, 10=Roof, 11=Door, 12=Window. Other component types
-                    // (decorative subpieces, hooks) don't get retail-side mirrors.
-                    if (compType < 9 || compType > 12)
-                        continue;
-
-                    ObjectGuid mirrorGuid = MakeHouseMeshMirrorGuid(plotIndex, bnetId, pieceIndex);
-                    auto mirror = std::make_unique<HousingMirrorEntity>(this, mirrorGuid);
-                    mirror->InitPositionData(meshGuid,
-                        localPos, identity, /*scale*/ 1.0f, /*attachmentFlags*/ 3,
-                        HousingMirrorEntity::Tagging::None);
-                    TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseForPlot: spawned Group B mirror[{}] {} "
-                        "for plot {} (attach={} [mesh type={}])",
-                        pieceIndex, mirrorGuid.ToString(), plotIndex, meshGuid.ToString(), compType);
-                    mirrors.push_back(std::move(mirror));
-                    ++pieceIndex;
-                }
-            }
-
-            if (mirrors.empty())
-            {
-                TC_LOG_WARN("housing", "HousingMap::SpawnHouseForPlot: no fixture MeshObjects found for plot {}; "
-                    "Group B mirrors skipped (client spatial anchors off house meshes will be missing)", plotIndex);
-            }
-            else
-            {
-                TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseForPlot: emitted {} Group B mirrors for plot {}",
-                    mirrors.size(), plotIndex);
-            }
-        }
-    }
-
-    // Door GO spawning is now handled blizzlike inside SpawnExtCompTree:
-    // When a door-type MeshObject (ExteriorComponentType=11) with GameObjectID > 0 is
-    // spawned as part of the fixture tree, SpawnExtCompTree automatically creates the
-    // interactive GO at the door mesh's world position. This removes the dependency on
-    // fixtureOverrides for door spawning — the door GO spawns whenever its MeshObject
-    // spawns, regardless of whether the player has used the fixture editor.
-    //
-    // The door GO is stored in _houseGameObjects[plotIndex] by SpawnExtCompTree.
-    // Return it here for callers that need the pointer.
-    //
-    // The missing `return` here was causing C4715 warnings at every build AND a
-    // crash in HandleNeighborhoodBuyHouse (2026-04-23 14:23:30) — callers got
-    // whatever garbage sat in RAX, which sometimes looked like a non-null GameObject*
-    // pointer. `houseGo->GetGUID().ToString()` then dereferenced bad memory and
-    // SIGSEGV'd inside ObjectGuid::GetHigh via the fmt formatter.
-    return GetHouseGameObject(plotIndex);
+    TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseForPlot: house {} on plot {}: room at ({:.2f}, {:.2f}, {:.2f}) facing {:.3f}, "
+        "root at local ({:.2f}, {:.2f}, {:.2f}), world ({:.2f}, {:.2f}, {:.2f}) facing {:.3f}",
+        plotInfo->HouseGuid.ToString(), plotIndex, anchorPos.GetPositionX(), anchorPos.GetPositionY(), anchorPos.GetPositionZ(),
+        anchorPos.GetOrientation(), rootLocalPos.GetPositionX(), rootLocalPos.GetPositionY(), rootLocalPos.GetPositionZ(),
+        rootWorldPos.GetPositionX(), rootWorldPos.GetPositionY(), rootWorldPos.GetPositionZ(), rootWorldPos.GetOrientation());
+    return true;
 }
 
-void HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& housePos,
-    QuaternionData const& houseRot, ObjectGuid houseGuid)
+bool HousingMap::IsHouseSpawned(uint8 plotIndex) const
+{
+    return _exteriorRootGuids.contains(plotIndex);
+}
+
+ObjectGuid HousingMap::GetExteriorRootGuid(uint8 plotIndex) const
+{
+    auto itr = _exteriorRootGuids.find(plotIndex);
+    return itr != _exteriorRootGuids.end() ? itr->second : ObjectGuid::Empty;
+}
+
+ObjectGuid HousingMap::SpawnExteriorRoot(uint8 plotIndex, Position const& localPos, QuaternionData const& localRot, Position const& worldPos)
+{
+    // hbcd3 1310328-1310363: one Entity with entry 0, attached to the room with the house's placement, attachment
+    // flags 3, carrying Tag_HouseExteriorPiece and Tag_HouseExteriorRoot.
+    ObjectGuid const rootGuid = HousingMgr::MakeExteriorRootGuid(GetId(), plotIndex);
+    RemoveHousingEntityNow(rootGuid);
+    _exteriorRootGuids.erase(plotIndex);
+
+    HousingRoomEntity* root = new HousingRoomEntity(HousingGridEntityRole::ExteriorRoot);
+    if (!root->Create(rootGuid, this, worldPos, false))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnExteriorRoot: the exterior root of plot {} could not be created", plotIndex);
+        delete root;
+        return ObjectGuid::Empty;
+    }
+
+    root->SetMirroredPosition(localPos, localRot, 1.0f, GetRoomIdentityGuid(plotIndex), HOUSING_ATTACHMENT_FLAGS_PIECE);
+    PhasingHandler::InitDbPhaseShift(root->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+
+    if (!AddToMap(root))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnExteriorRoot: the exterior root of plot {} could not be added to the map", plotIndex);
+        delete root;
+        return ObjectGuid::Empty;
+    }
+
+    _exteriorRootGuids[plotIndex] = rootGuid;
+    return rootGuid;
+}
+
+void HousingMap::SpawnPlotHouseEntity(uint8 plotIndex, Neighborhood::PlotInfo const& plot, ObjectGuid rootGuid, Position const& worldPos)
+{
+    // hbcd3 1310364-1310395: the house entity has no position; its EntityGUID names the exterior root. The captures
+    // hold house entities of eight Battle.net accounts, sent to a player as she comes near their houses.
+    RemoveHousingEntityNow(plot.HouseGuid);
+    _houseEntityGuids.erase(plotIndex);
+
+    HousingRoomEntity* house = new HousingRoomEntity(HousingGridEntityRole::House);
+    if (!house->Create(plot.HouseGuid, this, worldPos, false))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnPlotHouseEntity: the house entity of plot {} could not be created", plotIndex);
+        delete house;
+        return;
+    }
+
+    uint32 const level = std::max<uint32>(1, plot.HouseLevel);
+    house->SetHouseData(plot.OwnerBnetGuid, plot.OwnerGuid, int32(plotIndex), level, plot.HouseFavor,
+        sHousingMgr.GetInteriorDecorBudgetForLevel(level), sHousingMgr.GetExteriorDecorBudgetForLevel(level),
+        sHousingMgr.GetFixtureBudgetForLevel(level), sHousingMgr.GetRoomBudgetForLevel(level), rootGuid);
+    PhasingHandler::InitDbPhaseShift(house->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+
+    if (!AddToMap(house))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnPlotHouseEntity: the house entity of plot {} could not be added to the map", plotIndex);
+        delete house;
+        return;
+    }
+
+    _houseEntityGuids[plotIndex] = plot.HouseGuid;
+}
+
+void HousingMap::RemoveHousingEntityNow(ObjectGuid guid)
+{
+    if (guid.IsEmpty())
+        return;
+
+    if (HousingRoomEntity* entity = GetHousingRoomEntity(guid))
+        RemoveFromMap(entity, true);
+}
+
+bool HousingMap::GetWorldPose(ObjectGuid guid, Position& position, QuaternionData& rotation, uint32 depth /*= 0*/)
+{
+    // A house is a short chain (room, root, piece, piece on a hook, entry offset); a longer one is a loop.
+    if (depth > 16 || guid.IsEmpty())
+        return false;
+
+    ObjectGuid parent;
+    Position localPos;
+    QuaternionData localRot;
+    if (MeshObject* mesh = GetMeshObject(guid))
+    {
+        parent = mesh->GetAttachParentGUID();
+        localPos = mesh->GetLocalPosition();
+        localRot = mesh->GetLocalRotation();
+        if (parent.IsEmpty())
+        {
+            position = mesh->GetPosition();
+            rotation = localRot;
+            return true;
+        }
+    }
+    else if (HousingRoomEntity* entity = GetHousingRoomEntity(guid))
+    {
+        parent = entity->GetAttachParentGUID();
+        localPos = entity->GetLocalPosition();
+        localRot = entity->GetLocalRotation();
+        // A room hangs on nothing: its mirrored position is its place in the world.
+        if (parent.IsEmpty())
+        {
+            position = entity->GetPosition();
+            rotation = localRot;
+            return true;
+        }
+    }
+    else
+        return false;
+
+    Position parentPos;
+    QuaternionData parentRot;
+    if (!GetWorldPose(parent, parentPos, parentRot, depth + 1))
+        return false;
+
+    HousingMgr::ComposeAttachment(parentPos, parentRot, localPos, localRot, position, rotation);
+    return true;
+}
+
+bool HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& anchorPos,
+    QuaternionData const& anchorRot, ObjectGuid houseGuid)
 {
     // The retail client requires a Room entity with an attached MeshObject that has a Geobox
     // (axis-aligned bounding box) to define the plot's placement boundary. Without these,
@@ -2215,19 +2046,21 @@ void HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& housePos,
     // room registry accepted only the first, dropping the other's Geobox chain
     // → OutsidePlotBounds + ownership categorization breakage (audit 2026-04-22).
 
-    // 1. Housing/2 identity entity — the single authoritative room for this plot.
+    // 1. Housing/2 identity entity — the single authoritative room for this plot. Its GUID's counter is the plot
+    // index: plot 13's room is 0xDC40000000000012 / 0x0D (hbcd3 1299598).
     ObjectGuid roomIdentityGuid = ObjectGuid::Create<HighGuid::Housing>(
         /*subType*/ 2,
         /*arg1*/ 0,
         /*arg2*/ static_cast<uint32>(HOUSE_ROOM_ID),
-        /*counter*/ static_cast<ObjectGuid::LowType>(plotIndex + 1));
+        /*counter*/ static_cast<ObjectGuid::LowType>(plotIndex));
 
     HousingRoomEntity* roomIdentity = new HousingRoomEntity();
-    if (!roomIdentity->Create(roomIdentityGuid, this, housePos))
+    PhasingHandler::InitDbPhaseShift(roomIdentity->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+    if (!roomIdentity->Create(roomIdentityGuid, this, anchorPos))
     {
         TC_LOG_ERROR("housing", "HousingMap::SpawnRoomForPlot: Failed to create Housing/2 identity room for plot {}", plotIndex);
         delete roomIdentity;
-        return;
+        return false;
     }
 
     roomIdentity->SetHouseGUID(houseGuid);
@@ -2245,7 +2078,7 @@ void HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& housePos,
     // near world origin (invisible) and the client's OutsidePlotBounds check
     // fails for every placement because the player's world position is far
     // from the "plot center" the client derives from the room chain.
-    roomIdentity->SetMirroredPosition(housePos, houseRot,
+    roomIdentity->SetMirroredPosition(anchorPos, anchorRot,
         /*scale*/ 1.0f, ObjectGuid::Empty, /*attachFlags*/ 3);
 
     // 1b. Doors on the identity entity (not on the component mesh).
@@ -2282,13 +2115,13 @@ void HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& housePos,
 
     MeshObject* componentMesh = MeshObject::CreateMeshObject(this, componentPos, componentRot, 1.0f,
         fileDataID, /*isWMO*/ true,
-        /*attachParent*/ roomIdentityGuid, /*attachFlags*/ 3, &housePos);
+        /*attachParent*/ roomIdentityGuid, /*attachFlags*/ 3, &anchorPos);
 
     if (!componentMesh)
     {
         TC_LOG_ERROR("housing", "HousingMap::SpawnRoomForPlot: Failed to create room component mesh for plot {}", plotIndex);
-        roomIdentity->AddObjectToRemoveList();
-        return;
+        RemoveFromMap(roomIdentity, true);
+        return false;
     }
 
     PhasingHandler::InitDbPhaseShift(componentMesh->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
@@ -2307,9 +2140,9 @@ void HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& housePos,
     if (!AddToMap(componentMesh))
     {
         TC_LOG_ERROR("housing", "HousingMap::SpawnRoomForPlot: Failed to add room component mesh to map for plot {}", plotIndex);
-        roomIdentity->AddObjectToRemoveList();
+        RemoveFromMap(roomIdentity, true);
         delete componentMesh;
-        return;
+        return false;
     }
 
     _roomIdentityGuids[plotIndex] = roomIdentityGuid;
@@ -2322,8 +2155,9 @@ void HousingMap::SpawnRoomForPlot(uint8 plotIndex, Position const& housePos,
     TC_LOG_ERROR("housing", "HousingMap::SpawnRoomForPlot: plot={} identity={} component={} "
         "at ({:.1f},{:.1f},{:.1f}) geobox=({:.2f},{:.2f},{:.2f})->({:.2f},{:.2f},{:.2f})",
         plotIndex, roomIdentityGuid.ToString(), componentMesh->GetGUID().ToString(),
-        housePos.GetPositionX(), housePos.GetPositionY(), housePos.GetPositionZ(),
+        anchorPos.GetPositionX(), anchorPos.GetPositionY(), anchorPos.GetPositionZ(),
         geoMinX, geoMinY, geoMinZ, geoMaxX, geoMaxY, geoMaxZ);
+    return true;
 }
 
 void HousingMap::DespawnRoomForPlot(uint8 plotIndex)
@@ -2337,12 +2171,12 @@ void HousingMap::DespawnRoomForPlot(uint8 plotIndex)
         _roomComponentMeshes.erase(compItr);
     }
 
-    // Housing/2 identity entity.
+    // Housing/2 identity entity. Its GUID is fixed by the plot and a rebuilt house makes it again straight away, so
+    // it leaves the map at once rather than at the end of the update.
     auto identItr = _roomIdentityGuids.find(plotIndex);
     if (identItr != _roomIdentityGuids.end())
     {
-        if (HousingRoomEntity* room = GetObjectsStore().Find<HousingRoomEntity>(identItr->second))
-            room->AddObjectToRemoveList();
+        RemoveHousingEntityNow(identItr->second);
         _roomIdentityGuids.erase(identItr);
     }
 
@@ -2351,88 +2185,16 @@ void HousingMap::DespawnRoomForPlot(uint8 plotIndex)
     _roomEntities.erase(plotIndex);
 }
 
-MeshObject* HousingMap::SpawnHouseMeshObject(uint8 plotIndex, int32 fileDataID, bool isWMO,
-    Position const& pos, QuaternionData const& rot, float scale,
-    ObjectGuid houseGuid, int32 exteriorComponentID, int32 houseExteriorWmoDataID,
-    uint8 exteriorComponentType /*= 9*/, uint8 houseSize /*= 2*/, int32 exteriorComponentHookID /*= -1*/,
-    ObjectGuid attachParent /*= ObjectGuid::Empty*/, uint8 attachFlags /*= 0*/,
-    Position const* worldPos /*= nullptr*/)
-{
-    // For child pieces, worldPos contains the parent's world position for grid placement.
-    // Use it for LoadGrid so the grid cell near the house is loaded (not the local-space origin).
-    if (worldPos)
-        LoadGrid(worldPos->GetPositionX(), worldPos->GetPositionY());
-    else
-        LoadGrid(pos.GetPositionX(), pos.GetPositionY());
-
-    MeshObject* mesh = MeshObject::CreateMeshObject(this, pos, rot, scale, fileDataID, isWMO,
-        attachParent, attachFlags, worldPos);
-    if (!mesh)
-    {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseMeshObject: CreateMeshObject failed for plot {} fileDataID {}",
-            plotIndex, fileDataID);
-        return nullptr;
-    }
-
-    // Set up all entity fragments BEFORE AddToMap (create packet is sent during AddToMap)
-    // The base piece (componentType=9, no parent) gets Tag_HouseExteriorRoot (225).
-    // All other pieces (roof, door, chimney, windows) get Tag_HouseExteriorPiece (224).
-    // The client uses Tag_HouseExteriorRoot to identify the fixture GUID for edit mode.
-    bool isRoot = (exteriorComponentType == 9) && attachParent.IsEmpty();
-
-    // Generate a unique fixture GUID per fixture. The client uses FHousingFixture_C::Guid
-    // to identify individual fixtures — if all fixtures share the same GUID (houseGuid),
-    // Retail sniff-verified: the Guid field (field 5) = the MeshObject's own GUID,
-    // and AttachParentGUID (field 4) = the parent MeshObject's GUID (NOT Housing GUIDs).
-    // The client's fixture manager searches the frame tree using AttachParentGUID as the
-    // key (sub_7FF72697BE70). Frames are indexed by the parent MeshObject entity's GUID.
-    // Using Housing GUIDs here causes a key mismatch → fixture-hookpoint linking fails.
-    ObjectGuid fixtureGuid = mesh->GetGUID(); // self-reference: the MeshObject's own GUID
-
-    ObjectGuid parentFixtureGuid;
-    if (!attachParent.IsEmpty())
-    {
-        if (MeshObject* parentMesh = GetMeshObject(attachParent))
-            parentFixtureGuid = parentMesh->GetGUID(); // parent's MeshObject GUID
-    }
-
-    mesh->InitHousingFixtureData(houseGuid, fixtureGuid, parentFixtureGuid,
-        exteriorComponentID, houseExteriorWmoDataID,
-        exteriorComponentType, houseSize, exteriorComponentHookID, isRoot);
-
-    // Now add to map — this triggers the create packet with all fragments included
-    if (!AddToMap(mesh))
-    {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnHouseMeshObject: AddToMap failed for plot {} fileDataID {}",
-            plotIndex, fileDataID);
-        delete mesh;
-        return nullptr;
-    }
-
-    _meshObjects[plotIndex].push_back(mesh->GetGUID());
-
-    TC_LOG_DEBUG("housing", "HousingMap::SpawnHouseMeshObject: plot={} guid={} fileDataID={} isWMO={} "
-        "localPos=({:.1f}, {:.1f}, {:.1f}) gridPos=({:.1f}, {:.1f}, {:.1f}) exteriorComponentID={} wmoDataID={}",
-        plotIndex, mesh->GetGUID().ToString(), fileDataID, isWMO,
-        pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(),
-        mesh->GetPositionX(), mesh->GetPositionY(), mesh->GetPositionZ(),
-        exteriorComponentID, houseExteriorWmoDataID);
-
-    return mesh;
-}
-
-void HousingMap::SpawnFullHouseMeshObjects(uint8 plotIndex, Position const& housePos,
-    QuaternionData const& houseRot, ObjectGuid houseGuid,
+void HousingMap::SpawnFullHouseMeshObjects(uint8 plotIndex, ObjectGuid rootGuid, Position const& rootWorldPos,
+    QuaternionData const& rootWorldRot, ObjectGuid houseGuid,
     int32 exteriorComponentID, int32 houseExteriorWmoDataID,
-    int32 factionRestriction /*= NEIGHBORHOOD_FACTION_ALLIANCE*/,
     FixtureOverrideMap const* fixtureOverrides /*= nullptr*/,
     RootOverrideMap const* rootOverrides /*= nullptr*/)
 {
-    // === DATA-DRIVEN EXTERIOR SPAWNING ===
-    // Build the house from DB2 ExteriorComponent tree.
-    // A house consists of multiple independent root components (Base type=9, Roof type=10, etc.)
-    // all sharing the same HouseExteriorWmoDataID. Each root is spawned independently at the
-    // house position, and each has its own hook children (doors on base, chimney/windows on roof).
+    // The house is built from the ExteriorComponent tree. Its structural pieces (Base type 9, Roof type 10) all hang on
+    // the exterior root at local zero, and each piece's hooks carry the pieces the owner chose for them. Retail's
+    // starter Horde house is the wall 1004 and the roof 3811 on the root and the entry 976 on the wall's hook 17262
+    // (hbcd3 1310863-1311080).
     //
     // Root selection per type:
     //   1. Check rootOverrides (player's explicit choice for that type)
@@ -2441,288 +2203,83 @@ void HousingMap::SpawnFullHouseMeshObjects(uint8 plotIndex, Position const& hous
 
     uint32 coreExtCompID = static_cast<uint32>(exteriorComponentID);
     ExteriorComponentEntry const* coreComp = sExteriorComponentStore.LookupEntry(coreExtCompID);
-
-    if (coreComp && coreComp->ModelFileDataID > 0 && coreComp->HouseExteriorWmoDataID > 0)
+    if (!coreComp || coreComp->ModelFileDataID <= 0 || coreComp->HouseExteriorWmoDataID <= 0)
     {
-        uint32 wmoDataID = coreComp->HouseExteriorWmoDataID;
-        auto const* rootComps = sHousingMgr.GetRootComponentsForWmoData(wmoDataID);
-        uint32 totalSpawned = 0;
-
-        if (rootComps)
-        {
-            // Group roots by type, filtering to match the house's Size
-            uint8 houseSize = coreComp->Size;
-            std::unordered_map<uint8 /*type*/, std::vector<uint32>> rootsByType;
-            for (uint32 rootID : *rootComps)
-            {
-                ExteriorComponentEntry const* rc = sExteriorComponentStore.LookupEntry(rootID);
-                if (rc && rc->ModelFileDataID > 0 && rc->Size == houseSize)
-                    rootsByType[rc->Type].push_back(rootID);
-            }
-
-            for (auto const& [type, compIDs] : rootsByType)
-            {
-                uint32 selectedCompID = 0;
-
-                // 1. Check player's root overrides for this type
-                if (rootOverrides)
-                {
-                    auto ovrItr = rootOverrides->find(type);
-                    if (ovrItr != rootOverrides->end())
-                        selectedCompID = ovrItr->second;
-                    else
-                    {
-                        // Type not in fixtures DB → not unlocked yet, skip it
-                        TC_LOG_DEBUG("housing", "SpawnFullHouseMeshObjects: Skipping root type={} — not in fixtures",
-                            type);
-                        continue;
-                    }
-                }
-
-                // 2. For the core type, use the player's selected coreExtCompID
-                if (!selectedCompID && type == coreComp->Type)
-                    selectedCompID = coreExtCompID;
-
-                // 3. Fall back to DB2 default for this type + wmoDataID
-                if (!selectedCompID)
-                {
-                    uint32 defaultID = sHousingMgr.GetDefaultFixtureForType(type, wmoDataID);
-                    if (defaultID)
-                        selectedCompID = defaultID;
-                }
-
-                // 4. Last resort: first available in the list
-                if (!selectedCompID && !compIDs.empty())
-                    selectedCompID = compIDs[0];
-
-                if (selectedCompID)
-                {
-                    ExteriorComponentEntry const* selComp = sExteriorComponentStore.LookupEntry(selectedCompID);
-                    TC_LOG_INFO("housing", "SpawnFullHouseMeshObjects: Spawning root type={} comp={} '{}' "
-                        "(wmoDataID={}, size={}, ModelFDID={})",
-                        type, selectedCompID,
-                        selComp && selComp->Name[DEFAULT_LOCALE] ? selComp->Name[DEFAULT_LOCALE] : "",
-                        wmoDataID, houseSize, selComp ? selComp->ModelFileDataID : 0);
-
-                    totalSpawned += SpawnExtCompTree(plotIndex, selectedCompID,
-                        housePos, houseRot,
-                        houseGuid, houseExteriorWmoDataID,
-                        ObjectGuid::Empty, nullptr, 0, fixtureOverrides);
-                }
-            }
-        }
-
-        if (totalSpawned > 0)
-        {
-            TC_LOG_INFO("housing", "HousingMap::SpawnFullHouseMeshObjects: Data-driven spawn "
-                "for plot {} wmoDataID {} coreComp {} — {} total MeshObjects (faction={})",
-                plotIndex, wmoDataID, coreExtCompID, totalSpawned,
-                factionRestriction == NEIGHBORHOOD_FACTION_ALLIANCE ? "Alliance" : "Horde");
-            return;
-        }
-
-        TC_LOG_ERROR("housing", "HousingMap::SpawnFullHouseMeshObjects: Data-driven spawn "
-            "yielded 0 meshes for plot {} wmoDataID {} coreComp {} — no DB2 data available",
-            plotIndex, wmoDataID, coreExtCompID);
-        return;
-    }
-    else if (!coreComp)
-    {
-        TC_LOG_ERROR("housing", "HousingMap::SpawnFullHouseMeshObjects: ExteriorComponent {} not found "
-            "— cannot spawn house for plot {}", exteriorComponentID, plotIndex);
-    }
-
-    // === HARDCODED FALLBACK ===
-    if (factionRestriction == NEIGHBORHOOD_FACTION_HORDE)
-    {
-        SpawnHordeHouseMeshObjects(plotIndex, housePos, houseRot, houseGuid,
-            exteriorComponentID, houseExteriorWmoDataID);
+        TC_LOG_ERROR("housing", "HousingMap::SpawnFullHouseMeshObjects: ExteriorComponent {} is missing or has no model, so the house "
+            "on plot {} has no pieces", exteriorComponentID, plotIndex);
         return;
     }
 
-    // === ALLIANCE EXTERIOR (Stucco Small) ===
-    // Two root pieces (base + roof) at the house position, children with local-space offsets.
-    //
-    // Structure:
-    //   Root 0 (base, 6648736) - ExteriorComponentID 141, type 9 (Base)
-    //     └── Child: Door (7450804), ExteriorComponentID 1380, type 11, hookID 2505
-    //   Root 1 (roof, 7420602) - ExteriorComponentID 1503, type 10 (Roof)
-    //     ├── Child: Chimney (7118952), hookID 14931
-    //     ├── Child: Window back-left (7450830), hookID 17202
-    //     └── Child: Window back-right (7450830), hookID 14929
+    uint32 wmoDataID = coreComp->HouseExteriorWmoDataID;
+    auto const* rootComps = sHousingMgr.GetRootComponentsForWmoData(wmoDataID);
+    uint32 totalSpawned = 0;
 
-    // Spawn root piece 0: Base structure (uses the passed exteriorComponentID, default 141 = Stucco Base)
-    MeshObject* basePiece = SpawnHouseMeshObject(plotIndex, 6648736, /*isWMO*/ true,
-        housePos, houseRot, 1.0f,
-        houseGuid, exteriorComponentID, houseExteriorWmoDataID,
-        /*exteriorComponentType*/ 9, /*houseSize*/ 2, /*hookID*/ -1,
-        ObjectGuid::Empty, /*attachFlags*/ 0);
-
-    // Spawn root piece 1: Roof (retail sniff: ExteriorComponentID 1503, type 10, fileDataID 7420602)
-    MeshObject* roofPiece = SpawnHouseMeshObject(plotIndex, 7420602, /*isWMO*/ true,
-        housePos, houseRot, 1.0f,
-        houseGuid, 1503, houseExteriorWmoDataID,
-        /*exteriorComponentType*/ 10, /*houseSize*/ 2, /*hookID*/ -1,
-        ObjectGuid::Empty, /*attachFlags*/ 0);
-
-    // Child of base: Door mesh (retail sniff: ExteriorComponentID 1380, type 11, hookID 2505)
-    // Position and rotation from retail sniff — local space relative to base.
-    if (basePiece)
+    if (rootComps)
     {
-        ObjectGuid baseGuid = basePiece->GetGUID();
+        // Group roots by type, filtering to match the house's Size
+        uint8 houseSize = coreComp->Size;
+        std::unordered_map<uint8 /*type*/, std::vector<uint32>> rootsByType;
+        for (uint32 rootID : *rootComps)
+        {
+            ExteriorComponentEntry const* rc = sExteriorComponentStore.LookupEntry(rootID);
+            if (rc && rc->ModelFileDataID > 0 && rc->Size == houseSize)
+                rootsByType[rc->Type].push_back(rootID);
+        }
 
-        SpawnHouseMeshObject(plotIndex, 7450804, /*isWMO*/ true,
-            Position(9.2805f, -3.4555f, -0.5611f, 0.0f),
-            QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 1.0f,
-            houseGuid, 1380, houseExteriorWmoDataID,
-            /*exteriorComponentType*/ 11, /*houseSize*/ 1, /*hookID*/ 2505,
-            baseGuid, /*attachFlags*/ 3, &housePos);
+        for (auto const& [type, compIDs] : rootsByType)
+        {
+            uint32 selectedCompID = 0;
+
+            // 1. Check player's root overrides for this type
+            if (rootOverrides)
+            {
+                auto ovrItr = rootOverrides->find(type);
+                if (ovrItr != rootOverrides->end())
+                    selectedCompID = ovrItr->second;
+                else
+                {
+                    // Type not in fixtures DB → not unlocked yet, skip it
+                    TC_LOG_DEBUG("housing", "SpawnFullHouseMeshObjects: Skipping root type={} — not in fixtures",
+                        type);
+                    continue;
+                }
+            }
+
+            // 2. For the core type, use the player's selected coreExtCompID
+            if (!selectedCompID && type == coreComp->Type)
+                selectedCompID = coreExtCompID;
+
+            // 3. Fall back to DB2 default for this type + wmoDataID
+            if (!selectedCompID)
+            {
+                uint32 defaultID = sHousingMgr.GetDefaultFixtureForType(type, wmoDataID);
+                if (defaultID)
+                    selectedCompID = defaultID;
+            }
+
+            // 4. Last resort: first available in the list
+            if (!selectedCompID && !compIDs.empty())
+                selectedCompID = compIDs[0];
+
+            if (selectedCompID)
+                totalSpawned += SpawnExtCompTree(plotIndex, selectedCompID, Position(), QuaternionData(0.0f, 0.0f, 0.0f, 1.0f),
+                    houseGuid, houseExteriorWmoDataID, rootGuid, rootWorldPos, rootWorldRot, 0, fixtureOverrides);
+        }
     }
 
-    // Children of roof piece — chimney and windows (local-space positions/rotations)
-    if (roofPiece)
-    {
-        ObjectGuid roofGuid = roofPiece->GetGUID();
-
-        // Chimney (back-left)
-        SpawnHouseMeshObject(plotIndex, 7118952, /*isWMO*/ true,
-            Position(-3.6472f, -5.6444f, 12.3556f, 0.0f),
-            QuaternionData(0.0f, 0.0f, -0.7071066f, 0.70710695f), 1.0f,
-            houseGuid, 1452, houseExteriorWmoDataID,
-            /*exteriorComponentType*/ 16, /*houseSize*/ 2, /*hookID*/ 14931,
-            roofGuid, /*attachFlags*/ 3, &housePos);
-
-        // Window back-left
-        SpawnHouseMeshObject(plotIndex, 7450830, /*isWMO*/ true,
-            Position(-3.025f, -0.0222f, 11.35f, 0.0f),
-            QuaternionData(0.0f, 0.0f, -1.0f, 0.0f), 1.0f,
-            houseGuid, 1448, houseExteriorWmoDataID,
-            /*exteriorComponentType*/ 14, /*houseSize*/ 2, /*hookID*/ 17202,
-            roofGuid, /*attachFlags*/ 3, &housePos);
-
-        // Window back-right
-        SpawnHouseMeshObject(plotIndex, 7450830, /*isWMO*/ true,
-            Position(3.0305f, -0.0222f, 11.35f, 0.0f),
-            QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 1.0f,
-            houseGuid, 1448, houseExteriorWmoDataID,
-            /*exteriorComponentType*/ 14, /*houseSize*/ 2, /*hookID*/ 14929,
-            roofGuid, /*attachFlags*/ 3, &housePos);
-    }
-
-    uint32 meshCount = 0;
-    auto meshItr = _meshObjects.find(plotIndex);
-    if (meshItr != _meshObjects.end())
-        meshCount = static_cast<uint32>(meshItr->second.size());
-
-    TC_LOG_DEBUG("housing", "HousingMap::SpawnFullHouseMeshObjects: Spawned {} alliance MeshObjects for plot {} in neighborhood '{}'",
-        meshCount, plotIndex, _neighborhood ? _neighborhood->GetName() : "?");
-}
-
-void HousingMap::SpawnHordeHouseMeshObjects(uint8 plotIndex, Position const& housePos,
-    QuaternionData const& houseRot, ObjectGuid houseGuid,
-    int32 /*exteriorComponentID*/, int32 /*houseExteriorWmoDataID*/)
-{
-    // === HORDE EXTERIOR ===
-    // Sniff-verified: Horde starter house with HouseExteriorWmoDataID=87.
-    // Two root pieces at the house position, children with local-space offsets.
-    //
-    // Parent-child hierarchy:
-    //   Root 0 (main structure, 7118906) - ExteriorComponentID 3811, type 10
-    //     ├── Child: Door/entrance (7118912), hookID 17245, extCompID 976
-    //     ├── Child: Wall element (7460531), hookID -1, extCompID 2476
-    //     ├── Child: Wall variant (7118901), hookID -1, extCompID 1011
-    //     ├── Child: Roof piece A (7462686), hookID 17294, extCompID 2445
-    //     ├── Child: Structure detail (7118918), hookID 17286, extCompID 980
-    //     └── Child: Roof piece B (7462686), hookID 17285, extCompID 2445
-    //   Root 1 (base, 6648685) - ExteriorComponentID 1003, type 9
-
-    int32 hordeWmoDataID = HORDE_HOUSE_EXTERIOR_WMO_DATA_ID; // 87
-
-    // Root piece 0: Main structure
-    MeshObject* rootPiece = SpawnHouseMeshObject(plotIndex, 7118906, /*isWMO*/ true,
-        housePos, houseRot, 1.0f,
-        houseGuid, 3811, hordeWmoDataID,
-        /*exteriorComponentType*/ 10, /*houseSize*/ 2, /*hookID*/ -1,
-        ObjectGuid::Empty, /*attachFlags*/ 0);
-
-    // Root piece 1: Base structure
-    MeshObject* basePiece = SpawnHouseMeshObject(plotIndex, 6648685, /*isWMO*/ true,
-        housePos, houseRot, 1.0f,
-        houseGuid, 1003, hordeWmoDataID,
-        /*exteriorComponentType*/ 9, /*houseSize*/ 2, /*hookID*/ -1,
-        ObjectGuid::Empty, /*attachFlags*/ 0);
-
-    // Children of root piece 0
-    if (rootPiece)
-    {
-        ObjectGuid rootGuid = rootPiece->GetGUID();
-
-        // Door/entrance
-        SpawnHouseMeshObject(plotIndex, 7118912, /*isWMO*/ true,
-            Position(14.2722f, -8.6194f, 0.0f, 0.0f),
-            QuaternionData(0.0f, 0.0f, -0.2873478f, 0.9578263f), 1.0f,
-            houseGuid, 976, hordeWmoDataID,
-            /*exteriorComponentType*/ 11, /*houseSize*/ 2, /*hookID*/ 17245,
-            rootGuid, /*attachFlags*/ 3, &housePos);
-
-        // Wall element
-        SpawnHouseMeshObject(plotIndex, 7460531, /*isWMO*/ true,
-            Position(0.0f, 0.0f, 0.0f, 0.0f),
-            QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 1.0f,
-            houseGuid, 2476, hordeWmoDataID,
-            /*exteriorComponentType*/ 12, /*houseSize*/ 2, /*hookID*/ -1,
-            rootGuid, /*attachFlags*/ 3, &housePos);
-
-        // Wall variant
-        SpawnHouseMeshObject(plotIndex, 7118901, /*isWMO*/ true,
-            Position(0.0f, 0.0f, 0.0f, 0.0f),
-            QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 1.0f,
-            houseGuid, 1011, hordeWmoDataID,
-            /*exteriorComponentType*/ 12, /*houseSize*/ 2, /*hookID*/ -1,
-            rootGuid, /*attachFlags*/ 3, &housePos);
-
-        // Roof piece A (right side)
-        SpawnHouseMeshObject(plotIndex, 7462686, /*isWMO*/ true,
-            Position(6.2889f, -4.4556f, 0.0833f, 0.0f),
-            QuaternionData(0.0f, 0.0f, 0.95782566f, 0.28735f), 1.0f,
-            houseGuid, 2445, hordeWmoDataID,
-            /*exteriorComponentType*/ 13, /*houseSize*/ 2, /*hookID*/ 17294,
-            rootGuid, /*attachFlags*/ 3, &housePos);
-
-        // Structure detail
-        SpawnHouseMeshObject(plotIndex, 7118918, /*isWMO*/ true,
-            Position(-0.1389f, 8.6806f, 5.4139f, 0.0f),
-            QuaternionData(0.0f, 0.0f, 0.7071066f, 0.70710695f), 1.0f,
-            houseGuid, 980, hordeWmoDataID,
-            /*exteriorComponentType*/ 12, /*houseSize*/ 2, /*hookID*/ 17286,
-            rootGuid, /*attachFlags*/ 3, &housePos);
-
-        // Roof piece B (left side)
-        SpawnHouseMeshObject(plotIndex, 7462686, /*isWMO*/ true,
-            Position(-7.0611f, -3.7361f, 0.0833f, 0.0f),
-            QuaternionData(0.0f, 0.0f, 0.2873478f, 0.9578263f), 1.0f,
-            houseGuid, 2445, hordeWmoDataID,
-            /*exteriorComponentType*/ 13, /*houseSize*/ 2, /*hookID*/ 17285,
-            rootGuid, /*attachFlags*/ 3, &housePos);
-    }
-
-    uint32 meshCount = 0;
-    auto meshItr = _meshObjects.find(plotIndex);
-    if (meshItr != _meshObjects.end())
-        meshCount = static_cast<uint32>(meshItr->second.size());
-
-    TC_LOG_DEBUG("housing", "HousingMap::SpawnHordeHouseMeshObjects: Spawned {} MeshObjects for plot {} in neighborhood '{}' "
-        "(root={} base={})",
-        meshCount, plotIndex, _neighborhood ? _neighborhood->GetName() : "?",
-        rootPiece ? "OK" : "FAIL", basePiece ? "OK" : "FAIL");
+    if (!totalSpawned)
+        TC_LOG_ERROR("housing", "HousingMap::SpawnFullHouseMeshObjects: no piece of HouseExteriorWmoData {} (core component {}) could "
+            "be built for plot {}", wmoDataID, coreExtCompID, plotIndex);
+    else
+        TC_LOG_DEBUG("housing", "HousingMap::SpawnFullHouseMeshObjects: plot {} HouseExteriorWmoData {} core component {}: {} pieces",
+            plotIndex, wmoDataID, coreExtCompID, totalSpawned);
 }
 
 uint32 HousingMap::SpawnExtCompTree(uint8 plotIndex, uint32 extCompID,
-    Position const& pos, QuaternionData const& rot,
+    Position const& localPos, QuaternionData const& localRot,
     ObjectGuid houseGuid, int32 houseExteriorWmoDataID,
-    ObjectGuid parentGuid, Position const* worldPos, int32 depth /*= 0*/,
-    FixtureOverrideMap const* fixtureOverrides /*= nullptr*/,
-    int32 hookIDOverride /*= -1*/)
+    ObjectGuid parentGuid, Position const& parentWorldPos, QuaternionData const& parentWorldRot,
+    int32 depth /*= 0*/, FixtureOverrideMap const* fixtureOverrides /*= nullptr*/, int32 hookID /*= -1*/)
 {
     if (depth > 10) // safety limit against infinite recursion
         return 0;
@@ -2740,20 +2297,15 @@ uint32 HousingMap::SpawnExtCompTree(uint8 plotIndex, uint32 extCompID,
         return 0;
     }
 
-    // Determine attach flags: root pieces (no parent) use 0, children use 3
-    uint8 attachFlags = parentGuid.IsEmpty() ? 0 : 3;
+    // Where the piece stands in the world: the server places it on the grid there, and its children and door are
+    // placed from it. The client places it from its attachment.
+    Position worldPos;
+    QuaternionData worldRot;
+    HousingMgr::ComposeAttachment(parentWorldPos, parentWorldRot, localPos, localRot, worldPos, worldRot);
+    LoadGrid(worldPos.GetPositionX(), worldPos.GetPositionY());
 
-    // The hookIDOverride tells the client which hook point this component occupies.
-    // This must propagate at ALL depths (not just depth=0) because during initial house spawn
-    // via SpawnFullHouseMeshObjects, hooks are iterated at depth >= 1 with valid hookIDOverride.
-    int32 effectiveHookID = (hookIDOverride > 0) ? hookIDOverride : -1;
-
-    MeshObject* mesh = SpawnHouseMeshObject(plotIndex, comp->ModelFileDataID, /*isWMO*/ true,
-        pos, rot, 1.0f,
-        houseGuid, static_cast<int32>(extCompID), houseExteriorWmoDataID,
-        comp->Type, /*houseSize*/ 2, effectiveHookID,
-        parentGuid, attachFlags, worldPos);
-
+    MeshObject* mesh = MeshObject::CreateMeshObject(this, localPos, localRot, 1.0f, comp->ModelFileDataID, /*isWMO*/ true,
+        parentGuid, HOUSING_ATTACHMENT_FLAGS_PIECE, &worldPos);
     if (!mesh)
     {
         TC_LOG_ERROR("housing", "HousingMap::SpawnExtCompTree: Failed to spawn mesh for comp {} "
@@ -2762,187 +2314,60 @@ uint32 HousingMap::SpawnExtCompTree(uint8 plotIndex, uint32 extCompID,
         return 0;
     }
 
+    // A door piece carries its door: the Entity at the piece's EntryOffset and the door game object riding it. They
+    // are made before the piece's fixture data, so the piece names the real door (hbcd3 1310976-1310985).
+    HousingRoomEntity* doorAttachPoint = nullptr;
+    GameObject* door = nullptr;
+    if (comp->Type == HOUSING_FIXTURE_TYPE_DOOR && comp->GameObjectID > 0)
+        door = CreateHouseDoor(plotIndex, mesh->GetGUID(), *comp, worldPos, worldRot, houseGuid, doorAttachPoint);
+
+    // Size and Field_59 come from the component: retail sent Size 2 and Field_59 2 on the wall 1004 and Size 1,
+    // Field_59 2 on the entry 976 (hbcd3 1310914-1310985), the current client's ExteriorComponent rows' Size and
+    // Field_7. What Field_59 means is not known.
+    mesh->InitHousingFixtureData(houseGuid, parentGuid, static_cast<int32>(extCompID), houseExteriorWmoDataID,
+        comp->Type, comp->Field_7, comp->Size, hookID, door ? door->GetGUID() : ObjectGuid::Empty,
+        comp->Type == HOUSING_FIXTURE_TYPE_BASE && hookID < 0);
+
+    if (!AddToMap(mesh))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnExtCompTree: AddToMap failed for plot {} component {}", plotIndex, extCompID);
+        delete mesh;
+        delete door;
+        delete doorAttachPoint;
+        return 0;
+    }
+
+    _meshObjects[plotIndex].push_back(mesh->GetGUID());
+
+    if (door)
+        AddHouseDoor(plotIndex, door, doorAttachPoint);
+
     uint32 count = 1;
     ObjectGuid meshGuid = mesh->GetGUID();
 
-    // Compute THIS mesh's cumulative world position by composing the immediate
-    // parent's world position with our local-space hook offset, rotated by the
-    // parent's cumulative orientation. At depth 0 we are the root: our local
-    // pos IS the world position (passed by SpawnFullHouseMeshObjects).
-    //
-    // This cumulative position is required so that a grand-child's door GO
-    // (e.g. house-root → DoorwayWall → door) lands on the visible mesh rather
-    // than offset by the wall's distance from the root.
-    Position thisMeshWorldPos;
-    if (depth == 0 || !worldPos)
-    {
-        thisMeshWorldPos = pos;
-    }
-    else
-    {
-        Position const& parentWorldPos = *worldPos;
-        float parentFacing = parentWorldPos.GetOrientation();
-        float cf = std::cos(parentFacing);
-        float sf = std::sin(parentFacing);
-        float wx = parentWorldPos.GetPositionX() + pos.GetPositionX() * cf - pos.GetPositionY() * sf;
-        float wy = parentWorldPos.GetPositionY() + pos.GetPositionX() * sf + pos.GetPositionY() * cf;
-        float wz = parentWorldPos.GetPositionZ() + pos.GetPositionZ();
-        // Extract the Z-axis rotation contribution of the hook quaternion so
-        // that grand-children of this mesh apply the correct cumulative yaw.
-        // yaw = atan2(2*(w*z + x*y), 1 - 2*(y² + z²))
-        float thisZRot = std::atan2(
-            2.0f * (rot.w * rot.z + rot.x * rot.y),
-            1.0f - 2.0f * (rot.y * rot.y + rot.z * rot.z));
-        thisMeshWorldPos.Relocate(wx, wy, wz, parentFacing + thisZRot);
-    }
-
-    // --- Blizzlike: If this is a door component (Type=11), spawn the interactive GO ---
-    // Retail sniff: door MeshObjects have FHousingFixture_C.GameObjectGUID set to the
-    // door GO entry. A separate GameObject (type GOOBER) is spawned at the door mesh's
-    // world position for player click interaction. The GO's PositionLocalSpace=(0,0,0)
-    // relative to a parent entity at the door's world position.
-    if (comp->Type == 11 && comp->GameObjectID > 0)
-    {
-        uint32 doorGoEntry = static_cast<uint32>(comp->GameObjectID);
-        GameObjectTemplate const* doorTemplate = sObjectMgr->GetGameObjectTemplate(doorGoEntry);
-        if (doorTemplate)
-        {
-            // thisMeshWorldPos already carries the door mesh's cumulative world
-            // position through every parent hook transform. Earlier revisions
-            // computed this as `houseRoot + localPos`, which lost the offset of
-            // any intermediate parent (e.g. a DoorwayWall hosting the door) and
-            // left the clickable GO a few yards away from the visible mesh.
-            float doorWorldX = thisMeshWorldPos.GetPositionX();
-            float doorWorldY = thisMeshWorldPos.GetPositionY();
-            float doorWorldZ = thisMeshWorldPos.GetPositionZ();
-            float doorFacing = thisMeshWorldPos.GetOrientation();
-            float cosFacing = std::cos(doorFacing);
-            float sinFacing = std::sin(doorFacing);
-
-            // Apply the ExteriorComponentExitPoint offset in DOOR-local space
-            // (rotated by the cumulative facing): X/Y push the clickable box in
-            // front of the mesh (e.g. "step in front of the door"), Z lifts it
-            // onto the porch instead of the mesh base.
-            ExteriorComponentExitPointEntry const* exitPt = sHousingMgr.GetExitPoint(extCompID);
-            if (exitPt)
-            {
-                doorWorldX += exitPt->Position[0] * cosFacing - exitPt->Position[1] * sinFacing;
-                doorWorldY += exitPt->Position[0] * sinFacing + exitPt->Position[1] * cosFacing;
-                doorWorldZ += exitPt->Position[2];
-            }
-
-            Position doorPos(doorWorldX, doorWorldY, doorWorldZ, doorFacing);
-            QuaternionData doorRot(0, 0, 0, 1);
-
-            // Remove any previously-tracked door GO for this plot before we store a
-            // new one — otherwise the old GUID reference is lost and the game object
-            // leaks on the map (visible as a phantom clickable box at the old door
-            // location after the entrance is moved).
-            if (auto existingItr = _houseGameObjects.find(plotIndex); existingItr != _houseGameObjects.end())
-            {
-                if (GameObject* oldGo = GetGameObject(existingItr->second))
-                    oldGo->AddObjectToRemoveList();
-                _houseGameObjects.erase(existingItr);
-            }
-
-            GameObject* doorGo = GameObject::CreateGameObject(doorGoEntry, this, doorPos, doorRot, 255, GO_STATE_READY);
-            if (doorGo)
-            {
-                doorGo->SetFlag(GO_FLAG_NODESPAWN);
-                PhasingHandler::InitDbPhaseShift(doorGo->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-
-                if (AddToMap(doorGo))
-                {
-                    _houseGameObjects[plotIndex] = doorGo->GetGUID();
-                    // Using the door casts its goober spell, which takes the character inside.
-                    TC_LOG_INFO("housing", "SpawnExtCompTree: Door GO {} goober spell {}",
-                        doorGoEntry, doorGo->GetGOInfo()->type == GAMEOBJECT_TYPE_GOOBER ? doorGo->GetGOInfo()->goober.spell : 0);
-                    TC_LOG_INFO("housing", "SpawnExtCompTree: Door GO spawned blizzlike — entry={} guid={} "
-                        "at ({:.1f},{:.1f},{:.1f}) for comp={} (hook local: {:.1f},{:.1f},{:.1f}) exitPt=({:.1f},{:.1f},{:.1f}) plot={}",
-                        doorGoEntry, doorGo->GetGUID().ToString(),
-                        doorWorldX, doorWorldY, doorWorldZ,
-                        extCompID,
-                        pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(),
-                        exitPt ? exitPt->Position[0] : 0.0f,
-                        exitPt ? exitPt->Position[1] : 0.0f,
-                        exitPt ? exitPt->Position[2] : 0.0f,
-                        plotIndex);
-                }
-                else
-                {
-                    TC_LOG_ERROR("housing", "SpawnExtCompTree: Door GO AddToMap FAILED for comp={} plot={}", extCompID, plotIndex);
-                    delete doorGo;
-                }
-            }
-            else
-            {
-                TC_LOG_ERROR("housing", "SpawnExtCompTree: CreateGameObject FAILED for door entry={} comp={}", doorGoEntry, extCompID);
-            }
-        }
-        else
-        {
-            TC_LOG_ERROR("housing", "SpawnExtCompTree: Door GO template {} NOT FOUND for comp={}", doorGoEntry, extCompID);
-        }
-    }
-
-    // Children receive THIS mesh's cumulative world position as their parent
-    // transform so their local hook offsets compose correctly (was previously
-    // always the root's position, which broke grand-children like doors hosted
-    // by DoorwayWalls).
-    Position const* childWorldPos = &thisMeshWorldPos;
-
-    // Recurse into hooks on this component
-    auto const* hooks = sHousingMgr.GetHooksOnComponent(extCompID);
-    TC_LOG_INFO("housing", "SpawnExtCompTree: comp={} has {} hooks, fixtureOverrides={}",
-        extCompID, hooks ? uint32(hooks->size()) : 0, fixtureOverrides != nullptr);
-
-    // Spawn child components at hooks from player fixture overrides.
-    // Door meshes with GameObjectID > 0 automatically spawn their interactive GO above.
-    if (hooks)
+    // Spawn child components at the hooks the owner filled.
+    if (auto const* hooks = sHousingMgr.GetHooksOnComponent(extCompID))
     {
         for (ExteriorComponentHookEntry const* hook : *hooks)
         {
-            if (!hook)
+            if (!hook || !fixtureOverrides)
                 continue;
 
-            // Only spawn hook children that the player has explicitly selected
-            ExteriorComponentEntry const* childComp = nullptr;
-            if (fixtureOverrides)
-            {
-                auto overrideItr = fixtureOverrides->find(hook->ID);
-                if (overrideItr != fixtureOverrides->end())
-                    childComp = sExteriorComponentStore.LookupEntry(overrideItr->second);
-            }
+            auto overrideItr = fixtureOverrides->find(hook->ID);
+            if (overrideItr == fixtureOverrides->end())
+                continue;
+
+            ExteriorComponentEntry const* childComp = sExteriorComponentStore.LookupEntry(overrideItr->second);
             if (!childComp)
                 continue;
 
-            TC_LOG_INFO("housing", "SpawnExtCompTree: parent={} hook={} (type={}) → child comp {} '{}' (ParentComp={}, ModelFDID={})",
-                extCompID, hook->ID, hook->ExteriorComponentTypeID, childComp->ID,
-                childComp->Name[DEFAULT_LOCALE] ? childComp->Name[DEFAULT_LOCALE] : "",
-                childComp->ParentComponentID, childComp->ModelFileDataID);
+            TC_LOG_DEBUG("housing", "SpawnExtCompTree: parent={} hook={} (type={}) → child comp {} (ModelFDID={})",
+                extCompID, hook->ID, hook->ExteriorComponentTypeID, childComp->ID, childComp->ModelFileDataID);
 
-            // Hook position/rotation are the local-space coordinates where the child
-            // mesh attaches on the parent. Use hook position directly as the child's
-            // PositionLocalSpace — the client handles the attachment via AttachParentGUID.
-            Position hookPos(hook->Position[0], hook->Position[1], hook->Position[2], 0.0f);
-            QuaternionData hookRot;
-            // Hook rotation is in degrees — convert to quaternion (XYZ extrinsic Euler)
-            static constexpr float DEG_TO_RAD = static_cast<float>(M_PI / 180.0);
-            float rx = hook->Rotation[0] * DEG_TO_RAD;
-            float ry = hook->Rotation[1] * DEG_TO_RAD;
-            float rz = hook->Rotation[2] * DEG_TO_RAD;
-            float cx = std::cos(rx / 2.0f), sx = std::sin(rx / 2.0f);
-            float cy = std::cos(ry / 2.0f), sy = std::sin(ry / 2.0f);
-            float cz = std::cos(rz / 2.0f), sz = std::sin(rz / 2.0f);
-            hookRot.x = sx * cy * cz - cx * sy * sz;
-            hookRot.y = cx * sy * cz + sx * cy * sz;
-            hookRot.z = cx * cy * sz - sx * sy * cz;
-            hookRot.w = cx * cy * cz + sx * sy * sz;
-
-            count += SpawnExtCompTree(plotIndex, childComp->ID,
-                hookPos, hookRot,
-                houseGuid, houseExteriorWmoDataID,
-                meshGuid, childWorldPos, depth + 1, fixtureOverrides,
+            // The hook's position and turn are the child's pose on this piece.
+            Position hookPos(hook->Position[0], hook->Position[1], hook->Position[2]);
+            count += SpawnExtCompTree(plotIndex, childComp->ID, hookPos, HousingMgr::GetHookRotation(*hook),
+                houseGuid, houseExteriorWmoDataID, meshGuid, worldPos, worldRot, depth + 1, fixtureOverrides,
                 static_cast<int32>(hook->ID));
         }
     }
@@ -2955,51 +2380,95 @@ uint32 HousingMap::SpawnExtCompTree(uint8 plotIndex, uint32 extCompID,
     return count;
 }
 
-void HousingMap::SendPlotMeshObjectsToPlayers(uint8 plotIndex)
+GameObject* HousingMap::CreateHouseDoor(uint8 plotIndex, ObjectGuid entryGuid, ExteriorComponentEntry const& entry,
+    Position const& entryWorldPos, QuaternionData const& entryWorldRot, ObjectGuid houseGuid, HousingRoomEntity*& attachPoint)
 {
-    auto meshItr = _meshObjects.find(plotIndex);
-    if (meshItr == _meshObjects.end() || meshItr->second.empty())
+    attachPoint = nullptr;
+
+    uint32 const doorEntry = static_cast<uint32>(entry.GameObjectID);
+    if (!sObjectMgr->GetGameObjectTemplate(doorEntry))
     {
-        TC_LOG_ERROR("housing", "HousingMap::SendPlotMeshObjectsToPlayers: plot {} has no MeshObjects to send", plotIndex);
-        return;
+        TC_LOG_ERROR("housing", "HousingMap::CreateHouseDoor: door {} of component {} has no gameobject template; plot {} gets no door",
+            doorEntry, entry.ID, plotIndex);
+        return nullptr;
     }
 
-    for (MapReference const& ref : GetPlayers())
+    // One door per house.
+    DespawnDoorGO(plotIndex);
+
+    // The Entity the door rides stands at the entry's EntryOffset, attachment flags 3 (hbcd3 1310987-1311020: 976's
+    // (-4.4534, 0.3277, 2.4228)); the door's stationary position is the whole chain composed (hbcd3 1310816).
+    Position const offsetLocalPos(entry.Position[0], entry.Position[1], entry.Position[2]);
+    QuaternionData const identity(0.0f, 0.0f, 0.0f, 1.0f);
+    Position doorWorldPos;
+    QuaternionData doorWorldRot;
+    HousingMgr::ComposeAttachment(entryWorldPos, entryWorldRot, offsetLocalPos, identity, doorWorldPos, doorWorldRot);
+
+    attachPoint = new HousingRoomEntity(HousingGridEntityRole::AttachPoint);
+    if (!attachPoint->Create(ObjectGuid::Create<HighGuid::Entity>(GetId(), 0, GenerateLowGuid<HighGuid::Entity>()), this, doorWorldPos, false))
     {
-        Player* p = ref.GetSource();
-        if (!p || !p->IsInWorld())
-            continue;
-
-        UpdateData updateData(GetId());
-        uint32 created = 0;
-        for (ObjectGuid const& meshGuid : meshItr->second)
-        {
-            MeshObject* meshObj = GetMeshObject(meshGuid);
-            if (!meshObj || !meshObj->IsInWorld())
-                continue;
-
-            // Re-CREATEing a GUID the client already holds crashes it - refresh instead.
-            if (p->HaveAtClient(meshObj))
-            {
-                meshObj->BuildValuesUpdateBlockForPlayer(&updateData, p);
-                continue;
-            }
-
-            meshObj->BuildCreateUpdateBlockForPlayer(&updateData, p);
-            p->m_clientGUIDs.insert(meshGuid);
-            ++created;
-        }
-
-        if (!updateData.HasData())
-            continue;
-
-        WorldPacket packet;
-        updateData.BuildPacket(&packet);
-        p->SendDirectMessage(&packet);
-
-        TC_LOG_INFO("housing", "HousingMap::SendPlotMeshObjectsToPlayers: plot {} -> player {} ({} CREATE of {} meshes)",
-            plotIndex, p->GetGUID().ToString(), created, uint32(meshItr->second.size()));
+        TC_LOG_ERROR("housing", "HousingMap::CreateHouseDoor: the Entity for the door of plot {} could not be created", plotIndex);
+        delete attachPoint;
+        attachPoint = nullptr;
+        return nullptr;
     }
+    attachPoint->SetMirroredPosition(offsetLocalPos, identity, 1.0f, entryGuid, HOUSING_ATTACHMENT_FLAGS_PIECE);
+    PhasingHandler::InitDbPhaseShift(attachPoint->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+
+    // The door: identity rotation, riding the Entity at position zero, CreatedBy the house, Flags 0 (hbcd3
+    // 1310790-1310861). Its stationary orientation is the chain's turn.
+    LoadGrid(doorWorldPos.GetPositionX(), doorWorldPos.GetPositionY());
+    GameObject* door = GameObject::CreateGameObject(doorEntry, this, doorWorldPos, identity, 255, GO_STATE_READY);
+    if (!door)
+    {
+        TC_LOG_ERROR("housing", "HousingMap::CreateHouseDoor: door {} of plot {} could not be created", doorEntry, plotIndex);
+        delete attachPoint;
+        attachPoint = nullptr;
+        return nullptr;
+    }
+
+    PhasingHandler::InitDbPhaseShift(door->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+    door->SetCreatedByGUID(houseGuid);
+    door->InitHousingDecorProxy(attachPoint->GetGUID());
+    return door;
+}
+
+bool HousingMap::AddHouseDoor(uint8 plotIndex, GameObject* door, HousingRoomEntity* attachPoint)
+{
+    // The entry piece already names the door; without the door it must name nothing.
+    ObjectGuid const entryGuid = attachPoint->GetAttachParentGUID();
+    auto forgetDoorOnEntry = [this, entryGuid]()
+    {
+        if (MeshObject* entryMesh = GetMeshObject(entryGuid))
+            entryMesh->SetFixtureGameObjectGUID(ObjectGuid::Empty);
+    };
+
+    if (!AddToMap(attachPoint))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::AddHouseDoor: the Entity for the door of plot {} could not be added to the map", plotIndex);
+        delete attachPoint;
+        delete door;
+        forgetDoorOnEntry();
+        return false;
+    }
+    _doorAttachPointGuids[plotIndex] = attachPoint->GetGUID();
+
+    if (!AddToMap(door))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::AddHouseDoor: door {} of plot {} could not be added to the map", door->GetEntry(), plotIndex);
+        delete door;
+        // The Entity the door would have ridden leaves with it.
+        _doorAttachPointGuids.erase(plotIndex);
+        RemoveHousingEntityNow(attachPoint->GetGUID());
+        forgetDoorOnEntry();
+        return false;
+    }
+    _houseGameObjects[plotIndex] = door->GetGUID();
+
+    TC_LOG_DEBUG("housing", "HousingMap::AddHouseDoor: door {} of plot {} at ({:.3f}, {:.3f}, {:.3f}) facing {:.4f}, riding {}",
+        door->GetGUID().ToString(), plotIndex, door->GetPositionX(), door->GetPositionY(), door->GetPositionZ(),
+        door->GetOrientation(), attachPoint->GetGUID().ToString());
+    return true;
 }
 
 void HousingMap::DespawnAllMeshObjectsForPlot(uint8 plotIndex)
@@ -3056,6 +2525,12 @@ void HousingMap::DespawnSingleMeshObject(uint8 plotIndex, ObjectGuid meshGuid)
         }
     }
 
+    // The door rides an Entity on its entry; it goes with the entry.
+    if (auto doorItr = _doorAttachPointGuids.find(plotIndex); doorItr != _doorAttachPointGuids.end())
+        if (HousingRoomEntity const* attachPoint = GetHousingRoomEntity(doorItr->second))
+            if (std::find(toRemove.begin(), toRemove.end(), attachPoint->GetAttachParentGUID()) != toRemove.end())
+                DespawnDoorGO(plotIndex);
+
     for (ObjectGuid const& guid : toRemove)
     {
         if (MeshObject* mesh = GetMeshObject(guid))
@@ -3104,32 +2579,25 @@ MeshObject* HousingMap::SpawnFixtureAtHook(uint8 plotIndex, uint32 hookID, uint3
         return nullptr;
     }
 
-    // Hook position/rotation are local-space offsets relative to the parent
-    Position hookPos(hookEntry->Position[0], hookEntry->Position[1], hookEntry->Position[2], 0.0f);
-    QuaternionData hookRot;
-    static constexpr float DEG_TO_RAD = static_cast<float>(M_PI / 180.0);
-    float rx = hookEntry->Rotation[0] * DEG_TO_RAD;
-    float ry = hookEntry->Rotation[1] * DEG_TO_RAD;
-    float rz = hookEntry->Rotation[2] * DEG_TO_RAD;
-    float cx = std::cos(rx / 2.0f), sx = std::sin(rx / 2.0f);
-    float cy = std::cos(ry / 2.0f), sy = std::sin(ry / 2.0f);
-    float cz = std::cos(rz / 2.0f), sz = std::sin(rz / 2.0f);
-    hookRot.x = sx * cy * cz - cx * sy * sz;
-    hookRot.y = cx * sy * cz + sx * cy * sz;
-    hookRot.z = cx * cy * sz - sx * sy * cz;
-    hookRot.w = cx * cy * cz + sx * sy * sz;
-
-    // Use the parent's world position for grid placement
-    Position parentWorldPos(parentMesh->GetPositionX(), parentMesh->GetPositionY(),
-        parentMesh->GetPositionZ(), parentMesh->GetOrientation());
+    // The hook's position and turn are the new piece's pose on the parent; the parent's place in the world comes
+    // from its attachment chain.
+    Position hookPos(hookEntry->Position[0], hookEntry->Position[1], hookEntry->Position[2]);
+    Position parentWorldPos;
+    QuaternionData parentWorldRot;
+    if (!GetWorldPose(parentMesh->GetGUID(), parentWorldPos, parentWorldRot))
+    {
+        TC_LOG_ERROR("housing", "HousingMap::SpawnFixtureAtHook: the attachment chain of the piece owning hook {} on plot {} is broken",
+            hookID, plotIndex);
+        return nullptr;
+    }
 
     // Spawn the component tree at this hook (may have sub-hooks/children).
     // Pass hookID as the override so the top-level mesh gets ExteriorComponentHookID = hookID
     // (the actual hook point where we're installing it, not the component's native HookID from DB2).
     uint32 spawned = SpawnExtCompTree(plotIndex, componentID,
-        hookPos, hookRot,
+        hookPos, HousingMgr::GetHookRotation(*hookEntry),
         houseGuid, houseExteriorWmoDataID,
-        parentMesh->GetGUID(), &parentWorldPos, 0, nullptr,
+        parentMesh->GetGUID(), parentWorldPos, parentWorldRot, 0, nullptr,
         static_cast<int32>(hookID));
 
     TC_LOG_DEBUG("housing", "HousingMap::SpawnFixtureAtHook: Spawned {} mesh(es) for hook {} component {} on plot {}",
@@ -3161,111 +2629,27 @@ MeshObject* HousingMap::SpawnFixtureAtHook(uint8 plotIndex, uint32 hookID, uint3
 
 void HousingMap::DespawnHouseForPlot(uint8 plotIndex)
 {
-    // Despawn room entities, MeshObjects, then the GO
-    DespawnRoomForPlot(plotIndex);
+    // The door and the pieces first, then what they hang on.
+    DespawnDoorGO(plotIndex);
     DespawnAllMeshObjectsForPlot(plotIndex);
 
-    // Despawn the Entity mirrors paired with the exterior root.
-    _houseMirrorEntities.erase(plotIndex);
-    _houseMeshMirrorEntities.erase(plotIndex);
+    // The house entity and the exterior root have fixed GUIDs and are built again straight away when a house is
+    // rebuilt, so they leave the map at once rather than at the end of the update.
+    if (auto itr = _houseEntityGuids.find(plotIndex); itr != _houseEntityGuids.end())
+    {
+        RemoveHousingEntityNow(itr->second);
+        _houseEntityGuids.erase(itr);
+    }
 
-    auto itr = _houseGameObjects.find(plotIndex);
-    if (itr == _houseGameObjects.end())
-        return;
+    if (auto itr = _exteriorRootGuids.find(plotIndex); itr != _exteriorRootGuids.end())
+    {
+        RemoveHousingEntityNow(itr->second);
+        _exteriorRootGuids.erase(itr);
+    }
 
-    if (GameObject* go = GetGameObject(itr->second))
-        go->AddObjectToRemoveList();
+    DespawnRoomForPlot(plotIndex);
 
-    TC_LOG_DEBUG("housing", "HousingMap::DespawnHouseForPlot: Despawned house GO for plot {}", plotIndex);
-    _houseGameObjects.erase(itr);
-}
-
-HousingMirrorEntity* HousingMap::GetHouseMirror(uint8 plotIndex) const
-{
-    auto itr = _houseMirrorEntities.find(plotIndex);
-    if (itr == _houseMirrorEntities.end() || itr->second.empty())
-        return nullptr;
-    // Returns the Type-9 (Base) root mirror — the canonical mirror referenced
-    // by FHousingPlayerHouse_C.EntityGUID. Per-piece access via GetHouseMirrors.
-    return itr->second.front().get();
-}
-
-ObjectGuid HousingMap::GetHouseMirrorGuid(uint8 plotIndex) const
-{
-    if (HousingMirrorEntity* m = GetHouseMirror(plotIndex))
-        return m->GetGUID();
-    return ObjectGuid::Empty;
-}
-
-std::vector<HousingMirrorEntity*> HousingMap::GetHouseMirrors(uint8 plotIndex) const
-{
-    std::vector<HousingMirrorEntity*> result;
-    auto itr = _houseMirrorEntities.find(plotIndex);
-    if (itr == _houseMirrorEntities.end())
-        return result;
-    result.reserve(itr->second.size());
-    for (auto const& mirror : itr->second)
-        result.push_back(mirror.get());
-    return result;
-}
-
-ObjectGuid HousingMap::MakeHouseMirrorGuid(uint8 plotIndex, uint32 bnetAccountId, uint8 pieceIndex /*= 0*/) const
-{
-    // Deterministic convention: HighGuid::Entity, mapId=GetId() (neighborhood
-    // world map), entry=37361 (synthetic entry for housing mirrors — picked
-    // outside the range of creature/gameobject entries in use). Counter packs
-    // (bnetAccountId, plotIndex, pieceIndex) so each per-piece Group A mirror
-    // has a unique GUID and the mapping stays deterministic across runs.
-    // pieceIndex 0 is the Type-9 root mirror (canonical "house mirror GUID"
-    // referenced by FHousingPlayerHouse_C.EntityGUID); 1+ are Roof/Door/Window
-    // pieces. Same derivation is used by proxy emission for neighbour plots
-    // without needing the mirror object to exist.
-    constexpr uint32 HOUSING_MIRROR_ENTRY = 37361;
-    uint64 counter = (static_cast<uint64>(bnetAccountId) << 16)
-                   | (static_cast<uint64>(plotIndex)     << 8)
-                   |  static_cast<uint64>(pieceIndex);
-    return ObjectGuid::Create<HighGuid::Entity>(GetId(), HOUSING_MIRROR_ENTRY, counter);
-}
-
-HousingMirrorEntity* HousingMap::GetHouseMeshMirror(uint8 plotIndex) const
-{
-    auto itr = _houseMeshMirrorEntities.find(plotIndex);
-    if (itr == _houseMeshMirrorEntities.end() || itr->second.empty())
-        return nullptr;
-    // Returns the first (root-piece) Group B mirror for legacy callers that
-    // only need any anchor; per-piece access goes via _houseMeshMirrorEntities.
-    return itr->second.front().get();
-}
-
-ObjectGuid HousingMap::GetHouseMeshMirrorGuid(uint8 plotIndex) const
-{
-    if (HousingMirrorEntity* m = GetHouseMeshMirror(plotIndex))
-        return m->GetGUID();
-    return ObjectGuid::Empty;
-}
-
-std::vector<HousingMirrorEntity*> HousingMap::GetHouseMeshMirrors(uint8 plotIndex) const
-{
-    std::vector<HousingMirrorEntity*> result;
-    auto itr = _houseMeshMirrorEntities.find(plotIndex);
-    if (itr == _houseMeshMirrorEntities.end())
-        return result;
-    result.reserve(itr->second.size());
-    for (auto const& mirror : itr->second)
-        result.push_back(mirror.get());
-    return result;
-}
-
-ObjectGuid HousingMap::MakeHouseMeshMirrorGuid(uint8 plotIndex, uint32 bnetAccountId, uint8 pieceIndex /*= 0*/) const
-{
-    // Distinct synthetic entry from Group A (37361) so Group A/B guids never collide.
-    // Counter packs the (bnet, plot, piece) triple so each per-piece Group B
-    // mirror has a unique GUID across the realm: (bnetId << 16) | (plot << 8) | piece.
-    constexpr uint32 HOUSING_MESH_MIRROR_ENTRY = 37362;
-    uint64 counter = (static_cast<uint64>(bnetAccountId) << 16)
-                   | (static_cast<uint64>(plotIndex)     << 8)
-                   |  static_cast<uint64>(pieceIndex);
-    return ObjectGuid::Create<HighGuid::Entity>(GetId(), HOUSING_MESH_MIRROR_ENTRY, counter);
+    TC_LOG_DEBUG("housing", "HousingMap::DespawnHouseForPlot: Despawned the house on plot {}", plotIndex);
 }
 
 HousingRoomEntity* HousingMap::GetRoomIdentityEntity(uint8 plotIndex) const
@@ -3284,146 +2668,65 @@ ObjectGuid HousingMap::GetRoomIdentityGuid(uint8 plotIndex) const
 
 void HousingMap::DespawnDoorGO(uint8 plotIndex)
 {
-    auto itr = _houseGameObjects.find(plotIndex);
-    if (itr == _houseGameObjects.end())
-        return;
+    if (auto itr = _houseGameObjects.find(plotIndex); itr != _houseGameObjects.end())
+    {
+        if (GameObject* go = GetGameObject(itr->second))
+            go->AddObjectToRemoveList();
 
-    if (GameObject* go = GetGameObject(itr->second))
-        go->AddObjectToRemoveList();
+        TC_LOG_DEBUG("housing", "HousingMap::DespawnDoorGO: Removed door GO {} for plot {}",
+            itr->second.ToString(), plotIndex);
+        _houseGameObjects.erase(itr);
+    }
 
-    TC_LOG_DEBUG("housing", "HousingMap::DespawnDoorGO: Removed door GO {} for plot {}",
-        itr->second.ToString(), plotIndex);
-    _houseGameObjects.erase(itr);
+    if (auto itr = _doorAttachPointGuids.find(plotIndex); itr != _doorAttachPointGuids.end())
+    {
+        if (HousingRoomEntity* attachPoint = GetHousingRoomEntity(itr->second))
+            attachPoint->AddObjectToRemoveList();
+        _doorAttachPointGuids.erase(itr);
+    }
 }
 
-void HousingMap::RespawnDoorGOAtHook(uint8 plotIndex, uint32 hookID, uint32 doorComponentID, Housing const* housing, Player* player /*= nullptr*/)
+void HousingMap::RespawnDoorGOAtHook(uint8 plotIndex, uint32 hookID, uint32 doorComponentID, Housing const* housing, Player* /*player*/)
 {
-    // Remove old door GO
-    DespawnDoorGO(plotIndex);
-
-    // Resolve the door GO entry from the component's GameObjectID
     ExteriorComponentEntry const* doorComp = sExteriorComponentStore.LookupEntry(doorComponentID);
-    if (!doorComp || doorComp->GameObjectID <= 0)
+    if (!doorComp || doorComp->GameObjectID <= 0 || !housing)
     {
         TC_LOG_ERROR("housing", "HousingMap::RespawnDoorGOAtHook: No GameObjectID for door comp {} at hook {}", doorComponentID, hookID);
         return;
     }
-    uint32 doorEntry = static_cast<uint32>(doorComp->GameObjectID);
 
-    GameObjectTemplate const* doorTemplate = sObjectMgr->GetGameObjectTemplate(doorEntry);
-    if (!doorTemplate)
+    MeshObject* entryMesh = FindMeshObjectByHookID(plotIndex, static_cast<int32>(hookID));
+    if (!entryMesh)
     {
-        TC_LOG_ERROR("housing", "HousingMap::RespawnDoorGOAtHook: GO template {} not found for door comp {}", doorEntry, doorComponentID);
+        TC_LOG_ERROR("housing", "HousingMap::RespawnDoorGOAtHook: plot {} has no piece on hook {}, so its door has nothing to ride",
+            plotIndex, hookID);
         return;
     }
 
-    // Get hook position (local offset from house center)
-    ExteriorComponentHookEntry const* hookEntry = sExteriorComponentHookStore.LookupEntry(hookID);
-    if (!hookEntry)
+    // Building the entry already made its door; nothing more to do when the door rides this entry.
+    if (GetHouseGameObject(plotIndex))
+        if (auto itr = _doorAttachPointGuids.find(plotIndex); itr != _doorAttachPointGuids.end())
+            if (HousingRoomEntity const* attachPoint = GetHousingRoomEntity(itr->second))
+                if (attachPoint->GetAttachParentGUID() == entryMesh->GetGUID())
+                    return;
+
+    Position entryWorldPos;
+    QuaternionData entryWorldRot;
+    if (!GetWorldPose(entryMesh->GetGUID(), entryWorldPos, entryWorldRot))
     {
-        TC_LOG_ERROR("housing", "HousingMap::RespawnDoorGOAtHook: Hook {} not found in DB2", hookID);
+        TC_LOG_ERROR("housing", "HousingMap::RespawnDoorGOAtHook: the attachment chain of the entry on hook {} of plot {} is broken",
+            hookID, plotIndex);
         return;
     }
 
-    // Get house position for world-space transform.
-    // Use the room entity's position (already spawned at the correct world-space coordinates)
-    // since DB2 HousePosition Z doesn't match the actual terrain height.
-    Position housePos;
-    if (housing->HasCustomPosition())
-    {
-        housePos = housing->GetHousePosition();
-    }
-    else
-    {
-        // Try the Housing/2 identity room first — it's spawned at the correct house position.
-        if (HousingRoomEntity* roomId = GetRoomIdentityEntity(plotIndex))
-            housePos = roomId->GetPosition();
-
-        // Fallback: resolve facing from DB2 (needed for the rotation transform)
-        if (housePos.GetOrientation() == 0.0f && _neighborhood)
-        {
-            auto plots = sHousingMgr.GetPlotsForMap(_neighborhood->GetNeighborhoodMapID());
-            for (NeighborhoodPlotData const* pd : plots)
-            {
-                if (pd && pd->PlotIndex == static_cast<int32>(plotIndex))
-                {
-                    float hFacing = pd->HouseRotation[2];
-                    if (pd->HouseRotation[0] == 0.0f && pd->HouseRotation[1] == 0.0f && pd->HouseRotation[2] == 0.0f)
-                        hFacing = std::atan2(pd->CornerstonePosition[1] - pd->HousePosition[1],
-                                            pd->CornerstonePosition[0] - pd->HousePosition[0]);
-                    housePos.SetOrientation(hFacing);
-                    break;
-                }
-            }
-        }
-    }
-
-    // Place the door GO at the door fixture MeshObject's position.
-    // The MeshObject is already positioned correctly by the WMO attachment system.
-    Position doorPos;
-    if (MeshObject* doorMesh = FindMeshObjectByHookID(plotIndex, static_cast<int32>(hookID)))
-    {
-        doorPos = doorMesh->GetPosition();
-    }
-    else
-    {
-        // Fallback: compute from hook offset + house position
-        float doorLocalX = hookEntry->Position[0];
-        float doorLocalY = hookEntry->Position[1];
-        float doorLocalZ = hookEntry->Position[2];
-        float facing = housePos.GetOrientation();
-        float cosFacing = std::cos(facing);
-        float sinFacing = std::sin(facing);
-        doorPos = Position(
-            housePos.GetPositionX() + doorLocalX * cosFacing - doorLocalY * sinFacing,
-            housePos.GetPositionY() + doorLocalX * sinFacing + doorLocalY * cosFacing,
-            housePos.GetPositionZ() + doorLocalZ,
-            housePos.GetOrientation());
-    }
-
-    // Apply the ExteriorComponentExitPoint Z offset to match SpawnExtCompTree —
-    // without it the final GO after a fixture move lands ~2 yards below the
-    // initial spawn and sinks into the ground / out of the player's view.
-    if (ExteriorComponentExitPointEntry const* exitPt = sHousingMgr.GetExitPoint(doorComponentID))
-        doorPos.m_positionZ += exitPt->Position[2];
-
-    QuaternionData rot = QuaternionData::fromEulerAnglesZYX(doorPos.GetOrientation(), 0.0f, 0.0f);
-    GameObject* doorGo = GameObject::CreateGameObject(doorEntry, this, doorPos, rot, 255, GO_STATE_READY);
-    if (!doorGo)
-    {
-        TC_LOG_ERROR("housing", "HousingMap::RespawnDoorGOAtHook: CreateGameObject failed for entry {} at hook {}", doorEntry, hookID);
+    HousingRoomEntity* attachPoint = nullptr;
+    GameObject* door = CreateHouseDoor(plotIndex, entryMesh->GetGUID(), *doorComp, entryWorldPos, entryWorldRot,
+        housing->GetHouseGuid(), attachPoint);
+    if (!door)
         return;
-    }
 
-    doorGo->SetFlag(GO_FLAG_NODESPAWN);
-    PhasingHandler::InitDbPhaseShift(doorGo->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
-
-    if (AddToMap(doorGo))
-    {
-        _houseGameObjects[plotIndex] = doorGo->GetGUID();
-
-        // Force-send CREATE to the player so the GO is immediately visible
-        if (player)
-        {
-            UpdateData goUpdate(player->GetMapId());
-            doorGo->BuildCreateUpdateBlockForPlayer(&goUpdate, player);
-            player->m_clientGUIDs.insert(doorGo->GetGUID());
-            if (goUpdate.HasData())
-            {
-                WorldPacket goPacket;
-                goUpdate.BuildPacket(&goPacket);
-                player->SendDirectMessage(&goPacket);
-            }
-        }
-
-        TC_LOG_INFO("housing", "HousingMap::RespawnDoorGOAtHook: Door GO {} spawned at hook {} ({:.1f},{:.1f},{:.1f}) for plot {}",
-            doorGo->GetGUID().ToString(), hookID, doorPos.GetPositionX(), doorPos.GetPositionY(), doorPos.GetPositionZ(), plotIndex);
-    }
-    else
-    {
-        TC_LOG_ERROR("housing", "HousingMap::RespawnDoorGOAtHook: AddToMap failed for door GO at hook {}", hookID);
-        delete doorGo;
-    }
+    entryMesh->SetFixtureGameObjectGUID(door->GetGUID());
+    AddHouseDoor(plotIndex, door, attachPoint);
 }
 
 GameObject* HousingMap::GetHouseGameObject(uint8 plotIndex)
@@ -3577,6 +2880,10 @@ bool HousingMap::SpawnDecorItem(uint8 plotIndex, Housing::PlacedDecor const& dec
                 go->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0,
                     roomEntityGuid, decor.SourceType, decor.SourceValue);
                 go->InitHousingDecorMirroredPosition(localPos, rot, decorScale, roomEntityGuid, attachFlags);
+                // It rides the room it stands in, at its place and turn in that room (hbcd3 1411570-1411650).
+                if (!roomEntityGuid.IsEmpty())
+                    go->SetHousingTransport(roomEntityGuid, Position(localX, localY, localZ,
+                        Position::NormalizeOrientation(orientation - roomWorldPos.GetOrientation())));
 
                 if (!AddToMap(go))
                 {

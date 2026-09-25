@@ -158,6 +158,9 @@ private:
     /// GUID of the interior plot AreaTrigger (entry 37358, FHousingPlotAreaTrigger_C).
     /// The client fires HOUSE_PLOT_ENTERED when it sees this AT, enabling housing CMSGs.
     ObjectGuid _interiorPlotAT;
+
+    /// The exit door game object, spawned once for the house and riding its decor entity on the entry hall.
+    ObjectGuid _exitDoorGuid;
 };
 
 #endif // HouseInteriorMap_h__

@@ -1437,22 +1437,18 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         // NeighborhoodPlot.WorldState to 1 (29729 for plot 13, hbcd3 Number 13863) and the cornerstone to owned.
         housingMap->SetPlotOwnershipState(resolvedPlotIndex, true);
 
-        // An unpacked house brings its fixtures and its placed decor with it.
-        std::unordered_map<uint32, uint32> const fixtureOverrides = packedHouse ? housing->GetFixtureOverrideMap() : std::unordered_map<uint32, uint32>();
-        GameObject* houseGo = housingMap->SpawnHouseForPlot(resolvedPlotIndex, nullptr,
-            static_cast<int32>(housing->GetCoreExteriorComponentID()), static_cast<int32>(housing->GetHouseType()),
-            fixtureOverrides.empty() ? nullptr : &fixtureOverrides);
+        // The house is built from its own fixtures, as a character's arrival builds it: a new house has the starter
+        // pieces and front door Housing::Create gave it, and an unpacked house brings its own. An unpacked house also
+        // brings its placed decor.
+        bool const built = housingMap->SpawnHouseFromState(resolvedPlotIndex, *housing);
         if (packedHouse)
             housingMap->SpawnAllDecorForPlot(resolvedPlotIndex, housing);
-        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: SpawnHouseForPlot for plot {}: {}",
-            resolvedPlotIndex, houseGo ? houseGo->GetGUID().ToString() : "FAILED/NULL");
+        TC_LOG_DEBUG("housing", "HandleNeighborhoodBuyHouse: SpawnHouseFromState for plot {}: {}",
+            resolvedPlotIndex, built ? "built" : "FAILED");
 
-        // The house is made of MeshObjects, which ordinary grid visibility does NOT deliver -
-        // every other site in this system transmits them by hand. SpawnHouseForPlot sends
-        // nothing, so a house bought while the buyer is standing on the plot existed only on
-        // the server: the cornerstone flipped to owned (a GameObject, sent normally) and no
-        // house appeared until the player re-entered the map and AddPlayerToMap pushed them.
-        housingMap->SendPlotMeshObjectsToPlayers(resolvedPlotIndex);
+        // Every piece of the house reaches the characters near the plot through ordinary visibility as it is added to
+        // the map, parents before the door. Retail sent the door and the pieces in one update, door first (hbcd3
+        // Number 14144); that order is not reproduced yet.
     }
     else
     {
@@ -1551,7 +1547,7 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         else
         {
             GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&updateData, player);
-            player->m_clientGUIDs.insert(GetBattlenetAccount().GetGUID());
+            player->m_clientSessionEntityGUIDs.insert(GetBattlenetAccount().GetGUID());
         }
 
         if (player->HaveAtClient(&houseEntity))
@@ -1559,7 +1555,7 @@ void WorldSession::HandleNeighborhoodBuyHouse(WorldPackets::Neighborhood::Neighb
         else
         {
             houseEntity.BuildCreateUpdateBlockForPlayer(&updateData, player);
-            player->m_clientGUIDs.insert(houseEntity.GetGUID());
+            player->m_clientSessionEntityGUIDs.insert(houseEntity.GetGUID());
         }
 
         updateData.BuildPacket(&updatePacket);
@@ -1670,8 +1666,8 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
             // the plot, in the same transaction.
             Position fromPlot;
             Position toPlot;
-            if (sHousingMgr.GetPlotHouseFrame(neighborhood->GetNeighborhoodMapID(), oldPlotIndex, fromPlot)
-                && sHousingMgr.GetPlotHouseFrame(neighborhood->GetNeighborhoodMapID(), targetPlotIndex, toPlot))
+            if (sHousingMgr.GetPlotRoomAnchor(neighborhood->GetNeighborhoodMapID(), oldPlotIndex, fromPlot)
+                && sHousingMgr.GetPlotRoomAnchor(neighborhood->GetNeighborhoodMapID(), targetPlotIndex, toPlot))
                 housing->MoveExteriorDecorBetweenPlots(fromPlot, toPlot, trans);
             else
                 TC_LOG_ERROR("housing", "HandleNeighborhoodMoveHouse: plot {} or plot {} of neighborhood {} is not in NeighborhoodPlot, so the exterior decor of house {} keeps its old place",
@@ -1706,11 +1702,7 @@ void WorldSession::HandleNeighborhoodMoveHouse(WorldPackets::Neighborhood::Neigh
             housingMap->SetPlotOwnershipState(targetPlotIndex, true);
             if (Housing const* h = housing)
             {
-                auto fixtureOverrides = h->GetFixtureOverrideMap();
-                housingMap->SpawnHouseForPlot(targetPlotIndex, nullptr,
-                    static_cast<int32>(h->GetCoreExteriorComponentID()),
-                    static_cast<int32>(h->GetHouseType()),
-                    fixtureOverrides.empty() ? nullptr : &fixtureOverrides);
+                housingMap->SpawnHouseFromState(targetPlotIndex, *h);
 
                 // Re-spawn the player's exterior decor at the new plot. DespawnAllDecorForPlot
                 // (called above for the old plot) only removes the in-world entities — the

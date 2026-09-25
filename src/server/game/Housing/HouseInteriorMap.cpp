@@ -1206,6 +1206,10 @@ void HouseInteriorMap::SpawnInteriorDecorFromList(std::vector<Housing::PlacedDec
                     go->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0,
                         roomEntityGuid, decor.SourceType, decor.SourceValue);
                     go->InitHousingDecorMirroredPosition(localPos, rot, decorScale, roomEntityGuid, attachFlags);
+                    // It rides the room it stands in, at its place and turn in that room (hbcd3 1411570-1411650).
+                    if (!roomEntityGuid.IsEmpty())
+                        go->SetHousingTransport(roomEntityGuid, Position(localX, localY, localZ,
+                            Position::NormalizeOrientation(orientation - roomWorldPos.GetOrientation())));
 
                     if (AddToMap(go))
                     {
@@ -1399,6 +1403,10 @@ void HouseInteriorMap::SpawnSingleInteriorDecor(Housing::PlacedDecor const& deco
                 go->InitHousingDecorData(decor.Guid, houseGuid, decor.Locked ? 1 : 0,
                     roomEntityGuid, decor.SourceType, decor.SourceValue);
                 go->InitHousingDecorMirroredPosition(localPos, rot, decorScale, roomEntityGuid, attachFlags);
+                // It rides the room it stands in, at its place and turn in that room (hbcd3 1411570-1411650).
+                if (!roomEntityGuid.IsEmpty())
+                    go->SetHousingTransport(roomEntityGuid, Position(localX, localY, localZ,
+                        Position::NormalizeOrientation(orientation - roomWorldPos.GetOrientation())));
 
                 if (AddToMap(go))
                 {
@@ -1785,7 +1793,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         WorldPacket storagePacket;
 
                         session->GetBattlenetAccount().BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
-                        p->m_clientGUIDs.insert(session->GetBattlenetAccount().GetGUID());
+                        p->m_clientSessionEntityGUIDs.insert(session->GetBattlenetAccount().GetGUID());
 
                         HousingPlayerHouseEntity& houseEntity = session->GetHousingPlayerHouseEntity(_houseGuid);
                         if (p->HaveAtClient(&houseEntity))
@@ -1793,7 +1801,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         else
                         {
                             houseEntity.BuildCreateUpdateBlockForPlayer(&storageUpdate, p);
-                            p->m_clientGUIDs.insert(houseEntity.GetGUID());
+                            p->m_clientSessionEntityGUIDs.insert(houseEntity.GetGUID());
                         }
 
                         // Decor and HousingRoomEntity CREATEs are sent by the map visibility
@@ -1937,66 +1945,32 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                         }
                     }
 
-                    // 10) Spawn the interior exit door — blizzlike decor entity + GO hierarchy.
-                    // Retail sniff: A HousingDecorEntity (Object Type 18, Housing/56 GUID) with
-                    // FHousingDecor_C fragment carries TargetGameObjectGUID pointing to the door GO.
-                    // The GO (type GOOBER) attaches to the decor entity via TransportGUID with
-                    // PositionLocalSpace=(0,0,0) and AttachmentFlags=7.
-                    // Alliance entry=575017 (displayId=113554), Horde entry=587318.
+                    // 10) The exit door. Retail puts a decor entity (object type 18, FHousingDecor_C and
+                    // FMirroredPositionData_C) on the entry hall, room 46, at local (-2.2401733, 0.006225586,
+                    // 0.019993), and the door game object 587318 rides it: transport and attach parent the decor
+                    // entity, attachment flags 7, Flags 262144, CreatedBy the house (hbcd3 1402902-1402945,
+                    // 1411652-1411700). The decor entity's TargetGameObjectGUID is that real door. One door serves
+                    // every character in the house, so it is spawned once, not once per visitor.
                     {
-                        TC_LOG_INFO("housing", "InteriorDoor: Starting blizzlike door spawn for player {} (map owner={})",
-                            playerGuid.ToString(), _owner.ToString());
-
-                        // The interior map is instanced per house, not per visitor: the door context is
-                        // always the house of this map, taken from any character of its account.
                         Housing* ownerHousing = GetOwnerHousing();
-
                         if (!ownerHousing)
                         {
-                            // Owner may be offline when a guest enters — fall back to a minimal
-                            // SummonGameObject so the guest isn't locked in. Blizzlike decor entity
-                            // hierarchy requires owner housing context (entry hall GUID, houseGuid).
-                            TC_LOG_WARN("housing", "InteriorDoor: owner housing unavailable (owner offline?) — "
-                                "fallback to SummonGameObject for player {}", playerGuid.ToString());
-                            float fbX = _originX - 2.52f;
-                            float fbY = _originY;
-                            float fbZ = _originZ + 0.02f;
-                            if (GameObject* doorGo = p->SummonGameObject(INTERIOR_DOOR_GO_ALLIANCE,
-                                Position(fbX, fbY, fbZ, 0.0f), QuaternionData(0, 0, 0, 1), 0s))
-                            {
-                                doorGo->ReplaceAllFlags(GameObjectFlags(0x40000));
-                                TC_LOG_INFO("housing", "InteriorDoor: Fallback door guid={}",
-                                    doorGo->GetGUID().ToString());
-                            }
+                            TC_LOG_ERROR("housing", "InteriorDoor: no character of the account of house {} is online, so the exit door "
+                                "cannot be placed for {}", _houseGuid.ToString(), playerGuid.ToString());
                             return;
                         }
 
-                        uint32 doorGoEntry = INTERIOR_DOOR_GO_ALLIANCE; // Alliance default
                         Neighborhood* nbh = sNeighborhoodMgr.GetNeighborhood(ownerHousing->GetNeighborhoodGuid());
                         int32 faction = nbh ? nbh->GetFactionRestriction() : NEIGHBORHOOD_FACTION_ALLIANCE;
-                        if (faction == NEIGHBORHOOD_FACTION_HORDE)
-                            doorGoEntry = INTERIOR_DOOR_GO_HORDE;
+                        // No capture shows the Alliance exit door (575017), so it stands where the Horde one does.
+                        uint32 doorGoEntry = faction == NEIGHBORHOOD_FACTION_HORDE ? INTERIOR_DOOR_GO_HORDE : INTERIOR_DOOR_GO_ALLIANCE;
+                        Position const doorLocalPos(-2.2401733f, 0.006225586f, 0.019993f);
+                        Position const doorWorldPos(_originX + doorLocalPos.GetPositionX(), _originY + doorLocalPos.GetPositionY(),
+                            _originZ + doorLocalPos.GetPositionZ(), 0.0f);
 
-                        TC_LOG_INFO("housing", "InteriorDoor: faction={} doorGoEntry={}",
-                            faction == NEIGHBORHOOD_FACTION_HORDE ? "Horde" : "Alliance", doorGoEntry);
-
-                        // Sniff-verified position: (-2.521, 0.006, 0.020) relative to entry hall room entity
-                        float doorLocalX = -2.52f;
-                        float doorLocalY = 0.006f;
-                        float doorLocalZ = 0.02f;
-                        float doorWorldX = _originX + doorLocalX;
-                        float doorWorldY = _originY + doorLocalY;
-                        float doorWorldZ = _originZ + doorLocalZ;
-
-                        TC_LOG_INFO("housing", "InteriorDoor: origin=({:.2f},{:.2f},{:.2f}) doorWorld=({:.2f},{:.2f},{:.2f})",
-                            _originX, _originY, _originZ, doorWorldX, doorWorldY, doorWorldZ);
-
-                        // Find the entry hall room entity GUID (slot 0) from the OWNER's housing
                         ObjectGuid entryHallGuid = ObjectGuid::Empty;
                         for (auto const* rm : ownerHousing->GetRooms())
                         {
-                            TC_LOG_DEBUG("housing", "InteriorDoor: examining room slot={} entryId={} guid={}",
-                                rm->SlotIndex, rm->RoomEntryId, rm->Guid.ToString());
                             if (rm->SlotIndex == 0)
                             {
                                 entryHallGuid = rm->Guid;
@@ -2006,120 +1980,79 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
 
                         if (entryHallGuid.IsEmpty())
                         {
-                            TC_LOG_ERROR("housing", "InteriorDoor: entry hall room (slot 0) NOT FOUND — "
-                                "falling back to SummonGameObject");
-                            // Fallback to the old simple approach so door still works
-                            if (GameObject* doorGo = p->SummonGameObject(doorGoEntry,
-                                Position(doorWorldX, doorWorldY, doorWorldZ, 0.0f),
-                                QuaternionData(0, 0, 0, 1), 0s))
-                            {
-                                doorGo->ReplaceAllFlags(GameObjectFlags(0x40000));
-                                TC_LOG_INFO("housing", "InteriorDoor: Fallback SummonGameObject succeeded guid={}",
-                                    doorGo->GetGUID().ToString());
-                            }
+                            TC_LOG_ERROR("housing", "InteriorDoor: house {} has no entry hall (room slot 0), so it gets no exit door",
+                                _houseGuid.ToString());
                             return;
                         }
 
-                        // The OWNER's house GUID — not the visiting player's
+                        if (GetGameObject(_exitDoorGuid))
+                            return;
+
                         ObjectGuid interiorHouseGuid = ownerHousing->GetHouseGuid();
-                        TC_LOG_INFO("housing", "InteriorDoor: entryHallGuid={} houseGuid={}",
-                            entryHallGuid.ToString(), interiorHouseGuid.ToString());
 
-                        // Create the decor entity (Object Type 18, Housing/56 subType=1)
-                        ObjectGuid decorGuid = ObjectGuidFactory::CreateHousing(1, 0,
-                            doorGoEntry, GetInstanceId() + 900000);
+                        // The decor entity's GUID is still the port's own make; per-instance decor GUIDs come with the
+                        // decor storage work.
+                        ObjectGuid decorGuid = ObjectGuidFactory::CreateHousing(1, 0, doorGoEntry, GetInstanceId() + 900000);
 
-                        TC_LOG_INFO("housing", "InteriorDoor: generated decorGuid={}", decorGuid.ToString());
-
-                        // GO via SummonGameObject has PrivateObjectOwner=player, so it is
-                        // despawned when the player leaves the map. The decor entity persists
-                        // on the (per-player) interior map across leave+reenter. Split the two:
-                        //   - if decor entity exists, skip re-creating it (duplicate-GUID insert
-                        //     would hit MapStoredObjectsUnorderedMap's assertion)
-                        //   - always (re)summon the interactive GO so the door button is there
-                        //     on re-entry too
-                        Position doorWorldPos(doorWorldX, doorWorldY, doorWorldZ, 0.0f);
-                        bool decorAlreadyPresent = GetObjectsStore().Find<HousingDecorEntity>(decorGuid) != nullptr;
-
-                        if (!decorAlreadyPresent)
+                        GameObject* doorGo = GameObject::CreateGameObject(doorGoEntry, this, doorWorldPos,
+                            QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 255, GO_STATE_READY);
+                        if (!doorGo)
                         {
-                            HousingDecorEntity* decorEntity = new HousingDecorEntity();
+                            TC_LOG_ERROR("housing", "InteriorDoor: the exit door {} of house {} could not be created",
+                                doorGoEntry, interiorHouseGuid.ToString());
+                            return;
+                        }
 
+                        PhasingHandler::InitDbPhaseShift(doorGo->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+                        doorGo->SetCreatedByGUID(interiorHouseGuid);
+                        doorGo->ReplaceAllFlags(GameObjectFlags(0x40000));
+                        doorGo->InitHousingDecorProxy(decorGuid);
+
+                        HousingDecorEntity* decorEntity = GetObjectsStore().Find<HousingDecorEntity>(decorGuid);
+                        if (!decorEntity)
+                        {
+                            decorEntity = new HousingDecorEntity();
                             if (!decorEntity->Create(decorGuid, this, doorWorldPos))
                             {
-                                TC_LOG_ERROR("housing", "InteriorDoor: decorEntity Create FAILED — falling back to SummonGameObject");
+                                TC_LOG_ERROR("housing", "InteriorDoor: the decor entity of the exit door of house {} could not be created",
+                                    interiorHouseGuid.ToString());
                                 delete decorEntity;
-                                if (GameObject* doorGo = p->SummonGameObject(doorGoEntry,
-                                    doorWorldPos, QuaternionData(0, 0, 0, 1), 0s))
-                                {
-                                    doorGo->ReplaceAllFlags(GameObjectFlags(0x40000));
-                                    TC_LOG_INFO("housing", "InteriorDoor: Fallback SummonGameObject succeeded guid={}",
-                                        doorGo->GetGUID().ToString());
-                                }
+                                delete doorGo;
                                 return;
                             }
-
-                            TC_LOG_INFO("housing", "InteriorDoor: decorEntity created OK guid={}", decorGuid.ToString());
 
                             decorEntity->SetDecorGUID(decorGuid);
                             decorEntity->SetAttachParentGUID(entryHallGuid);
                             decorEntity->SetFlags(0);
                             decorEntity->SetPersistedData(interiorHouseGuid);
-
-                            ObjectGuid goGuid = ObjectGuid::Create<HighGuid::GameObject>(
-                                GetId(), doorGoEntry, GetInstanceId() + 900000);
-                            decorEntity->SetTargetGameObjectGUID(goGuid);
-
-                            Position localPos(doorLocalX, doorLocalY, doorLocalZ);
-                            decorEntity->SetMirroredPosition(localPos, QuaternionData(0, 0, 0, 1),
-                                1.0f, entryHallGuid, 3);
-
-                            PhasingHandler::InitDbPhaseShift(decorEntity->GetPhaseShift(),
-                                PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
+                            decorEntity->SetTargetGameObjectGUID(doorGo->GetGUID());
+                            decorEntity->SetMirroredPosition(doorLocalPos, QuaternionData(0.0f, 0.0f, 0.0f, 1.0f),
+                                1.0f, entryHallGuid, HOUSING_ATTACHMENT_FLAGS_PIECE);
+                            PhasingHandler::InitDbPhaseShift(decorEntity->GetPhaseShift(), PHASE_USE_FLAGS_ALWAYS_VISIBLE, 0, 0);
 
                             if (!AddToMap(decorEntity))
                             {
-                                TC_LOG_ERROR("housing", "InteriorDoor: decorEntity AddToMap FAILED — falling back to SummonGameObject");
+                                TC_LOG_ERROR("housing", "InteriorDoor: the decor entity of the exit door of house {} could not be added to the map",
+                                    interiorHouseGuid.ToString());
                                 delete decorEntity;
-                                if (GameObject* doorGo = p->SummonGameObject(doorGoEntry,
-                                    doorWorldPos, QuaternionData(0, 0, 0, 1), 0s))
-                                {
-                                    doorGo->ReplaceAllFlags(GameObjectFlags(0x40000));
-                                    TC_LOG_INFO("housing", "InteriorDoor: Fallback SummonGameObject succeeded guid={}",
-                                        doorGo->GetGUID().ToString());
-                                }
+                                delete doorGo;
                                 return;
                             }
-
-                            TC_LOG_INFO("housing", "InteriorDoor: decorEntity AddToMap OK");
                         }
                         else
-                        {
-                            TC_LOG_INFO("housing", "InteriorDoor: decor entity already present on map — re-summoning GO only");
-                        }
+                            decorEntity->SetTargetGameObjectGUID(doorGo->GetGUID());
 
-                        // Spawn the interactive GO via SummonGameObject — this path is proven
-                        // to trigger visibility updates to the existing player. Manual
-                        // CreateGameObject+AddToMap misses SetSpawnedByDefault(false) +
-                        // SetRespawnTime(0) and resulted in the GO being invisible client-side.
-                        // This always runs (even on re-entry with existing decor) because the
-                        // GO is PrivateObjectOwner-tied to the player and despawns on leave.
-                        GameObject* doorGo = p->SummonGameObject(doorGoEntry,
-                            doorWorldPos, QuaternionData(0, 0, 0, 1), 0s);
-                        if (!doorGo)
+                        if (!AddToMap(doorGo))
                         {
-                            TC_LOG_ERROR("housing", "InteriorDoor: SummonGameObject FAILED for entry={}",
-                                doorGoEntry);
+                            TC_LOG_ERROR("housing", "InteriorDoor: the exit door of house {} could not be added to the map",
+                                interiorHouseGuid.ToString());
+                            delete doorGo;
                             return;
                         }
 
-                        doorGo->ReplaceAllFlags(GameObjectFlags(0x40000));
-
-                        TC_LOG_INFO("housing", "InteriorDoor: SUCCESS — decorReused={} decorEntity={} doorGO={} entry={} "
-                            "at ({:.2f},{:.2f},{:.2f}) entryHall={} house={}",
-                            decorAlreadyPresent, decorGuid.ToString(), doorGo->GetGUID().ToString(),
-                            doorGoEntry, doorWorldX, doorWorldY, doorWorldZ,
-                            entryHallGuid.ToString(), interiorHouseGuid.ToString());
+                        _exitDoorGuid = doorGo->GetGUID();
+                        TC_LOG_DEBUG("housing", "InteriorDoor: exit door {} rides decor entity {} on entry hall {} of house {}",
+                            _exitDoorGuid.ToString(), decorGuid.ToString(), entryHallGuid.ToString(), interiorHouseGuid.ToString());
                     }
 
                     TC_LOG_ERROR("housing", "HouseInteriorMap deferred: Complete — "

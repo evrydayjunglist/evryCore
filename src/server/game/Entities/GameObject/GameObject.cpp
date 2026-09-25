@@ -4264,8 +4264,9 @@ void GameObject::InitHousingDecorData(ObjectGuid decorGuid, ObjectGuid houseGuid
         .ModifyValue(&UF::HousingDecorData::AttachParentGUID), attachParent);
     SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
         .ModifyValue(&UF::HousingDecorData::Flags), flags);
+    // A decor item that is a game object names no other game object.
     SetUpdateFieldValue(m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
-        .ModifyValue(&UF::HousingDecorData::TargetGameObjectGUID), GetGUID());
+        .ModifyValue(&UF::HousingDecorData::TargetGameObjectGUID), ObjectGuid::Empty);
 
     // Set persisted data (house ownership + source tracking)
     auto persistedRef = m_values.ModifyValue(&GameObject::m_housingDecorData, 0)
@@ -4277,12 +4278,6 @@ void GameObject::InitHousingDecorData(ObjectGuid decorGuid, ObjectGuid houseGuid
 
     m_entityFragments.Add(WowCS::EntityFragment::FHousingDecor_C, IsInWorld(),
         WowCS::GetRawFragmentData(m_housingDecorData));
-
-    // 12.0.5 added Tag_HousingDecorProxyGameObject (=226) to mark a GameObject that is
-    // serving as a housing-decor proxy (chair/chest/mailbox/etc. placed as decor).
-    // Attach it alongside FHousingDecor_C so the client treats this entity as housing
-    // decor in addition to its normal GO behavior.
-    m_entityFragments.Add(WowCS::EntityFragment::Tag_HousingDecorProxyGameObject, IsInWorld());
 
     TC_LOG_DEBUG("housing", "GameObject::InitHousingDecorData: entry={} goGuid={} decorGuid={} houseGuid={} flags={} "
         "isInWorld={} fragmentCount={}",
@@ -4312,6 +4307,22 @@ void GameObject::InitHousingDecorMirroredPosition(Position const& localPos, Quat
         GetEntry(), GetGUID().ToString(),
         localPos.GetPositionX(), localPos.GetPositionY(), localPos.GetPositionZ(),
         attachParent.ToString(), attachFlags);
+}
+
+void GameObject::InitHousingDecorProxy(ObjectGuid parentEntity)
+{
+    InitHousingDecorMirroredPosition(Position(), QuaternionData(0.0f, 0.0f, 0.0f, 1.0f), 1.0f, parentEntity, 7);
+    m_entityFragments.Add(WowCS::EntityFragment::Tag_HousingDecorProxyGameObject, IsInWorld());
+    SetHousingTransport(parentEntity, Position());
+}
+
+void GameObject::SetHousingTransport(ObjectGuid parent, Position const& localPos)
+{
+    m_movementInfo.transport.Reset();
+    m_movementInfo.transport.guid = parent;
+    m_movementInfo.transport.pos.Relocate(localPos);
+    m_movementInfo.transport.seat = 0;
+    m_updateFlag.MovementTransport = true;
 }
 
 std::span<uint32 const> GameObject::GetPauseTimes() const

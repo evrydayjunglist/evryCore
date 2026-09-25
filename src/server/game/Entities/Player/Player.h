@@ -2742,6 +2742,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         // currently visible objects at player client
         GuidUnorderedSet m_clientGUIDs;
+        // Entities the session owns rather than the grid, which the client holds from the character's own create: the
+        // Battle.net account, the account's house entities and the neighborhood mirror. They are kept out of
+        // m_clientGUIDs, because the visibility pass sends an out-of-range for everything in that set it does not
+        // meet on the grid, and the client would drop them.
+        GuidUnorderedSet m_clientSessionEntityGUIDs;
         GuidUnorderedSet m_visibleTransports;
 
         bool HaveAtClient(BaseEntity const* u) const;

@@ -2711,6 +2711,16 @@ void Map::RemoveAllObjectsInRemoveList()
                 obj->ToCreature()->CleanupsBeforeDelete();
                 RemoveFromMap(obj->ToCreature(), true);
                 break;
+            // Housing objects: without these cases they stayed on the map, hidden, after being sent to this list.
+            case TYPEID_MESH_OBJECT:
+                RemoveFromMap(obj->ToMeshObject(), true);
+                break;
+            case TYPEID_HOUSING_ENTITY:
+                if (HousingRoomEntity* room = dynamic_cast<HousingRoomEntity*>(obj))
+                    RemoveFromMap(room, true);
+                else if (HousingDecorEntity* decor = dynamic_cast<HousingDecorEntity*>(obj))
+                    RemoveFromMap(decor, true);
+                break;
             default:
                 TC_LOG_ERROR("maps", "Non-grid object (TypeId: {}) is in grid object remove list, ignored.", obj->GetTypeId());
                 break;

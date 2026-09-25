@@ -22,45 +22,75 @@
 #include "Player.h"
 #include "StringFormat.h"
 #include "UpdateData.h"
+#include "WorldSession.h"
 
-HousingRoomEntity::HousingRoomEntity()
-    : WorldObject(false)
+HousingRoomEntity::HousingRoomEntity(HousingGridEntityRole role /*= HousingGridEntityRole::Room*/)
+    : WorldObject(false), _role(role)
 {
     m_objectTypeId = TYPEID_HOUSING_ENTITY; // 18 — retail objectType for housing entities
 
-    m_updateFlag.HasEntityPosition = true;
-    m_updateFlag.Stationary = true;
-
-    // Object constructor adds CGObject (fragment 2) automatically. Retail room entities
-    // do NOT have CGObject — sniff-verified fragment list is [21, 31, 220] only.
-    // Remove it before adding our housing fragments.
+    // Object constructor adds CGObject (fragment 2) automatically. Retail's housing entities of object type 18 carry
+    // none, so it is removed before the housing fragments are added.
     m_entityFragments.Remove(WowCS::EntityFragment::CGObject);
 
-    m_entityFragments.Add(WowCS::EntityFragment::FHousingRoom_C, false, WowCS::GetRawFragmentData(m_housingRoomData));
-    m_entityFragments.Add(WowCS::EntityFragment::FMirroredPositionData_C, false, WowCS::GetRawFragmentData(m_mirroredPositionData));
-    m_entityFragments.Add(WowCS::EntityFragment::Tag_HousingRoom, false);
+    switch (role)
+    {
+        case HousingGridEntityRole::Room:
+            m_updateFlag.HasEntityPosition = true;
+            m_updateFlag.Stationary = true;
+            m_entityFragments.Add(WowCS::EntityFragment::FHousingRoom_C, false, WowCS::GetRawFragmentData(m_housingRoomData));
+            m_entityFragments.Add(WowCS::EntityFragment::FMirroredPositionData_C, false, WowCS::GetRawFragmentData(m_mirroredPositionData));
+            m_entityFragments.Add(WowCS::EntityFragment::Tag_HousingRoom, false);
+            break;
+        case HousingGridEntityRole::ExteriorRoot:
+            m_updateFlag.HasEntityPosition = true;
+            m_entityFragments.Add(WowCS::EntityFragment::FMirroredPositionData_C, false, WowCS::GetRawFragmentData(m_mirroredPositionData));
+            m_entityFragments.Add(WowCS::EntityFragment::Tag_HouseExteriorPiece, false);
+            m_entityFragments.Add(WowCS::EntityFragment::Tag_HouseExteriorRoot, false);
+            break;
+        case HousingGridEntityRole::AttachPoint:
+            m_updateFlag.HasEntityPosition = true;
+            m_entityFragments.Add(WowCS::EntityFragment::FMirroredPositionData_C, false, WowCS::GetRawFragmentData(m_mirroredPositionData));
+            break;
+        case HousingGridEntityRole::House:
+            m_entityFragments.Add(WowCS::EntityFragment::FHousingPlayerHouse_C, false, WowCS::GetRawFragmentData(m_housingPlayerHouseData));
+            break;
+    }
 }
 
-bool HousingRoomEntity::Create(ObjectGuid guid, Map* map, Position const& pos)
+bool HousingRoomEntity::Create(ObjectGuid guid, Map* map, Position const& pos, bool addToMap /*= true*/)
 {
     _Create(guid);
     SetMap(map);
     Relocate(pos);
     SetObjectScale(1.0f);
 
-    if (!GetMap()->AddToMap(this))
+    if (addToMap && !GetMap()->AddToMap(this))
         return false;
 
-    // The Housing/2 identity carries the per-plot Geobox via its attached
-    // component MeshObject. The client's OutsidePlotBounds and IsInsidePlot
-    // checks both walk the room registry — if the identity is not in the
-    // client's entity table, every decor placement attempt fails. Mark it
-    // active + far-visible so it streams to every player on the map even
-    // after we drop HousingMap::m_VisibleDistance below MAX.
-    setActive(true);
-    SetFarVisible(true);
+    // A room carries the plot's geobox through its component mesh, and the client's OutsidePlotBounds and IsInsidePlot
+    // checks walk the room registry, so a room streams to every player on the map. The other roles follow the grid
+    // like the house's meshes.
+    if (_role == HousingGridEntityRole::Room)
+    {
+        setActive(true);
+        SetFarVisible(true);
+    }
 
     return true;
+}
+
+bool HousingRoomEntity::IsNeverVisibleFor(WorldObject const* seer, bool allowServersideObjects) const
+{
+    if (WorldObject::IsNeverVisibleFor(seer, allowServersideObjects))
+        return true;
+
+    if (_role == HousingGridEntityRole::House)
+        if (Player const* player = seer->ToPlayer())
+            if (WorldSession const* session = player->GetSession())
+                return session->GetBattlenetAccountGUID() == *m_housingPlayerHouseData->BnetAccount;
+
+    return false;
 }
 
 void HousingRoomEntity::AddToWorld()
@@ -148,7 +178,17 @@ void HousingRoomEntity::BuildValuesUpdate(UF::UpdateFieldFlag flags, ByteBuffer&
 
 std::string HousingRoomEntity::GetNameForLocaleIdx(LocaleConstant /*locale*/) const
 {
-    return "HousingRoom";
+    switch (_role)
+    {
+        case HousingGridEntityRole::ExteriorRoot:
+            return "HousingExteriorRoot";
+        case HousingGridEntityRole::AttachPoint:
+            return "HousingAttachPoint";
+        case HousingGridEntityRole::House:
+            return "HousingHouse";
+        default:
+            return "HousingRoom";
+    }
 }
 
 std::string HousingRoomEntity::GetDebugInfo() const
@@ -260,4 +300,24 @@ void HousingRoomEntity::SetMirroredPosition(Position const& pos, QuaternionData 
     SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::RotationLocalSpace), rot);
     SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::ScaleLocalSpace), scale);
     SetUpdateFieldValue(posData.ModifyValue(&UF::MirroredMeshObjectData::AttachmentFlags), attachFlags);
+
+    _attachParent = attachParent;
+    _localPosition.Relocate(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ());
+    _localRotation = rot;
+}
+
+void HousingRoomEntity::SetHouseData(ObjectGuid bnetAccount, ObjectGuid cosmeticOwner, int32 plotIndex, uint32 level, uint64 favor,
+    uint32 interiorDecorBudget, uint32 exteriorDecorBudget, uint32 exteriorFixtureBudget, uint32 roomBudget, ObjectGuid entityGuid)
+{
+    auto houseData = m_values.ModifyValue(&HousingRoomEntity::m_housingPlayerHouseData);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::BnetAccount), bnetAccount);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::CosmeticOwner), cosmeticOwner);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::PlotIndex), plotIndex);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::Level), level);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::Favor), favor);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::InteriorDecorPlacementBudget), interiorDecorBudget);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::ExteriorDecorPlacementBudget), exteriorDecorBudget);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::ExteriorFixtureBudget), exteriorFixtureBudget);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::RoomPlacementBudget), roomBudget);
+    SetUpdateFieldValue(houseData.ModifyValue(&UF::HousingPlayerHouseData::EntityGUID), entityGuid);
 }

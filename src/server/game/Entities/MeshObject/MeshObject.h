@@ -56,7 +56,7 @@ public:
     float GetLocalScale() const { return _scaleLocalSpace; }
     void UpdateLocalScale(float scale);
     uint8 GetAttachmentFlags() const { return _attachmentFlags; }
-    bool IsExteriorRoot() const { return _isExteriorRoot; }
+    bool IsCorePiece() const { return _isCorePiece; }
     int32 GetExteriorComponentHookID() const { return _exteriorComponentHookID; }
     int32 GetExteriorComponentID() const { return _exteriorComponentID; }
     void UpdateExteriorComponentID(int32 id);
@@ -65,13 +65,16 @@ public:
     ObjectGuid const& GetRoomHouseGUID() const { return _roomHouseGUID; }
     ObjectGuid const& GetDecorRoomEntityGUID() const { return _decorRoomEntityGUID; }
 
-    // Housing fixture
-    // isRoot: true for root pieces (no parent attachment), false for child pieces.
-    // Root pieces get Tag_HouseExteriorRoot (225), children get Tag_HouseExteriorPiece (224).
-    void InitHousingFixtureData(ObjectGuid houseGuid, ObjectGuid fixtureGuid,
-        ObjectGuid parentFixtureGuid, int32 exteriorComponentID,
-        int32 houseExteriorWmoDataID, uint8 exteriorComponentType = 9,
-        uint8 houseSize = 2, int32 exteriorComponentHookID = -1, bool isRoot = false);
+    // A piece of a house's exterior (FHousingFixture_C). attachParent is what the piece hangs on: the exterior root
+    // Entity for a structural piece, the piece that owns the hook otherwise. gameObjectGuid is the door riding this
+    // piece, set on the entry only. Retail tags every piece Tag_HouseExteriorPiece and none Tag_HouseExteriorRoot,
+    // which only the exterior root Entity carries (hbcd3 1310863-1311080), and names the piece itself in Guid.
+    // isCorePiece marks, on the server only, the base piece of the house.
+    void InitHousingFixtureData(ObjectGuid houseGuid, ObjectGuid attachParent, int32 exteriorComponentID,
+        int32 houseExteriorWmoDataID, uint8 exteriorComponentType, uint8 field59, uint8 size,
+        int32 exteriorComponentHookID, ObjectGuid gameObjectGuid, bool isCorePiece);
+    // The door riding this piece, when the door is made after the piece.
+    void SetFixtureGameObjectGUID(ObjectGuid gameObjectGuid);
     ObjectGuid const& GetFixtureGuid() const { return _fixtureGuid; }
 
     // Housing decor (adds FHousingDecor_C entity fragment for placed decor items)
@@ -148,7 +151,7 @@ private:
     // Decor: RoomEntityGUID written when m_updateFlag.Decor is set (decor entities)
     ObjectGuid _roomHouseGUID;
     ObjectGuid _decorRoomEntityGUID;
-    bool _isExteriorRoot = false;
+    bool _isCorePiece = false;
     int32 _exteriorComponentHookID = -1;
     int32 _exteriorComponentID = 0;
     ObjectGuid _fixtureGuid;

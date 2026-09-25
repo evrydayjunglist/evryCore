@@ -35,10 +35,12 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "QuestDef.h"
+#include "RBAC.h"
 #include "Random.h"
 #include "WorldSession.h"
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 InitiativeManager& InitiativeManager::Instance()
 {
@@ -51,14 +53,12 @@ void InitiativeManager::Initialize()
     TC_LOG_DEBUG("housing", "InitiativeManager: Initializing...");
 
     BuildDB2IndexMaps();
+    BuildTaskCriteria();
     LoadFromDB();
 
     // Auto-start initiatives for neighborhoods that don't have active ones.
     // Must run AFTER LoadFromDB() and AFTER sNeighborhoodMgr.Initialize().
     CheckAndStartInitiatives();
-
-    // Build reverse index from CriteriaID -> initiative tasks for O(1) matching
-    BuildCriteriaIndex();
 
     TC_LOG_INFO("housing", "InitiativeManager: Initialized with {} initiative definitions, {} active instances across all neighborhoods",
         uint32(sNeighborhoodInitiativeStore.GetNumRows()), [this]() -> uint32 {
@@ -159,6 +159,148 @@ void InitiativeManager::BuildDB2IndexMaps()
         uint32(_initiativeTasks.size()), uint32(_cycleMilestones.size()), uint32(_initiativeActiveCycle.size()), uint32(_cyclePriorities.size()));
 }
 
+void InitiativeTaskCriteria::Build(std::vector<std::pair<uint32, uint32>> const& taskRoots, std::span<CriteriaTreeEntry const* const> trees,
+    std::function<CriteriaEntry const*(uint32)> const& criteriaLookup,
+    std::function<ModifierTreeNode const*(uint32)> const& modifierLookup)
+{
+    _trees.clear();
+    _criteria.clear();
+    _taskRoots.clear();
+    _tasksByCriteria.clear();
+    for (CriteriaList& list : _criteriaByType)
+        list.clear();
+    _tasksWithMissingTree.clear();
+
+    std::unordered_map<uint32, CriteriaTreeEntry const*> entries;
+    std::unordered_map<uint32, std::vector<CriteriaTreeEntry const*>> children;
+    for (CriteriaTreeEntry const* entry : trees)
+    {
+        if (!entry)
+            continue;
+
+        entries[entry->ID] = entry;
+        if (entry->Parent)
+            children[entry->Parent].push_back(entry);
+    }
+
+    // Copy every node under each task's root. Tasks can share a tree, so each node is copied once.
+    std::vector<uint32> pending;
+    for (auto const& [taskId, rootId] : taskRoots)
+    {
+        if (!entries.contains(rootId))
+        {
+            _tasksWithMissingTree.push_back(taskId);
+            continue;
+        }
+
+        pending.push_back(rootId);
+        while (!pending.empty())
+        {
+            uint32 const id = pending.back();
+            pending.pop_back();
+            if (_trees.contains(id))
+                continue;
+
+            CriteriaTree& node = _trees[id];
+            node.ID = id;
+            node.Entry = entries[id];
+            if (auto itr = children.find(id); itr != children.end())
+                for (CriteriaTreeEntry const* child : itr->second)
+                    pending.push_back(child->ID);
+        }
+    }
+
+    // Link each node to its children, in their OrderIndex order, and give it its criteria.
+    for (auto& [id, node] : _trees)
+    {
+        if (auto itr = children.find(id); itr != children.end())
+        {
+            std::vector<CriteriaTreeEntry const*> ordered = itr->second;
+            std::sort(ordered.begin(), ordered.end(), [](CriteriaTreeEntry const* a, CriteriaTreeEntry const* b)
+            {
+                return std::tie(a->OrderIndex, a->ID) < std::tie(b->OrderIndex, b->ID);
+            });
+            for (CriteriaTreeEntry const* child : ordered)
+                node.Children.push_back(&_trees.at(child->ID));
+        }
+
+        if (!node.Entry->CriteriaID)
+            continue;
+
+        CriteriaEntry const* criteriaEntry = criteriaLookup(node.Entry->CriteriaID);
+        if (!criteriaEntry || criteriaEntry->Type < 0 || criteriaEntry->Type >= int16(CriteriaType::Count))
+            continue;
+
+        auto [criteriaItr, inserted] = _criteria.try_emplace(criteriaEntry->ID);
+        Criteria& criteria = criteriaItr->second;
+        if (inserted)
+        {
+            criteria.ID = criteriaEntry->ID;
+            criteria.Entry = criteriaEntry;
+            criteria.Modifier = criteriaEntry->ModifierTreeId ? modifierLookup(criteriaEntry->ModifierTreeId) : nullptr;
+            _criteriaByType[criteriaEntry->Type].push_back(&criteria);
+        }
+        node.Criteria = &criteria;
+    }
+
+    for (auto const& [taskId, rootId] : taskRoots)
+    {
+        auto rootItr = _trees.find(rootId);
+        if (rootItr == _trees.end())
+            continue;
+
+        _taskRoots[taskId] = &rootItr->second;
+        CriteriaMgr::WalkCriteriaTree(&rootItr->second, [&](CriteriaTree const* node)
+        {
+            if (node->Criteria)
+                _tasksByCriteria[node->Criteria->ID].push_back({ .TaskID = taskId, .Node = node });
+        });
+    }
+}
+
+CriteriaTree const* InitiativeTaskCriteria::GetTaskTree(uint32 taskId) const
+{
+    auto itr = _taskRoots.find(taskId);
+    return itr != _taskRoots.end() ? itr->second : nullptr;
+}
+
+CriteriaList const& InitiativeTaskCriteria::GetCriteriaByType(CriteriaType type) const
+{
+    static CriteriaList const empty;
+    if (type >= CriteriaType::Count)
+        return empty;
+    return _criteriaByType[size_t(type)];
+}
+
+std::vector<InitiativeTaskCriteria::TaskLink> const* InitiativeTaskCriteria::GetTasksForCriteria(uint32 criteriaId) const
+{
+    auto itr = _tasksByCriteria.find(criteriaId);
+    return itr != _tasksByCriteria.end() ? &itr->second : nullptr;
+}
+
+void InitiativeManager::BuildTaskCriteria()
+{
+    std::vector<std::pair<uint32, uint32>> taskRoots;
+    for (InitiativeTaskEntry const* task : sInitiativeTaskStore)
+        if (task && task->CriteriaTreeID > 0)
+            taskRoots.emplace_back(task->ID, uint32(task->CriteriaTreeID));
+
+    std::vector<CriteriaTreeEntry const*> trees;
+    trees.reserve(sCriteriaTreeStore.GetNumRows());
+    for (CriteriaTreeEntry const* tree : sCriteriaTreeStore)
+        trees.push_back(tree);
+
+    _taskCriteria.Build(taskRoots, trees,
+        [](uint32 criteriaId) { return sCriteriaStore.LookupEntry(criteriaId); },
+        [](uint32 modifierTreeId) { return sCriteriaMgr->GetModifierTree(modifierTreeId); });
+
+    for (uint32 taskId : _taskCriteria.GetTasksWithMissingTree())
+        TC_LOG_ERROR("housing", "InitiativeManager: the criteria tree of endeavor task {} is not in CriteriaTree.db2; the task cannot advance", taskId);
+
+    TC_LOG_INFO("housing", "InitiativeManager: loaded the criteria trees of {} endeavor tasks, with {} criteria",
+        uint32(taskRoots.size() - _taskCriteria.GetTasksWithMissingTree().size()), uint32(_taskCriteria.GetCriteriaCount()));
+}
+
 void InitiativeManager::LoadFromDB()
 {
     _activeInitiatives.clear();
@@ -226,6 +368,7 @@ void InitiativeManager::LoadFromDB()
                     {
                         tItr->second.Progress = progress;
                         tItr->second.Status = static_cast<InitiativeTaskStatus>(std::min<uint8>(status, 2));
+                        tItr->second.CompletionTime = f[3].GetUInt32();
                     }
                 } while (taskResult->NextRow());
             }
@@ -274,7 +417,7 @@ void InitiativeManager::LoadFromDB()
                     uint32 bnetAccountId = f[0].GetUInt32();
                     ObjectGuid::LowType characterGuid = f[1].GetUInt64();
                     uint32 taskId     = f[2].GetUInt32();
-                    uint32 amount     = f[3].GetUInt32();
+                    float  amount     = f[3].GetFloat();
                     initiative->AccountContributions[bnetAccountId][taskId] = amount;
                     initiative->ContributorCharacters[bnetAccountId] = characterGuid;
                 } while (contribResult->NextRow());
@@ -311,6 +454,9 @@ void InitiativeManager::LoadFromDB()
 
 void InitiativeManager::Update(uint32 diff)
 {
+    // Deeds are applied every world tick, so a contributor who is still in the world gets her favor and world text.
+    ApplyPendingTaskCredits();
+
     _updateTimer += diff;
     if (_updateTimer < UPDATE_INTERVAL_MS)
         return;
@@ -435,9 +581,6 @@ ActiveInitiative* InitiativeManager::StartInitiative(uint64 neighborhoodGuid, ui
     ActiveInitiative* ptr = initiative.get();
     _activeInitiatives[neighborhoodGuid].push_back(std::move(initiative));
 
-    // Rebuild criteria reverse index now that a new initiative is active
-    BuildCriteriaIndex();
-
     // The started state and the first points reach the client through the entity-fragment
     // updates on the neighborhood entity.
 
@@ -491,8 +634,13 @@ void InitiativeManager::CompleteInitiative(uint64 neighborhoodGuid, uint32 initi
             initiative->Progress = 1.0f;
 
             // Mark all tasks complete and persist
+            uint32 const now = static_cast<uint32>(GameTime::GetGameTime());
             for (auto& [taskId, taskProgress] : initiative->TaskProgress)
+            {
+                if (taskProgress.Status != INITIATIVE_TASK_STATUS_COMPLETE)
+                    taskProgress.CompletionTime = now;
                 taskProgress.Status = INITIATIVE_TASK_STATUS_COMPLETE;
+            }
 
             PersistInitiative(*initiative);
             PersistTaskProgress(*initiative);
@@ -504,9 +652,6 @@ void InitiativeManager::CompleteInitiative(uint64 neighborhoodGuid, uint32 initi
             if (neighborhood)
                 BroadcastInitiativeComplete(neighborhood, initiativeID);
 
-            // Rebuild criteria index since this initiative's tasks are no longer active
-            BuildCriteriaIndex();
-
             TC_LOG_INFO("housing", "InitiativeManager::CompleteInitiative: Initiative {} completed in neighborhood {}",
                 initiativeID, neighborhoodGuid);
             return;
@@ -514,7 +659,7 @@ void InitiativeManager::CompleteInitiative(uint64 neighborhoodGuid, uint32 initi
     }
 }
 
-void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initiativeID, uint32 taskID, uint32 progressDelta, Player* contributor)
+void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initiativeID, uint32 taskID, uint32 progressDelta, TaskContributor const& contributor)
 {
     ActiveInitiative* initiative = nullptr;
     auto itr = _activeInitiatives.find(neighborhoodGuid);
@@ -557,7 +702,7 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
     // a 10-weight task demanded 10, and left the weight itself with no effect on anything.
     // The task's own completion target is its CriteriaTree root Amount.
     int32 contributionWeight = taskEntry && taskEntry->ProgressContributionAmount > 0 ? taskEntry->ProgressContributionAmount : 1;
-    uint32 targetCount = GetTaskTargetCount(taskEntry);
+    uint32 targetCount = GetTaskTargetCount(taskID);
 
     taskProgress.Progress += progressDelta;
     if (taskProgress.Status == INITIATIVE_TASK_STATUS_NOT_STARTED)
@@ -567,13 +712,13 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
     float contribution = float(contributionWeight) * float(progressDelta);
 
     // Contributions belong to the contributor's Battle.net account, shared by every character of it.
-    uint32 const contribAccount = contributor && contributor->GetSession() ? contributor->GetSession()->GetBattlenetAccountId() : 0;
+    uint32 const contribAccount = contributor.BnetAccountId;
     if (contribAccount)
     {
         // Repeat contributions to the same task by the same account are worth progressively less —
         // that is exactly what InitiativeTask.RepetitionContributionDampeningCurve is for. The curve
         // is sampled at the contribution this account has already banked on this task.
-        uint32 alreadyOnTask = 0;
+        float alreadyOnTask = 0.0f;
         auto playerItr = initiative->AccountContributions.find(contribAccount);
         if (playerItr != initiative->AccountContributions.end())
         {
@@ -582,47 +727,49 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
                 alreadyOnTask = perTaskItr->second;
         }
 
-        contribution *= GetRepetitionDampening(taskEntry, float(alreadyOnTask));
+        contribution *= GetRepetitionDampening(taskEntry, alreadyOnTask);
     }
 
-    uint32 award = static_cast<uint32>(std::lround(contribution));
+    // Kept as a fraction: retail's activity log shows contributions such as 2.2 (hbcd3 1305730).
+    float const award = contribution;
 
     // Track the account's contribution
-    if (contribAccount && award)
+    if (contribAccount && award > 0.0f)
     {
-        uint32 totalBefore = GetAccountContribution(neighborhoodGuid, initiativeID, contribAccount);
+        float const totalBefore = GetAccountContribution(neighborhoodGuid, initiativeID, contribAccount);
 
         initiative->AccountContributions[contribAccount][taskID] += award;
-        initiative->ContributorCharacters[contribAccount] = contributor->GetGUID().GetCounter();
-        PersistContribution(initiative->DbId, contribAccount, contributor->GetGUID().GetCounter(), taskID, award);
-        UpdatePlayerInitiativeFavor(contributor, neighborhoodGuid);
+        initiative->ContributorCharacters[contribAccount] = contributor.CharacterGuid.GetCounter();
+        PersistContribution(initiative->DbId, contribAccount, contributor.CharacterGuid.GetCounter(), taskID, award);
 
-        // Endeavor task contributions pay House XP. This is the only producer of
-        // HOUSING_FAVOR_SOURCE_INITIATIVE_TASK.
-        GrantInitiativeTaskFavor(contributor, neighborhoodGuid, initiativeID, totalBefore, totalBefore + award);
+        // The favor and the world text need the character. She is online unless she left in the same world tick as
+        // the deed; then only the account's contribution is kept.
+        if (Player* player = contributor.ContributorPlayer)
+        {
+            UpdatePlayerInitiativeFavor(player, neighborhoodGuid);
 
-        // Float the "+Neighborly" world text the retail client shows for a neighborhood deed. In the
-        // build-68275 housing capture this lands immediately before the SMSG_CRITERIA_UPDATE batch
-        // for the deed, which is exactly this code path — OnCriteriaProgress is the criteria event.
-        // Null anchor guid and both args zero, byte-for-byte as captured; the client falls back to
-        // the receiving player as the anchor.
-        WorldPackets::Misc::DisplayWorldText worldText;
-        worldText.Text = HOUSING_WORLD_TEXT_NEIGHBORLY;
-        contributor->SendDirectMessage(worldText.Write());
+            // Endeavor task contributions pay House XP. This is the only producer of
+            // HOUSING_FAVOR_SOURCE_INITIATIVE_TASK.
+            GrantInitiativeTaskFavor(player, neighborhoodGuid, initiativeID, totalBefore, totalBefore + award);
+
+            // Float the "+Neighborly" world text the retail client shows for a neighborhood deed. In the
+            // build-68275 housing capture this lands immediately before the SMSG_CRITERIA_UPDATE batch
+            // for the deed. Null anchor guid and both args zero, byte-for-byte as captured; the client
+            // falls back to the receiving player as the anchor.
+            WorldPackets::Misc::DisplayWorldText worldText;
+            worldText.Text = HOUSING_WORLD_TEXT_NEIGHBORLY;
+            player->SendDirectMessage(worldText.Write());
+        }
     }
 
-    // Persist individual task progress to DB
-    PersistSingleTaskProgress(initiative->DbId, taskID, taskProgress.Progress, static_cast<uint8>(taskProgress.Status));
-
-    TC_LOG_DEBUG("housing", "InitiativeManager::UpdateTaskProgress: Task {} in initiative {} progress: {}/{} (+{} contribution points, contributor: {})",
-        taskID, initiativeID, taskProgress.Progress, targetCount, award,
-        contributor ? contributor->GetGUID().ToString() : "none");
+    TC_LOG_DEBUG("housing", "InitiativeManager::UpdateTaskProgress: Task {} in initiative {} progress: {}/{} (+{:.2f} contribution points, contributor: {})",
+        taskID, initiativeID, taskProgress.Progress, targetCount, award, contributor.CharacterGuid.ToString());
 
     // Check if task completed
     if (taskProgress.Progress >= targetCount)
     {
         taskProgress.Status = INITIATIVE_TASK_STATUS_COMPLETE;
-        PersistSingleTaskProgress(initiative->DbId, taskID, taskProgress.Progress, static_cast<uint8>(taskProgress.Status));
+        taskProgress.CompletionTime = static_cast<uint32>(GameTime::GetGameTime());
 
         // Resolve by persisted counter - arg1 is the NeighborhoodMapID, not 0 (this site never matched anyway).
         Neighborhood* neighborhood = sNeighborhoodMgr.GetNeighborhoodByCounter(neighborhoodGuid);
@@ -633,12 +780,14 @@ void InitiativeManager::UpdateTaskProgress(uint64 neighborhoodGuid, uint32 initi
             taskID, initiativeID, neighborhoodGuid);
     }
 
+    PersistSingleTaskProgress(initiative->DbId, taskProgress);
+
     // Overall initiative progress is the accumulated contribution pool, not the fraction of tasks
     // finished: every completion is worth ProgressContributionAmount out of the 1000 points the
     // client is told the initiative requires. Progress stays a 0..1 fraction (the wire scales it by
     // INITIATIVE_PROGRESS_REQUIRED in Player::BuildInitiative*), so the persisted column is unchanged.
-    if (award)
-        initiative->Progress = std::min(1.0f, initiative->Progress + float(award) / INITIATIVE_PROGRESS_REQUIRED);
+    if (award > 0.0f)
+        initiative->Progress = std::min(1.0f, initiative->Progress + award / INITIATIVE_PROGRESS_REQUIRED);
 
     // Send points update to neighborhood
     // Resolve by persisted counter - arg1 is the NeighborhoodMapID, not 0 (this site never matched anyway).
@@ -692,8 +841,9 @@ void InitiativeManager::ClearTaskCriteria(uint64 neighborhoodGuid, uint32 initia
 
     taskItr->second.Progress = 0;
     taskItr->second.Status = INITIATIVE_TASK_STATUS_NOT_STARTED;
+    taskItr->second.CompletionTime = 0;
 
-    PersistSingleTaskProgress(initiative->DbId, taskID, 0, static_cast<uint8>(INITIATIVE_TASK_STATUS_NOT_STARTED));
+    PersistSingleTaskProgress(initiative->DbId, taskItr->second);
     PersistInitiative(*initiative);
 
     // Mirror the server-side reset on every member's client.
@@ -704,102 +854,99 @@ void InitiativeManager::ClearTaskCriteria(uint64 neighborhoodGuid, uint32 initia
         taskID, initiativeID, neighborhoodGuid);
 }
 
-void InitiativeManager::BuildCriteriaIndex()
+void InitiativeManager::OnPlayerCriteriaEvent(Player* player, CriteriaHandler const& checker, CriteriaType type, uint64 miscValue1,
+    uint64 miscValue2, uint64 miscValue3, WorldObject const* ref)
 {
-    _criteriaToTasks.clear();
-
-    uint32 linkCount = 0;
-    uint32 missingTreeCount = 0;
-
-    for (auto const& [nhGuid, initiatives] : _activeInitiatives)
-    {
-        for (auto const& initiative : initiatives)
-        {
-            if (initiative->Completed)
-                continue;
-
-            auto tasksItr = _initiativeTasks.find(initiative->InitiativeID);
-            if (tasksItr == _initiativeTasks.end())
-                continue;
-
-            for (auto const& task : tasksItr->second)
-            {
-                if (task.CriteriaTreeID <= 0)
-                    continue;
-
-                // Walk the CriteriaTree to find all leaf Criteria entries
-                CriteriaTree const* tree = sCriteriaMgr->GetCriteriaTree(static_cast<uint32>(task.CriteriaTreeID));
-                if (!tree)
-                {
-                    ++missingTreeCount;
-                    TC_LOG_DEBUG("housing", "InitiativeManager::BuildCriteriaIndex: CriteriaTree {} not found for task {} (initiative {})",
-                        task.CriteriaTreeID, task.TaskID, initiative->InitiativeID);
-                    continue;
-                }
-
-                CriteriaMgr::WalkCriteriaTree(tree, [&](CriteriaTree const* node)
-                {
-                    if (node->Criteria)
-                    {
-                        CriteriaTaskLink link;
-                        link.NeighborhoodGuid = nhGuid;
-                        link.InitiativeID = initiative->InitiativeID;
-                        link.TaskID = task.TaskID;
-                        _criteriaToTasks[node->Criteria->ID].push_back(link);
-                        ++linkCount;
-                    }
-                });
-            }
-        }
-    }
-
-    TC_LOG_DEBUG("housing", "InitiativeManager::BuildCriteriaIndex: Built {} criteria->task links ({} missing trees)",
-        linkCount, missingTreeCount);
-}
-
-void InitiativeManager::OnCriteriaProgress(Player* player, uint32 criteriaId)
-{
-    if (!player)
+    CriteriaList const& criteriaList = _taskCriteria.GetCriteriaByType(type);
+    if (criteriaList.empty() || !player || !player->GetSession())
         return;
 
-    // Look up the reverse index — is this criteria referenced by any initiative task?
-    auto itr = _criteriaToTasks.find(criteriaId);
-    if (itr == _criteriaToTasks.end())
+    // Deeds do not count for the players whose achievements do not advance either: a game master in GM mode and an
+    // account the permission forbids (CriteriaHandler::UpdateCriteria).
+    if (player->IsGameMaster() || player->GetSession()->HasPermission(rbac::RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS))
         return;
 
     // Deeds count for the character's active endeavor: the neighborhood she chose on the dashboard, where her account
     // has a house (Player::GetHousingActiveNeighborhood).
-    ObjectGuid neighborhoodGuid = player->GetHousingActiveNeighborhood();
+    ObjectGuid const neighborhoodGuid = player->GetHousingActiveNeighborhood();
     if (neighborhoodGuid.IsEmpty())
         return;
 
-    uint64 nhLowGuid = neighborhoodGuid.GetCounter();
-
-    for (auto const& link : itr->second)
+    std::vector<PendingTaskCredit> credits;
+    for (Criteria const* criteria : criteriaList)
     {
-        // Only credit tasks for THIS player's neighborhood
-        if (link.NeighborhoodGuid != nhLowGuid)
+        std::vector<InitiativeTaskCriteria::TaskLink> const* links = _taskCriteria.GetTasksForCriteria(criteria->ID);
+        if (!links || !checker.MeetsCriteriaRequirements(criteria, miscValue1, miscValue2, miscValue3, ref, player))
             continue;
 
-        // Find the active initiative and verify the task isn't already complete
-        auto initItr = _activeInitiatives.find(nhLowGuid);
-        if (initItr == _activeInitiatives.end())
-            continue;
-
-        for (auto& initiative : initItr->second)
+        for (InitiativeTaskCriteria::TaskLink const& link : *links)
         {
-            if (initiative->InitiativeID != link.InitiativeID || initiative->Completed)
+            // The faction flags of the node that holds the criteria, as CriteriaHandler::CanUpdateCriteriaTree reads them.
+            EnumFlag<CriteriaTreeFlags> const flags = link.Node->Entry->GetFlags();
+            if ((flags.HasFlag(CriteriaTreeFlags::HordeOnly) && player->GetTeam() != HORDE) ||
+                (flags.HasFlag(CriteriaTreeFlags::AllianceOnly) && player->GetTeam() != ALLIANCE))
                 continue;
 
-            auto progressItr = initiative->TaskProgress.find(link.TaskID);
-            if (progressItr != initiative->TaskProgress.end() && progressItr->second.Status == INITIATIVE_TASK_STATUS_COMPLETE)
+            // One unit per task for one event, even when the event meets more than one criteria of the task.
+            if (std::ranges::any_of(credits, [&link](PendingTaskCredit const& credit) { return credit.TaskID == link.TaskID; }))
                 continue;
 
-            // Credit 1 unit of progress to the community task
-            UpdateTaskProgress(nhLowGuid, link.InitiativeID, link.TaskID, 1, player);
+            PendingTaskCredit& credit = credits.emplace_back();
+            credit.BnetAccountId = player->GetSession()->GetBattlenetAccountId();
+            credit.CharacterGuid = player->GetGUID();
+            credit.NeighborhoodGuid = neighborhoodGuid.GetCounter();
+            credit.TaskID = link.TaskID;
+            credit.CriteriaID = criteria->ID;
+        }
+    }
 
-            TC_LOG_DEBUG("housing", "InitiativeManager::OnCriteriaProgress: Player {} ({}) contributed to task {} via criteria {} (initiative {}, neighborhood {})",
-                player->GetName(), player->GetGUID().ToString(), link.TaskID, criteriaId, link.InitiativeID, nhLowGuid);
+    if (credits.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(_pendingCreditsLock);
+    _pendingCredits.insert(_pendingCredits.end(), credits.begin(), credits.end());
+}
+
+void InitiativeManager::ApplyPendingTaskCredits()
+{
+    std::vector<PendingTaskCredit> credits;
+    {
+        std::lock_guard<std::mutex> lock(_pendingCreditsLock);
+        credits.swap(_pendingCredits);
+    }
+
+    for (PendingTaskCredit const& credit : credits)
+    {
+        // The running endeavors of her neighborhood that still need this task. They are listed before any is credited,
+        // because a credit can complete an endeavor.
+        std::vector<uint32> initiativeIds;
+        if (auto itr = _activeInitiatives.find(credit.NeighborhoodGuid); itr != _activeInitiatives.end())
+        {
+            for (std::unique_ptr<ActiveInitiative> const& initiative : itr->second)
+            {
+                if (initiative->Completed)
+                    continue;
+
+                auto task = initiative->TaskProgress.find(credit.TaskID);
+                if (task != initiative->TaskProgress.end() && task->second.Status != INITIATIVE_TASK_STATUS_COMPLETE)
+                    initiativeIds.push_back(initiative->InitiativeID);
+            }
+        }
+
+        if (initiativeIds.empty())
+            continue;
+
+        TaskContributor contributor;
+        contributor.BnetAccountId = credit.BnetAccountId;
+        contributor.CharacterGuid = credit.CharacterGuid;
+        contributor.ContributorPlayer = ObjectAccessor::FindConnectedPlayer(credit.CharacterGuid);
+
+        for (uint32 initiativeId : initiativeIds)
+        {
+            UpdateTaskProgress(credit.NeighborhoodGuid, initiativeId, credit.TaskID, 1, contributor);
+
+            TC_LOG_DEBUG("housing", "InitiativeManager: {} contributed to task {} through criteria {} (initiative {}, neighborhood {})",
+                credit.CharacterGuid.ToString(), credit.TaskID, credit.CriteriaID, initiativeId, credit.NeighborhoodGuid);
         }
     }
 }
@@ -1019,57 +1166,66 @@ void InitiativeManager::SendPlayerInitiativeInfo(WorldSession* session, ObjectGu
 void InitiativeManager::SendActivityLog(WorldSession* session, ObjectGuid const& neighborhoodGuid, uint64 neighborhoodLowGuid) const
 {
     // Each entry names the contributor's Battle.net account and character, as retail's do (hbcd3 1305730). The
-    // character is the one of that account that contributed last.
+    // character is the one of that account that contributed last. Retail lists the tasks of the endeavor that is
+    // still running, each with the time it was completed: the same capture shows the log entry for task 168 while
+    // that endeavor stands at 2.2 of 1000 (hbcd3 1305712).
     WorldPackets::Housing::GetInitiativeActivityLogResult result;
     result.NeighborhoodGuid = neighborhoodGuid;
 
-    // Populate with completed initiatives as log entries
-    auto itr = _activeInitiatives.find(neighborhoodLowGuid);
-    if (itr != _activeInitiatives.end())
+    if (ActiveInitiative const* active = GetActiveInitiative(neighborhoodLowGuid))
     {
-        for (auto const& initiative : itr->second)
+        for (InitiativeActivityLogLine const& line : BuildActivityLog(*active))
         {
-            if (!initiative->Completed)
-                continue;
-
-            for (auto const& [taskId, taskProgress] : initiative->TaskProgress)
-            {
-                // One entry per contributing account when there are any
-                bool hasContributors = false;
-                for (auto const& [bnetAccountId, taskContribs] : initiative->AccountContributions)
-                {
-                    auto taskContribItr = taskContribs.find(taskId);
-                    if (taskContribItr != taskContribs.end() && taskContribItr->second > 0)
-                    {
-                        WorldPackets::Housing::NICompletedTasksEntry entry;
-                        auto character = initiative->ContributorCharacters.find(bnetAccountId);
-                        if (character != initiative->ContributorCharacters.end() && character->second)
-                            entry.PlayerGuid = ObjectGuid::Create<HighGuid::Player>(character->second);
-                        entry.BnetAccountGuid = ObjectGuid::Create<HighGuid::BNetAccount>(bnetAccountId);
-                        entry.ContributionAmount = float(taskContribItr->second);
-                        entry.CompletionTime = initiative->StartTime;
-                        entry.TaskID = taskId;
-                        result.CompletedTasks.push_back(entry);
-                        hasContributors = true;
-                    }
-                }
-
-                // Fallback: if no per-account data, emit aggregate entry with empty PlayerGuid
-                if (!hasContributors)
-                {
-                    WorldPackets::Housing::NICompletedTasksEntry entry;
-                    entry.ContributionAmount = float(taskProgress.Progress);
-                    entry.CompletionTime = initiative->StartTime;
-                    entry.TaskID = taskId;
-                    result.CompletedTasks.push_back(entry);
-                }
-            }
+            WorldPackets::Housing::NICompletedTasksEntry& entry = result.CompletedTasks.emplace_back();
+            if (line.BnetAccountId)
+                entry.BnetAccountGuid = ObjectGuid::Create<HighGuid::BNetAccount>(line.BnetAccountId);
+            if (line.CharacterGuid)
+                entry.PlayerGuid = ObjectGuid::Create<HighGuid::Player>(line.CharacterGuid);
+            entry.TaskID = line.TaskID;
+            entry.CompletionTime = line.CompletionTime;
+            entry.ContributionAmount = line.Contribution;
         }
     }
 
     session->SendPacket(result.Write());
     TC_LOG_DEBUG("housing", "InitiativeManager: Sent GetInitiativeActivityLogResult with {} entries for neighborhood {}",
         uint32(result.CompletedTasks.size()), neighborhoodLowGuid);
+}
+
+std::vector<InitiativeActivityLogLine> InitiativeManager::BuildActivityLog(ActiveInitiative const& initiative)
+{
+    std::vector<InitiativeActivityLogLine> lines;
+    for (auto const& [taskId, taskProgress] : initiative.TaskProgress)
+    {
+        if (taskProgress.Status != INITIATIVE_TASK_STATUS_COMPLETE)
+            continue;
+
+        // Retail has no log line without an account (none of the 746 lines of the 12.1 capture's log has one), so a
+        // completed task nobody is known to have helped has no line.
+        for (auto const& [bnetAccountId, taskContribs] : initiative.AccountContributions)
+        {
+            auto contribution = taskContribs.find(taskId);
+            if (contribution == taskContribs.end())
+                continue;
+
+            InitiativeActivityLogLine& line = lines.emplace_back();
+            line.TaskID = taskId;
+            line.BnetAccountId = bnetAccountId;
+            if (auto character = initiative.ContributorCharacters.find(bnetAccountId); character != initiative.ContributorCharacters.end())
+                line.CharacterGuid = character->second;
+            line.CompletionTime = taskProgress.CompletionTime;
+            line.Contribution = contribution->second;
+        }
+    }
+
+    // Retail keeps each account's lines together and lists them oldest first (the 12.1 capture's log, Number 11152:
+    // 13 accounts, each in one unbroken run with rising times). The order of the accounts themselves follows no rule
+    // visible in that log, so they go by account id, which gives the same order every time the log is asked for.
+    std::sort(lines.begin(), lines.end(), [](InitiativeActivityLogLine const& a, InitiativeActivityLogLine const& b)
+    {
+        return std::make_tuple(a.BnetAccountId, a.CompletionTime, a.TaskID) < std::make_tuple(b.BnetAccountId, b.CompletionTime, b.TaskID);
+    });
+    return lines;
 }
 
 void InitiativeManager::SendInitiativeRewardsResult(WorldSession* session, uint32 resultCode) const
@@ -1171,10 +1327,7 @@ std::vector<uint64> InitiativeManager::CollectTaskCriteriaIDs(uint32 initiativeI
         if (taskID != 0 && task.TaskID != taskID)
             continue;
 
-        if (task.CriteriaTreeID <= 0)
-            continue;
-
-        CriteriaTree const* tree = sCriteriaMgr->GetCriteriaTree(static_cast<uint32>(task.CriteriaTreeID));
+        CriteriaTree const* tree = _taskCriteria.GetTaskTree(task.TaskID);
         if (!tree)
             continue;
 
@@ -1370,10 +1523,10 @@ void InitiativeManager::PersistTaskProgress(ActiveInitiative const& initiative)
         return;
 
     for (auto const& [taskId, taskProgress] : initiative.TaskProgress)
-        PersistSingleTaskProgress(initiative.DbId, taskId, taskProgress.Progress, static_cast<uint8>(taskProgress.Status));
+        PersistSingleTaskProgress(initiative.DbId, taskProgress);
 }
 
-void InitiativeManager::PersistSingleTaskProgress(uint64 initiativeDbId, uint32 taskId, uint32 progress, uint8 status)
+void InitiativeManager::PersistSingleTaskProgress(uint64 initiativeDbId, InitiativeTaskProgress const& taskProgress)
 {
     if (!HasSavedId(initiativeDbId))
         return;
@@ -1381,9 +1534,10 @@ void InitiativeManager::PersistSingleTaskProgress(uint64 initiativeDbId, uint32 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_INITIATIVE_TASK_PROGRESS);
     uint8 index = 0;
     stmt->setUInt64(index++, initiativeDbId);
-    stmt->setUInt32(index++, taskId);
-    stmt->setUInt32(index++, progress);
-    stmt->setUInt8(index++, status);
+    stmt->setUInt32(index++, taskProgress.TaskID);
+    stmt->setUInt32(index++, taskProgress.Progress);
+    stmt->setUInt8(index++, static_cast<uint8>(taskProgress.Status));
+    stmt->setUInt32(index++, taskProgress.CompletionTime);
     CharacterDatabase.Execute(stmt);
 }
 
@@ -1492,7 +1646,7 @@ void InitiativeManager::GrantMilestoneRewards(Player* player, uint64 neighborhoo
     }
 }
 
-void InitiativeManager::PersistContribution(uint64 initiativeDbId, uint32 bnetAccountId, ObjectGuid::LowType characterGuid, uint32 taskId, uint32 amount)
+void InitiativeManager::PersistContribution(uint64 initiativeDbId, uint32 bnetAccountId, ObjectGuid::LowType characterGuid, uint32 taskId, float amount)
 {
     if (!HasSavedId(initiativeDbId))
         return;
@@ -1503,12 +1657,12 @@ void InitiativeManager::PersistContribution(uint64 initiativeDbId, uint32 bnetAc
     stmt->setUInt32(index++, bnetAccountId);
     stmt->setUInt64(index++, characterGuid);
     stmt->setUInt32(index++, taskId);
-    stmt->setUInt32(index++, amount);
+    stmt->setFloat(index++, amount);
     stmt->setUInt32(index++, static_cast<uint32>(GameTime::GetGameTime()));
     CharacterDatabase.Execute(stmt);
 }
 
-uint32 InitiativeManager::GetAccountContribution(uint64 neighborhoodGuid, uint32 initiativeID, uint32 bnetAccountId) const
+float InitiativeManager::GetAccountContribution(uint64 neighborhoodGuid, uint32 initiativeID, uint32 bnetAccountId) const
 {
     auto nhItr = _activeInitiatives.find(neighborhoodGuid);
     if (nhItr == _activeInitiatives.end())
@@ -1521,20 +1675,20 @@ uint32 InitiativeManager::GetAccountContribution(uint64 neighborhoodGuid, uint32
 
         auto playerItr = initiative->AccountContributions.find(bnetAccountId);
         if (playerItr == initiative->AccountContributions.end())
-            return 0;
+            return 0.0f;
 
-        uint32 total = 0;
+        float total = 0.0f;
         for (auto const& [taskId, amount] : playerItr->second)
             total += amount;
         return total;
     }
-    return 0;
+    return 0.0f;
 }
 
-std::vector<std::pair<uint32, uint32>> InitiativeManager::GetTopContributors(
+std::vector<std::pair<uint32, float>> InitiativeManager::GetTopContributors(
     uint64 neighborhoodGuid, uint32 initiativeID, uint32 limit) const
 {
-    std::vector<std::pair<uint32, uint32>> result;
+    std::vector<std::pair<uint32, float>> result;
 
     auto nhItr = _activeInitiatives.find(neighborhoodGuid);
     if (nhItr == _activeInitiatives.end())
@@ -1548,10 +1702,10 @@ std::vector<std::pair<uint32, uint32>> InitiativeManager::GetTopContributors(
         // Aggregate per-account totals
         for (auto const& [bnetAccountId, taskContribs] : initiative->AccountContributions)
         {
-            uint32 total = 0;
+            float total = 0.0f;
             for (auto const& [taskId, amount] : taskContribs)
                 total += amount;
-            if (total > 0)
+            if (total > 0.0f)
                 result.emplace_back(bnetAccountId, total);
         }
         break;
@@ -1578,16 +1732,14 @@ void InitiativeManager::UpdatePlayerInitiativeFavor(Player* player, uint64 neigh
     if (!active)
         return;
 
-    uint32 totalFavor = GetAccountContribution(neighborhoodGuid, active->InitiativeID, player->GetSession()->GetBattlenetAccountId());
+    // The update field holds whole points.
+    uint32 totalFavor = static_cast<uint32>(GetAccountContribution(neighborhoodGuid, active->InitiativeID, player->GetSession()->GetBattlenetAccountId()));
     player->UpdateInitiativeFavor(totalFavor);
 }
 
-uint32 InitiativeManager::GetTaskTargetCount(InitiativeTaskEntry const* taskEntry)
+uint32 InitiativeManager::GetTaskTargetCount(uint32 taskID) const
 {
-    if (!taskEntry || taskEntry->CriteriaTreeID <= 0)
-        return 1;
-
-    CriteriaTree const* tree = sCriteriaMgr->GetCriteriaTree(static_cast<uint32>(taskEntry->CriteriaTreeID));
+    CriteriaTree const* tree = _taskCriteria.GetTaskTree(taskID);
     if (!tree || !tree->Entry || !tree->Entry->Amount)
         return 1;
 
@@ -1615,7 +1767,7 @@ float InitiativeManager::GetRepetitionDampening(InitiativeTaskEntry const* taskE
     return std::min(value, 1.0f);
 }
 
-void InitiativeManager::GrantInitiativeTaskFavor(Player* player, uint64 neighborhoodGuid, uint32 initiativeID, uint32 contributionBefore, uint32 contributionAfter) const
+void InitiativeManager::GrantInitiativeTaskFavor(Player* player, uint64 neighborhoodGuid, uint32 initiativeID, float contributionBefore, float contributionAfter) const
 {
     if (!player)
         return;
@@ -1639,16 +1791,20 @@ void InitiativeManager::GrantInitiativeTaskFavor(Player* player, uint64 neighbor
             if (cycle->HouseXPCap > 0)
                 cap = static_cast<uint32>(cycle->HouseXPCap);
 
+    // Favor is whole points, so the account gets the whole points its running total crossed; the fractions add up over
+    // the next contributions instead of being lost.
+    uint32 before = static_cast<uint32>(contributionBefore);
+    uint32 after = static_cast<uint32>(contributionAfter);
     if (cap)
     {
-        contributionBefore = std::min(contributionBefore, cap);
-        contributionAfter = std::min(contributionAfter, cap);
+        before = std::min(before, cap);
+        after = std::min(after, cap);
     }
 
-    if (contributionAfter <= contributionBefore)
+    if (after <= before)
         return;
 
-    housing->AddFavor(contributionAfter - contributionBefore, HOUSING_FAVOR_SOURCE_INITIATIVE_TASK);
+    housing->AddFavor(after - before, HOUSING_FAVOR_SOURCE_INITIATIVE_TASK);
 }
 
 void InitiativeManager::CheckMilestones(ActiveInitiative& initiative, Neighborhood* neighborhood)

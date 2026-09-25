@@ -17,7 +17,6 @@
 
 #include "CriteriaHandler.h"
 #include "ArenaTeamMgr.h"
-#include "InitiativeManager.h"
 #include "AzeriteItem.h"
 #include "BattlePetMgr.h"
 #include "Battleground.h"
@@ -525,9 +524,6 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
         if (!data->Meets(referencePlayer, ref, uint32(miscValue1), uint32(miscValue2)))
             return;
 
-    // Housing initiative hook: notify InitiativeManager when validated criteria fires
-    if (referencePlayer)
-        sInitiativeManager.OnCriteriaProgress(referencePlayer, criteria->ID);
     if (std::optional<uint64> progressDelta = GetArchaeologyCriteriaProgressDelta(CriteriaType(criteria->Entry->Type)))
     {
         SetCriteriaProgress(criteria, *progressDelta, referencePlayer, PROGRESS_ACCUMULATE);
@@ -1425,6 +1421,31 @@ bool CriteriaHandler::CanUpdateCriteria(Criteria const* criteria, CriteriaTreeLi
 
     if (criteria->Entry->EligibilityWorldStateID != 0)
         if (WorldStateMgr::GetValue(criteria->Entry->EligibilityWorldStateID, referencePlayer->GetMap()) != criteria->Entry->EligibilityWorldStateValue)
+            return false;
+
+    return true;
+}
+
+bool CriteriaHandler::MeetsCriteriaRequirements(Criteria const* criteria, uint64 miscValue1, uint64 miscValue2, uint64 miscValue3, WorldObject const* ref, Player* referencePlayer) const
+{
+    if (DisableMgr::IsDisabledFor(DISABLE_TYPE_CRITERIA, criteria->ID, nullptr))
+        return false;
+
+    if (!RequirementsSatisfied(criteria, miscValue1, miscValue2, miscValue3, ref, referencePlayer))
+        return false;
+
+    if (criteria->Modifier && !ModifierTreeSatisfied(criteria->Modifier, miscValue1, miscValue2, ref, referencePlayer))
+        return false;
+
+    if (!ConditionsSatisfied(criteria, referencePlayer))
+        return false;
+
+    if (criteria->Entry->EligibilityWorldStateID != 0)
+        if (WorldStateMgr::GetValue(criteria->Entry->EligibilityWorldStateID, referencePlayer->GetMap()) != criteria->Entry->EligibilityWorldStateValue)
+            return false;
+
+    if (CriteriaDataSet const* data = sCriteriaMgr->GetCriteriaDataSet(criteria))
+        if (!data->Meets(referencePlayer, ref, uint32(miscValue1), uint32(miscValue2)))
             return false;
 
     return true;

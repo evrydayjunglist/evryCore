@@ -26206,8 +26206,10 @@ void Player::SendInitialPacketsAfterAddToMap()
 
     // The one unprompted housing message of the login burst: SMSG_INITIATIVE_REWARD_AVAILABLE, for a player with an
     // unclaimed reached milestone. 43 retail 12.1 logins carry it between the aura burst and the next UPDATE_OBJECT,
-    // before the client's first CMSG_NEIGHBORHOOD_INITIATIVE_SERVICE_STATUS_CHECK.
-    sInitiativeManager.SendRewardsAvailable(this);
+    // before the client's first CMSG_NEIGHBORHOOD_INITIATIVE_SERVICE_STATUS_CHECK. It is sent at login only, not on
+    // every map change: in the 12.1 capture it follows the login once and does not follow the later SMSG_NEW_WORLD.
+    if (GetSession()->PlayerLoading())
+        sInitiativeManager.SendRewardsAvailable(this);
 
     // Housing state setup at neighborhood map entry.
     //
@@ -29262,6 +29264,10 @@ void Player::UpdateCriteria(CriteriaType type, uint64 miscValue1 /*= 0*/, uint64
     m_achievementMgr->UpdateCriteria(type, miscValue1, miscValue2, miscValue3, ref, this);
     m_questObjectiveCriteriaMgr->UpdateCriteria(type, miscValue1, miscValue2, miscValue3, ref, this);
 
+    // Neighborhood endeavor tasks have criteria trees of their own, checked once per event with her achievement
+    // handler. Her deed counts for her own account, so this is not skipped for group events.
+    sInitiativeManager.OnPlayerCriteriaEvent(this, *m_achievementMgr, type, miscValue1, miscValue2, miscValue3, ref);
+
     // Update only individual achievement criteria here, otherwise we may get multiple updates
     // from a single boss kill
     if (CriteriaMgr::IsGroupCriteriaType(type))
@@ -32009,7 +32015,7 @@ void Player::AddPlayerMirrorHouse(Housing const& housing)
     // only InitiativeFavor remains).
     uint64 nhGuid = housing.GetNeighborhoodGuid().GetCounter();
     if (ActiveInitiative* activeInit = sInitiativeManager.GetActiveInitiative(nhGuid))
-        mirrorHouse.InitiativeFavor = sInitiativeManager.GetAccountContribution(nhGuid, activeInit->InitiativeID, GetSession()->GetBattlenetAccountId());
+        mirrorHouse.InitiativeFavor = static_cast<uint32>(sInitiativeManager.GetAccountContribution(nhGuid, activeInit->InitiativeID, GetSession()->GetBattlenetAccountId()));
 
     TC_LOG_DEBUG("housing", "Player::AddPlayerMirrorHouse: HouseGuid={} NeighborhoodGuid={} PlotID={} Level={} MapID={} Favor={}",
         housing.GetHouseGuid().ToString(), housing.GetNeighborhoodGuid().ToString(), mirrorHouse.PlotID, mirrorHouse.Level,
@@ -32316,8 +32322,7 @@ void Player::UpdateInitiativeComponent()
         }
     }
 
-    float playerContribution = static_cast<float>(
-        sInitiativeManager.GetAccountContribution(nhGuid.GetCounter(), activeInit->InitiativeID, GetSession()->GetBattlenetAccountId()));
+    float playerContribution = sInitiativeManager.GetAccountContribution(nhGuid.GetCounter(), activeInit->InitiativeID, GetSession()->GetBattlenetAccountId());
 
     SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::RemainingDuration), remainingDuration);
     SetUpdateFieldValue(info.ModifyValue(&UF::PlayerInitiativeInfo::CurrentInitiativeID), static_cast<int32>(activeInit->InitiativeID));

@@ -973,10 +973,10 @@ void CharacterDatabaseConnection::DoPrepareStatements()
 
     // Neighborhood Initiative Task Progress (per-task persistence)
     PrepareStatement(CHAR_SEL_INITIATIVE_TASK_PROGRESS,
-        "SELECT taskId, progress, status FROM neighborhood_initiative_task_progress WHERE initiativeDbId = ?",
+        "SELECT taskId, progress, status, completionTime FROM neighborhood_initiative_task_progress WHERE initiativeDbId = ?",
         CONNECTION_SYNCH);
     PrepareStatement(CHAR_REP_INITIATIVE_TASK_PROGRESS,
-        "REPLACE INTO neighborhood_initiative_task_progress (initiativeDbId, taskId, progress, status) VALUES (?, ?, ?, ?)",
+        "REPLACE INTO neighborhood_initiative_task_progress (initiativeDbId, taskId, progress, status, completionTime) VALUES (?, ?, ?, ?, ?)",
         CONNECTION_ASYNC);
 
     // Neighborhood Initiative Milestones (reached/claimed tracking)

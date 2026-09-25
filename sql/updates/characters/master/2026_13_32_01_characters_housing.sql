@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS `neighborhood_initiative_task_progress` (
     `taskId` INT UNSIGNED NOT NULL,
     `progress` INT UNSIGNED NOT NULL DEFAULT 0,
     `status` TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `completionTime` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'When the task was completed, shown in the activity log',
     PRIMARY KEY (`initiativeDbId`, `taskId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -222,7 +223,7 @@ CREATE TABLE IF NOT EXISTS `neighborhood_initiative_contributions` (
     `bnetAccountId` INT UNSIGNED NOT NULL,
     `playerGuid` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'The character of the account that contributed last, named in the activity log',
     `taskId` INT UNSIGNED NOT NULL,
-    `amount` INT UNSIGNED NOT NULL DEFAULT 0,
+    `amount` FLOAT NOT NULL DEFAULT 0 COMMENT 'Fractional, as the activity log shows it',
     `lastUpdated` INT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     UNIQUE INDEX `idx_initiative_account_task` (`initiativeDbId`, `bnetAccountId`, `taskId`),

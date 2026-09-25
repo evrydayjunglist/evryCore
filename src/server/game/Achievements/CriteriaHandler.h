@@ -282,6 +282,11 @@ public:
     void StartCriteria(CriteriaStartEvent startEvent, uint32 entry, Milliseconds timeLost = Milliseconds::zero());
     virtual void FailCriteria(CriteriaFailEvent failEvent, uint32 asset);
 
+    // Whether an event meets a criteria that no tree of CriteriaMgr holds, such as a neighborhood endeavor task's. These
+    // are the checks CanUpdateCriteria and UpdateCriteria make before counting, without the tree test, which the caller
+    // makes against its own tree. Changes no progress.
+    bool MeetsCriteriaRequirements(Criteria const* criteria, uint64 miscValue1, uint64 miscValue2, uint64 miscValue3, WorldObject const* ref, Player* referencePlayer) const;
+
 protected:
     virtual void SendCriteriaUpdate(Criteria const* criteria, CriteriaProgress const* progress, Seconds timeElapsed, bool timedCompleted) const = 0;
 

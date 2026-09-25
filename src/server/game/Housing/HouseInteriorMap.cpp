@@ -1871,12 +1871,9 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     // the initial UPDATE_OBJECT via Player::BuildCreateUpdateBlockForPlayer.
                     // It must be in the initial batch for the client's type-18 render init.
 
-                    // 7) InitiativeServiceStatus
-                    {
-                        WorldPackets::Housing::InitiativeServiceStatus initStatus;
-                        initStatus.ServiceEnabled = true;
-                        p->SendDirectMessage(initStatus.Write());
-                    }
+                    // SMSG_INITIATIVE_SERVICE_STATUS is not pushed here. Retail sends it only in answer to the
+                    // CMSG_NEIGHBORHOOD_INITIATIVE_SERVICE_STATUS_CHECK the client sends on entering (hbcd3 1416370,
+                    // answered once at 1416657), and HandleNeighborhoodInitiativeServiceStatusCheck answers that.
 
                     // 7) Create AND send the interior plot AreaTrigger LAST.
                     // The AT must be created here (not in pre-spawn) because if it's
@@ -2107,7 +2104,7 @@ bool HouseInteriorMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/
                     }
 
                     TC_LOG_DEBUG("housing", "HouseInteriorMap deferred: Complete — "
-                        "HouseInfo+Status+Perms+Auras+Account+Initiative+PlotAT+ENTER_PLOT+Door for {}",
+                        "HouseInfo+Status+Perms+Auras+Account+PlotAT+ENTER_PLOT+Door for {}",
                         playerGuid.ToString());
                 }, Milliseconds(500));
             }

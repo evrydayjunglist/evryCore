@@ -1,0 +1,4248 @@
+{
+  "format": 1,
+  "build": 69814,
+  "kind": "reaper-creation",
+  "records": [
+    {
+      "table": "ModelFileData",
+      "id": 7000007,
+      "tableHash": 2707547180,
+      "fields": {
+        "ID": 7000007,
+        "GeoBox1": -1.1440818309783936,
+        "GeoBox2": -0.05507498234510422,
+        "GeoBox3": -0.9355913996696472,
+        "GeoBox4": 0.8381698727607727,
+        "GeoBox5": 0.05069629102945328,
+        "GeoBox6": 0.08383172750473022,
+        "FileDataID": 7000007,
+        "Flags": 0,
+        "LodCount": 0,
+        "ModelResourcesID": 89663
+      },
+      "blob": "467192bf4e9661bdeb826fbf4d92563feaa64f3df8afab3dc7cf6a0000000000003f5e0100"
+    },
+    {
+      "table": "Item",
+      "id": 70100,
+      "tableHash": 1344507586,
+      "fields": {
+        "ID": 70100,
+        "ClassID": 2,
+        "SubclassID": 6,
+        "Material": 6,
+        "InventoryType": 17,
+        "SheatheType": 2,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000004,
+        "ItemGroupSoundsID": 8,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0
+      },
+      "blob": "0200000006061102ffc4cf6a000800000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "ItemSparse",
+      "id": 70100,
+      "tableHash": 2442913102,
+      "fields": {
+        "ID": 70100,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Faded Scythe",
+        "ExpansionID": 0,
+        "DmgVariance": 0.5,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 4,
+        "BuyPrice": 22,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.95169997215271,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 0,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 2900,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 2,
+        "Material": 6,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 1,
+        "InventoryType": 17,
+        "OverallQualityID": 1
+      },
+      "blob": "0000000046616465642053637974686500000000000000003f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01000000000000000000000000000000ffffffffffffffff0400000016000000010000000000803f9ca2733f000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000540b0000000000000100ffff0000000000000206000200000000011101"
+    },
+    {
+      "table": "ItemDisplayInfo",
+      "id": 1000,
+      "tableHash": 2557447376,
+      "fields": {
+        "ID": 1000,
+        "GeosetGroupOverride": 0,
+        "ItemVisual": 0,
+        "ParticleColorID": 0,
+        "ItemRangedDisplayInfoID": 0,
+        "OverrideSwooshSoundKitID": 0,
+        "SheatheTransformMatrixID": 0,
+        "StateSpellVisualKitID": 0,
+        "SheathedSpellVisualKitID": 0,
+        "UnsheathedSpellVisualKitID": 0,
+        "Flags": 0,
+        "ModelResourcesID1": 89663,
+        "ModelResourcesID2": 0,
+        "ModelMaterialResourcesID1": 0,
+        "ModelMaterialResourcesID2": 0,
+        "ModelType1": 0,
+        "ModelType2": 0,
+        "GeosetGroup1": 0,
+        "GeosetGroup2": 0,
+        "GeosetGroup3": 0,
+        "GeosetGroup4": 0,
+        "GeosetGroup5": 0,
+        "GeosetGroup6": 0,
+        "AttachmentGeosetGroup1": 0,
+        "AttachmentGeosetGroup2": 0,
+        "AttachmentGeosetGroup3": 0,
+        "AttachmentGeosetGroup4": 0,
+        "AttachmentGeosetGroup5": 0,
+        "AttachmentGeosetGroup6": 0,
+        "HelmetGeosetVis1": 0,
+        "HelmetGeosetVis2": 0
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000000000003f5e010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "ItemAppearance",
+      "id": 2563,
+      "tableHash": 1109793673,
+      "fields": {
+        "ID": 2563,
+        "DisplayType": 11,
+        "ItemDisplayInfoID": 1000,
+        "DefaultIconFileDataID": 7000004,
+        "UiOrder": 256300,
+        "PlayerConditionID": 0
+      },
+      "blob": "0be8030000c4cf6a002ce9030000000000"
+    },
+    {
+      "table": "ItemModifiedAppearance",
+      "id": 1320,
+      "tableHash": 3834752085,
+      "fields": {
+        "ID": 1320,
+        "ItemID": 70100,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 2563,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0
+      },
+      "blob": "28050000d411010000000000030a0000000000000500000000"
+    },
+    {
+      "table": "Item",
+      "id": 70101,
+      "tableHash": 1344507586,
+      "fields": {
+        "ID": 70101,
+        "ClassID": 4,
+        "SubclassID": 3,
+        "Material": 5,
+        "InventoryType": 20,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000001,
+        "ItemGroupSoundsID": 11,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0
+      },
+      "blob": "0400000003051400ffc1cf6a000b00000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "ItemSparse",
+      "id": 70101,
+      "tableHash": 2442913102,
+      "fields": {
+        "ID": 70101,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Hauberk",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 2,
+        "BuyPrice": 12,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.972100019454956,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 5,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 0,
+        "InventoryType": 20,
+        "OverallQualityID": 1
+      },
+      "blob": "000000005068616e746f6d204861756265726b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01000000000000000000000000000000ffffffffffffffff020000000c000000010000000000803f8cdb783f00000000002000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100ffff0000000000000005000200000000001401"
+    },
+    {
+      "table": "ItemDisplayInfo",
+      "id": 1001,
+      "tableHash": 2557447376,
+      "fields": {
+        "ID": 1001,
+        "GeosetGroupOverride": 0,
+        "ItemVisual": 0,
+        "ParticleColorID": 0,
+        "ItemRangedDisplayInfoID": 0,
+        "OverrideSwooshSoundKitID": 0,
+        "SheatheTransformMatrixID": 0,
+        "StateSpellVisualKitID": 0,
+        "SheathedSpellVisualKitID": 0,
+        "UnsheathedSpellVisualKitID": 0,
+        "Flags": 0,
+        "ModelResourcesID1": 0,
+        "ModelResourcesID2": 0,
+        "ModelMaterialResourcesID1": 0,
+        "ModelMaterialResourcesID2": 0,
+        "ModelType1": -1,
+        "ModelType2": 0,
+        "GeosetGroup1": 0,
+        "GeosetGroup2": 0,
+        "GeosetGroup3": 0,
+        "GeosetGroup4": 0,
+        "GeosetGroup5": 0,
+        "GeosetGroup6": 0,
+        "AttachmentGeosetGroup1": 0,
+        "AttachmentGeosetGroup2": 0,
+        "AttachmentGeosetGroup3": 0,
+        "AttachmentGeosetGroup4": 0,
+        "AttachmentGeosetGroup5": 0,
+        "AttachmentGeosetGroup6": 0,
+        "HelmetGeosetVis1": 0,
+        "HelmetGeosetVis2": 0
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000010,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000010,
+        "FileDataID": 7000010,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128584
+      },
+      "blob": "cacf6a000088381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000010,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000010,
+        "GenderIndex": 3,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "030000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 91072,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 91072,
+        "ComponentSection": 0,
+        "MaterialResourcesID": 1128584,
+        "ItemDisplayInfoID": 1001
+      },
+      "blob": "0088381100e9030000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000020,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000020,
+        "FileDataID": 7000020,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128585
+      },
+      "blob": "d4cf6a000089381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000020,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000020,
+        "GenderIndex": 3,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "030000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 91073,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 91073,
+        "ComponentSection": 3,
+        "MaterialResourcesID": 1128585,
+        "ItemDisplayInfoID": 1001
+      },
+      "blob": "0389381100e9030000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000017,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000017,
+        "FileDataID": 7000017,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128586
+      },
+      "blob": "d1cf6a00008a381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000017,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000017,
+        "GenderIndex": 3,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "030000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 101418,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 101418,
+        "ComponentSection": 4,
+        "MaterialResourcesID": 1128586,
+        "ItemDisplayInfoID": 1001
+      },
+      "blob": "048a381100e9030000"
+    },
+    {
+      "table": "ItemAppearance",
+      "id": 2830,
+      "tableHash": 1109793673,
+      "fields": {
+        "ID": 2830,
+        "DisplayType": 3,
+        "ItemDisplayInfoID": 1001,
+        "DefaultIconFileDataID": 7000001,
+        "UiOrder": 283000,
+        "PlayerConditionID": 0
+      },
+      "blob": "03e9030000c1cf6a007851040000000000"
+    },
+    {
+      "table": "ItemModifiedAppearance",
+      "id": 1522,
+      "tableHash": 3834752085,
+      "fields": {
+        "ID": 1522,
+        "ItemID": 70101,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 2830,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0
+      },
+      "blob": "f2050000d5110100000000000e0b0000000000000500000000"
+    },
+    {
+      "table": "Item",
+      "id": 70102,
+      "tableHash": 1344507586,
+      "fields": {
+        "ID": 70102,
+        "ClassID": 4,
+        "SubclassID": 3,
+        "Material": 5,
+        "InventoryType": 7,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000002,
+        "ItemGroupSoundsID": 11,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0
+      },
+      "blob": "0400000003050700ffc2cf6a000b00000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "ItemSparse",
+      "id": 70102,
+      "tableHash": 2442913102,
+      "fields": {
+        "ID": 70102,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Legplates",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 2,
+        "BuyPrice": 12,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.9648000001907349,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 5,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 1,
+        "InventoryType": 7,
+        "OverallQualityID": 1
+      },
+      "blob": "000000005068616e746f6d204c6567706c61746573000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01000000000000000000000000000000ffffffffffffffff020000000c000000010000000000803f22fd763f00000000002000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100ffff0000000000000005000200000000010701"
+    },
+    {
+      "table": "ItemDisplayInfo",
+      "id": 1002,
+      "tableHash": 2557447376,
+      "fields": {
+        "ID": 1002,
+        "GeosetGroupOverride": 0,
+        "ItemVisual": 0,
+        "ParticleColorID": 0,
+        "ItemRangedDisplayInfoID": 0,
+        "OverrideSwooshSoundKitID": 0,
+        "SheatheTransformMatrixID": 0,
+        "StateSpellVisualKitID": 0,
+        "SheathedSpellVisualKitID": 0,
+        "UnsheathedSpellVisualKitID": 0,
+        "Flags": 0,
+        "ModelResourcesID1": 0,
+        "ModelResourcesID2": 0,
+        "ModelMaterialResourcesID1": 0,
+        "ModelMaterialResourcesID2": 0,
+        "ModelType1": -1,
+        "ModelType2": 0,
+        "GeosetGroup1": 0,
+        "GeosetGroup2": 0,
+        "GeosetGroup3": 0,
+        "GeosetGroup4": 0,
+        "GeosetGroup5": 0,
+        "GeosetGroup6": 0,
+        "AttachmentGeosetGroup1": 0,
+        "AttachmentGeosetGroup2": 0,
+        "AttachmentGeosetGroup3": 0,
+        "AttachmentGeosetGroup4": 0,
+        "AttachmentGeosetGroup5": 0,
+        "AttachmentGeosetGroup6": 0,
+        "HelmetGeosetVis1": 0,
+        "HelmetGeosetVis2": 0
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000014,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000014,
+        "FileDataID": 7000014,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128587
+      },
+      "blob": "cecf6a00008b381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000014,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000014,
+        "GenderIndex": 3,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "030000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 101419,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 101419,
+        "ComponentSection": 5,
+        "MaterialResourcesID": 1128587,
+        "ItemDisplayInfoID": 1002
+      },
+      "blob": "058b381100ea030000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000013,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000013,
+        "FileDataID": 7000013,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128588
+      },
+      "blob": "cdcf6a00008c381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000013,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000013,
+        "GenderIndex": 3,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "030000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 101420,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 101420,
+        "ComponentSection": 6,
+        "MaterialResourcesID": 1128588,
+        "ItemDisplayInfoID": 1002
+      },
+      "blob": "068c381100ea030000"
+    },
+    {
+      "table": "ItemAppearance",
+      "id": 4161,
+      "tableHash": 1109793673,
+      "fields": {
+        "ID": 4161,
+        "DisplayType": 5,
+        "ItemDisplayInfoID": 1002,
+        "DefaultIconFileDataID": 7000002,
+        "UiOrder": 416100,
+        "PlayerConditionID": 0
+      },
+      "blob": "05ea030000c2cf6a006459060000000000"
+    },
+    {
+      "table": "ItemModifiedAppearance",
+      "id": 4146,
+      "tableHash": 3834752085,
+      "fields": {
+        "ID": 4146,
+        "ItemID": 70102,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 4161,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0
+      },
+      "blob": "32100000d61101000000000041100000000000000500000000"
+    },
+    {
+      "table": "Item",
+      "id": 70103,
+      "tableHash": 1344507586,
+      "fields": {
+        "ID": 70103,
+        "ClassID": 4,
+        "SubclassID": 3,
+        "Material": 5,
+        "InventoryType": 8,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000000,
+        "ItemGroupSoundsID": 11,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0
+      },
+      "blob": "0400000003050800ffc0cf6a000b00000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "ItemSparse",
+      "id": 70103,
+      "tableHash": 2442913102,
+      "fields": {
+        "ID": 70103,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Boots",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 1,
+        "BuyPrice": 9,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.9684000015258789,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 5,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 0,
+        "InventoryType": 8,
+        "OverallQualityID": 1
+      },
+      "blob": "000000005068616e746f6d20426f6f7473000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01000000000000000000000000000000ffffffffffffffff0100000009000000010000000000803f10e9773f00000000002000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100ffff0000000000000005000200000000000801"
+    },
+    {
+      "table": "ItemDisplayInfo",
+      "id": 1003,
+      "tableHash": 2557447376,
+      "fields": {
+        "ID": 1003,
+        "GeosetGroupOverride": 0,
+        "ItemVisual": 0,
+        "ParticleColorID": 0,
+        "ItemRangedDisplayInfoID": 0,
+        "OverrideSwooshSoundKitID": 0,
+        "SheatheTransformMatrixID": 0,
+        "StateSpellVisualKitID": 0,
+        "SheathedSpellVisualKitID": 0,
+        "UnsheathedSpellVisualKitID": 0,
+        "Flags": 0,
+        "ModelResourcesID1": 0,
+        "ModelResourcesID2": 0,
+        "ModelMaterialResourcesID1": 0,
+        "ModelMaterialResourcesID2": 0,
+        "ModelType1": -1,
+        "ModelType2": 0,
+        "GeosetGroup1": 0,
+        "GeosetGroup2": 0,
+        "GeosetGroup3": 0,
+        "GeosetGroup4": 0,
+        "GeosetGroup5": 0,
+        "GeosetGroup6": 0,
+        "AttachmentGeosetGroup1": 0,
+        "AttachmentGeosetGroup2": 0,
+        "AttachmentGeosetGroup3": 0,
+        "AttachmentGeosetGroup4": 0,
+        "AttachmentGeosetGroup5": 0,
+        "AttachmentGeosetGroup6": 0,
+        "HelmetGeosetVis1": 0,
+        "HelmetGeosetVis2": 0
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000012,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000012,
+        "FileDataID": 7000012,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128589
+      },
+      "blob": "cccf6a00008d381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000012,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000012,
+        "GenderIndex": 3,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "030000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 101421,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 101421,
+        "ComponentSection": 6,
+        "MaterialResourcesID": 1128589,
+        "ItemDisplayInfoID": 1003
+      },
+      "blob": "068d381100eb030000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000011,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000011,
+        "FileDataID": 7000011,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128590
+      },
+      "blob": "cbcf6a00008e381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000011,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000011,
+        "GenderIndex": 3,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "030000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 101422,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 101422,
+        "ComponentSection": 7,
+        "MaterialResourcesID": 1128590,
+        "ItemDisplayInfoID": 1003
+      },
+      "blob": "078e381100eb030000"
+    },
+    {
+      "table": "ItemAppearance",
+      "id": 4618,
+      "tableHash": 1109793673,
+      "fields": {
+        "ID": 4618,
+        "DisplayType": 6,
+        "ItemDisplayInfoID": 1003,
+        "DefaultIconFileDataID": 7000000,
+        "UiOrder": 461800,
+        "PlayerConditionID": 0
+      },
+      "blob": "06eb030000c0cf6a00e80b070000000000"
+    },
+    {
+      "table": "ItemModifiedAppearance",
+      "id": 4147,
+      "tableHash": 3834752085,
+      "fields": {
+        "ID": 4147,
+        "ItemID": 70103,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 4618,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0
+      },
+      "blob": "33100000d7110100000000000a120000000000000500000000"
+    },
+    {
+      "table": "Item",
+      "id": 70129,
+      "tableHash": 1344507586,
+      "fields": {
+        "ID": 70129,
+        "ClassID": 4,
+        "SubclassID": 0,
+        "Material": 7,
+        "InventoryType": 4,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000003,
+        "ItemGroupSoundsID": 7,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0
+      },
+      "blob": "0400000000070400ffc3cf6a000700000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "ItemSparse",
+      "id": 70129,
+      "tableHash": 2442913102,
+      "fields": {
+        "ID": 70129,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Shirt",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 1,
+        "BuyPrice": 1,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.9506000280380249,
+        "Flags1": 32768,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 7,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 0,
+        "InventoryType": 4,
+        "OverallQualityID": 0
+      },
+      "blob": "000000005068616e746f6d205368697274000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01000000000000000000000000000000ffffffffffffffff0100000001000000010000000000803f865a733f00800000002000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100ffff0000000000000007000200000000000400"
+    },
+    {
+      "table": "ItemDisplayInfo",
+      "id": 1004,
+      "tableHash": 2557447376,
+      "fields": {
+        "ID": 1004,
+        "GeosetGroupOverride": 0,
+        "ItemVisual": 0,
+        "ParticleColorID": 0,
+        "ItemRangedDisplayInfoID": 0,
+        "OverrideSwooshSoundKitID": 0,
+        "SheatheTransformMatrixID": 0,
+        "StateSpellVisualKitID": 0,
+        "SheathedSpellVisualKitID": 0,
+        "UnsheathedSpellVisualKitID": 0,
+        "Flags": 0,
+        "ModelResourcesID1": 0,
+        "ModelResourcesID2": 0,
+        "ModelMaterialResourcesID1": 0,
+        "ModelMaterialResourcesID2": 0,
+        "ModelType1": -1,
+        "ModelType2": 0,
+        "GeosetGroup1": 0,
+        "GeosetGroup2": 0,
+        "GeosetGroup3": 0,
+        "GeosetGroup4": 0,
+        "GeosetGroup5": 0,
+        "GeosetGroup6": 0,
+        "AttachmentGeosetGroup1": 0,
+        "AttachmentGeosetGroup2": 0,
+        "AttachmentGeosetGroup3": 0,
+        "AttachmentGeosetGroup4": 0,
+        "AttachmentGeosetGroup5": 0,
+        "AttachmentGeosetGroup6": 0,
+        "HelmetGeosetVis1": 0,
+        "HelmetGeosetVis2": 0
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000019,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000019,
+        "FileDataID": 7000019,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128591
+      },
+      "blob": "d3cf6a00008f381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000019,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000019,
+        "GenderIndex": 0,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "000000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000018,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000018,
+        "FileDataID": 7000018,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128591
+      },
+      "blob": "d2cf6a00008f381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000018,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000018,
+        "GenderIndex": 1,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "010000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 101423,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 101423,
+        "ComponentSection": 3,
+        "MaterialResourcesID": 1128591,
+        "ItemDisplayInfoID": 1004
+      },
+      "blob": "038f381100ec030000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000016,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000016,
+        "FileDataID": 7000016,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128592
+      },
+      "blob": "d0cf6a000090381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000016,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000016,
+        "GenderIndex": 0,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "000000"
+    },
+    {
+      "table": "TextureFileData",
+      "id": 7000015,
+      "tableHash": 440872980,
+      "fields": {
+        "ID": 7000015,
+        "FileDataID": 7000015,
+        "UsageType": 0,
+        "MaterialResourcesID": 1128592
+      },
+      "blob": "cfcf6a000090381100"
+    },
+    {
+      "table": "ComponentTextureFileData",
+      "id": 7000015,
+      "tableHash": 2185268109,
+      "fields": {
+        "ID": 7000015,
+        "GenderIndex": 1,
+        "ClassID": 0,
+        "RaceID": 0
+      },
+      "blob": "010000"
+    },
+    {
+      "table": "ItemDisplayInfoMaterialRes",
+      "id": 101424,
+      "tableHash": 4082824155,
+      "fields": {
+        "ID": 101424,
+        "ComponentSection": 4,
+        "MaterialResourcesID": 1128592,
+        "ItemDisplayInfoID": 1004
+      },
+      "blob": "0490381100ec030000"
+    },
+    {
+      "table": "ItemAppearance",
+      "id": 4790,
+      "tableHash": 1109793673,
+      "fields": {
+        "ID": 4790,
+        "DisplayType": 2,
+        "ItemDisplayInfoID": 1004,
+        "DefaultIconFileDataID": 7000003,
+        "UiOrder": 479000,
+        "PlayerConditionID": 0
+      },
+      "blob": "02ec030000c3cf6a00184f070000000000"
+    },
+    {
+      "table": "ItemModifiedAppearance",
+      "id": 4148,
+      "tableHash": 3834752085,
+      "fields": {
+        "ID": 4148,
+        "ItemID": 70129,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 4790,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0
+      },
+      "blob": "34100000f111010000000000b6120000000000000500000000"
+    },
+    {
+      "table": "CharacterLoadout",
+      "id": 1000,
+      "tableHash": 3758770171,
+      "fields": {
+        "ID": 1000,
+        "ChrClassID": 17,
+        "Purpose": 1,
+        "ItemContext": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1
+      },
+      "blob": "110100000000ffffffffffffffff"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1000,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1000,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70100
+      },
+      "blob": "e803d4110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1001,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1001,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70101
+      },
+      "blob": "e803d5110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1002,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1002,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70102
+      },
+      "blob": "e803d6110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1003,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1003,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70103
+      },
+      "blob": "e803d7110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1004,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1004,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70129
+      },
+      "blob": "e803f1110100"
+    },
+    {
+      "table": "CharacterLoadout",
+      "id": 1001,
+      "tableHash": 3758770171,
+      "fields": {
+        "ID": 1001,
+        "ChrClassID": 17,
+        "Purpose": 9,
+        "ItemContext": 75,
+        "RaceMask1": -1,
+        "RaceMask2": -1
+      },
+      "blob": "11090000004bffffffffffffffff"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1005,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1005,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70100
+      },
+      "blob": "e903d4110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1006,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1006,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70101
+      },
+      "blob": "e903d5110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1007,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1007,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70102
+      },
+      "blob": "e903d6110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1008,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1008,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70103
+      },
+      "blob": "e903d7110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1009,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1009,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70129
+      },
+      "blob": "e903f1110100"
+    },
+    {
+      "table": "CharacterLoadoutItem",
+      "id": 1010,
+      "tableHash": 1707318183,
+      "fields": {
+        "ID": 1010,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 6948
+      },
+      "blob": "e903241b0000"
+    },
+    {
+      "table": "SkillRaceClassInfo",
+      "id": 1250,
+      "tableHash": 112059424,
+      "fields": {
+        "ID": 1250,
+        "SkillID": 229,
+        "ClassMask": 65536,
+        "Flags": 128,
+        "Availability": 1,
+        "MinLevel": 1,
+        "SkillTierID": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1
+      },
+      "blob": "e500000001008000000001000000010000ffffffffffffffff"
+    },
+    {
+      "table": "SkillLineAbility",
+      "id": 1005,
+      "tableHash": 4282664694,
+      "fields": {
+        "ID": 1005,
+        "AbilityVerb": "",
+        "AbilityAllVerb": "",
+        "SkillLine": 229,
+        "Spell": 200,
+        "MinSkillLineRank": 1,
+        "ClassMask": 65536,
+        "SupercedesSpell": 0,
+        "AcquireMethod": 2,
+        "TrivialSkillLineRankHigh": 0,
+        "TrivialSkillLineRankLow": 0,
+        "Flags": 0,
+        "NumSkillUps": 1,
+        "UniqueBit": 0,
+        "TradeSkillCategoryID": 0,
+        "SkillupSkillLineID": 0,
+        "RaceMask1": 0,
+        "RaceMask2": 0
+      },
+      "blob": "0000ed030000e500c800000001000000010000000000020000000000000000000000010000000000000000000000000000"
+    },
+    {
+      "table": "SkillRaceClassInfo",
+      "id": 1253,
+      "tableHash": 112059424,
+      "fields": {
+        "ID": 1253,
+        "SkillID": 172,
+        "ClassMask": 65536,
+        "Flags": 128,
+        "Availability": 1,
+        "MinLevel": 1,
+        "SkillTierID": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1
+      },
+      "blob": "ac00000001008000000001000000010000ffffffffffffffff"
+    },
+    {
+      "table": "SkillLineAbility",
+      "id": 1009,
+      "tableHash": 4282664694,
+      "fields": {
+        "ID": 1009,
+        "AbilityVerb": "",
+        "AbilityAllVerb": "",
+        "SkillLine": 172,
+        "Spell": 197,
+        "MinSkillLineRank": 1,
+        "ClassMask": 65536,
+        "SupercedesSpell": 0,
+        "AcquireMethod": 2,
+        "TrivialSkillLineRankHigh": 0,
+        "TrivialSkillLineRankLow": 0,
+        "Flags": 0,
+        "NumSkillUps": 1,
+        "UniqueBit": 0,
+        "TradeSkillCategoryID": 0,
+        "SkillupSkillLineID": 0,
+        "RaceMask1": 0,
+        "RaceMask2": 0
+      },
+      "blob": "0000f1030000ac00c500000001000000010000000000020000000000000000000000010000000000000000000000000000"
+    },
+    {
+      "table": "SkillRaceClassInfo",
+      "id": 1254,
+      "tableHash": 112059424,
+      "fields": {
+        "ID": 1254,
+        "SkillID": 293,
+        "ClassMask": 65536,
+        "Flags": 128,
+        "Availability": 1,
+        "MinLevel": 1,
+        "SkillTierID": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1
+      },
+      "blob": "2501000001008000000001000000010000ffffffffffffffff"
+    },
+    {
+      "table": "SkillLineAbility",
+      "id": 1010,
+      "tableHash": 4282664694,
+      "fields": {
+        "ID": 1010,
+        "AbilityVerb": "",
+        "AbilityAllVerb": "",
+        "SkillLine": 293,
+        "Spell": 750,
+        "MinSkillLineRank": 1,
+        "ClassMask": 65536,
+        "SupercedesSpell": 0,
+        "AcquireMethod": 2,
+        "TrivialSkillLineRankHigh": 0,
+        "TrivialSkillLineRankLow": 0,
+        "Flags": 0,
+        "NumSkillUps": 1,
+        "UniqueBit": 0,
+        "TradeSkillCategoryID": 0,
+        "SkillupSkillLineID": 0,
+        "RaceMask1": 0,
+        "RaceMask2": 0
+      },
+      "blob": "0000f20300002501ee02000001000000010000000000020000000000000000000000010000000000000000000000000000"
+    }
+  ],
+  "changes": [
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2707547180,
+        "RecordId": 7000007
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2707547180,
+        "RecordId": 7000007,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "467192bf4e9661bdeb826fbf4d92563feaa64f3df8afab3dc7cf6a0000000000003f5e0100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2707547180,
+      "recordID": 7000007
+    },
+    {
+      "schema": "hotfix",
+      "table": "item",
+      "key": {
+        "ID": 70100
+      },
+      "before": null,
+      "after": {
+        "ID": 70100,
+        "ClassID": 2,
+        "SubclassID": 6,
+        "Material": 6,
+        "InventoryType": 17,
+        "SheatheType": 2,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000004,
+        "ItemGroupSoundsID": 8,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1344507586,
+      "recordID": 70100
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_sparse",
+      "key": {
+        "ID": 70100
+      },
+      "before": null,
+      "after": {
+        "ID": 70100,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Faded Scythe",
+        "ExpansionID": 0,
+        "DmgVariance": 0.5,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 4,
+        "BuyPrice": 22,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.95169997215271,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 0,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 2900,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 2,
+        "Material": 6,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 1,
+        "InventoryType": 17,
+        "OverallQualityID": 1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2442913102,
+      "recordID": 70100
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2557447376,
+        "RecordId": 1000
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2557447376,
+        "RecordId": 1000,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "000000000000000000000000000000000000000000000000000000000000000000000000000000003f5e010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2557447376,
+      "recordID": 1000
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_appearance",
+      "key": {
+        "ID": 2563
+      },
+      "before": null,
+      "after": {
+        "ID": 2563,
+        "DisplayType": 11,
+        "ItemDisplayInfoID": 1000,
+        "DefaultIconFileDataID": 7000004,
+        "UiOrder": 256300,
+        "PlayerConditionID": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1109793673,
+      "recordID": 2563
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_modified_appearance",
+      "key": {
+        "ID": 1320
+      },
+      "before": null,
+      "after": {
+        "ID": 1320,
+        "ItemID": 70100,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 2563,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 3834752085,
+      "recordID": 1320
+    },
+    {
+      "schema": "hotfix",
+      "table": "item",
+      "key": {
+        "ID": 70101
+      },
+      "before": null,
+      "after": {
+        "ID": 70101,
+        "ClassID": 4,
+        "SubclassID": 3,
+        "Material": 5,
+        "InventoryType": 20,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000001,
+        "ItemGroupSoundsID": 11,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1344507586,
+      "recordID": 70101
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_sparse",
+      "key": {
+        "ID": 70101
+      },
+      "before": null,
+      "after": {
+        "ID": 70101,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Hauberk",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 2,
+        "BuyPrice": 12,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.972100019454956,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 5,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 0,
+        "InventoryType": 20,
+        "OverallQualityID": 1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2442913102,
+      "recordID": 70101
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2557447376,
+        "RecordId": 1001
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2557447376,
+        "RecordId": 1001,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2557447376,
+      "recordID": 1001
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000010
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000010,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "cacf6a000088381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000010
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000010
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000010,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000010
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 91072
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 91072,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "0088381100e9030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 91072
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000020
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000020,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "d4cf6a000089381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000020
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000020
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000020,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000020
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 91073
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 91073,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "0389381100e9030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 91073
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000017
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000017,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "d1cf6a00008a381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000017
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000017
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000017,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000017
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 101418
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 101418,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "048a381100e9030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 101418
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_appearance",
+      "key": {
+        "ID": 2830
+      },
+      "before": null,
+      "after": {
+        "ID": 2830,
+        "DisplayType": 3,
+        "ItemDisplayInfoID": 1001,
+        "DefaultIconFileDataID": 7000001,
+        "UiOrder": 283000,
+        "PlayerConditionID": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1109793673,
+      "recordID": 2830
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_modified_appearance",
+      "key": {
+        "ID": 1522
+      },
+      "before": null,
+      "after": {
+        "ID": 1522,
+        "ItemID": 70101,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 2830,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 3834752085,
+      "recordID": 1522
+    },
+    {
+      "schema": "hotfix",
+      "table": "item",
+      "key": {
+        "ID": 70102
+      },
+      "before": null,
+      "after": {
+        "ID": 70102,
+        "ClassID": 4,
+        "SubclassID": 3,
+        "Material": 5,
+        "InventoryType": 7,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000002,
+        "ItemGroupSoundsID": 11,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1344507586,
+      "recordID": 70102
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_sparse",
+      "key": {
+        "ID": 70102
+      },
+      "before": null,
+      "after": {
+        "ID": 70102,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Legplates",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 2,
+        "BuyPrice": 12,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.9648000001907349,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 5,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 1,
+        "InventoryType": 7,
+        "OverallQualityID": 1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2442913102,
+      "recordID": 70102
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2557447376,
+        "RecordId": 1002
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2557447376,
+        "RecordId": 1002,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2557447376,
+      "recordID": 1002
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000014
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000014,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "cecf6a00008b381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000014
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000014
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000014,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000014
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 101419
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 101419,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "058b381100ea030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 101419
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000013
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000013,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "cdcf6a00008c381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000013
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000013
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000013,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000013
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 101420
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 101420,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "068c381100ea030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 101420
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_appearance",
+      "key": {
+        "ID": 4161
+      },
+      "before": null,
+      "after": {
+        "ID": 4161,
+        "DisplayType": 5,
+        "ItemDisplayInfoID": 1002,
+        "DefaultIconFileDataID": 7000002,
+        "UiOrder": 416100,
+        "PlayerConditionID": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1109793673,
+      "recordID": 4161
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_modified_appearance",
+      "key": {
+        "ID": 4146
+      },
+      "before": null,
+      "after": {
+        "ID": 4146,
+        "ItemID": 70102,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 4161,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 3834752085,
+      "recordID": 4146
+    },
+    {
+      "schema": "hotfix",
+      "table": "item",
+      "key": {
+        "ID": 70103
+      },
+      "before": null,
+      "after": {
+        "ID": 70103,
+        "ClassID": 4,
+        "SubclassID": 3,
+        "Material": 5,
+        "InventoryType": 8,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000000,
+        "ItemGroupSoundsID": 11,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1344507586,
+      "recordID": 70103
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_sparse",
+      "key": {
+        "ID": 70103
+      },
+      "before": null,
+      "after": {
+        "ID": 70103,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Boots",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 1,
+        "BuyPrice": 9,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.9684000015258789,
+        "Flags1": 0,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 5,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 0,
+        "InventoryType": 8,
+        "OverallQualityID": 1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2442913102,
+      "recordID": 70103
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2557447376,
+        "RecordId": 1003
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2557447376,
+        "RecordId": 1003,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2557447376,
+      "recordID": 1003
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000012
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000012,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "cccf6a00008d381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000012
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000012
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000012,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000012
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 101421
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 101421,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "068d381100eb030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 101421
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000011
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000011,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "cbcf6a00008e381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000011
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000011
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000011,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000011
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 101422
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 101422,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "078e381100eb030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 101422
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_appearance",
+      "key": {
+        "ID": 4618
+      },
+      "before": null,
+      "after": {
+        "ID": 4618,
+        "DisplayType": 6,
+        "ItemDisplayInfoID": 1003,
+        "DefaultIconFileDataID": 7000000,
+        "UiOrder": 461800,
+        "PlayerConditionID": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1109793673,
+      "recordID": 4618
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_modified_appearance",
+      "key": {
+        "ID": 4147
+      },
+      "before": null,
+      "after": {
+        "ID": 4147,
+        "ItemID": 70103,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 4618,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 3834752085,
+      "recordID": 4147
+    },
+    {
+      "schema": "hotfix",
+      "table": "item",
+      "key": {
+        "ID": 70129
+      },
+      "before": null,
+      "after": {
+        "ID": 70129,
+        "ClassID": 4,
+        "SubclassID": 0,
+        "Material": 7,
+        "InventoryType": 4,
+        "SheatheType": 0,
+        "SoundOverrideSubclassID": -1,
+        "IconFileDataID": 7000003,
+        "ItemGroupSoundsID": 7,
+        "ContentTuningID": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "Unknown1200": 0,
+        "CraftingQualityID": 0,
+        "ItemSquishEraID": 0,
+        "RecraftReagentCountPercentage": 0.0,
+        "OrderSource": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1344507586,
+      "recordID": 70129
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_sparse",
+      "key": {
+        "ID": 70129
+      },
+      "before": null,
+      "after": {
+        "ID": 70129,
+        "Description": "",
+        "Display3": "",
+        "Display2": "",
+        "Display1": "",
+        "Display": "Phantom Shirt",
+        "ExpansionID": 0,
+        "DmgVariance": 0.0,
+        "LimitCategory": 0,
+        "DurationInInventory": 0,
+        "QualityModifier": 0.0,
+        "BagFamily": 0,
+        "StartQuestID": 0,
+        "LanguageID": 0,
+        "ItemRange": 0.0,
+        "StatPercentageOfSocket1": 0.0,
+        "StatPercentageOfSocket2": 0.0,
+        "StatPercentageOfSocket3": 0.0,
+        "StatPercentageOfSocket4": 0.0,
+        "StatPercentageOfSocket5": 0.0,
+        "StatPercentageOfSocket6": 0.0,
+        "StatPercentageOfSocket7": 0.0,
+        "StatPercentageOfSocket8": 0.0,
+        "StatPercentageOfSocket9": 0.0,
+        "StatPercentageOfSocket10": 0.0,
+        "StatPercentEditor1": 0,
+        "StatPercentEditor2": 0,
+        "StatPercentEditor3": 0,
+        "StatPercentEditor4": 0,
+        "StatPercentEditor5": 0,
+        "StatPercentEditor6": 0,
+        "StatPercentEditor7": 0,
+        "StatPercentEditor8": 0,
+        "StatPercentEditor9": 0,
+        "StatPercentEditor10": 0,
+        "StatModifierBonusStat1": -1,
+        "StatModifierBonusStat2": -1,
+        "StatModifierBonusStat3": -1,
+        "StatModifierBonusStat4": -1,
+        "StatModifierBonusStat5": -1,
+        "StatModifierBonusStat6": -1,
+        "StatModifierBonusStat7": -1,
+        "StatModifierBonusStat8": -1,
+        "StatModifierBonusStat9": -1,
+        "StatModifierBonusStat10": -1,
+        "Stackable": 1,
+        "MaxCount": 0,
+        "MinReputation": 0,
+        "RequiredAbility": 0,
+        "AllowableRace1": -1,
+        "AllowableRace2": -1,
+        "SellPrice": 1,
+        "BuyPrice": 1,
+        "VendorStackCount": 1,
+        "PriceVariance": 1.0,
+        "PriceRandomValue": 0.9506000280380249,
+        "Flags1": 32768,
+        "Flags2": 8192,
+        "Flags3": 8388608,
+        "Flags4": 0,
+        "Flags5": 0,
+        "FactionRelated": 0,
+        "ModifiedCraftingReagentItemID": 0,
+        "ContentTuningID": 0,
+        "PlayerLevelToItemLevelCurveID": 0,
+        "ItemLevelOffsetCurveID": 0,
+        "ItemLevelOffsetItemLevel": 0,
+        "ItemSquishEraID": 0,
+        "ItemNameDescriptionID": 0,
+        "RequiredTransmogHoliday": 0,
+        "RequiredHoliday": 0,
+        "GemProperties": 0,
+        "SocketMatchEnchantmentId": 0,
+        "TotemCategoryID": 0,
+        "InstanceBound": 0,
+        "ZoneBound1": 0,
+        "ZoneBound2": 0,
+        "ItemSet": 0,
+        "LockID": 0,
+        "PageID": 0,
+        "ItemDelay": 0,
+        "MinFactionID": 0,
+        "RequiredSkillRank": 0,
+        "RequiredSkill": 0,
+        "ItemLevel": 1,
+        "AllowableClass": -1,
+        "ArtifactID": 0,
+        "SpellWeight": 0,
+        "SpellWeightCategory": 0,
+        "SocketType1": 0,
+        "SocketType2": 0,
+        "SocketType3": 0,
+        "SheatheType": 0,
+        "Material": 7,
+        "PageMaterialID": 0,
+        "Bonding": 2,
+        "DamageDamageType": 0,
+        "ContainerSlots": 0,
+        "RequiredPVPMedal": 0,
+        "RequiredPVPRank": 0,
+        "RequiredLevel": 0,
+        "InventoryType": 4,
+        "OverallQualityID": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2442913102,
+      "recordID": 70129
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2557447376,
+        "RecordId": 1004
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2557447376,
+        "RecordId": 1004,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2557447376,
+      "recordID": 1004
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000019
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000019,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "d3cf6a00008f381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000019
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000019
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000019,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "000000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000019
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000018
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000018,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "d2cf6a00008f381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000018
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000018
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000018,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "010000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000018
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 101423
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 101423,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "038f381100ec030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 101423
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000016
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000016,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "d0cf6a000090381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000016
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000016
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000016,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "000000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000016
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 440872980,
+        "RecordId": 7000015
+      },
+      "before": null,
+      "after": {
+        "TableHash": 440872980,
+        "RecordId": 7000015,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "cfcf6a000090381100"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 440872980,
+      "recordID": 7000015
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 2185268109,
+        "RecordId": 7000015
+      },
+      "before": null,
+      "after": {
+        "TableHash": 2185268109,
+        "RecordId": 7000015,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "010000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 2185268109,
+      "recordID": 7000015
+    },
+    {
+      "schema": "hotfix",
+      "table": "hotfix_blob",
+      "key": {
+        "TableHash": 4082824155,
+        "RecordId": 101424
+      },
+      "before": null,
+      "after": {
+        "TableHash": 4082824155,
+        "RecordId": 101424,
+        "locale": "enUS",
+        "Blob": {
+          "hex": "0490381100ec030000"
+        },
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4082824155,
+      "recordID": 101424
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_appearance",
+      "key": {
+        "ID": 4790
+      },
+      "before": null,
+      "after": {
+        "ID": 4790,
+        "DisplayType": 2,
+        "ItemDisplayInfoID": 1004,
+        "DefaultIconFileDataID": 7000003,
+        "UiOrder": 479000,
+        "PlayerConditionID": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1109793673,
+      "recordID": 4790
+    },
+    {
+      "schema": "hotfix",
+      "table": "item_modified_appearance",
+      "key": {
+        "ID": 4148
+      },
+      "before": null,
+      "after": {
+        "ID": 4148,
+        "ItemID": 70129,
+        "ItemAppearanceModifierID": 0,
+        "ItemAppearanceID": 4790,
+        "OrderIndex": 0,
+        "TransmogSourceTypeEnum": 5,
+        "Flags": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 3834752085,
+      "recordID": 4148
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout",
+      "key": {
+        "ID": 1000
+      },
+      "before": null,
+      "after": {
+        "ID": 1000,
+        "ChrClassID": 17,
+        "Purpose": 1,
+        "ItemContext": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 3758770171,
+      "recordID": 1000
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1000
+      },
+      "before": null,
+      "after": {
+        "ID": 1000,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70100,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1000
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1001
+      },
+      "before": null,
+      "after": {
+        "ID": 1001,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70101,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1001
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1002
+      },
+      "before": null,
+      "after": {
+        "ID": 1002,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70102,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1002
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1003
+      },
+      "before": null,
+      "after": {
+        "ID": 1003,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70103,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1003
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1004
+      },
+      "before": null,
+      "after": {
+        "ID": 1004,
+        "CharacterLoadoutID": 1000,
+        "ItemID": 70129,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1004
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout",
+      "key": {
+        "ID": 1001
+      },
+      "before": null,
+      "after": {
+        "ID": 1001,
+        "ChrClassID": 17,
+        "Purpose": 9,
+        "ItemContext": 75,
+        "RaceMask1": -1,
+        "RaceMask2": -1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 3758770171,
+      "recordID": 1001
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1005
+      },
+      "before": null,
+      "after": {
+        "ID": 1005,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70100,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1005
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1006
+      },
+      "before": null,
+      "after": {
+        "ID": 1006,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70101,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1006
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1007
+      },
+      "before": null,
+      "after": {
+        "ID": 1007,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70102,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1007
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1008
+      },
+      "before": null,
+      "after": {
+        "ID": 1008,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70103,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1008
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1009
+      },
+      "before": null,
+      "after": {
+        "ID": 1009,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 70129,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1009
+    },
+    {
+      "schema": "hotfix",
+      "table": "character_loadout_item",
+      "key": {
+        "ID": 1010
+      },
+      "before": null,
+      "after": {
+        "ID": 1010,
+        "CharacterLoadoutID": 1001,
+        "ItemID": 6948,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 1707318183,
+      "recordID": 1010
+    },
+    {
+      "schema": "hotfix",
+      "table": "skill_race_class_info",
+      "key": {
+        "ID": 1250
+      },
+      "before": {
+        "ID": 1250,
+        "SkillID": 173,
+        "ClassMask": 65536,
+        "Flags": 128,
+        "Availability": 1,
+        "MinLevel": 1,
+        "SkillTierID": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1,
+        "VerifiedBuild": 69814
+      },
+      "after": {
+        "ID": 1250,
+        "SkillID": 229,
+        "ClassMask": 65536,
+        "Flags": 128,
+        "Availability": 1,
+        "MinLevel": 1,
+        "SkillTierID": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 112059424,
+      "recordID": 1250
+    },
+    {
+      "schema": "hotfix",
+      "table": "skill_line_ability",
+      "key": {
+        "ID": 1005
+      },
+      "before": {
+        "AbilityVerb": null,
+        "AbilityAllVerb": null,
+        "ID": 1005,
+        "SkillLine": 1311,
+        "Spell": 1180,
+        "MinSkillLineRank": 1,
+        "ClassMask": 65536,
+        "SupercedesSpell": 0,
+        "AcquireMethod": 2,
+        "TrivialSkillLineRankHigh": 0,
+        "TrivialSkillLineRankLow": 0,
+        "Flags": 0,
+        "NumSkillUps": 1,
+        "UniqueBit": 0,
+        "TradeSkillCategoryID": 0,
+        "SkillupSkillLineID": 0,
+        "RaceMask1": 0,
+        "RaceMask2": 0,
+        "VerifiedBuild": 69814
+      },
+      "after": {
+        "ID": 1005,
+        "AbilityVerb": "",
+        "AbilityAllVerb": "",
+        "SkillLine": 229,
+        "Spell": 200,
+        "MinSkillLineRank": 1,
+        "ClassMask": 65536,
+        "SupercedesSpell": 0,
+        "AcquireMethod": 2,
+        "TrivialSkillLineRankHigh": 0,
+        "TrivialSkillLineRankLow": 0,
+        "Flags": 0,
+        "NumSkillUps": 1,
+        "UniqueBit": 0,
+        "TradeSkillCategoryID": 0,
+        "SkillupSkillLineID": 0,
+        "RaceMask1": 0,
+        "RaceMask2": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4282664694,
+      "recordID": 1005
+    },
+    {
+      "schema": "hotfix",
+      "table": "skill_race_class_info",
+      "key": {
+        "ID": 1253
+      },
+      "before": null,
+      "after": {
+        "ID": 1253,
+        "SkillID": 172,
+        "ClassMask": 65536,
+        "Flags": 128,
+        "Availability": 1,
+        "MinLevel": 1,
+        "SkillTierID": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 112059424,
+      "recordID": 1253
+    },
+    {
+      "schema": "hotfix",
+      "table": "skill_line_ability",
+      "key": {
+        "ID": 1009
+      },
+      "before": null,
+      "after": {
+        "ID": 1009,
+        "AbilityVerb": "",
+        "AbilityAllVerb": "",
+        "SkillLine": 172,
+        "Spell": 197,
+        "MinSkillLineRank": 1,
+        "ClassMask": 65536,
+        "SupercedesSpell": 0,
+        "AcquireMethod": 2,
+        "TrivialSkillLineRankHigh": 0,
+        "TrivialSkillLineRankLow": 0,
+        "Flags": 0,
+        "NumSkillUps": 1,
+        "UniqueBit": 0,
+        "TradeSkillCategoryID": 0,
+        "SkillupSkillLineID": 0,
+        "RaceMask1": 0,
+        "RaceMask2": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4282664694,
+      "recordID": 1009
+    },
+    {
+      "schema": "hotfix",
+      "table": "skill_race_class_info",
+      "key": {
+        "ID": 1254
+      },
+      "before": null,
+      "after": {
+        "ID": 1254,
+        "SkillID": 293,
+        "ClassMask": 65536,
+        "Flags": 128,
+        "Availability": 1,
+        "MinLevel": 1,
+        "SkillTierID": 0,
+        "RaceMask1": -1,
+        "RaceMask2": -1,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 112059424,
+      "recordID": 1254
+    },
+    {
+      "schema": "hotfix",
+      "table": "skill_line_ability",
+      "key": {
+        "ID": 1010
+      },
+      "before": null,
+      "after": {
+        "ID": 1010,
+        "AbilityVerb": "",
+        "AbilityAllVerb": "",
+        "SkillLine": 293,
+        "Spell": 750,
+        "MinSkillLineRank": 1,
+        "ClassMask": 65536,
+        "SupercedesSpell": 0,
+        "AcquireMethod": 2,
+        "TrivialSkillLineRankHigh": 0,
+        "TrivialSkillLineRankLow": 0,
+        "Flags": 0,
+        "NumSkillUps": 1,
+        "UniqueBit": 0,
+        "TradeSkillCategoryID": 0,
+        "SkillupSkillLineID": 0,
+        "RaceMask1": 0,
+        "RaceMask2": 0,
+        "VerifiedBuild": 69814
+      },
+      "tableHash": 4282664694,
+      "recordID": 1010
+    },
+    {
+      "schema": "world",
+      "table": "playercreateinfo_item",
+      "key": {
+        "race": 0,
+        "class": 17,
+        "itemid": 2092
+      },
+      "before": {
+        "race": 0,
+        "class": 17,
+        "itemid": 2092,
+        "amount": 1
+      },
+      "after": null
+    }
+  ],
+  "items": [
+    {
+      "sourceID": 484324,
+      "name": "Faded Scythe",
+      "template": 12282,
+      "inventory": 17,
+      "subclass": 6,
+      "material": 6,
+      "sheath": 2,
+      "displayType": 11,
+      "icon": "inv_weapon_shortblade_23",
+      "sections": [],
+      "itemID": 70100,
+      "displayID": 1000,
+      "appearanceID": 2563
+    },
+    {
+      "sourceID": 2000071,
+      "name": "Phantom Hauberk",
+      "template": 187692,
+      "inventory": 20,
+      "subclass": 3,
+      "material": 5,
+      "sheath": 0,
+      "displayType": 3,
+      "icon": "inv_chest_chain_05",
+      "sections": [
+        [
+          0,
+          [
+            "armuppertexture/starter_reaper_chest_au_u.blp"
+          ]
+        ],
+        [
+          3,
+          [
+            "torsouppertexture/starter_reaper_chest_tu_u.blp"
+          ]
+        ],
+        [
+          4,
+          [
+            "torsolowertexture/starter_reaper_chest_tl_u.blp"
+          ]
+        ]
+      ],
+      "itemID": 70101,
+      "displayID": 1001,
+      "appearanceID": 2830
+    },
+    {
+      "sourceID": 2000069,
+      "name": "Phantom Legplates",
+      "template": 187690,
+      "inventory": 7,
+      "subclass": 3,
+      "material": 5,
+      "sheath": 0,
+      "displayType": 5,
+      "icon": "inv_pants_01",
+      "sections": [
+        [
+          5,
+          [
+            "leguppertexture/starter_reaper_pant_lu_u.blp"
+          ]
+        ],
+        [
+          6,
+          [
+            "leglowertexture/starter_reaper_pant_ll_u.blp"
+          ]
+        ]
+      ],
+      "itemID": 70102,
+      "displayID": 1002,
+      "appearanceID": 4161
+    },
+    {
+      "sourceID": 2000070,
+      "name": "Phantom Boots",
+      "template": 187691,
+      "inventory": 8,
+      "subclass": 3,
+      "material": 5,
+      "sheath": 0,
+      "displayType": 6,
+      "icon": "inv_boots_plate_06",
+      "sections": [
+        [
+          6,
+          [
+            "leglowertexture/starter_reaper_boots_ll_u.blp"
+          ]
+        ],
+        [
+          7,
+          [
+            "foottexture/starter_reaper_boots_fo_u.blp"
+          ]
+        ]
+      ],
+      "itemID": 70103,
+      "displayID": 1003,
+      "appearanceID": 4618
+    },
+    {
+      "sourceID": 2001095,
+      "name": "Phantom Shirt",
+      "template": 6134,
+      "inventory": 4,
+      "subclass": 0,
+      "material": 7,
+      "sheath": 0,
+      "displayType": 2,
+      "icon": "inv_shirt_05",
+      "sections": [
+        [
+          3,
+          [
+            "torsouppertexture/leather_a_03red_chest_tu_m.blp",
+            "torsouppertexture/leather_a_03red_chest_tu_f.blp"
+          ]
+        ],
+        [
+          4,
+          [
+            "torsolowertexture/leather_a_03red_chest_tl_m.blp",
+            "torsolowertexture/leather_a_03red_chest_tl_f.blp"
+          ]
+        ]
+      ],
+      "itemID": 70129,
+      "displayID": 1004,
+      "appearanceID": 4790
+    }
+  ],
+  "loadouts": [
+    {
+      "id": 1000,
+      "purpose": 1,
+      "items": [
+        70100,
+        70101,
+        70102,
+        70103,
+        70129
+      ]
+    },
+    {
+      "id": 1001,
+      "purpose": 9,
+      "items": [
+        70100,
+        70101,
+        70102,
+        70103,
+        70129,
+        6948
+      ]
+    }
+  ],
+  "allocation": [
+    {
+      "tables": [
+        "Item",
+        "ItemSparse"
+      ],
+      "id": 70100
+    },
+    {
+      "tables": [
+        "ItemDisplayInfo"
+      ],
+      "id": 1000
+    },
+    {
+      "tables": [
+        "ItemAppearance"
+      ],
+      "id": 2563
+    },
+    {
+      "tables": [
+        "ItemModifiedAppearance"
+      ],
+      "id": 1320
+    },
+    {
+      "tables": [
+        "Item",
+        "ItemSparse"
+      ],
+      "id": 70101
+    },
+    {
+      "tables": [
+        "ItemDisplayInfo"
+      ],
+      "id": 1001
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 91072
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 91073
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 101418
+    },
+    {
+      "tables": [
+        "ItemAppearance"
+      ],
+      "id": 2830
+    },
+    {
+      "tables": [
+        "ItemModifiedAppearance"
+      ],
+      "id": 1522
+    },
+    {
+      "tables": [
+        "Item",
+        "ItemSparse"
+      ],
+      "id": 70102
+    },
+    {
+      "tables": [
+        "ItemDisplayInfo"
+      ],
+      "id": 1002
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 101419
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 101420
+    },
+    {
+      "tables": [
+        "ItemAppearance"
+      ],
+      "id": 4161
+    },
+    {
+      "tables": [
+        "ItemModifiedAppearance"
+      ],
+      "id": 4146
+    },
+    {
+      "tables": [
+        "Item",
+        "ItemSparse"
+      ],
+      "id": 70103
+    },
+    {
+      "tables": [
+        "ItemDisplayInfo"
+      ],
+      "id": 1003
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 101421
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 101422
+    },
+    {
+      "tables": [
+        "ItemAppearance"
+      ],
+      "id": 4618
+    },
+    {
+      "tables": [
+        "ItemModifiedAppearance"
+      ],
+      "id": 4147
+    },
+    {
+      "tables": [
+        "Item",
+        "ItemSparse"
+      ],
+      "id": 70129
+    },
+    {
+      "tables": [
+        "ItemDisplayInfo"
+      ],
+      "id": 1004
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 101423
+    },
+    {
+      "tables": [
+        "ItemDisplayInfoMaterialRes"
+      ],
+      "id": 101424
+    },
+    {
+      "tables": [
+        "ItemAppearance"
+      ],
+      "id": 4790
+    },
+    {
+      "tables": [
+        "ItemModifiedAppearance"
+      ],
+      "id": 4148
+    },
+    {
+      "tables": [
+        "CharacterLoadout"
+      ],
+      "id": 1000
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1000
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1001
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1002
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1003
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1004
+    },
+    {
+      "tables": [
+        "CharacterLoadout"
+      ],
+      "id": 1001
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1005
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1006
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1007
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1008
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1009
+    },
+    {
+      "tables": [
+        "CharacterLoadoutItem"
+      ],
+      "id": 1010
+    },
+    {
+      "tables": [
+        "SkillRaceClassInfo"
+      ],
+      "id": 1253
+    },
+    {
+      "tables": [
+        "SkillLineAbility"
+      ],
+      "id": 1009
+    },
+    {
+      "tables": [
+        "SkillRaceClassInfo"
+      ],
+      "id": 1254
+    },
+    {
+      "tables": [
+        "SkillLineAbility"
+      ],
+      "id": 1010
+    }
+  ],
+  "resourceIDs": {
+    "model": 89663,
+    "materials": [
+      1128584,
+      1128585,
+      1128586,
+      1128587,
+      1128588,
+      1128589,
+      1128590,
+      1128591,
+      1128592
+    ]
+  },
+  "races": [
+    1,
+    5,
+    8,
+    10,
+    11
+  ],
+  "nativeTemplates": [
+    12282,
+    187692,
+    187690,
+    187691,
+    6134
+  ],
+  "nativeRenderingTested": false,
+  "gameplayAccepted": false
+}

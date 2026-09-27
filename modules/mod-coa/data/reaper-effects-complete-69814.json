@@ -1,0 +1,4273 @@
+{
+  "format": 1,
+  "build": 69814,
+  "records": [
+    {
+      "table": "SpellVisualEffectName",
+      "tableHash": 48336690,
+      "layoutHash": 575000294,
+      "id": 65000,
+      "source": 100035,
+      "fields": {
+        "ModelFileDataID": 2000000039,
+        "BaseMissileSpeed": 0,
+        "Scale": 1.0,
+        "MinAllowedScale": 0.009999999776482582,
+        "MaxAllowedScale": 1.0,
+        "Alpha": 1,
+        "Flags": 0,
+        "TextureFileDataID": 0,
+        "EffectRadius": 1.0,
+        "Type": 0,
+        "GenericID": 0,
+        "RibbonQualityID": 0,
+        "DissolveEffectID": 0,
+        "ModelPosition": -1,
+        "Unknown901": 0,
+        "Unknown1100": 0,
+        "ID": 65000
+      },
+      "blob": "27943577000000000000803f0ad7233c0000803f0000803f00000000000000000000803f00000000000000000000000000000000ffffffff000000",
+      "storage": "spell_visual_effect_name"
+    },
+    {
+      "table": "SpellVisualEffectName",
+      "tableHash": 48336690,
+      "layoutHash": 575000294,
+      "id": 64999,
+      "source": 100133,
+      "fields": {
+        "ModelFileDataID": 2000000049,
+        "BaseMissileSpeed": 0,
+        "Scale": 0.699999988079071,
+        "MinAllowedScale": 0.009999999776482582,
+        "MaxAllowedScale": 0.699999988079071,
+        "Alpha": 1,
+        "Flags": 0,
+        "TextureFileDataID": 0,
+        "EffectRadius": 0.5,
+        "Type": 0,
+        "GenericID": 0,
+        "RibbonQualityID": 0,
+        "DissolveEffectID": 0,
+        "ModelPosition": -1,
+        "Unknown901": 0,
+        "Unknown1100": 0,
+        "ID": 64999
+      },
+      "blob": "31943577000000003333333f0ad7233c3333333f0000803f00000000000000000000003f00000000000000000000000000000000ffffffff000000",
+      "storage": "spell_visual_effect_name"
+    },
+    {
+      "table": "SpellVisualEffectName",
+      "tableHash": 48336690,
+      "layoutHash": 575000294,
+      "id": 64998,
+      "source": 138855,
+      "fields": {
+        "ModelFileDataID": 2000000034,
+        "BaseMissileSpeed": 0,
+        "Scale": 0.699999988079071,
+        "MinAllowedScale": 1.0,
+        "MaxAllowedScale": 1.0,
+        "Alpha": 1,
+        "Flags": 0,
+        "TextureFileDataID": 0,
+        "EffectRadius": 0.0,
+        "Type": 0,
+        "GenericID": 0,
+        "RibbonQualityID": 0,
+        "DissolveEffectID": 0,
+        "ModelPosition": -1,
+        "Unknown901": 0,
+        "Unknown1100": 0,
+        "ID": 64998
+      },
+      "blob": "22943577000000003333333f0000803f0000803f0000803f00000000000000000000000000000000000000000000000000000000ffffffff000000",
+      "storage": "spell_visual_effect_name"
+    },
+    {
+      "table": "SpellVisualEffectName",
+      "tableHash": 48336690,
+      "layoutHash": 575000294,
+      "id": 64997,
+      "source": 143530,
+      "fields": {
+        "ModelFileDataID": 2000000065,
+        "BaseMissileSpeed": 0,
+        "Scale": 1.0,
+        "MinAllowedScale": 1.0,
+        "MaxAllowedScale": 1.0,
+        "Alpha": 1,
+        "Flags": 0,
+        "TextureFileDataID": 0,
+        "EffectRadius": 0.0,
+        "Type": 0,
+        "GenericID": 0,
+        "RibbonQualityID": 0,
+        "DissolveEffectID": 0,
+        "ModelPosition": -1,
+        "Unknown901": 0,
+        "Unknown1100": 0,
+        "ID": 64997
+      },
+      "blob": "41943577000000000000803f0000803f0000803f0000803f00000000000000000000000000000000000000000000000000000000ffffffff000000",
+      "storage": "spell_visual_effect_name"
+    },
+    {
+      "table": "SpellVisualEffectName",
+      "tableHash": 48336690,
+      "layoutHash": 575000294,
+      "id": 64996,
+      "source": 253039,
+      "fields": {
+        "ModelFileDataID": 2000000037,
+        "BaseMissileSpeed": 0,
+        "Scale": 1.0,
+        "MinAllowedScale": 0.009999999776482582,
+        "MaxAllowedScale": 100.0,
+        "Alpha": 1,
+        "Flags": 0,
+        "TextureFileDataID": 0,
+        "EffectRadius": 1.0,
+        "Type": 0,
+        "GenericID": 0,
+        "RibbonQualityID": 0,
+        "DissolveEffectID": 0,
+        "ModelPosition": -1,
+        "Unknown901": 0,
+        "Unknown1100": 0,
+        "ID": 64996
+      },
+      "blob": "25943577000000000000803f0ad7233c0000c8420000803f00000000000000000000803f00000000000000000000000000000000ffffffff000000",
+      "storage": "spell_visual_effect_name"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370138,
+      "source": 15109,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.699999988079071,
+        "Flags": 0,
+        "MinDistance": 8.0,
+        "DistanceCutoff": 45.0,
+        "EAXDef": 0,
+        "SoundKitAdvancedID": 0,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370138
+      },
+      "blob": "010000003333333f000000000000004100003442000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703790,
+      "source": "15109/0",
+      "fields": {
+        "SoundKitID": 370138,
+        "FileDataID": 2000000001,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703790
+      },
+      "blob": "daa5050001943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703791,
+      "source": "15109/1",
+      "fields": {
+        "SoundKitID": 370138,
+        "FileDataID": 2000000002,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703791
+      },
+      "blob": "daa5050002943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703792,
+      "source": "15109/2",
+      "fields": {
+        "SoundKitID": 370138,
+        "FileDataID": 2000000003,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703792
+      },
+      "blob": "daa5050003943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703793,
+      "source": "15109/3",
+      "fields": {
+        "SoundKitID": 370138,
+        "FileDataID": 2000000004,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703793
+      },
+      "blob": "daa5050004943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitAdvanced",
+      "tableHash": 3232102598,
+      "layoutHash": 4133337104,
+      "id": 333708,
+      "source": "sound 268463",
+      "fields": {
+        "SoundKitID": 370139,
+        "InnerRadius2D": 4.0,
+        "OuterRadius2D": 8.0,
+        "TimeA": 0,
+        "TimeB": 0,
+        "TimeC": 0,
+        "TimeD": 0,
+        "RandomOffsetRange": 0,
+        "Usage": 2,
+        "TimeIntervalMin": 0,
+        "TimeIntervalMax": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "VolumeSliderCategory": 0,
+        "DuckToSFX": 1.0,
+        "DuckToMusic": 1.0,
+        "DuckToAmbience": 1.0,
+        "DuckToDialog": 1.0,
+        "DuckToSuppressors": 1.0,
+        "DuckToCinematicSFX": 1.0,
+        "DuckToCinematicMusic": 1.0,
+        "Field_11_2_0_61476_021": 1.0,
+        "InnerRadiusOfInfluence": 0.0,
+        "OuterRadiusOfInfluence": 0.0,
+        "TimeToDuck": 0,
+        "TimeToUnduck": 0,
+        "InsideAngle": 360.0,
+        "OutsideAngle": 360.0,
+        "OutsideVolume": 0.0,
+        "MinRandomPosOffset": 0,
+        "MaxRandomPosOffset": 0,
+        "MsOffset": 0,
+        "TimeCooldownMin": 0,
+        "TimeCooldownMax": 0,
+        "MaxInstancesBehavior": 0,
+        "VolumeControlType": 0,
+        "VolumeFadeInTimeMin": -1,
+        "VolumeFadeInTimeMax": -1,
+        "VolumeFadeInCurveID": 3159,
+        "VolumeFadeOutTimeMin": -1,
+        "VolumeFadeOutTimeMax": -1,
+        "VolumeFadeOutCurveID": 3160,
+        "ChanceToPlay": 1.0,
+        "RolloffType": 0,
+        "RolloffParam0": 0.0,
+        "Field_8_2_0_30080_045": 0.0,
+        "Field_8_2_0_30080_046": 0.0,
+        "Field_8_2_0_30080_047": 0,
+        "Field_8_2_0_30080_048": 0,
+        "Field_8_3_0_32044_049": 0.0,
+        "Field_8_3_0_32044_050": 0.0,
+        "Field_8_3_0_32044_051": 0.0,
+        "Field_8_3_0_32044_052": 0.0,
+        "Field_8_3_0_32044_053": 0.0,
+        "Field_8_3_0_32044_054": 0.0,
+        "Field_9_1_0_38312_055": 20.0,
+        "Field_9_1_0_38312_056": 20000.0,
+        "ID": 333708
+      },
+      "blob": "dba50500000080400000004100000000000000000000000000000000000000000200000000000000000000000000000000000000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f000000000000000000000000000000000000b4430000b443000000000000000000000000000000000000000000ffffffffffffffff570c0000ffffffffffffffff580c00000000803f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a04100409c46",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370139,
+      "source": 268463,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.20000000298023224,
+        "Flags": 0,
+        "MinDistance": 6.0,
+        "DistanceCutoff": 32.0,
+        "EAXDef": 2,
+        "SoundKitAdvancedID": 333708,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370139
+      },
+      "blob": "01000000cdcc4c3e000000000000c04000000042028c17050000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703794,
+      "source": "268463/0",
+      "fields": {
+        "SoundKitID": 370139,
+        "FileDataID": 2000000014,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703794
+      },
+      "blob": "dba505000e943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703795,
+      "source": "268463/1",
+      "fields": {
+        "SoundKitID": 370139,
+        "FileDataID": 2000000015,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703795
+      },
+      "blob": "dba505000f943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703796,
+      "source": "268463/2",
+      "fields": {
+        "SoundKitID": 370139,
+        "FileDataID": 2000000016,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703796
+      },
+      "blob": "dba5050010943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703797,
+      "source": "268463/3",
+      "fields": {
+        "SoundKitID": 370139,
+        "FileDataID": 2000000017,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703797
+      },
+      "blob": "dba5050011943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703798,
+      "source": "268463/4",
+      "fields": {
+        "SoundKitID": 370139,
+        "FileDataID": 2000000018,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703798
+      },
+      "blob": "dba5050012943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370140,
+      "source": 304301,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.8999999761581421,
+        "Flags": 512,
+        "MinDistance": 8.0,
+        "DistanceCutoff": 45.0,
+        "EAXDef": 2,
+        "SoundKitAdvancedID": 0,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370140
+      },
+      "blob": "010000006666663f000200000000004100003442020000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703799,
+      "source": "304301/0",
+      "fields": {
+        "SoundKitID": 370140,
+        "FileDataID": 2000000005,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703799
+      },
+      "blob": "dca5050005943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitAdvanced",
+      "tableHash": 3232102598,
+      "layoutHash": 4133337104,
+      "id": 333709,
+      "source": "sound 309465",
+      "fields": {
+        "SoundKitID": 370141,
+        "InnerRadius2D": 2.0,
+        "OuterRadius2D": 4.0,
+        "TimeA": 0,
+        "TimeB": 0,
+        "TimeC": 0,
+        "TimeD": 0,
+        "RandomOffsetRange": 0,
+        "Usage": 2,
+        "TimeIntervalMin": 0,
+        "TimeIntervalMax": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "VolumeSliderCategory": 0,
+        "DuckToSFX": 1.0,
+        "DuckToMusic": 1.0,
+        "DuckToAmbience": 1.0,
+        "DuckToDialog": 1.0,
+        "DuckToSuppressors": 1.0,
+        "DuckToCinematicSFX": 1.0,
+        "DuckToCinematicMusic": 1.0,
+        "Field_11_2_0_61476_021": 1.0,
+        "InnerRadiusOfInfluence": 0.0,
+        "OuterRadiusOfInfluence": 0.0,
+        "TimeToDuck": 0,
+        "TimeToUnduck": 0,
+        "InsideAngle": 360.0,
+        "OutsideAngle": 360.0,
+        "OutsideVolume": 0.0,
+        "MinRandomPosOffset": 0,
+        "MaxRandomPosOffset": 0,
+        "MsOffset": 0,
+        "TimeCooldownMin": 0,
+        "TimeCooldownMax": 0,
+        "MaxInstancesBehavior": 0,
+        "VolumeControlType": 0,
+        "VolumeFadeInTimeMin": -1,
+        "VolumeFadeInTimeMax": -1,
+        "VolumeFadeInCurveID": 0,
+        "VolumeFadeOutTimeMin": -1,
+        "VolumeFadeOutTimeMax": -1,
+        "VolumeFadeOutCurveID": 0,
+        "ChanceToPlay": 1.0,
+        "RolloffType": 0,
+        "RolloffParam0": 0.0,
+        "Field_8_2_0_30080_045": 0.0,
+        "Field_8_2_0_30080_046": 0.0,
+        "Field_8_2_0_30080_047": 0,
+        "Field_8_2_0_30080_048": 0,
+        "Field_8_3_0_32044_049": 0.0,
+        "Field_8_3_0_32044_050": 0.0,
+        "Field_8_3_0_32044_051": 0.0,
+        "Field_8_3_0_32044_052": 0.0,
+        "Field_8_3_0_32044_053": 0.0,
+        "Field_8_3_0_32044_054": 0.0,
+        "Field_9_1_0_38312_055": 20.0,
+        "Field_9_1_0_38312_056": 20000.0,
+        "ID": 333709
+      },
+      "blob": "dda50500000000400000804000000000000000000000000000000000000000000200000000000000000000000000000000000000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f000000000000000000000000000000000000b4430000b443000000000000000000000000000000000000000000ffffffffffffffff00000000ffffffffffffffff000000000000803f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a04100409c46",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370141,
+      "source": 309465,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.6499999761581421,
+        "Flags": 0,
+        "MinDistance": 8.0,
+        "DistanceCutoff": 45.0,
+        "EAXDef": 0,
+        "SoundKitAdvancedID": 333709,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370141
+      },
+      "blob": "010000006666263f000000000000004100003442008d17050000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703800,
+      "source": "309465/0",
+      "fields": {
+        "SoundKitID": 370141,
+        "FileDataID": 2000000025,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703800
+      },
+      "blob": "dda5050019943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703801,
+      "source": "309465/1",
+      "fields": {
+        "SoundKitID": 370141,
+        "FileDataID": 2000000024,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703801
+      },
+      "blob": "dda5050018943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703802,
+      "source": "309465/2",
+      "fields": {
+        "SoundKitID": 370141,
+        "FileDataID": 2000000026,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703802
+      },
+      "blob": "dda505001a943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703803,
+      "source": "309465/3",
+      "fields": {
+        "SoundKitID": 370141,
+        "FileDataID": 2000000023,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703803
+      },
+      "blob": "dda5050017943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703804,
+      "source": "309465/4",
+      "fields": {
+        "SoundKitID": 370141,
+        "FileDataID": 2000000022,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703804
+      },
+      "blob": "dda5050016943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitAdvanced",
+      "tableHash": 3232102598,
+      "layoutHash": 4133337104,
+      "id": 333710,
+      "source": "sound 309592",
+      "fields": {
+        "SoundKitID": 370142,
+        "InnerRadius2D": 5.0,
+        "OuterRadius2D": 8.0,
+        "TimeA": 0,
+        "TimeB": 0,
+        "TimeC": 0,
+        "TimeD": 0,
+        "RandomOffsetRange": 0,
+        "Usage": 2,
+        "TimeIntervalMin": 0,
+        "TimeIntervalMax": 0,
+        "DelayMin": 100,
+        "DelayMax": 100,
+        "VolumeSliderCategory": 0,
+        "DuckToSFX": 1.0,
+        "DuckToMusic": 1.0,
+        "DuckToAmbience": 1.0,
+        "DuckToDialog": 1.0,
+        "DuckToSuppressors": 1.0,
+        "DuckToCinematicSFX": 1.0,
+        "DuckToCinematicMusic": 1.0,
+        "Field_11_2_0_61476_021": 1.0,
+        "InnerRadiusOfInfluence": 0.0,
+        "OuterRadiusOfInfluence": 0.0,
+        "TimeToDuck": 0,
+        "TimeToUnduck": 0,
+        "InsideAngle": 360.0,
+        "OutsideAngle": 360.0,
+        "OutsideVolume": 0.0,
+        "MinRandomPosOffset": 0,
+        "MaxRandomPosOffset": 0,
+        "MsOffset": 0,
+        "TimeCooldownMin": 0,
+        "TimeCooldownMax": 0,
+        "MaxInstancesBehavior": 0,
+        "VolumeControlType": 1,
+        "VolumeFadeInTimeMin": -1,
+        "VolumeFadeInTimeMax": -1,
+        "VolumeFadeInCurveID": 3159,
+        "VolumeFadeOutTimeMin": -1,
+        "VolumeFadeOutTimeMax": -1,
+        "VolumeFadeOutCurveID": 3160,
+        "ChanceToPlay": 1.0,
+        "RolloffType": 2,
+        "RolloffParam0": 1.0,
+        "Field_8_2_0_30080_045": 0.0,
+        "Field_8_2_0_30080_046": 0.0,
+        "Field_8_2_0_30080_047": 0,
+        "Field_8_2_0_30080_048": 0,
+        "Field_8_3_0_32044_049": 0.0,
+        "Field_8_3_0_32044_050": 0.0,
+        "Field_8_3_0_32044_051": 0.0,
+        "Field_8_3_0_32044_052": 0.0,
+        "Field_8_3_0_32044_053": 0.0,
+        "Field_8_3_0_32044_054": 0.0,
+        "Field_9_1_0_38312_055": 20.0,
+        "Field_9_1_0_38312_056": 20000.0,
+        "ID": 333710
+      },
+      "blob": "dea505000000a0400000004100000000000000000000000000000000000000000200000000000000006400000064000000000000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f000000000000000000000000000000000000b4430000b443000000000000000000000000000000000000000001ffffffffffffffff570c0000ffffffffffffffff580c00000000803f020000000000803f000000000000000000000000000000000000000000000000000000000000000000000000000000000000a04100409c46",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370142,
+      "source": 309592,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.4000000059604645,
+        "Flags": 64,
+        "MinDistance": 5.0,
+        "DistanceCutoff": 25.0,
+        "EAXDef": 0,
+        "SoundKitAdvancedID": 333710,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370142
+      },
+      "blob": "01000000cdcccc3e400000000000a0400000c841008e17050000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703805,
+      "source": "309592/0",
+      "fields": {
+        "SoundKitID": 370142,
+        "FileDataID": 2000000009,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703805
+      },
+      "blob": "dea5050009943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703806,
+      "source": "309592/1",
+      "fields": {
+        "SoundKitID": 370142,
+        "FileDataID": 2000000010,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703806
+      },
+      "blob": "dea505000a943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703807,
+      "source": "309592/2",
+      "fields": {
+        "SoundKitID": 370142,
+        "FileDataID": 2000000011,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703807
+      },
+      "blob": "dea505000b943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703808,
+      "source": "309592/3",
+      "fields": {
+        "SoundKitID": 370142,
+        "FileDataID": 2000000012,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703808
+      },
+      "blob": "dea505000c943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703809,
+      "source": "309592/4",
+      "fields": {
+        "SoundKitID": 370142,
+        "FileDataID": 2000000013,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703809
+      },
+      "blob": "dea505000d943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitAdvanced",
+      "tableHash": 3232102598,
+      "layoutHash": 4133337104,
+      "id": 333711,
+      "source": "sound 309593",
+      "fields": {
+        "SoundKitID": 370143,
+        "InnerRadius2D": 5.0,
+        "OuterRadius2D": 8.0,
+        "TimeA": 0,
+        "TimeB": 0,
+        "TimeC": 0,
+        "TimeD": 0,
+        "RandomOffsetRange": 0,
+        "Usage": 2,
+        "TimeIntervalMin": 0,
+        "TimeIntervalMax": 0,
+        "DelayMin": 100,
+        "DelayMax": 100,
+        "VolumeSliderCategory": 0,
+        "DuckToSFX": 1.0,
+        "DuckToMusic": 1.0,
+        "DuckToAmbience": 1.0,
+        "DuckToDialog": 1.0,
+        "DuckToSuppressors": 1.0,
+        "DuckToCinematicSFX": 1.0,
+        "DuckToCinematicMusic": 1.0,
+        "Field_11_2_0_61476_021": 1.0,
+        "InnerRadiusOfInfluence": 0.0,
+        "OuterRadiusOfInfluence": 0.0,
+        "TimeToDuck": 0,
+        "TimeToUnduck": 0,
+        "InsideAngle": 360.0,
+        "OutsideAngle": 360.0,
+        "OutsideVolume": 0.0,
+        "MinRandomPosOffset": 0,
+        "MaxRandomPosOffset": 0,
+        "MsOffset": 0,
+        "TimeCooldownMin": 0,
+        "TimeCooldownMax": 0,
+        "MaxInstancesBehavior": 0,
+        "VolumeControlType": 1,
+        "VolumeFadeInTimeMin": -1,
+        "VolumeFadeInTimeMax": -1,
+        "VolumeFadeInCurveID": 3159,
+        "VolumeFadeOutTimeMin": -1,
+        "VolumeFadeOutTimeMax": -1,
+        "VolumeFadeOutCurveID": 3160,
+        "ChanceToPlay": 1.0,
+        "RolloffType": 2,
+        "RolloffParam0": 1.0,
+        "Field_8_2_0_30080_045": 0.0,
+        "Field_8_2_0_30080_046": 0.0,
+        "Field_8_2_0_30080_047": 0,
+        "Field_8_2_0_30080_048": 0,
+        "Field_8_3_0_32044_049": 0.0,
+        "Field_8_3_0_32044_050": 0.0,
+        "Field_8_3_0_32044_051": 0.0,
+        "Field_8_3_0_32044_052": 0.0,
+        "Field_8_3_0_32044_053": 0.0,
+        "Field_8_3_0_32044_054": 0.0,
+        "Field_9_1_0_38312_055": 20.0,
+        "Field_9_1_0_38312_056": 20000.0,
+        "ID": 333711
+      },
+      "blob": "dfa505000000a0400000004100000000000000000000000000000000000000000200000000000000006400000064000000000000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f000000000000000000000000000000000000b4430000b443000000000000000000000000000000000000000001ffffffffffffffff570c0000ffffffffffffffff580c00000000803f020000000000803f000000000000000000000000000000000000000000000000000000000000000000000000000000000000a04100409c46",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370143,
+      "source": 309593,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.699999988079071,
+        "Flags": 64,
+        "MinDistance": 5.0,
+        "DistanceCutoff": 25.0,
+        "EAXDef": 0,
+        "SoundKitAdvancedID": 333711,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370143
+      },
+      "blob": "010000003333333f400000000000a0400000c841008f17050000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703810,
+      "source": "309593/0",
+      "fields": {
+        "SoundKitID": 370143,
+        "FileDataID": 2000000009,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703810
+      },
+      "blob": "dfa5050009943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703811,
+      "source": "309593/1",
+      "fields": {
+        "SoundKitID": 370143,
+        "FileDataID": 2000000010,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703811
+      },
+      "blob": "dfa505000a943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703812,
+      "source": "309593/2",
+      "fields": {
+        "SoundKitID": 370143,
+        "FileDataID": 2000000011,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703812
+      },
+      "blob": "dfa505000b943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703813,
+      "source": "309593/3",
+      "fields": {
+        "SoundKitID": 370143,
+        "FileDataID": 2000000012,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703813
+      },
+      "blob": "dfa505000c943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703814,
+      "source": "309593/4",
+      "fields": {
+        "SoundKitID": 370143,
+        "FileDataID": 2000000013,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703814
+      },
+      "blob": "dfa505000d943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitAdvanced",
+      "tableHash": 3232102598,
+      "layoutHash": 4133337104,
+      "id": 333712,
+      "source": "sound 313845",
+      "fields": {
+        "SoundKitID": 370144,
+        "InnerRadius2D": 2.0,
+        "OuterRadius2D": 5.0,
+        "TimeA": 0,
+        "TimeB": 0,
+        "TimeC": 0,
+        "TimeD": 0,
+        "RandomOffsetRange": 0,
+        "Usage": 2,
+        "TimeIntervalMin": 0,
+        "TimeIntervalMax": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "VolumeSliderCategory": 0,
+        "DuckToSFX": 1.0,
+        "DuckToMusic": 1.0,
+        "DuckToAmbience": 1.0,
+        "DuckToDialog": 1.0,
+        "DuckToSuppressors": 1.0,
+        "DuckToCinematicSFX": 1.0,
+        "DuckToCinematicMusic": 1.0,
+        "Field_11_2_0_61476_021": 1.0,
+        "InnerRadiusOfInfluence": 0.0,
+        "OuterRadiusOfInfluence": 0.0,
+        "TimeToDuck": 0,
+        "TimeToUnduck": 0,
+        "InsideAngle": 360.0,
+        "OutsideAngle": 360.0,
+        "OutsideVolume": 0.0,
+        "MinRandomPosOffset": 0,
+        "MaxRandomPosOffset": 0,
+        "MsOffset": 0,
+        "TimeCooldownMin": 0,
+        "TimeCooldownMax": 0,
+        "MaxInstancesBehavior": 0,
+        "VolumeControlType": 0,
+        "VolumeFadeInTimeMin": -1,
+        "VolumeFadeInTimeMax": -1,
+        "VolumeFadeInCurveID": 0,
+        "VolumeFadeOutTimeMin": -1,
+        "VolumeFadeOutTimeMax": -1,
+        "VolumeFadeOutCurveID": 0,
+        "ChanceToPlay": 1.0,
+        "RolloffType": 0,
+        "RolloffParam0": 0.0,
+        "Field_8_2_0_30080_045": 0.0,
+        "Field_8_2_0_30080_046": 0.0,
+        "Field_8_2_0_30080_047": 0,
+        "Field_8_2_0_30080_048": 0,
+        "Field_8_3_0_32044_049": 0.0,
+        "Field_8_3_0_32044_050": 0.0,
+        "Field_8_3_0_32044_051": 0.0,
+        "Field_8_3_0_32044_052": 0.0,
+        "Field_8_3_0_32044_053": 0.0,
+        "Field_8_3_0_32044_054": 0.0,
+        "Field_9_1_0_38312_055": 20.0,
+        "Field_9_1_0_38312_056": 20000.0,
+        "ID": 333712
+      },
+      "blob": "e0a50500000000400000a04000000000000000000000000000000000000000000200000000000000000000000000000000000000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f000000000000000000000000000000000000b4430000b443000000000000000000000000000000000000000000ffffffffffffffff00000000ffffffffffffffff000000000000803f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a04100409c46",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370144,
+      "source": 313845,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.550000011920929,
+        "Flags": 0,
+        "MinDistance": 2.0,
+        "DistanceCutoff": 45.0,
+        "EAXDef": 0,
+        "SoundKitAdvancedID": 333712,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370144
+      },
+      "blob": "01000000cdcc0c3f000000000000004000003442009017050000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703815,
+      "source": "313845/0",
+      "fields": {
+        "SoundKitID": 370144,
+        "FileDataID": 2000000019,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703815
+      },
+      "blob": "e0a5050013943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703816,
+      "source": "313845/1",
+      "fields": {
+        "SoundKitID": 370144,
+        "FileDataID": 2000000020,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703816
+      },
+      "blob": "e0a5050014943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703817,
+      "source": "313845/2",
+      "fields": {
+        "SoundKitID": 370144,
+        "FileDataID": 2000000021,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703817
+      },
+      "blob": "e0a5050015943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKit",
+      "tableHash": 908293937,
+      "layoutHash": 2818245713,
+      "id": 370145,
+      "source": 314976,
+      "fields": {
+        "SoundType": 1,
+        "VolumeFloat": 0.800000011920929,
+        "Flags": 0,
+        "MinDistance": 4.0,
+        "DistanceCutoff": 20.0,
+        "EAXDef": 0,
+        "SoundKitAdvancedID": 0,
+        "VolumeVariationPlus": 0,
+        "VolumeVariationMinus": 0,
+        "PitchVariationPlus": 0,
+        "PitchVariationMinus": 0,
+        "DialogType": 0,
+        "PitchAdjust": 0,
+        "BusOverwriteID": 0,
+        "MaxInstances": 0,
+        "SoundMixGroupID": 0,
+        "ID": 370145
+      },
+      "blob": "01000000cdcc4c3f00000000000080400000a041000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "sound_kit"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703818,
+      "source": "314976/0",
+      "fields": {
+        "SoundKitID": 370145,
+        "FileDataID": 2000000006,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703818
+      },
+      "blob": "e1a5050006943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703819,
+      "source": "314976/1",
+      "fields": {
+        "SoundKitID": 370145,
+        "FileDataID": 2000000007,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703819
+      },
+      "blob": "e1a5050007943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SoundKitEntry",
+      "tableHash": 3266400455,
+      "layoutHash": 2407726973,
+      "id": 1703820,
+      "source": "314976/2",
+      "fields": {
+        "SoundKitID": 370145,
+        "FileDataID": 2000000008,
+        "Frequency": 1,
+        "Volume": 1,
+        "PlayerConditionID": 0,
+        "ID": 1703820
+      },
+      "blob": "e1a5050008943577010000803f00000000",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellMissileMotion",
+      "tableHash": 930182777,
+      "layoutHash": 33598210,
+      "id": 65000,
+      "source": 9999,
+      "fields": {
+        "Name": "Scarab Right Lane Arc",
+        "ScriptBody": "local p = progress\r\n\r\nlocal lane = -1\r\nlocal laneWidth = math.max(1.2, startDistance * 0.09)\r\nlocal snakeWidth = math.max(0.35, startDistance * 0.025)\r\nlocal snakeArc = math.max(0.32, startDistance * 0.032)\r\nlocal snakeWaves = 1.35\r\n\r\nlocal startDrop = math.max(0.5544, startDistance * 0.04032)\r\nlocal chestLift = math.max(0.30, startDistance * 0.022)\r\nlocal endLower = math.max(1.15, startDistance * 0.085)\r\nlocal chestOffset = 0.35\r\n\r\nlocal curve = sin(p * 180)\r\n\r\nlocal rise = 0\r\nif (p > 0.60) then\r\n  rise = (p - 0.60) / 0.40\r\n  rise = rise * rise\r\nend\r\n\r\nlocal lateArcP = 0\r\nif (p > 0.20) then\r\n  lateArcP = (p - 0.20) / 0.80\r\nend\r\n\r\nlocal lateArc = (lateArcP * lateArcP) * (1 - lateArcP) * 4\r\nlocal dip = -startDrop * ((1 - p) * (1 - p))\r\nlocal terminalDrop = endLower * (p * p * p)\r\n\r\nlocal snake = sin(p * 360 * snakeWaves)\r\ntransRight = (lane * laneWidth * curve) + (lane * snakeWidth * snake * curve)\r\ntransUp = dip + (lateArc * snakeArc) + (rise * chestLift) - terminalDrop - (chestOffset * p * p)\r\n\r\nspeedScalar = 1.0\r\nfaceImpactPos = 1",
+        "Flags": 0,
+        "MissileCount": 1,
+        "ID": 65000
+      },
+      "blob": "536361726162205269676874204c616e6520417263006c6f63616c2070203d2070726f67726573730d0a0d0a6c6f63616c206c616e65203d202d310d0a6c6f63616c206c616e655769647468203d206d6174682e6d617828312e322c20737461727444697374616e6365202a20302e3039290d0a6c6f63616c20736e616b655769647468203d206d6174682e6d617828302e33352c20737461727444697374616e6365202a20302e303235290d0a6c6f63616c20736e616b65417263203d206d6174682e6d617828302e33322c20737461727444697374616e6365202a20302e303332290d0a6c6f63616c20736e616b655761766573203d20312e33350d0a0d0a6c6f63616c20737461727444726f70203d206d6174682e6d617828302e353534342c20737461727444697374616e6365202a20302e3034303332290d0a6c6f63616c2063686573744c696674203d206d6174682e6d617828302e33302c20737461727444697374616e6365202a20302e303232290d0a6c6f63616c20656e644c6f776572203d206d6174682e6d617828312e31352c20737461727444697374616e6365202a20302e303835290d0a6c6f63616c2063686573744f6666736574203d20302e33350d0a0d0a6c6f63616c206375727665203d2073696e2870202a20313830290d0a0d0a6c6f63616c2072697365203d20300d0a6966202870203e20302e363029207468656e0d0a202072697365203d202870202d20302e363029202f20302e34300d0a202072697365203d2072697365202a20726973650d0a656e640d0a0d0a6c6f63616c206c61746541726350203d20300d0a6966202870203e20302e323029207468656e0d0a20206c61746541726350203d202870202d20302e323029202f20302e38300d0a656e640d0a0d0a6c6f63616c206c617465417263203d20286c61746541726350202a206c6174654172635029202a202831202d206c6174654172635029202a20340d0a6c6f63616c20646970203d202d737461727444726f70202a20282831202d207029202a202831202d207029290d0a6c6f63616c207465726d696e616c44726f70203d20656e644c6f776572202a202870202a2070202a2070290d0a0d0a6c6f63616c20736e616b65203d2073696e2870202a20333630202a20736e616b655761766573290d0a7472616e735269676874203d20286c616e65202a206c616e655769647468202a20637572766529202b20286c616e65202a20736e616b655769647468202a20736e616b65202a206375727665290d0a7472616e735570203d20646970202b20286c617465417263202a20736e616b6541726329202b202872697365202a2063686573744c69667429202d207465726d696e616c44726f70202d202863686573744f6666736574202a2070202a2070290d0a0d0a73706565645363616c6172203d20312e300d0a66616365496d70616374506f73203d2031000001",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282233,
+      "source": 3232,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282233
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797875,
+      "source": "3232/animation",
+      "fields": {
+        "EffectType": 6,
+        "Effect": 3,
+        "ParentSpellVisualKitID": 282233,
+        "ID": 797875
+      },
+      "blob": "0600000003000000794e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797876,
+      "source": "3232/sound",
+      "fields": {
+        "EffectType": 5,
+        "Effect": 370143,
+        "ParentSpellVisualKitID": 282233,
+        "ID": 797876
+      },
+      "blob": "05000000dfa50500794e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitModelAttach",
+      "tableHash": 4033975491,
+      "layoutHash": 47154516,
+      "id": 641855,
+      "source": "3232/LeftHandEffect",
+      "fields": {
+        "Offset1": 0,
+        "Offset2": 0,
+        "Offset3": 0,
+        "OffsetVariation1": 0,
+        "OffsetVariation2": 0,
+        "OffsetVariation3": 0,
+        "SpellVisualEffectNameID": 64998,
+        "AttachmentID": 21,
+        "PositionerID": 0,
+        "Yaw": 0,
+        "Pitch": 0,
+        "Roll": 0,
+        "YawVariation": 0,
+        "PitchVariation": 0,
+        "RollVariation": 0,
+        "Scale": 1,
+        "ScaleVariation": 0,
+        "StartAnimID": -1,
+        "AnimID": -1,
+        "EndAnimID": -1,
+        "AnimKitID": 0,
+        "Flags": 0,
+        "LowDefModelAttachID": 0,
+        "StartDelay": 0,
+        "Field_9_0_1_33978_021": 0,
+        "Field_11_0_0_54210_022": 0,
+        "ParentSpellVisualKitID": 282233,
+        "ID": 641855
+      },
+      "blob": "000000000000000000000000000000000000000000000000e6fd000015000000000000000000000000000000000000000000000000000000000000803f00000000ffffffffffff00000000000000000000000000000000000000000000794e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797877,
+      "source": "3232/LeftHandEffect",
+      "fields": {
+        "EffectType": 2,
+        "Effect": 641855,
+        "ParentSpellVisualKitID": 282233,
+        "ID": 797877
+      },
+      "blob": "020000003fcb0900794e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitModelAttach",
+      "tableHash": 4033975491,
+      "layoutHash": 47154516,
+      "id": 641856,
+      "source": "3232/RightHandEffect",
+      "fields": {
+        "Offset1": 0,
+        "Offset2": 0,
+        "Offset3": 0,
+        "OffsetVariation1": 0,
+        "OffsetVariation2": 0,
+        "OffsetVariation3": 0,
+        "SpellVisualEffectNameID": 64998,
+        "AttachmentID": 22,
+        "PositionerID": 0,
+        "Yaw": 0,
+        "Pitch": 0,
+        "Roll": 0,
+        "YawVariation": 0,
+        "PitchVariation": 0,
+        "RollVariation": 0,
+        "Scale": 1,
+        "ScaleVariation": 0,
+        "StartAnimID": -1,
+        "AnimID": -1,
+        "EndAnimID": -1,
+        "AnimKitID": 0,
+        "Flags": 0,
+        "LowDefModelAttachID": 0,
+        "StartDelay": 0,
+        "Field_9_0_1_33978_021": 0,
+        "Field_11_0_0_54210_022": 0,
+        "ParentSpellVisualKitID": 282233,
+        "ID": 641856
+      },
+      "blob": "000000000000000000000000000000000000000000000000e6fd000016000000000000000000000000000000000000000000000000000000000000803f00000000ffffffffffff00000000000000000000000000000000000000000000794e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797878,
+      "source": "3232/RightHandEffect",
+      "fields": {
+        "EffectType": 2,
+        "Effect": 641856,
+        "ParentSpellVisualKitID": 282233,
+        "ID": 797878
+      },
+      "blob": "0200000040cb0900794e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282234,
+      "source": 3233,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282234
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282235,
+      "source": 3238,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282235
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797879,
+      "source": "3238/animation",
+      "fields": {
+        "EffectType": 6,
+        "Effect": 7,
+        "ParentSpellVisualKitID": 282235,
+        "ID": 797879
+      },
+      "blob": "06000000070000007b4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797880,
+      "source": "3238/sound",
+      "fields": {
+        "EffectType": 5,
+        "Effect": 370141,
+        "ParentSpellVisualKitID": 282235,
+        "ID": 797880
+      },
+      "blob": "05000000dda505007b4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitModelAttach",
+      "tableHash": 4033975491,
+      "layoutHash": 47154516,
+      "id": 641857,
+      "source": "3238/LeftHandEffect",
+      "fields": {
+        "Offset1": 0,
+        "Offset2": 0,
+        "Offset3": 0,
+        "OffsetVariation1": 0,
+        "OffsetVariation2": 0,
+        "OffsetVariation3": 0,
+        "SpellVisualEffectNameID": 64996,
+        "AttachmentID": 21,
+        "PositionerID": 0,
+        "Yaw": 0,
+        "Pitch": 0,
+        "Roll": 0,
+        "YawVariation": 0,
+        "PitchVariation": 0,
+        "RollVariation": 0,
+        "Scale": 1,
+        "ScaleVariation": 0,
+        "StartAnimID": -1,
+        "AnimID": -1,
+        "EndAnimID": -1,
+        "AnimKitID": 0,
+        "Flags": 0,
+        "LowDefModelAttachID": 0,
+        "StartDelay": 0,
+        "Field_9_0_1_33978_021": 0,
+        "Field_11_0_0_54210_022": 0,
+        "ParentSpellVisualKitID": 282235,
+        "ID": 641857
+      },
+      "blob": "000000000000000000000000000000000000000000000000e4fd000015000000000000000000000000000000000000000000000000000000000000803f00000000ffffffffffff000000000000000000000000000000000000000000007b4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797881,
+      "source": "3238/LeftHandEffect",
+      "fields": {
+        "EffectType": 2,
+        "Effect": 641857,
+        "ParentSpellVisualKitID": 282235,
+        "ID": 797881
+      },
+      "blob": "0200000041cb09007b4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitModelAttach",
+      "tableHash": 4033975491,
+      "layoutHash": 47154516,
+      "id": 641858,
+      "source": "3238/RightHandEffect",
+      "fields": {
+        "Offset1": 0,
+        "Offset2": 0,
+        "Offset3": 0,
+        "OffsetVariation1": 0,
+        "OffsetVariation2": 0,
+        "OffsetVariation3": 0,
+        "SpellVisualEffectNameID": 64996,
+        "AttachmentID": 22,
+        "PositionerID": 0,
+        "Yaw": 0,
+        "Pitch": 0,
+        "Roll": 0,
+        "YawVariation": 0,
+        "PitchVariation": 0,
+        "RollVariation": 0,
+        "Scale": 1,
+        "ScaleVariation": 0,
+        "StartAnimID": -1,
+        "AnimID": -1,
+        "EndAnimID": -1,
+        "AnimKitID": 0,
+        "Flags": 0,
+        "LowDefModelAttachID": 0,
+        "StartDelay": 0,
+        "Field_9_0_1_33978_021": 0,
+        "Field_11_0_0_54210_022": 0,
+        "ParentSpellVisualKitID": 282235,
+        "ID": 641858
+      },
+      "blob": "000000000000000000000000000000000000000000000000e4fd000016000000000000000000000000000000000000000000000000000000000000803f00000000ffffffffffff000000000000000000000000000000000000000000007b4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797882,
+      "source": "3238/RightHandEffect",
+      "fields": {
+        "EffectType": 2,
+        "Effect": 641858,
+        "ParentSpellVisualKitID": 282235,
+        "ID": 797882
+      },
+      "blob": "0200000042cb09007b4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282236,
+      "source": 3239,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282236
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797883,
+      "source": "3239/sound",
+      "fields": {
+        "EffectType": 5,
+        "Effect": 370139,
+        "ParentSpellVisualKitID": 282236,
+        "ID": 797883
+      },
+      "blob": "05000000dba505007c4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitModelAttach",
+      "tableHash": 4033975491,
+      "layoutHash": 47154516,
+      "id": 641859,
+      "source": "3239/ChestEffect",
+      "fields": {
+        "Offset1": 0,
+        "Offset2": 0,
+        "Offset3": 0,
+        "OffsetVariation1": 0,
+        "OffsetVariation2": 0,
+        "OffsetVariation3": 0,
+        "SpellVisualEffectNameID": 65000,
+        "AttachmentID": 34,
+        "PositionerID": 0,
+        "Yaw": 0,
+        "Pitch": 0,
+        "Roll": 0,
+        "YawVariation": 0,
+        "PitchVariation": 0,
+        "RollVariation": 0,
+        "Scale": 1,
+        "ScaleVariation": 0,
+        "StartAnimID": -1,
+        "AnimID": -1,
+        "EndAnimID": -1,
+        "AnimKitID": 0,
+        "Flags": 0,
+        "LowDefModelAttachID": 0,
+        "StartDelay": 0,
+        "Field_9_0_1_33978_021": 0,
+        "Field_11_0_0_54210_022": 0,
+        "ParentSpellVisualKitID": 282236,
+        "ID": 641859
+      },
+      "blob": "000000000000000000000000000000000000000000000000e8fd000022000000000000000000000000000000000000000000000000000000000000803f00000000ffffffffffff000000000000000000000000000000000000000000007c4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797884,
+      "source": "3239/ChestEffect",
+      "fields": {
+        "EffectType": 2,
+        "Effect": 641859,
+        "ParentSpellVisualKitID": 282236,
+        "ID": 797884
+      },
+      "blob": "0200000043cb09007c4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282237,
+      "source": 3821,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282237
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797885,
+      "source": "3821/animation",
+      "fields": {
+        "EffectType": 6,
+        "Effect": 50,
+        "ParentSpellVisualKitID": 282237,
+        "ID": 797885
+      },
+      "blob": "06000000320000007d4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797886,
+      "source": "3821/sound",
+      "fields": {
+        "EffectType": 5,
+        "Effect": 370142,
+        "ParentSpellVisualKitID": 282237,
+        "ID": 797886
+      },
+      "blob": "05000000dea505007d4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282238,
+      "source": 3822,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282238
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797887,
+      "source": "3822/animation",
+      "fields": {
+        "EffectType": 6,
+        "Effect": 73,
+        "ParentSpellVisualKitID": 282238,
+        "ID": 797887
+      },
+      "blob": "06000000490000007e4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitModelAttach",
+      "tableHash": 4033975491,
+      "layoutHash": 47154516,
+      "id": 641860,
+      "source": "3822/ChestEffect",
+      "fields": {
+        "Offset1": 0,
+        "Offset2": 0,
+        "Offset3": 0,
+        "OffsetVariation1": 0,
+        "OffsetVariation2": 0,
+        "OffsetVariation3": 0,
+        "SpellVisualEffectNameID": 64997,
+        "AttachmentID": 34,
+        "PositionerID": 0,
+        "Yaw": 0,
+        "Pitch": 0,
+        "Roll": 0,
+        "YawVariation": 0,
+        "PitchVariation": 0,
+        "RollVariation": 0,
+        "Scale": 1,
+        "ScaleVariation": 0,
+        "StartAnimID": -1,
+        "AnimID": -1,
+        "EndAnimID": -1,
+        "AnimKitID": 0,
+        "Flags": 0,
+        "LowDefModelAttachID": 0,
+        "StartDelay": 0,
+        "Field_9_0_1_33978_021": 0,
+        "Field_11_0_0_54210_022": 0,
+        "ParentSpellVisualKitID": 282238,
+        "ID": 641860
+      },
+      "blob": "000000000000000000000000000000000000000000000000e5fd000022000000000000000000000000000000000000000000000000000000000000803f00000000ffffffffffff000000000000000000000000000000000000000000007e4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797888,
+      "source": "3822/ChestEffect",
+      "fields": {
+        "EffectType": 2,
+        "Effect": 641860,
+        "ParentSpellVisualKitID": 282238,
+        "ID": 797888
+      },
+      "blob": "0200000044cb09007e4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282239,
+      "source": 20777,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282239
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797889,
+      "source": "20777/sound",
+      "fields": {
+        "EffectType": 5,
+        "Effect": 370140,
+        "ParentSpellVisualKitID": 282239,
+        "ID": 797889
+      },
+      "blob": "05000000dca505007f4e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282240,
+      "source": 20778,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282240
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797890,
+      "source": "20778/animation",
+      "fields": {
+        "EffectType": 6,
+        "Effect": 7,
+        "ParentSpellVisualKitID": 282240,
+        "ID": 797890
+      },
+      "blob": "0600000007000000804e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282241,
+      "source": 20779,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282241
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797891,
+      "source": "20779/animation",
+      "fields": {
+        "EffectType": 6,
+        "Effect": 73,
+        "ParentSpellVisualKitID": 282241,
+        "ID": 797891
+      },
+      "blob": "0600000049000000814e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797892,
+      "source": "20779/sound",
+      "fields": {
+        "EffectType": 5,
+        "Effect": 370144,
+        "ParentSpellVisualKitID": 282241,
+        "ID": 797892
+      },
+      "blob": "05000000e0a50500814e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisual",
+      "tableHash": 4146370265,
+      "layoutHash": 1267058959,
+      "id": 192667,
+      "source": 2279,
+      "fields": {
+        "MissileCastOffset1": 0.0,
+        "MissileCastOffset2": 0.0,
+        "MissileCastOffset3": 0.0,
+        "MissileImpactOffset1": 0.0,
+        "MissileImpactOffset2": 0.0,
+        "MissileImpactOffset3": 0.0,
+        "StateKit": 0,
+        "AnimEventSoundID": 0,
+        "Flags": 0,
+        "MissileAttachment": 20,
+        "MissileDestinationAttachment": 20,
+        "MissileCastPositionerID": 0,
+        "MissileImpactPositionerID": 0,
+        "MissileTargetingKit": 0,
+        "HostileSpellVisualID": 0,
+        "CasterSpellVisualID": 0,
+        "SpellVisualMissileSetID": 0,
+        "DamageNumberDelay": 0,
+        "LowViolenceSpellVisualID": 0,
+        "RaidSpellVisualMissileSetID": 0,
+        "ReducedUnexpectedCameraMovementSpellVisualID": 0,
+        "ID": 192667
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000000000001414000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566025,
+      "source": "2279/CastKit/1",
+      "fields": {
+        "StartEvent": 3,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282237,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192667,
+        "ID": 566025
+      },
+      "blob": "030000000d00000000000000000000000000000000000000010000007d4e040000000000000000009bf00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566026,
+      "source": "2279/ImpactKit/1",
+      "fields": {
+        "StartEvent": 6,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282238,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192667,
+        "ID": 566026
+      },
+      "blob": "060000000d00000000000000000000000000000000000000010000007e4e040000000000000000009bf00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566027,
+      "source": "2279/ImpactKit/2",
+      "fields": {
+        "StartEvent": 6,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 2,
+        "SpellVisualKitID": 282238,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192667,
+        "ID": 566027
+      },
+      "blob": "060000000d00000000000000000000000000000000000000020000007e4e040000000000000000009bf00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualMissile",
+      "tableHash": 1369604944,
+      "layoutHash": 2922942584,
+      "id": 29921,
+      "source": 20459,
+      "fields": {
+        "CastOffset1": 0.0,
+        "CastOffset2": 0.0,
+        "CastOffset3": -0.699999988079071,
+        "ImpactOffset1": 0.0,
+        "ImpactOffset2": 0.0,
+        "ImpactOffset3": 0.0,
+        "ID": 29921,
+        "SpellVisualEffectNameID": 64999,
+        "SoundEntriesID": 370138,
+        "Attachment": 20,
+        "DestinationAttachment": 34,
+        "CastPositionerID": 0,
+        "ImpactPositionerID": 0,
+        "FollowGroundHeight": 0,
+        "FollowGroundDropSpeed": 300,
+        "FollowGroundApproach": 750,
+        "Flags": 516,
+        "SpellMissileMotionID": 65000,
+        "AnimKitID": 0,
+        "ClutterLevel": 0,
+        "DecayTimeAfterImpact": 0,
+        "Unused1100": 0,
+        "SpellVisualMissileSetID": 65000
+      },
+      "blob": "0000000000000000333333bf000000000000000000000000e1740000e7fddaa50500142200000000000000002c010000ee0204020000e8fd0000000000000000000000000000e8fd0000",
+      "storage": "spell_visual_missile"
+    },
+    {
+      "table": "SpellVisual",
+      "tableHash": 4146370265,
+      "layoutHash": 1267058959,
+      "id": 192668,
+      "source": 20459,
+      "fields": {
+        "MissileCastOffset1": 0.0,
+        "MissileCastOffset2": 0.0,
+        "MissileCastOffset3": -0.699999988079071,
+        "MissileImpactOffset1": 0.0,
+        "MissileImpactOffset2": 0.0,
+        "MissileImpactOffset3": 0.0,
+        "StateKit": 0,
+        "AnimEventSoundID": 0,
+        "Flags": 0,
+        "MissileAttachment": 20,
+        "MissileDestinationAttachment": 34,
+        "MissileCastPositionerID": 0,
+        "MissileImpactPositionerID": 0,
+        "MissileTargetingKit": 0,
+        "HostileSpellVisualID": 0,
+        "CasterSpellVisualID": 0,
+        "SpellVisualMissileSetID": 65000,
+        "DamageNumberDelay": 0,
+        "LowViolenceSpellVisualID": 0,
+        "RaidSpellVisualMissileSetID": 0,
+        "ReducedUnexpectedCameraMovementSpellVisualID": 0,
+        "ID": 192668
+      },
+      "blob": "0000000000000000333333bf00000000000000000000000000000000000000000000000014220000000000000000000000000000000000000000e8fd0000000000000000000000000000",
+      "storage": "spell_visual"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566028,
+      "source": "20459/PrecastKit/1",
+      "fields": {
+        "StartEvent": 1,
+        "EndEvent": 2,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282239,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192668,
+        "ID": 566028
+      },
+      "blob": "010000000200000000000000000000000000000000000000010000007f4e040000000000000000009cf00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566029,
+      "source": "20459/CastKit/1",
+      "fields": {
+        "StartEvent": 3,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282240,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192668,
+        "ID": 566029
+      },
+      "blob": "030000000d0000000000000000000000000000000000000001000000804e040000000000000000009cf00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566030,
+      "source": "20459/ImpactKit/1",
+      "fields": {
+        "StartEvent": 6,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282241,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192668,
+        "ID": 566030
+      },
+      "blob": "060000000d0000000000000000000000000000000000000001000000814e040000000000000000009cf00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566031,
+      "source": "20459/ImpactKit/2",
+      "fields": {
+        "StartEvent": 6,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 2,
+        "SpellVisualKitID": 282241,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192668,
+        "ID": 566031
+      },
+      "blob": "060000000d0000000000000000000000000000000000000002000000814e040000000000000000009cf00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisual",
+      "tableHash": 4146370265,
+      "layoutHash": 1267058959,
+      "id": 192669,
+      "source": 2004,
+      "fields": {
+        "MissileCastOffset1": 0.0,
+        "MissileCastOffset2": 0.0,
+        "MissileCastOffset3": 0.0,
+        "MissileImpactOffset1": 0.0,
+        "MissileImpactOffset2": 0.0,
+        "MissileImpactOffset3": 0.0,
+        "StateKit": 0,
+        "AnimEventSoundID": 0,
+        "Flags": 0,
+        "MissileAttachment": 20,
+        "MissileDestinationAttachment": 20,
+        "MissileCastPositionerID": 0,
+        "MissileImpactPositionerID": 0,
+        "MissileTargetingKit": 0,
+        "HostileSpellVisualID": 0,
+        "CasterSpellVisualID": 0,
+        "SpellVisualMissileSetID": 0,
+        "DamageNumberDelay": 0,
+        "LowViolenceSpellVisualID": 0,
+        "RaidSpellVisualMissileSetID": 0,
+        "ReducedUnexpectedCameraMovementSpellVisualID": 0,
+        "ID": 192669
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000000000001414000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566032,
+      "source": "2004/CastKit/1",
+      "fields": {
+        "StartEvent": 3,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282235,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192669,
+        "ID": 566032
+      },
+      "blob": "030000000d00000000000000000000000000000000000000010000007b4e040000000000000000009df00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566033,
+      "source": "2004/TargetImpactKit/4",
+      "fields": {
+        "StartEvent": 6,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 4,
+        "SpellVisualKitID": 282236,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192669,
+        "ID": 566033
+      },
+      "blob": "060000000d00000000000000000000000000000000000000040000007c4e040000000000000000009df00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisual",
+      "tableHash": 4146370265,
+      "layoutHash": 1267058959,
+      "id": 192670,
+      "source": 2000,
+      "fields": {
+        "MissileCastOffset1": 0.0,
+        "MissileCastOffset2": 0.0,
+        "MissileCastOffset3": 0.0,
+        "MissileImpactOffset1": 0.0,
+        "MissileImpactOffset2": 0.0,
+        "MissileImpactOffset3": 0.0,
+        "StateKit": 0,
+        "AnimEventSoundID": 0,
+        "Flags": 0,
+        "MissileAttachment": 20,
+        "MissileDestinationAttachment": 20,
+        "MissileCastPositionerID": 0,
+        "MissileImpactPositionerID": 0,
+        "MissileTargetingKit": 0,
+        "HostileSpellVisualID": 0,
+        "CasterSpellVisualID": 0,
+        "SpellVisualMissileSetID": 0,
+        "DamageNumberDelay": 0,
+        "LowViolenceSpellVisualID": 0,
+        "RaidSpellVisualMissileSetID": 0,
+        "ReducedUnexpectedCameraMovementSpellVisualID": 0,
+        "ID": 192670
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000000000001414000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566034,
+      "source": "2000/CastKit/1",
+      "fields": {
+        "StartEvent": 3,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282233,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192670,
+        "ID": 566034
+      },
+      "blob": "030000000d0000000000000000000000000000000000000001000000794e040000000000000000009ef00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566035,
+      "source": "2000/ImpactKit/1",
+      "fields": {
+        "StartEvent": 6,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 1,
+        "SpellVisualKitID": 282234,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192670,
+        "ID": 566035
+      },
+      "blob": "060000000d00000000000000000000000000000000000000010000007a4e040000000000000000009ef00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566036,
+      "source": "2000/ImpactKit/2",
+      "fields": {
+        "StartEvent": 6,
+        "EndEvent": 13,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 2,
+        "SpellVisualKitID": 282234,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192670,
+        "ID": 566036
+      },
+      "blob": "060000000d00000000000000000000000000000000000000020000007a4e040000000000000000009ef00200",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualEffectName",
+      "tableHash": 48336690,
+      "layoutHash": 575000294,
+      "id": 64995,
+      "source": 100115,
+      "fields": {
+        "ModelFileDataID": 2000000051,
+        "BaseMissileSpeed": 0,
+        "Scale": 1.0,
+        "MinAllowedScale": 0.009999999776482582,
+        "MaxAllowedScale": 100.0,
+        "Alpha": 1,
+        "Flags": 0,
+        "TextureFileDataID": 0,
+        "EffectRadius": 1.0,
+        "Type": 0,
+        "GenericID": 0,
+        "RibbonQualityID": 0,
+        "DissolveEffectID": 0,
+        "ModelPosition": -1,
+        "Unknown901": 0,
+        "Unknown1100": 0,
+        "ID": 64995
+      },
+      "blob": "33943577000000000000803f0ad7233c0000c8420000803f00000000000000000000803f00000000000000000000000000000000ffffffff000000",
+      "storage": "spell_visual_effect_name"
+    },
+    {
+      "table": "SpellVisualKit",
+      "tableHash": 4102286043,
+      "layoutHash": 3228162500,
+      "id": 282242,
+      "source": 1000298,
+      "fields": {
+        "ClutterLevel": 0,
+        "FallbackSpellVisualKitId": 0,
+        "DelayMin": 0,
+        "DelayMax": 0,
+        "MinimumSpellVisualDensityFilterType": 0,
+        "MinimumSpellVisualDensityFilterParam": 0,
+        "ReducedSpellVisualDensityFilterType": 0,
+        "ReducedSpellVisualDensityFilterParam": 0,
+        "Flags1": 0,
+        "Flags2": 0,
+        "ID": 282242
+      },
+      "blob": "000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual_kit"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797893,
+      "source": "1000298/sound",
+      "fields": {
+        "EffectType": 5,
+        "Effect": 370145,
+        "ParentSpellVisualKitID": 282242,
+        "ID": 797893
+      },
+      "blob": "05000000e1a50500824e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitModelAttach",
+      "tableHash": 4033975491,
+      "layoutHash": 47154516,
+      "id": 641861,
+      "source": "1000298/BaseEffect",
+      "fields": {
+        "Offset1": 0,
+        "Offset2": 0,
+        "Offset3": 0,
+        "OffsetVariation1": 0,
+        "OffsetVariation2": 0,
+        "OffsetVariation3": 0,
+        "SpellVisualEffectNameID": 64995,
+        "AttachmentID": 19,
+        "PositionerID": 0,
+        "Yaw": 0,
+        "Pitch": 0,
+        "Roll": 0,
+        "YawVariation": 0,
+        "PitchVariation": 0,
+        "RollVariation": 0,
+        "Scale": 1,
+        "ScaleVariation": 0,
+        "StartAnimID": -1,
+        "AnimID": -1,
+        "EndAnimID": -1,
+        "AnimKitID": 0,
+        "Flags": 0,
+        "LowDefModelAttachID": 0,
+        "StartDelay": 0,
+        "Field_9_0_1_33978_021": 0,
+        "Field_11_0_0_54210_022": 0,
+        "ParentSpellVisualKitID": 282242,
+        "ID": 641861
+      },
+      "blob": "000000000000000000000000000000000000000000000000e3fd000013000000000000000000000000000000000000000000000000000000000000803f00000000ffffffffffff00000000000000000000000000000000000000000000824e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisualKitEffect",
+      "tableHash": 1181150530,
+      "layoutHash": 3810552994,
+      "id": 797894,
+      "source": "1000298/BaseEffect",
+      "fields": {
+        "EffectType": 2,
+        "Effect": 641861,
+        "ParentSpellVisualKitID": 282242,
+        "ID": 797894
+      },
+      "blob": "0200000045cb0900824e0400",
+      "storage": "hotfix_blob"
+    },
+    {
+      "table": "SpellVisual",
+      "tableHash": 4146370265,
+      "layoutHash": 1267058959,
+      "id": 192671,
+      "source": 1000091,
+      "fields": {
+        "MissileCastOffset1": 0.0,
+        "MissileCastOffset2": 0.0,
+        "MissileCastOffset3": 0.0,
+        "MissileImpactOffset1": 0.0,
+        "MissileImpactOffset2": 0.0,
+        "MissileImpactOffset3": 0.0,
+        "StateKit": 0,
+        "AnimEventSoundID": 0,
+        "Flags": 1,
+        "MissileAttachment": 20,
+        "MissileDestinationAttachment": 34,
+        "MissileCastPositionerID": 0,
+        "MissileImpactPositionerID": 0,
+        "MissileTargetingKit": 0,
+        "HostileSpellVisualID": 0,
+        "CasterSpellVisualID": 0,
+        "SpellVisualMissileSetID": 0,
+        "DamageNumberDelay": 0,
+        "LowViolenceSpellVisualID": 0,
+        "RaidSpellVisualMissileSetID": 0,
+        "ReducedUnexpectedCameraMovementSpellVisualID": 0,
+        "ID": 192671
+      },
+      "blob": "0000000000000000000000000000000000000000000000000000000000000000010000001422000000000000000000000000000000000000000000000000000000000000000000000000",
+      "storage": "spell_visual"
+    },
+    {
+      "table": "SpellVisualEvent",
+      "tableHash": 3425193231,
+      "layoutHash": 2254393646,
+      "id": 566037,
+      "source": "1000091/StateKit/2",
+      "fields": {
+        "StartEvent": 7,
+        "EndEvent": 8,
+        "StartMinOffsetMs": 0,
+        "StartMaxOffsetMs": 0,
+        "EndMinOffsetMs": 0,
+        "EndMaxOffsetMs": 0,
+        "TargetType": 2,
+        "SpellVisualKitID": 282242,
+        "Field_10_0_0_44649_008": 0,
+        "Field_10_0_0_44649_009": 0,
+        "SpellVisualID": 192671,
+        "ID": 566037
+      },
+      "blob": "07000000080000000000000000000000000000000000000002000000824e040000000000000000009ff00200",
+      "storage": "hotfix_blob"
+    }
+  ],
+  "chains": [
+    {
+      "name": "Reap",
+      "spellID": 600000,
+      "sourceVisualID": 2279,
+      "visualID": 192667,
+      "bindingBefore": {
+        "ID": 7816,
+        "DifficultyID": 0,
+        "SpellVisualID": 169205,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600000,
+        "VerifiedBuild": 69814
+      },
+      "bindingAfter": {
+        "ID": 7816,
+        "DifficultyID": 0,
+        "SpellVisualID": 192667,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600000,
+        "VerifiedBuild": 69814
+      },
+      "status": "generated; native delivery untested",
+      "gameplayAccepted": false
+    },
+    {
+      "name": "Murder",
+      "spellID": 600001,
+      "sourceVisualID": 20459,
+      "visualID": 192668,
+      "bindingBefore": {
+        "ID": 7817,
+        "DifficultyID": 0,
+        "SpellVisualID": 77979,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600001,
+        "VerifiedBuild": 69814
+      },
+      "bindingAfter": {
+        "ID": 7817,
+        "DifficultyID": 0,
+        "SpellVisualID": 192668,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600001,
+        "VerifiedBuild": 69814
+      },
+      "status": "generated; native delivery untested",
+      "gameplayAccepted": false
+    },
+    {
+      "name": "Soul Strike",
+      "spellID": 600002,
+      "sourceVisualID": 2004,
+      "visualID": 192669,
+      "bindingBefore": {
+        "ID": 7818,
+        "DifficultyID": 0,
+        "SpellVisualID": 169205,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600002,
+        "VerifiedBuild": 69814
+      },
+      "bindingAfter": {
+        "ID": 7818,
+        "DifficultyID": 0,
+        "SpellVisualID": 192669,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600002,
+        "VerifiedBuild": 69814
+      },
+      "status": "generated; native delivery untested",
+      "gameplayAccepted": false
+    },
+    {
+      "name": "Soulrend",
+      "spellID": 600003,
+      "sourceVisualID": 2000,
+      "visualID": 192670,
+      "bindingBefore": {
+        "ID": 7819,
+        "DifficultyID": 0,
+        "SpellVisualID": 169205,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600003,
+        "VerifiedBuild": 69814
+      },
+      "bindingAfter": {
+        "ID": 7819,
+        "DifficultyID": 0,
+        "SpellVisualID": 192670,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600003,
+        "VerifiedBuild": 69814
+      },
+      "status": "generated; native delivery untested",
+      "gameplayAccepted": false
+    },
+    {
+      "name": "Soul Infusion",
+      "spellID": 600007,
+      "sourceVisualID": 1000091,
+      "status": "generated with two native-reference track repairs; game test pending",
+      "gameplayAccepted": false,
+      "visualID": 192671,
+      "bindingBefore": null,
+      "bindingAfter": {
+        "ID": 7820,
+        "DifficultyID": 0,
+        "SpellVisualID": 192671,
+        "Probability": 1.0,
+        "Flags": 0,
+        "Priority": 0,
+        "SpellIconFileID": 0,
+        "ActiveIconFileID": 0,
+        "ViewerUnitConditionID": 0,
+        "ViewerPlayerConditionID": 0,
+        "CasterUnitConditionID": 0,
+        "CasterPlayerConditionID": 0,
+        "SpellID": 600007,
+        "VerifiedBuild": 69814
+      }
+    }
+  ],
+  "ownership": {
+    "SpellVisualEffectName:100035": 65000,
+    "SpellVisualEffectName:100133": 64999,
+    "SpellVisualEffectName:138855": 64998,
+    "SpellVisualEffectName:143530": 64997,
+    "SpellVisualEffectName:253039": 64996,
+    "SoundKit:15109": 370138,
+    "SoundKitEntry:15109/0": 1703790,
+    "SoundKitEntry:15109/1": 1703791,
+    "SoundKitEntry:15109/2": 1703792,
+    "SoundKitEntry:15109/3": 1703793,
+    "SoundKit:268463": 370139,
+    "SoundKitAdvanced:sound 268463": 333708,
+    "SoundKitEntry:268463/0": 1703794,
+    "SoundKitEntry:268463/1": 1703795,
+    "SoundKitEntry:268463/2": 1703796,
+    "SoundKitEntry:268463/3": 1703797,
+    "SoundKitEntry:268463/4": 1703798,
+    "SoundKit:304301": 370140,
+    "SoundKitEntry:304301/0": 1703799,
+    "SoundKit:309465": 370141,
+    "SoundKitAdvanced:sound 309465": 333709,
+    "SoundKitEntry:309465/0": 1703800,
+    "SoundKitEntry:309465/1": 1703801,
+    "SoundKitEntry:309465/2": 1703802,
+    "SoundKitEntry:309465/3": 1703803,
+    "SoundKitEntry:309465/4": 1703804,
+    "SoundKit:309592": 370142,
+    "SoundKitAdvanced:sound 309592": 333710,
+    "SoundKitEntry:309592/0": 1703805,
+    "SoundKitEntry:309592/1": 1703806,
+    "SoundKitEntry:309592/2": 1703807,
+    "SoundKitEntry:309592/3": 1703808,
+    "SoundKitEntry:309592/4": 1703809,
+    "SoundKit:309593": 370143,
+    "SoundKitAdvanced:sound 309593": 333711,
+    "SoundKitEntry:309593/0": 1703810,
+    "SoundKitEntry:309593/1": 1703811,
+    "SoundKitEntry:309593/2": 1703812,
+    "SoundKitEntry:309593/3": 1703813,
+    "SoundKitEntry:309593/4": 1703814,
+    "SoundKit:313845": 370144,
+    "SoundKitAdvanced:sound 313845": 333712,
+    "SoundKitEntry:313845/0": 1703815,
+    "SoundKitEntry:313845/1": 1703816,
+    "SoundKitEntry:313845/2": 1703817,
+    "SoundKit:314976": 370145,
+    "SoundKitEntry:314976/0": 1703818,
+    "SoundKitEntry:314976/1": 1703819,
+    "SoundKitEntry:314976/2": 1703820,
+    "SpellMissileMotion:9999": 65000,
+    "SpellVisualKit:3232": 282233,
+    "SpellVisualKitEffect:3232/animation": 797875,
+    "SpellVisualKitEffect:3232/sound": 797876,
+    "SpellVisualKitModelAttach:3232/LeftHandEffect": 641855,
+    "SpellVisualKitEffect:3232/LeftHandEffect": 797877,
+    "SpellVisualKitModelAttach:3232/RightHandEffect": 641856,
+    "SpellVisualKitEffect:3232/RightHandEffect": 797878,
+    "SpellVisualKit:3233": 282234,
+    "SpellVisualKit:3238": 282235,
+    "SpellVisualKitEffect:3238/animation": 797879,
+    "SpellVisualKitEffect:3238/sound": 797880,
+    "SpellVisualKitModelAttach:3238/LeftHandEffect": 641857,
+    "SpellVisualKitEffect:3238/LeftHandEffect": 797881,
+    "SpellVisualKitModelAttach:3238/RightHandEffect": 641858,
+    "SpellVisualKitEffect:3238/RightHandEffect": 797882,
+    "SpellVisualKit:3239": 282236,
+    "SpellVisualKitEffect:3239/sound": 797883,
+    "SpellVisualKitModelAttach:3239/ChestEffect": 641859,
+    "SpellVisualKitEffect:3239/ChestEffect": 797884,
+    "SpellVisualKit:3821": 282237,
+    "SpellVisualKitEffect:3821/animation": 797885,
+    "SpellVisualKitEffect:3821/sound": 797886,
+    "SpellVisualKit:3822": 282238,
+    "SpellVisualKitEffect:3822/animation": 797887,
+    "SpellVisualKitModelAttach:3822/ChestEffect": 641860,
+    "SpellVisualKitEffect:3822/ChestEffect": 797888,
+    "SpellVisualKit:20777": 282239,
+    "SpellVisualKitEffect:20777/sound": 797889,
+    "SpellVisualKit:20778": 282240,
+    "SpellVisualKitEffect:20778/animation": 797890,
+    "SpellVisualKit:20779": 282241,
+    "SpellVisualKitEffect:20779/animation": 797891,
+    "SpellVisualKitEffect:20779/sound": 797892,
+    "SpellVisual:2279": 192667,
+    "SpellVisualEvent:2279/CastKit/1": 566025,
+    "SpellVisualEvent:2279/ImpactKit/1": 566026,
+    "SpellVisualEvent:2279/ImpactKit/2": 566027,
+    "SpellVisualMissile:20459": 29921,
+    "SpellVisual:20459": 192668,
+    "SpellVisualEvent:20459/PrecastKit/1": 566028,
+    "SpellVisualEvent:20459/CastKit/1": 566029,
+    "SpellVisualEvent:20459/ImpactKit/1": 566030,
+    "SpellVisualEvent:20459/ImpactKit/2": 566031,
+    "SpellVisual:2004": 192669,
+    "SpellVisualEvent:2004/CastKit/1": 566032,
+    "SpellVisualEvent:2004/TargetImpactKit/4": 566033,
+    "SpellVisual:2000": 192670,
+    "SpellVisualEvent:2000/CastKit/1": 566034,
+    "SpellVisualEvent:2000/ImpactKit/1": 566035,
+    "SpellVisualEvent:2000/ImpactKit/2": 566036,
+    "SpellVisualEffectName:100115": 64995,
+    "SpellVisualKit:1000298": 282242,
+    "SpellVisualKitEffect:1000298/sound": 797893,
+    "SpellVisualKitModelAttach:1000298/BaseEffect": 641861,
+    "SpellVisualKitEffect:1000298/BaseEffect": 797894,
+    "SpellVisual:1000091": 192671,
+    "SpellVisualEvent:1000091/StateKit/2": 566037
+  },
+  "metadata": {
+    "SpellVisual": {
+      "meta": {
+        "fileName": "SpellVisual.db2",
+        "layoutHash": 1267058959,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "MissileCastOffset",
+            "type": "float",
+            "signed": true,
+            "arraySize": 3
+          },
+          {
+            "name": "MissileImpactOffset",
+            "type": "float",
+            "signed": true,
+            "arraySize": 3
+          },
+          {
+            "name": "StateKit",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "AnimEventSoundID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MissileAttachment",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MissileDestinationAttachment",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MissileCastPositionerID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MissileImpactPositionerID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MissileTargetingKit",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "HostileSpellVisualID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "CasterSpellVisualID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "SpellVisualMissileSetID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "DamageNumberDelay",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "LowViolenceSpellVisualID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "RaidSpellVisualMissileSetID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "ReducedUnexpectedCameraMovementSpellVisualID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          }
+        ]
+      },
+      "tableHash": 4146370265,
+      "sha256": "5f7511c5bb11e3f0e7bee2093e2b690b5ab72511243284fa0e062c1203d53cd7"
+    },
+    "SpellVisualEvent": {
+      "meta": {
+        "fileName": "SpellVisualEvent.db2",
+        "layoutHash": 2254393646,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "StartEvent",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "EndEvent",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "StartMinOffsetMs",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "StartMaxOffsetMs",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "EndMinOffsetMs",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "EndMaxOffsetMs",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "TargetType",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "SpellVisualKitID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_10_0_0_44649_008",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_10_0_0_44649_009",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          }
+        ],
+        "parentFieldName": "SpellVisualID"
+      },
+      "tableHash": 3425193231,
+      "sha256": "a8b98f9191c9ec3b4c673523e736d3cb2901018f0d35e4fdf6766668bcb11905"
+    },
+    "SpellVisualKit": {
+      "meta": {
+        "fileName": "SpellVisualKit.db2",
+        "layoutHash": 3228162500,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "ClutterLevel",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "FallbackSpellVisualKitId",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DelayMin",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "DelayMax",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MinimumSpellVisualDensityFilterType",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MinimumSpellVisualDensityFilterParam",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "ReducedSpellVisualDensityFilterType",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "ReducedSpellVisualDensityFilterParam",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 2
+          }
+        ]
+      },
+      "tableHash": 4102286043,
+      "sha256": "a8e531ba2966f1bc65d48754a16e3782eba273f03306f8fae50abf932553fb34"
+    },
+    "SpellVisualKitEffect": {
+      "meta": {
+        "fileName": "SpellVisualKitEffect.db2",
+        "layoutHash": 3810552994,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "EffectType",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Effect",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          }
+        ],
+        "parentFieldName": "ParentSpellVisualKitID"
+      },
+      "tableHash": 1181150530,
+      "sha256": "2d41c29c1c9e2d273a3a69b656cdeafb3d27a4e41f59842eda1d30aacf835891"
+    },
+    "SpellVisualKitModelAttach": {
+      "meta": {
+        "fileName": "SpellVisualKitModelAttach.db2",
+        "layoutHash": 47154516,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "Offset",
+            "type": "float",
+            "signed": true,
+            "arraySize": 3
+          },
+          {
+            "name": "OffsetVariation",
+            "type": "float",
+            "signed": true,
+            "arraySize": 3
+          },
+          {
+            "name": "SpellVisualEffectNameID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "AttachmentID",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "PositionerID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Yaw",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Pitch",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Roll",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "YawVariation",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "PitchVariation",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "RollVariation",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Scale",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "ScaleVariation",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "StartAnimID",
+            "type": "short",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "AnimID",
+            "type": "short",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "EndAnimID",
+            "type": "short",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "AnimKitID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "LowDefModelAttachID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "StartDelay",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_9_0_1_33978_021",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_11_0_0_54210_022",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          }
+        ],
+        "parentFieldName": "ParentSpellVisualKitID"
+      },
+      "tableHash": 4033975491,
+      "sha256": "c7d18d39eb80e8309526b92327e057339ed3d412c0aec09186c89279d5656577"
+    },
+    "SpellVisualEffectName": {
+      "meta": {
+        "fileName": "SpellVisualEffectName.db2",
+        "layoutHash": 575000294,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "ModelFileDataID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "BaseMissileSpeed",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Scale",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MinAllowedScale",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MaxAllowedScale",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Alpha",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "TextureFileDataID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "EffectRadius",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Type",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "GenericID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "RibbonQualityID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "DissolveEffectID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "ModelPosition",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Unknown901",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Unknown1100",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          }
+        ]
+      },
+      "tableHash": 48336690,
+      "sha256": "c3fb167ecdd6782533d6d94f692bdc1b1b13d7f3047d106d4d9fa6924f4e794f"
+    },
+    "SpellVisualAnim": {
+      "meta": {
+        "fileName": "SpellVisualAnim.db2",
+        "layoutHash": 4063453498,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "InitialAnimID",
+            "type": "short",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "LoopAnimID",
+            "type": "short",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "AnimKitID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_12_0_0_63967_003",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          }
+        ]
+      },
+      "tableHash": 859088734,
+      "sha256": "fbafb9fe9d0bbf42634995139acafeff3925150230a0f2d807004acbd4a4761f"
+    },
+    "SpellVisualMissile": {
+      "meta": {
+        "fileName": "SpellVisualMissile.db2",
+        "layoutHash": 2922942584,
+        "indexField": 2,
+        "fields": [
+          {
+            "name": "CastOffset",
+            "type": "float",
+            "signed": true,
+            "arraySize": 3
+          },
+          {
+            "name": "ImpactOffset",
+            "type": "float",
+            "signed": true,
+            "arraySize": 3
+          },
+          {
+            "name": "ID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "SpellVisualEffectNameID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "SoundEntriesID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "Attachment",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DestinationAttachment",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "CastPositionerID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "ImpactPositionerID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "FollowGroundHeight",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "FollowGroundDropSpeed",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "FollowGroundApproach",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "SpellMissileMotionID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "AnimKitID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "ClutterLevel",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DecayTimeAfterImpact",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Unused1100",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          }
+        ],
+        "parentFieldName": "SpellVisualMissileSetID"
+      },
+      "tableHash": 1369604944,
+      "sha256": "3c2bbe29546069bc749313009c2718b5b721e57ec2b1f4537a8a21018958b7d0"
+    },
+    "SpellXSpellVisual": {
+      "meta": {
+        "fileName": "SpellXSpellVisual.db2",
+        "layoutHash": 2039785616,
+        "indexField": 0,
+        "fields": [
+          {
+            "name": "ID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "DifficultyID",
+            "type": "short",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "SpellVisualID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "Probability",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Priority",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "SpellIconFileID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "ActiveIconFileID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "ViewerUnitConditionID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "ViewerPlayerConditionID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "CasterUnitConditionID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "CasterPlayerConditionID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          }
+        ],
+        "parentFieldName": "SpellID"
+      },
+      "tableHash": 666345498,
+      "sha256": "c3390f382a828a073e5d3cdf6d61b578da41004e4072fdbd5c1de4e32c105d0a"
+    },
+    "SpellMissileMotion": {
+      "meta": {
+        "fileName": "SpellMissileMotion.db2",
+        "layoutHash": 33598210,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "Name",
+            "type": "string",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "ScriptBody",
+            "type": "string",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MissileCount",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          }
+        ]
+      },
+      "tableHash": 930182777,
+      "sha256": "83e8a32e5dccebf6d5a7e161f049cf3f9812ce390654a2aee65bc1dda341a6be"
+    },
+    "SoundKit": {
+      "meta": {
+        "fileName": "SoundKit.db2",
+        "layoutHash": 2818245713,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "SoundType",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeFloat",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MinDistance",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DistanceCutoff",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "EAXDef",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "SoundKitAdvancedID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeVariationPlus",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeVariationMinus",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "PitchVariationPlus",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "PitchVariationMinus",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DialogType",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "PitchAdjust",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "BusOverwriteID",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MaxInstances",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "SoundMixGroupID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          }
+        ]
+      },
+      "tableHash": 908293937,
+      "sha256": "07c76dbe7812f1082745feaa57402e60a9777c505e72b26719d8611131a7c470"
+    },
+    "SoundKitEntry": {
+      "meta": {
+        "fileName": "SoundKitEntry.db2",
+        "layoutHash": 2407726973,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "SoundKitID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "FileDataID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Frequency",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "Volume",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "PlayerConditionID",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          }
+        ]
+      },
+      "tableHash": 3266400455,
+      "sha256": "7405d3f329997676177db0b9b930b51984da164777a8c4c820566e01721e81ce"
+    },
+    "SoundKitAdvanced": {
+      "meta": {
+        "fileName": "SoundKitAdvanced.db2",
+        "layoutHash": 4133337104,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "SoundKitID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "InnerRadius2D",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "OuterRadius2D",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeA",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeB",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeC",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeD",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "RandomOffsetRange",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Usage",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeIntervalMin",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeIntervalMax",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "DelayMin",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "DelayMax",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeSliderCategory",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "DuckToSFX",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DuckToMusic",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DuckToAmbience",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DuckToDialog",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DuckToSuppressors",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DuckToCinematicSFX",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "DuckToCinematicMusic",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_11_2_0_61476_021",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "InnerRadiusOfInfluence",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "OuterRadiusOfInfluence",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeToDuck",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeToUnduck",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "InsideAngle",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "OutsideAngle",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "OutsideVolume",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "MinRandomPosOffset",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MaxRandomPosOffset",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MsOffset",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeCooldownMin",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "TimeCooldownMax",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "MaxInstancesBehavior",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeControlType",
+            "type": "byte",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeFadeInTimeMin",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeFadeInTimeMax",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeFadeInCurveID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeFadeOutTimeMin",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeFadeOutTimeMax",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "VolumeFadeOutCurveID",
+            "type": "int",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "ChanceToPlay",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "RolloffType",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "RolloffParam0",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_2_0_30080_045",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_2_0_30080_046",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_2_0_30080_047",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_2_0_30080_048",
+            "type": "int",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_3_0_32044_049",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_3_0_32044_050",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_3_0_32044_051",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_3_0_32044_052",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_3_0_32044_053",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_8_3_0_32044_054",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_9_1_0_38312_055",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Field_9_1_0_38312_056",
+            "type": "float",
+            "signed": true,
+            "arraySize": 1
+          }
+        ]
+      },
+      "tableHash": 3232102598,
+      "sha256": "14b5b1fcdcfd250a35be3cff6bf2bec0f1db95e85f4d2e9650d6896e64350458"
+    },
+    "AnimationData": {
+      "meta": {
+        "fileName": "AnimationData.db2",
+        "layoutHash": 3153488444,
+        "indexField": -1,
+        "fields": [
+          {
+            "name": "Fallback",
+            "type": "short",
+            "signed": false,
+            "arraySize": 1
+          },
+          {
+            "name": "BehaviorTier",
+            "type": "byte",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "BehaviorID",
+            "type": "short",
+            "signed": true,
+            "arraySize": 1
+          },
+          {
+            "name": "Flags",
+            "type": "int",
+            "signed": true,
+            "arraySize": 2
+          }
+        ]
+      },
+      "tableHash": 2628737569,
+      "sha256": "616e3e0440e33f1fc79c1242cdf47a3dc02178780b1472c7b9ee72d5dc85e812"
+    }
+  },
+  "databaseSchema": "hotfixes",
+  "schemas": {
+    "spell_visual": "CREATE TABLE `spell_visual` (\n  `ID` int unsigned NOT NULL DEFAULT '0',\n  `MissileCastOffset1` float NOT NULL DEFAULT '0',\n  `MissileCastOffset2` float NOT NULL DEFAULT '0',\n  `MissileCastOffset3` float NOT NULL DEFAULT '0',\n  `MissileImpactOffset1` float NOT NULL DEFAULT '0',\n  `MissileImpactOffset2` float NOT NULL DEFAULT '0',\n  `MissileImpactOffset3` float NOT NULL DEFAULT '0',\n  `StateKit` int NOT NULL DEFAULT '0',\n  `AnimEventSoundID` int unsigned NOT NULL DEFAULT '0',\n  `Flags` int NOT NULL DEFAULT '0',\n  `MissileAttachment` tinyint NOT NULL DEFAULT '0',\n  `MissileDestinationAttachment` tinyint NOT NULL DEFAULT '0',\n  `MissileCastPositionerID` int unsigned NOT NULL DEFAULT '0',\n  `MissileImpactPositionerID` int unsigned NOT NULL DEFAULT '0',\n  `MissileTargetingKit` int NOT NULL DEFAULT '0',\n  `HostileSpellVisualID` int unsigned NOT NULL DEFAULT '0',\n  `CasterSpellVisualID` int unsigned NOT NULL DEFAULT '0',\n  `SpellVisualMissileSetID` smallint unsigned NOT NULL DEFAULT '0',\n  `DamageNumberDelay` smallint unsigned NOT NULL DEFAULT '0',\n  `LowViolenceSpellVisualID` int unsigned NOT NULL DEFAULT '0',\n  `RaidSpellVisualMissileSetID` int unsigned NOT NULL DEFAULT '0',\n  `ReducedUnexpectedCameraMovementSpellVisualID` int NOT NULL DEFAULT '0',\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`ID`,`VerifiedBuild`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "spell_visual_kit": "CREATE TABLE `spell_visual_kit` (\n  `ID` int unsigned NOT NULL DEFAULT '0',\n  `ClutterLevel` int NOT NULL DEFAULT '0',\n  `FallbackSpellVisualKitId` int NOT NULL DEFAULT '0',\n  `DelayMin` smallint unsigned NOT NULL DEFAULT '0',\n  `DelayMax` smallint unsigned NOT NULL DEFAULT '0',\n  `MinimumSpellVisualDensityFilterType` int NOT NULL DEFAULT '0',\n  `MinimumSpellVisualDensityFilterParam` int NOT NULL DEFAULT '0',\n  `ReducedSpellVisualDensityFilterType` int NOT NULL DEFAULT '0',\n  `ReducedSpellVisualDensityFilterParam` int NOT NULL DEFAULT '0',\n  `Flags1` int NOT NULL DEFAULT '0',\n  `Flags2` int NOT NULL DEFAULT '0',\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`ID`,`VerifiedBuild`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "spell_visual_effect_name": "CREATE TABLE `spell_visual_effect_name` (\n  `ID` int unsigned NOT NULL DEFAULT '0',\n  `ModelFileDataID` int NOT NULL DEFAULT '0',\n  `BaseMissileSpeed` float NOT NULL DEFAULT '0',\n  `Scale` float NOT NULL DEFAULT '0',\n  `MinAllowedScale` float NOT NULL DEFAULT '0',\n  `MaxAllowedScale` float NOT NULL DEFAULT '0',\n  `Alpha` float NOT NULL DEFAULT '0',\n  `Flags` int NOT NULL DEFAULT '0',\n  `TextureFileDataID` int NOT NULL DEFAULT '0',\n  `EffectRadius` float NOT NULL DEFAULT '0',\n  `Type` int NOT NULL DEFAULT '0',\n  `GenericID` int NOT NULL DEFAULT '0',\n  `RibbonQualityID` int unsigned NOT NULL DEFAULT '0',\n  `DissolveEffectID` int NOT NULL DEFAULT '0',\n  `ModelPosition` int NOT NULL DEFAULT '0',\n  `Unknown901` tinyint NOT NULL DEFAULT '0',\n  `Unknown1100` smallint unsigned NOT NULL DEFAULT '0',\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`ID`,`VerifiedBuild`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "spell_visual_missile": "CREATE TABLE `spell_visual_missile` (\n  `CastOffset1` float NOT NULL DEFAULT '0',\n  `CastOffset2` float NOT NULL DEFAULT '0',\n  `CastOffset3` float NOT NULL DEFAULT '0',\n  `ImpactOffset1` float NOT NULL DEFAULT '0',\n  `ImpactOffset2` float NOT NULL DEFAULT '0',\n  `ImpactOffset3` float NOT NULL DEFAULT '0',\n  `ID` int unsigned NOT NULL DEFAULT '0',\n  `SpellVisualEffectNameID` smallint unsigned NOT NULL DEFAULT '0',\n  `SoundEntriesID` int unsigned NOT NULL DEFAULT '0',\n  `Attachment` tinyint NOT NULL DEFAULT '0',\n  `DestinationAttachment` tinyint NOT NULL DEFAULT '0',\n  `CastPositionerID` smallint unsigned NOT NULL DEFAULT '0',\n  `ImpactPositionerID` smallint unsigned NOT NULL DEFAULT '0',\n  `FollowGroundHeight` int NOT NULL DEFAULT '0',\n  `FollowGroundDropSpeed` int unsigned NOT NULL DEFAULT '0',\n  `FollowGroundApproach` smallint unsigned NOT NULL DEFAULT '0',\n  `Flags` int NOT NULL DEFAULT '0',\n  `SpellMissileMotionID` smallint unsigned NOT NULL DEFAULT '0',\n  `AnimKitID` int unsigned NOT NULL DEFAULT '0',\n  `ClutterLevel` int NOT NULL DEFAULT '0',\n  `DecayTimeAfterImpact` int NOT NULL DEFAULT '0',\n  `Unused1100` smallint unsigned NOT NULL DEFAULT '0',\n  `SpellVisualMissileSetID` int unsigned NOT NULL DEFAULT '0',\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`ID`,`VerifiedBuild`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "spell_x_spell_visual": "CREATE TABLE `spell_x_spell_visual` (\n  `ID` int unsigned NOT NULL DEFAULT '0',\n  `DifficultyID` smallint NOT NULL DEFAULT '0',\n  `SpellVisualID` int unsigned NOT NULL DEFAULT '0',\n  `Probability` float NOT NULL DEFAULT '0',\n  `Flags` int NOT NULL DEFAULT '0',\n  `Priority` int NOT NULL DEFAULT '0',\n  `SpellIconFileID` int NOT NULL DEFAULT '0',\n  `ActiveIconFileID` int NOT NULL DEFAULT '0',\n  `ViewerUnitConditionID` smallint unsigned NOT NULL DEFAULT '0',\n  `ViewerPlayerConditionID` int unsigned NOT NULL DEFAULT '0',\n  `CasterUnitConditionID` smallint unsigned NOT NULL DEFAULT '0',\n  `CasterPlayerConditionID` int unsigned NOT NULL DEFAULT '0',\n  `SpellID` int unsigned NOT NULL DEFAULT '0',\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`ID`,`VerifiedBuild`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "sound_kit": "CREATE TABLE `sound_kit` (\n  `ID` int unsigned NOT NULL DEFAULT '0',\n  `SoundType` int NOT NULL DEFAULT '0',\n  `VolumeFloat` float NOT NULL DEFAULT '0',\n  `Flags` int NOT NULL DEFAULT '0',\n  `MinDistance` float NOT NULL DEFAULT '0',\n  `DistanceCutoff` float NOT NULL DEFAULT '0',\n  `EAXDef` tinyint unsigned NOT NULL DEFAULT '0',\n  `SoundKitAdvancedID` int unsigned NOT NULL DEFAULT '0',\n  `VolumeVariationPlus` float NOT NULL DEFAULT '0',\n  `VolumeVariationMinus` float NOT NULL DEFAULT '0',\n  `PitchVariationPlus` float NOT NULL DEFAULT '0',\n  `PitchVariationMinus` float NOT NULL DEFAULT '0',\n  `DialogType` tinyint NOT NULL DEFAULT '0',\n  `PitchAdjust` float NOT NULL DEFAULT '0',\n  `BusOverwriteID` smallint unsigned NOT NULL DEFAULT '0',\n  `MaxInstances` tinyint unsigned NOT NULL DEFAULT '0',\n  `SoundMixGroupID` int unsigned NOT NULL DEFAULT '0',\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`ID`,`VerifiedBuild`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "hotfix_blob": "CREATE TABLE `hotfix_blob` (\n  `TableHash` int unsigned NOT NULL,\n  `RecordId` int NOT NULL,\n  `locale` varchar(4) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `Blob` blob,\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`TableHash`,`RecordId`,`locale`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "hotfix_data": "CREATE TABLE `hotfix_data` (\n  `Id` int NOT NULL,\n  `UniqueId` int unsigned NOT NULL DEFAULT '0',\n  `TableHash` int unsigned NOT NULL,\n  `RecordId` int NOT NULL,\n  `Status` tinyint unsigned NOT NULL DEFAULT '3',\n  `VerifiedBuild` int NOT NULL DEFAULT '0',\n  PRIMARY KEY (`Id`,`TableHash`,`RecordId`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "updates": "CREATE TABLE `updates` (\n  `name` varchar(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'filename with extension of the update.',\n  `hash` char(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT '' COMMENT 'sha1 hash of the sql file.',\n  `state` enum('RELEASED','ARCHIVED') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'RELEASED' COMMENT 'defines if an update is released or archived.',\n  `timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'timestamp when the query was applied.',\n  `speed` int unsigned NOT NULL DEFAULT '0' COMMENT 'time the query takes to apply in ms.',\n  PRIMARY KEY (`name`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='List of all applied updates in this database.'"
+  },
+  "sourceInputs": {
+    "F:\\evry\\WOWEmulation\\Emulators\\Builds\\reaper-class\\3d-effects-69814-20260926\\recovered\\manifest.json": "285e42027807cbb69d11d4314cae8ef9fbcbbdff1a98a4d6ed11aab28e87a24c",
+    "F:\\evry\\WOWEmulation\\Emulators\\Builds\\reaper-class\\3d-effects-69814-20260926\\converted\\manifest.json": "d343784f0fb7b850505a637b841b767b2aa735a40dd80c8654729161f2ce0ce7",
+    "F:\\evry\\WOWEmulation\\Emulators\\Builds\\reaper-class\\3d-effects-69814-20260926\\retail\\tables.json": "6be5aed16524ac0aae55fda610c1dba6a0a5d2a397b03387b2c4e6899b2eae8c",
+    "F:\\evry\\WOWEmulation\\Emulators\\Builds\\reaper-class\\3d-effects-69814-20260926\\database.json": "09851775ee5b32912f193499cb3125e2566daf998e563fce73bf0557707c8b5c",
+    "F:\\evry\\WOWEmulation\\Emulators\\Builds\\reaper-class\\3d-effects-69814-20260926\\translation-evidence.json": "df95520b8dfb5ba1c7ea94427c0ab8d92e5e60b850a44752c5585f7d09627b11",
+    "F:\\evry\\WOWEmulation\\Emulators\\Builds\\reaper-class\\3d-effects-69814-20260926\\native-comparison.json": "fa0c62e70d2727b5a54022092cc9eaab3944f399a2938421df405bd86b1fc58c"
+  },
+  "nativeAnimations": {
+    "(-1, 54)": 3,
+    "(-1, 53)": 7,
+    "(-1, 58)": 50,
+    "(-1, 9)": 73
+  },
+  "note": "All five chains generated. Remaining-effects package excludes the installed Murder closure.",
+  "infusionReconstruction": {
+    "manifest": "F:\\evry\\WOWEmulation\\Emulators\\Builds\\reaper-class\\3d-effects-69814-20260926\\infusion-v1\\manifest.json",
+    "sha256": "dcae6c9f8c170fa0aaccaf024f0fccd985f53d7f620d2f65adb8795e310d5d5f",
+    "sourceSha256": "fa24a1aa40306f08f425c055f44a00a7d0de00811587310d0bbbf6d14c38e57a",
+    "nativeReferenceSha256": "8812e7a79fc5d43c32a3afcfd2638329fc89320d894932dc8066f52778138967",
+    "nativeFileDataID": 345807,
+    "repairedSha256": "cb33797a27170a03788cd850fa69f24060887ea2a5bdf829c5adfa7545550268",
+    "edits": [
+      {
+        "particle": 0,
+        "trackOffset": 456,
+        "sequence": 2,
+        "headerOffset": 3188,
+        "originalHeader": "0000000000000000",
+        "updatedHeader": "02000000e00d0000",
+        "appendedOffset": 3552,
+        "bytes": "0100",
+        "reason": "Restore native enabled keys 1,0 at the source-identical decay times 0,834 ms."
+      },
+      {
+        "particle": 1,
+        "trackOffset": 72,
+        "sequence": 0,
+        "headerOffset": 3220,
+        "originalHeader": "0000000000000000",
+        "updatedHeader": "01000000e40d0000",
+        "appendedOffset": 3556,
+        "bytes": "00000000",
+        "reason": "Use native constant-key timestamp 0; retain the CoA value 0.3, not native 0.0."
+      }
+    ],
+    "validTracksPreserved": 41,
+    "sourceBytesPreservedExceptHeaders": true,
+    "classification": "Native-reference compatibility reconstruction; CoA fallback semantics unobserved.",
+    "gameplayAccepted": false
+  }
+}

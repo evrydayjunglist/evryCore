@@ -26,7 +26,8 @@
 #include <cstdint>
 #include <vector>
 
-// Something the server sent her client that a real client answers: a movement order, or a time sync request.
+// Something the server sent her client that a real client answers: a movement order, a time sync request, or a party
+// invite window.
 enum class PlayerbotServerOrderKind : std::uint8_t
 {
     Root,
@@ -35,7 +36,8 @@ enum class PlayerbotServerOrderKind : std::uint8_t
     Teleport,
     SuspendToken,
     NewWorld,
-    TimeSync
+    TimeSync,
+    PartyInvite
 };
 
 inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
@@ -56,6 +58,8 @@ inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
             return "new world";
         case PlayerbotServerOrderKind::TimeSync:
             return "time sync request";
+        case PlayerbotServerOrderKind::PartyInvite:
+            return "party invite";
     }
 
     return "unknown";
@@ -77,6 +81,9 @@ struct PlayerbotServerOrder
     float VerticalSpeed = 0.0f;
     // Teleport: where the server is putting her.
     Position Destination;
+    // Party invite: who invited her. Only an invite window she can answer is kept; the notice that someone tried to
+    // invite her while she was already in a group is not.
+    ObjectGuid Inviter;
 };
 
 namespace PlayerbotServerMovementDetail
@@ -155,7 +162,8 @@ namespace PlayerbotServerMovementDetail
     }
 }
 
-// Reads what a client has to answer from one packet the server sent: movement orders and time sync requests. Any
+// Reads what a client has to answer from one packet the server sent: movement orders, time sync requests, and party
+// invites. Any
 // other packet adds nothing, and so does a packet that cannot be read. Only a handful of opcodes are copied; every
 // other packet returns at the switch.
 inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<PlayerbotServerOrder>& out)
@@ -170,6 +178,7 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
         case SMSG_NEW_WORLD:
         case SMSG_MOVE_SET_COMPOUND_STATE:
         case SMSG_TIME_SYNC_REQUEST:
+        case SMSG_PARTY_INVITE:
             break;
         default:
             return;
@@ -234,6 +243,18 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
                 order.SequenceIndex = data.read<std::uint32_t>();
                 out.push_back(order);
                 break;
+            case SMSG_PARTY_INVITE:
+            {
+                bool const canAccept = data.ReadBit();
+                data.ReadBits(5); // cross-realm, squelch, multiple roles and quest session flags
+                data.ReadBits(6); // length of the inviter's name
+                data.ReadBit();   // cross-faction
+                order.Kind = PlayerbotServerOrderKind::PartyInvite;
+                data >> order.Inviter;
+                if (canAccept)
+                    out.push_back(order);
+                break;
+            }
             default:
                 break;
         }

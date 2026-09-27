@@ -148,6 +148,8 @@ namespace PlayerbotClient
     void QueueMoveTeleportAck(WorldSession* session, ObjectGuid mover, uint32 ackIndex);
     void QueueSuspendTokenResponse(WorldSession* session, uint32 sequenceIndex);
     void QueueWorldPortResponse(WorldSession* session);
+    // Accept or Decline on the party invite window.
+    void QueuePartyInviteResponse(WorldSession* session, bool accept);
     // Her client's movement status at pos. It keeps only the modes the server granted her from its record of her movement;
     // the caller adds what she is doing.
     void FillClientMovementInfo(Player const* player, Position const& pos, MovementInfo& out);

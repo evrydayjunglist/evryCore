@@ -23,6 +23,7 @@
 #include "CommandablePlayerState.h"
 #include "PlayerbotCoordinatorLease.h"
 #include "PlayerbotCoordinatorPresence.h"
+#include "PlayerbotInvitePolicy.h"
 #include "PlayerbotMovement.h"
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotSessionPresence.h"
@@ -140,6 +141,9 @@ struct PlayerbotRecord
     PlayerbotServerReply SuspendTokenReply;
     PlayerbotServerReply WorldPortReply;
     uint32 UnansweredTeleportMs = 0;
+    // The party invite window she has open: who sent it and how long she has had it.
+    ObjectGuid InviteFrom;
+    uint32 InviteOpenMs = 0;
     CommandablePlayerState Command;
     Position CommandDestination;
     bool CommandMovePending = false;
@@ -171,8 +175,8 @@ public:
     void OnBotLogin(Player* player);
     void OnPlayerLogout(Player* player);
     void OnPlayerMapChanged(Player* player);
-    // Any thread: keeps the movement orders and time sync requests a bot's client must answer, until OnUpdate
-    // answers them.
+    // Any thread: keeps the movement orders, time sync requests, and party invites a bot's client must answer, until
+    // OnUpdate answers them.
     void OnSocketlessSessionPacketSend(WorldSession* session, WorldPacket const& packet);
     // Maps the ground this player can walk from where her client last put her, by a bot's walk rules, and writes a
     // picture next to the server logs. False, with the reason in message, when she cannot be mapped now.
@@ -215,6 +219,7 @@ private:
     void RetryServerReplies(PlayerbotRecord& bot, Player* player, uint32 diff);
     void ForgetPositionAfterTeleport(PlayerbotRecord& bot, Player* player);
     void ClearServerOrders(uint32 accountId);
+    void UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff);
     void BeginDeath(PlayerbotRecord& bot, Player* player);
@@ -257,6 +262,7 @@ private:
     PlayerbotBridge _bridge;
     PlayerbotCoordinatorLease _coordinatorLease;
     PlayerbotLoginMode _loginMode = PlayerbotLoginMode::Automatic;
+    PlayerbotInvitePolicy _invitePolicy = PlayerbotInvitePolicy::GameMaster;
     bool _bridgeStarted = false;
     std::unordered_map<ObjectGuid, PlayerbotRecord> _originalCommandRuntimes;
     std::unordered_map<ObjectGuid, CommandableRtsSession> _rtsSessions;

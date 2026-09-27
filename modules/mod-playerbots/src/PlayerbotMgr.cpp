@@ -667,6 +667,17 @@ void PlayerbotMgr::Start()
     }
 
     _loginMode = ReadLoginMode();
+
+    std::string const invitePolicy = sConfigMgr->GetStringDefault(PLAYERBOTS_INVITE_POLICY, "GameMaster");
+    if (std::optional<PlayerbotInvitePolicy> parsed = ParsePlayerbotInvitePolicy(invitePolicy))
+        _invitePolicy = *parsed;
+    else
+    {
+        _invitePolicy = PlayerbotInvitePolicy::Nobody;
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} is '{}'; expected Nobody, GameMaster, Peer or Anyone. Bots decline every party invite.",
+            PLAYERBOTS_INVITE_POLICY, invitePolicy);
+    }
+
     bool const bridgeRequested = sConfigMgr->GetBoolDefault(PLAYERBOTS_BRIDGE_ENABLE, false)
         || _loginMode == PlayerbotLoginMode::Coordinator;
     if (bridgeRequested)
@@ -2068,7 +2079,78 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} queued CMSG_TIME_SYNC_RESPONSE for sequence {}.",
                 session->GetAccountId(), order.SequenceIndex);
             break;
+        case PlayerbotServerOrderKind::PartyInvite:
+            // The window stays open until she clicks; UpdatePartyInvite answers it after she has read it.
+            bot.InviteFrom = order.Inviter;
+            bot.InviteOpenMs = 0;
+            break;
     }
+}
+
+void PlayerbotMgr::UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    if (bot.InviteFrom.IsEmpty())
+        return;
+
+    // The server withdrew the invite (the inviter cancelled it, or the party it was for is gone): the window closed.
+    if (!player->GetGroupInvite())
+    {
+        bot.InviteFrom.Clear();
+        return;
+    }
+
+    bot.InviteOpenMs += diff;
+    if (bot.InviteOpenMs < PLAYERBOT_INVITE_ANSWER_DELAY_MS)
+        return;
+
+    ObjectGuid const inviterGuid = bot.InviteFrom;
+    bot.InviteFrom.Clear();
+
+    PlayerbotInviteFacts facts;
+    facts.BotLevel = player->GetLevel();
+    facts.MaxLevel = uint8(std::min<uint32>(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL), std::numeric_limits<uint8>::max()));
+    facts.BotItemLevel = player->GetAverageItemLevel();
+
+    std::string inviterName = inviterGuid.ToString();
+    Player const* inviter = ObjectAccessor::FindConnectedPlayer(inviterGuid);
+    if (inviter)
+    {
+        inviterName = inviter->GetName();
+        facts.InviterIsGameMaster = inviter->GetSession()->GetSecurity() >= SEC_GAMEMASTER;
+        facts.InviterLevel = inviter->GetLevel();
+        facts.InviterItemLevel = inviter->GetAverageItemLevel();
+    }
+
+    PlayerbotInviteVerdict verdict = JudgePlayerbotInvite(_invitePolicy, facts);
+    // Only who she can see decides; someone she cannot find online is not a game master or a peer to her.
+    if (!inviter && _invitePolicy != PlayerbotInvitePolicy::Anyone)
+        verdict = _invitePolicy == PlayerbotInvitePolicy::Nobody ? PlayerbotInviteVerdict::DeclinedByPolicy : PlayerbotInviteVerdict::NotGameMaster;
+
+    char const* why = "";
+    switch (verdict)
+    {
+        case PlayerbotInviteVerdict::Accept:
+            why = "the invite policy lets them in";
+            break;
+        case PlayerbotInviteVerdict::DeclinedByPolicy:
+            why = "the invite policy turns every invite down";
+            break;
+        case PlayerbotInviteVerdict::NotGameMaster:
+            why = inviter ? "they are not a game master" : "they are no longer online";
+            break;
+        case PlayerbotInviteVerdict::LevelTooFar:
+            why = "their level is too far from hers";
+            break;
+        case PlayerbotInviteVerdict::ItemLevelTooFar:
+            why = "their average item level is too far from hers";
+            break;
+    }
+
+    bool const accept = verdict == PlayerbotInviteVerdict::Accept;
+    PlayerbotClient::QueuePartyInviteResponse(player->GetSession(), accept);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} {} the party invite from {} (level {}, item level {:.1f}; hers {}, {:.1f}; policy {}): {}. Queued CMSG_PARTY_INVITE_RESPONSE.",
+        player->GetName(), accept ? "accepted" : "declined", inviterName, facts.InviterLevel, facts.InviterItemLevel,
+        facts.BotLevel, facts.BotItemLevel, PlayerbotInvitePolicyName(_invitePolicy), why);
 }
 
 void PlayerbotMgr::RetryServerReplies(PlayerbotRecord& bot, Player* player, uint32 diff)
@@ -2209,6 +2291,8 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (!player->IsInWorld())
         return;
+
+    UpdatePartyInvite(bot, player, diff);
 
     if (!bot.CinematicSkipped)
     {

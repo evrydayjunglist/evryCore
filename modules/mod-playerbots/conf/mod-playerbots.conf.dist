@@ -104,6 +104,28 @@ Playerbots.Classes =
 Playerbots.RegenerateCharacters = 0
 
 #
+#    Playerbots.InvitePolicy
+#        Description: Who a bot accepts a party invite from. She answers the invite
+#                     window after a moment, like a player, with the same accept or
+#                     decline a client sends. The server's own rules still apply
+#                     first (faction, ignore list, full party, and the rest).
+#                     Each choice also accepts everyone the one above it accepts,
+#                     so a game master is always accepted unless it is Nobody.
+#        Default:     GameMaster
+#
+#                     Nobody     - decline every invite
+#                     GameMaster - only accounts at game master level or above
+#                     Peer       - game masters, and players within 5 levels of her;
+#                                  when both are at the top level, within 15 average
+#                                  equipped item levels instead
+#                     Anyone     - every player the server lets invite her
+#
+#                     An unknown value is logged at startup and treated as Nobody.
+#
+
+Playerbots.InvitePolicy = GameMaster
+
+#
 #    Playerbots.Bridge.Enable
 #        Description: Listen on 127.0.0.1 for the separate playerbots.exe
 #                     coordinator while using Automatic login mode. That bridge

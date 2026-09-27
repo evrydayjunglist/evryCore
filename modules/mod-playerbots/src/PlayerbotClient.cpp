@@ -148,6 +148,21 @@ void PlayerbotClient::QueueWorldPortResponse(WorldSession* session)
     session->QueuePacket(std::move(packet));
 }
 
+void PlayerbotClient::QueuePartyInviteResponse(WorldSession* session, bool accept)
+{
+    if (!session)
+        return;
+
+    // No party index (her ordinary party) and no desired roles, as the invite window sends outside group finder.
+    WorldPacket packet(CMSG_PARTY_INVITE_RESPONSE);
+    packet.WriteBit(false);
+    packet.WriteBit(accept);
+    packet.WriteBit(false);
+    packet.FlushBits();
+    packet.SetReceiveTime(GameTime::Now());
+    session->QueuePacket(std::move(packet));
+}
+
 void PlayerbotClient::FillClientMovementInfo(Player const* player, Position const& pos, MovementInfo& out)
 {
     out = player->m_movementInfo;

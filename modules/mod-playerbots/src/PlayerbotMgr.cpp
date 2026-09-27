@@ -75,6 +75,10 @@ namespace
     // Below this much health, or this much mana for a mana user, she sits until both are full before her next pull.
     constexpr float REST_BELOW_HEALTH_PCT = 60.0f;
     constexpr float REST_BELOW_MANA_PCT = 40.0f;
+    // In a fight, below this much health she presses a heal, shield, or damage cut she knows on herself before her next
+    // damage press; below the second, one with a long cooldown too.
+    constexpr float FIGHT_SELF_DEFENCE_BELOW_HEALTH_PCT = 50.0f;
+    constexpr float FIGHT_LONG_COOLDOWN_BELOW_HEALTH_PCT = 30.0f;
     std::string NormalizeLoginMode(std::string_view value)
     {
         while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
@@ -3677,6 +3681,33 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
             bot.CombatCastPending = false;
             bot.CombatCastSpellId = 0;
             bot.CombatCastWaitMs = 0;
+        }
+    }
+
+    float const healthPct = player->GetHealthPct();
+    if (player->IsInCombat() && healthPct < FIGHT_SELF_DEFENCE_BELOW_HEALTH_PCT)
+    {
+        if (SpellInfo const* defence = PlayerbotClient::PickSelfDefenceSpell(player, healthPct < FIGHT_LONG_COOLDOWN_BELOW_HEALTH_PCT))
+        {
+            // A cast-time heal needs her standing still; a walk carries on after it.
+            if (!heldInPlace && bot.Walker.IsMoving())
+            {
+                bot.Walker.Stop(player);
+                swingIfMelee();
+                return true;
+            }
+
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is at {:.0f}% health in a fight, so she casts spell {} on herself.",
+                player->GetName(), healthPct, defence->Id);
+            if (PlayerbotClient::TrySelfCast(player, defence->Id))
+            {
+                bot.CombatCastSpellId = defence->Id;
+                bot.CombatCastPending = true;
+                bot.CombatCastWaitMs = 0;
+            }
+
+            swingIfMelee();
+            return true;
         }
     }
 

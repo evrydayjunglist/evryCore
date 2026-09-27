@@ -62,6 +62,7 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -1117,6 +1118,78 @@ namespace
             return false;
 
         if (CombatSpellIsUtility(spellInfo) || !SpellHasCombatDamage(spellInfo))
+            return false;
+
+        return player->HasActiveSpell(spellInfo->Id);
+    }
+
+    // A heal, a heal over time, a shield, or a cut to the damage she takes.
+    bool SpellProtectsSelf(SpellInfo const* spellInfo)
+    {
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            switch (effect.Effect)
+            {
+                case SPELL_EFFECT_HEAL:
+                case SPELL_EFFECT_HEAL_PCT:
+                case SPELL_EFFECT_HEAL_MAX_HEALTH:
+                    return true;
+                case SPELL_EFFECT_APPLY_AURA:
+                    switch (effect.ApplyAuraName)
+                    {
+                        case SPELL_AURA_PERIODIC_HEAL:
+                        case SPELL_AURA_OBS_MOD_HEALTH:
+                        case SPELL_AURA_SCHOOL_ABSORB:
+                        case SPELL_AURA_SCHOOL_IMMUNITY:
+                            return true;
+                        case SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN:
+                            if (effect.BasePoints < 0.0f)
+                                return true;
+                            break;
+                        default:
+                            break;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    bool SelfDefenceSpellIsEligible(Player const* player, SpellInfo const* spellInfo)
+    {
+        if (!player || !spellInfo)
+            return false;
+
+        if (spellInfo->IsPassive() || !spellInfo->IsPositive())
+            return false;
+
+        if (spellInfo->IsProfession() || spellInfo->HasAttribute(SPELL_ATTR0_IS_TRADESKILL)
+            || spellInfo->HasAttribute(SPELL_ATTR0_DO_NOT_DISPLAY_SPELLBOOK_AURA_ICON_COMBAT_LOG)
+            || spellInfo->HasAttribute(SPELL_ATTR4_NOT_IN_SPELLBOOK))
+            return false;
+
+        if (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->HasAura(SPELL_AURA_MOD_SHAPESHIFT)
+            || spellInfo->HasEffect(SPELL_EFFECT_SUMMON) || spellInfo->HasEffect(SPELL_EFFECT_SUMMON_PET)
+            || spellInfo->HasEffect(SPELL_EFFECT_TELEPORT_UNITS))
+            return false;
+
+        switch (spellInfo->GetSpellSpecific())
+        {
+            case SPELL_SPECIFIC_FOOD:
+            case SPELL_SPECIFIC_DRINK:
+            case SPELL_SPECIFIC_FOOD_AND_DRINK:
+                return false;
+            default:
+                break;
+        }
+
+        if (!SpellProtectsSelf(spellInfo))
             return false;
 
         return player->HasActiveSpell(spellInfo->Id);
@@ -3153,6 +3226,69 @@ bool PlayerbotClient::TryCombatCast(Player* player, ObjectGuid creatureGuid, uin
     QueueCastSpell(player, creatureGuid, spellId);
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on {}.",
         player->GetName(), CombatSpellName(spellInfo), spellId, creatureGuid.ToString());
+    return true;
+}
+
+SpellInfo const* PlayerbotClient::PickSelfDefenceSpell(Player* player, bool allowLongCooldown)
+{
+    if (!player || !player->GetMap() || player->IsNonMeleeSpellCast(false, false, true))
+        return nullptr;
+
+    // A spell whose cooldown is this long (Lay on Hands, Shield Wall, Divine Shield) is kept for when she is nearly down.
+    constexpr uint32 LONG_COOLDOWN_MS = 60 * IN_MILLISECONDS;
+
+    SpellInfo const* best = nullptr;
+    bool bestLong = false;
+    bool bestHasCastTime = false;
+    for (auto const& [spellId, playerSpell] : player->GetSpellMap())
+    {
+        if (playerSpell.state == PLAYERSPELL_REMOVED || !playerSpell.active || playerSpell.disabled)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+        if (!SelfDefenceSpellIsEligible(player, spellInfo))
+            continue;
+
+        bool const isLong = spellInfo->GetRecoveryTime() >= LONG_COOLDOWN_MS;
+        if (isLong && !allowLongCooldown)
+            continue;
+
+        // A heal over time or a shield she already has from this spell is still working.
+        if (player->HasAura(spellInfo->Id, player->GetGUID()))
+            continue;
+
+        if (!CombatSpellIsReady(player, spellInfo) || CombatSpellAlreadyQueued(player, spellInfo))
+            continue;
+
+        if (CheckCombatSpellCast(player, player, spellInfo) != SPELL_CAST_OK)
+            continue;
+
+        // Save the long cooldowns, and prefer an instant press while she is being hit.
+        bool const hasCastTime = spellInfo->CalcCastTime() > 0;
+        if (best && std::tie(isLong, hasCastTime) >= std::tie(bestLong, bestHasCastTime))
+            continue;
+
+        best = spellInfo;
+        bestLong = isLong;
+        bestHasCastTime = hasCastTime;
+    }
+
+    return best;
+}
+
+bool PlayerbotClient::TrySelfCast(Player* player, uint32 spellId)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || !player->GetMap() || !spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+    if (!spellInfo)
+        return false;
+
+    // A client casting on itself keeps the enemy selected; only the cast names her.
+    QueueCastSpell(player, player->GetGUID(), spellId);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on herself.",
+        player->GetName(), CombatSpellName(spellInfo), spellId);
     return true;
 }
 

@@ -29,6 +29,7 @@
 // database updater applies a module's SQL only when that module is enabled.
 
 void AddCoaReaperCommandScripts();
+void AddSC_reaper_spell_scripts();
 
 class CoaWorldScript : public WorldScript
 {
@@ -45,4 +46,5 @@ void Addmod_coaScripts()
 {
     new CoaWorldScript();
     AddCoaReaperCommandScripts();
+    AddSC_reaper_spell_scripts();
 }

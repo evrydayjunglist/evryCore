@@ -664,6 +664,7 @@ void PlayerbotWalker::ResetNow()
     ClearWayRound();
     _walkingAWayRound = false;
     _lookedForAWayRound = false;
+    _wayRoundFirstStepRefused = false;
     _failedAtHerFeet = false;
 }
 
@@ -2183,6 +2184,7 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     settings.OriginY = y;
     settings.OriginZ = z;
     settings.Spacing = std::clamp(HeartbeatStepLen(player), WAY_ROUND_MIN_SPACING, WAY_ROUND_MAX_SPACING);
+    settings.StepYards = HeartbeatStepLen(player);
     settings.Radius = WAY_ROUND_YARDS;
     settings.MaxClimbDegrees = MaxWalkableSlopeDegrees;
     settings.MaxDropYards = MaxDownStepYards;
@@ -2199,6 +2201,7 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     _wayRoundMapId = player->GetMapId();
     _walkingAWayRound = false;
     _lookedForAWayRound = true;
+    _wayRoundFirstStepRefused = false;
     _lastGrounded.Relocate(x, y, z, _lastGrounded.GetOrientation());
     _state = State::LookingForAWayRound;
     TC_LOG_INFO(PLAYERBOTS_LOG,
@@ -2275,12 +2278,18 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
     ClearWayRound();
     _state = State::Failed;
     _contouring = false;
-    // The only spot she can walk to is the one she stands on, so no destination could have been reached from here.
-    _failedAtHerFeet = summary.Reached <= 1;
-    TC_LOG_INFO(PLAYERBOTS_LOG,
-        "mod-playerbots: {} found no way round: none of the {} spots she can walk to within {:.0f} yards is {:.0f} yards closer to where she is going, and the navmesh had no route she can start from any of the {} way(s) out. {}",
-        player->GetName(), summary.Reached, WAY_ROUND_YARDS, WAY_ROUND_MIN_GAIN_YARDS, uint32(waysOut),
-        _failedAtHerFeet ? "She cannot step anywhere from where she stands." : "Looking for other work.");
+    // The only spot she can walk to is the one she stands on, or every way she found was refused at her first step, so
+    // no destination could have been reached from here.
+    _failedAtHerFeet = summary.Reached <= 1 || _wayRoundFirstStepRefused;
+    if (_wayRoundFirstStepRefused)
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} found no way round: the map found {} spots she can walk to within {:.0f} yards, but every way round or way out she tried was refused at her first step. She cannot step anywhere from where she stands.",
+            player->GetName(), summary.Reached, WAY_ROUND_YARDS);
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} found no way round: none of the {} spots she can walk to within {:.0f} yards is {:.0f} yards closer to where she is going, and the navmesh had no route she can start from any of the {} way(s) out. {}",
+            player->GetName(), summary.Reached, WAY_ROUND_YARDS, WAY_ROUND_MIN_GAIN_YARDS, uint32(waysOut),
+            _failedAtHerFeet ? "She cannot step anywhere from where she stands." : "Looking for other work.");
 }
 
 bool PlayerbotWalker::StartWayRoundWalk(Player* player)
@@ -2349,10 +2358,19 @@ bool PlayerbotWalker::WalkTheWayRound(Player* player, PlayerbotWalkMapWayRound c
     _contouring = false;
     _startedOnAFace = false;
     _state = State::Moving;
-    if (!FirstGroundedStepIsLegal(player))
+    Position first;
+    GroundedStepFailure const firstFailure = PeekGroundedStepFailure(player, HeartbeatStepLen(player), first);
+    if (firstFailure != GroundedStepFailure::None)
     {
         _path.clear();
         _state = wasIn;
+        // Read by the look that is still going on. A refused step while she already walks a way round is not a look.
+        if (wasIn == State::LookingForAWayRound)
+            _wayRoundFirstStepRefused = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} did not take a way round ({}): her first step from ({:.2f}, {:.2f}, {:.2f}) to ({:.2f}, {:.2f}, {:.2f}) is refused ({}).",
+            player->GetName(), what, _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ(),
+            first.GetPositionX(), first.GetPositionY(), first.GetPositionZ(), GroundedStepFailureName(firstFailure));
         return false;
     }
 

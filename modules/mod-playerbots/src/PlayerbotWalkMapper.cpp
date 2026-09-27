@@ -140,6 +140,7 @@ bool PlayerbotWalkMapper::Start(Player* subject, Position const& feet, Position 
     settings.OriginY = y;
     settings.OriginZ = z;
     settings.Spacing = std::clamp(PlayerbotWalker::HeartbeatStepLength(subject), WALK_MAP_MIN_SPACING, WALK_MAP_MAX_SPACING);
+    settings.StepYards = PlayerbotWalker::HeartbeatStepLength(subject);
     settings.Radius = std::clamp(radius, PLAYERBOT_WALK_MAP_MIN_YARDS, PLAYERBOT_WALK_MAP_MAX_YARDS);
     settings.MaxClimbDegrees = PlayerbotWalker::MaxWalkableSlopeDegrees;
     settings.MaxDropYards = PlayerbotWalker::MaxDownStepYards;

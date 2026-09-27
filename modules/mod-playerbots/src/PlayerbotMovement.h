@@ -271,6 +271,8 @@ private:
     bool _walkingAWayRound = false;
     // One look per approach. A second one would only find the same ground.
     bool _lookedForAWayRound = false;
+    // This look found a way round or a way out and her first step onto it was refused.
+    bool _wayRoundFirstStepRefused = false;
     bool _failedAtHerFeet = false;
 };
 

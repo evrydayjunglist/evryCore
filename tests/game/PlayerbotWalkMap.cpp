@@ -239,6 +239,35 @@ TEST_CASE("Playerbot walk map refuses a step through a wall", "[playerbots][walk
             CHECK(map.WorldX(spot.I) < 3.0f);
 }
 
+TEST_CASE("Playerbot walk map judges a diagonal step as the heartbeats she walks", "[playerbots][walk-map]")
+{
+    // A lip 0.6 yards high. Over one 0.7-yard heartbeat that is about 41 degrees, too steep. Over a whole 0.99-yard
+    // diagonal between spots it is about 31 degrees, which a single long step would pass.
+    TestWorld world;
+    world.Floors = [](float x, float y) { return std::vector<float>{ x + y > 0.5f ? 0.6f : 0.0f }; };
+
+    PlayerbotWalkMap map(Settings(8.0f));
+    Finish(map, world);
+    for (PlayerbotWalkMapSpot const& spot : map.Spots())
+        if (spot.Reached)
+            CHECK(spot.Z < 0.3f);
+    // The refused diagonal from her feet leaves no floor behind at the spot it did not reach.
+    CHECK(map.Spots()[0].Steps[7] == PlayerbotWalkMapStep::SteepUp);
+    CHECK(map.Spots()[0].StepSpot[7] == -1);
+
+    // Judged as one long step, the same diagonal gets onto the lip her heartbeat refuses.
+    PlayerbotWalkMapSettings longStep = Settings(8.0f);
+    longStep.StepYards = 1.0f;
+    PlayerbotWalkMap once(longStep);
+    Finish(once, world);
+    CHECK(once.Spots()[0].Steps[7] == PlayerbotWalkMapStep::Legal);
+    bool reachedLip = false;
+    for (PlayerbotWalkMapSpot const& spot : once.Spots())
+        if (spot.Reached && spot.Z > 0.3f)
+            reachedLip = true;
+    CHECK(reachedLip);
+}
+
 TEST_CASE("Playerbot walk map does not step into ground that is not loaded", "[playerbots][walk-map]")
 {
     TestWorld world;

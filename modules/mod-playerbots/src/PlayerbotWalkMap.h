@@ -119,6 +119,10 @@ struct PlayerbotWalkMapSettings
     float OriginZ = 0.0f;
     // Yards between neighbouring spots.
     float Spacing = 1.0f;
+    // The longest step she takes at once: one walk heartbeat. A step between spots longer than this, such as a diagonal,
+    // is judged the way her heartbeats walk it, a whole heartbeat first and then the rest, because a longer step is
+    // allowed a higher rise and would pass a lip her heartbeat refuses. Zero means the spacing.
+    float StepYards = 0.0f;
     float Radius = 60.0f;
     float MaxClimbDegrees = 35.0f;
     float MaxDropYards = 2.0f;
@@ -384,6 +388,37 @@ private:
         return direction % 2 ? _settings.Spacing * 1.41421356f : _settings.Spacing;
     }
 
+    // One step between spots, judged as her heartbeats walk it: whole heartbeats from these feet, then what is left,
+    // each planted from where the last one put her. landed is true when the result is for the far spot itself, and
+    // false when a heartbeat on the way there was refused.
+    PlayerbotWalkMapStepResult JudgeStep(PlayerbotWalkMapWorld& world, float fromX, float fromY, float fromZ, float toX,
+        float toY, bool& landed) const
+    {
+        float const heartbeat = _settings.StepYards > 0.01f ? _settings.StepYards : _settings.Spacing;
+        float const dx = toX - fromX;
+        float const dy = toY - fromY;
+        float const run = std::sqrt(dx * dx + dy * dy);
+        float x = fromX;
+        float y = fromY;
+        float z = fromZ;
+        float walked = 0.0f;
+        for (;;)
+        {
+            walked += heartbeat;
+            // A last piece of a centimetre or so is part of the heartbeat before it.
+            landed = walked >= run - 0.01f;
+            float const toHereX = landed ? toX : fromX + dx * (walked / run);
+            float const toHereY = landed ? toY : fromY + dy * (walked / run);
+            PlayerbotWalkMapStepResult const result = world.Step(x, y, z, toHereX, toHereY);
+            if (landed || result.Step != PlayerbotWalkMapStep::Legal)
+                return result;
+
+            x = toHereX;
+            y = toHereY;
+            z = result.Z;
+        }
+    }
+
     void ExpandOutward(PlayerbotWalkMapWorld& world, std::int32_t from)
     {
         // Adding a floor can move the spots in memory, so copy what the steps need first.
@@ -412,11 +447,13 @@ private:
                 continue;
             }
 
-            PlayerbotWalkMapStepResult result = world.Step(x, y, z, toX, toY);
+            bool landed = false;
+            PlayerbotWalkMapStepResult result = JudgeStep(world, x, y, z, toX, toY, landed);
             if (result.Step == PlayerbotWalkMapStep::Untried)
                 result.Step = PlayerbotWalkMapStep::InvalidPosition;
             _spots[from].Steps[d] = result.Step;
-            if (!PlayerbotWalkMapStepPlanted(result.Step))
+            // A step refused part of the way there says nothing about the floor at the far spot.
+            if (!landed || !PlayerbotWalkMapStepPlanted(result.Step))
                 continue;
 
             std::int32_t const to = FindOrAddSpot(toI, toJ, result.Z);
@@ -474,9 +511,11 @@ private:
         else
         {
             float const fromZ = from >= 0 ? _spots[from].Z : floorZ;
-            PlayerbotWalkMapStepResult const result = world.Step(WorldX(fromI), WorldY(fromJ), fromZ, WorldX(_spots[to].I),
-                WorldY(_spots[to].J));
-            legal = result.Step == PlayerbotWalkMapStep::Legal && FindSpot(_spots[to].I, _spots[to].J, result.Z) == to;
+            bool landed = false;
+            PlayerbotWalkMapStepResult const result = JudgeStep(world, WorldX(fromI), WorldY(fromJ), fromZ,
+                WorldX(_spots[to].I), WorldY(_spots[to].J), landed);
+            legal = landed && result.Step == PlayerbotWalkMapStep::Legal
+                && FindSpot(_spots[to].I, _spots[to].J, result.Z) == to;
         }
 
         if (!legal)

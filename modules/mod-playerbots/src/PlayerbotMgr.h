@@ -215,7 +215,8 @@ private:
     bool BeginHealerWalk(PlayerbotRecord& bot, Player* player);
     bool UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32 diff);
     void RecoverFailedWalk(PlayerbotRecord& bot, Player* player);
-    bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking);
+    // allowFights false keeps to talk and loot: no pull, no item used on a creature.
+    bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking, bool allowFights = true);
     bool TryClickFromHere(PlayerbotRecord& bot, Player* player);
     bool TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, int32 questId, uint32 entry, Position const& skipPos, ObjectGuid extraSkipGuid);

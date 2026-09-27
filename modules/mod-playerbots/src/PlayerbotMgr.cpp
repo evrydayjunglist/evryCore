@@ -33,6 +33,7 @@
 #include "PlayerbotFactory.h"
 #include "RealmList.h"
 #include "SpellInfo.h"
+#include "StringFormat.h"
 #include "Unit.h"
 #include "UnitDefines.h"
 #include "World.h"
@@ -71,6 +72,9 @@ namespace
     constexpr uint32 GHOST_GIVE_UP_MS = 300000;
     constexpr float STILL_SHORT_REPEAT_YARDS = 1.0f;
     constexpr size_t STILL_SHORT_MEMORY = 8;
+    // Below this much health, or this much mana for a mana user, she sits until both are full before her next pull.
+    constexpr float REST_BELOW_HEALTH_PCT = 60.0f;
+    constexpr float REST_BELOW_MANA_PCT = 40.0f;
     std::string NormalizeLoginMode(std::string_view value)
     {
         while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
@@ -380,6 +384,32 @@ namespace
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is being hit by {}, so she stops going for {} and fights back.",
                 player->GetName(), attacker->CreatureGuid.ToString(), currentTarget.ToString());
         return attacker;
+    }
+
+    // Mana is what she rests for only when mana is her power; rage, energy and the rest do not come back by sitting.
+    bool UsesMana(Player const* player)
+    {
+        return player->GetPowerType() == POWER_MANA && player->GetMaxPower(POWER_MANA) > 0;
+    }
+
+    bool HealthAndManaAreFull(Player const* player)
+    {
+        if (player->GetHealth() < player->GetMaxHealth())
+            return false;
+        return !UsesMana(player) || player->GetPower(POWER_MANA) >= player->GetMaxPower(POWER_MANA);
+    }
+
+    // Hurt or drained enough that a player would sit down before the next fight. Never while anything is fighting her.
+    bool NeedsRest(Player* player)
+    {
+        if (!player->IsAlive() || player->IsInCombat() || PlayerbotClient::FindAttackerTarget(player))
+            return false;
+
+        if (player->GetHealthPct() < REST_BELOW_HEALTH_PCT)
+            return true;
+        if (!UsesMana(player))
+            return false;
+        return 100.0f * float(player->GetPower(POWER_MANA)) / float(player->GetMaxPower(POWER_MANA)) < REST_BELOW_MANA_PCT;
     }
 
     // Stay on this fight after a close-in walk fails: in melee, or this creature is hitting her.
@@ -1069,6 +1099,9 @@ void PlayerbotMgr::QuiesceForCommand(PlayerbotRecord& runtime, Player* player, b
 
     if (!continueExistingDeathRecovery)
         ClearLivingWork(runtime, player);
+    // Sitting to recover is her own choice, not death work; the commander owns her now. Moving stands her up.
+    if (player->IsAlive() && runtime.Death == PlayerbotDeathWork::SitRecover)
+        ClearDeath(runtime);
     runtime.CommandMovePending = false;
     runtime.CommandDestination.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -2264,6 +2297,32 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
     }
 
+    // Hurt or out of mana between fights, she sits down before she walks or pulls again. A corpse at her feet and a
+    // quest giver in talking range come first, as they would for a player. Whatever she was going to do next is kept
+    // and carries on when she stands up.
+    if (!bot.Walker.IsMoving()
+        && bot.CombatTarget.CreatureGuid.IsEmpty()
+        && bot.QuestTarget.NpcGuid.IsEmpty()
+        && bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty()
+        && bot.VendorTarget.NpcGuid.IsEmpty()
+        && NeedsRest(player))
+    {
+        if (TryImmediateWorld(bot, player, false, false))
+            return;
+
+        bot.Death = PlayerbotDeathWork::SitRecover;
+        bot.SitSent = false;
+        bot.DeathWaitMs = 0;
+        std::string mana;
+        if (UsesMana(player))
+            mana = Trinity::StringFormat(" and {:.0f}% mana",
+                100.0f * float(player->GetPower(POWER_MANA)) / float(player->GetMaxPower(POWER_MANA)));
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is at {:.0f}% health{} with nothing fighting her. She sits down to rest before the next fight.",
+            player->GetName(), player->GetHealthPct(), mana);
+        UpdateSitRecover(bot, player, diff);
+        return;
+    }
+
     if (bot.Walker.HasArrived() && !bot.QuestTarget.NpcGuid.IsEmpty())
     {
         bot.QuestArriveWaitMs += diff;
@@ -2634,12 +2693,13 @@ bool PlayerbotMgr::UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32
         return false;
     }
 
-    if (player->GetHealth() >= player->GetMaxHealth())
+    if (HealthAndManaAreFull(player))
     {
         if (player->IsSitState())
         {
             PlayerbotClient::QueueStandStateChange(player->GetSession(), UNIT_STAND_STATE_STAND);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} health is full. Standing and returning to the living brain.", player->GetName());
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} health{} full. Standing and returning to the living brain.",
+                player->GetName(), UsesMana(player) ? " and mana are" : " is");
         }
         ClearDeath(bot);
         return false;
@@ -2653,7 +2713,8 @@ bool PlayerbotMgr::UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32
             PlayerbotClient::QueueStandStateChange(player->GetSession(), UNIT_STAND_STATE_SIT);
             bot.SitSent = true;
             bot.DeathWaitMs = 0;
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_STAND_STATE_CHANGE sit until health is full.", player->GetName());
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_STAND_STATE_CHANGE sit until health{} full.",
+                player->GetName(), UsesMana(player) ? " and mana are" : " is");
         }
     }
 
@@ -3114,7 +3175,7 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
     bot.Walker.Reset();
 }
 
-bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking)
+bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking, bool allowFights)
 {
     Optional<PlayerbotClient::QuestTarget> talk;
     if (!walking || !CurrentWalkIsInReach(bot, player))
@@ -3127,8 +3188,11 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
     if (!walking)
     {
         go = PlayerbotClient::FindNearbyGameObjectObjectiveTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, false);
-        useItem = PlayerbotClient::FindNearbyUseItemOnUnitTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, true);
-        kill = PlayerbotClient::FindNearbyMonsterObjectiveTarget(player, COMBAT_SEARCH_RANGE, bot.UnreachableGuids);
+        if (allowFights)
+        {
+            useItem = PlayerbotClient::FindNearbyUseItemOnUnitTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, true);
+            kill = PlayerbotClient::FindNearbyMonsterObjectiveTarget(player, COMBAT_SEARCH_RANGE, bot.UnreachableGuids);
+        }
     }
 
     if (talk && talk->NpcGuid == bot.QuestTarget.NpcGuid)

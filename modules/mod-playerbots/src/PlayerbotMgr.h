@@ -123,6 +123,9 @@ struct PlayerbotRecord
     ObjectGuid StillShortGuid;
     std::vector<Position> StillShortFeet;
     bool LookedForOtherYellowOnFace = false;
+    // The quest reward she chose to put on, and how long she has waited for it to reach her bags.
+    uint32 WearItemId = 0;
+    uint32 WearWaitMs = 0;
     // She is running from a fight she is losing: where she started running and how many stretches she has run.
     bool Fleeing = false;
     Position FleeStart;
@@ -224,6 +227,8 @@ private:
     // allowFights false keeps to talk and loot: no pull, no item used on a creature.
     bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking, bool allowFights = true);
     bool TryClickFromHere(PlayerbotRecord& bot, Player* player);
+    // Talks to bot.QuestTarget, and remembers a quest reward she chose to put on.
+    bool TryInteractQuest(PlayerbotRecord& bot, Player* player);
     bool TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, int32 questId, uint32 entry, Position const& skipPos, ObjectGuid extraSkipGuid);
     bool TryLeaveFaceForOtherYellow(PlayerbotRecord& bot, Player* player);

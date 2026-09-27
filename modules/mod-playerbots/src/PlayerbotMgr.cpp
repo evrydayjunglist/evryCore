@@ -62,6 +62,8 @@ namespace
     constexpr uint32 STUCK_FEET_WAIT_MS = 5000;
     // Standing with nothing to do this long while targets are on her skip list, she forgets the list.
     constexpr uint32 IDLE_FORGET_SKIPS_MS = 120000;
+    // A quest reward she chose to put on that has not reached her bags by now is not coming.
+    constexpr uint32 WEAR_REWARD_WAIT_MS = 5000;
     constexpr uint32 LOOT_WINDOW_MS = 1000;
     constexpr uint32 VENDOR_RETRY_MS = 60000;
     constexpr uint32 RELEASE_WAIT_MS = 3000;
@@ -2407,6 +2409,22 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         return;
     }
 
+    // A quest reward she chose as an upgrade goes on once it is in her bags and she is out of a fight, as a player
+    // would drag it onto the character sheet. It does not stop her walk or her next pick.
+    if (bot.WearItemId && !player->IsInCombat() && !player->IsNonMeleeSpellCast(false))
+    {
+        bot.WearWaitMs += diff;
+        PlayerbotClient::WearLook const look = PlayerbotClient::TryWearUpgrade(player, bot.WearItemId);
+        if (look == PlayerbotClient::WearLook::NotYet && bot.WearWaitMs >= WEAR_REWARD_WAIT_MS)
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} chose item {} as a quest reward, but it is not in her bags after {} seconds. She does not wait for it.",
+                player->GetName(), bot.WearItemId, WEAR_REWARD_WAIT_MS / IN_MILLISECONDS);
+        if (look != PlayerbotClient::WearLook::NotYet || bot.WearWaitMs >= WEAR_REWARD_WAIT_MS)
+        {
+            bot.WearItemId = 0;
+            bot.WearWaitMs = 0;
+        }
+    }
+
     // Hurt or out of mana between fights, she sits down before she walks or pulls again. A corpse at her feet and a
     // quest giver in talking range come first, as they would for a player. Whatever she was going to do next is kept
     // and carries on when she stands up.
@@ -2436,7 +2454,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (bot.Walker.HasArrived() && !bot.QuestTarget.NpcGuid.IsEmpty())
     {
         bot.QuestArriveWaitMs += diff;
-        if (PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
+        if (TryInteractQuest(bot, player))
         {
             bot.QuestInteractQueued = true;
             bot.QuestInteractWaitMs = 0;
@@ -3354,6 +3372,20 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
     return BeginCombatTarget(bot, player, *kill);
 }
 
+bool PlayerbotMgr::TryInteractQuest(PlayerbotRecord& bot, Player* player)
+{
+    uint32 wearItemId = 0;
+    if (!PlayerbotClient::TryInteractQuest(player, bot.QuestTarget, &wearItemId))
+        return false;
+
+    if (wearItemId)
+    {
+        bot.WearItemId = wearItemId;
+        bot.WearWaitMs = 0;
+    }
+    return true;
+}
+
 bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
 {
     if (!player)
@@ -3363,7 +3395,7 @@ bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
 
     if (!bot.QuestTarget.NpcGuid.IsEmpty())
     {
-        if (!PlayerbotClient::TryInteractQuest(player, bot.QuestTarget))
+        if (!TryInteractQuest(bot, player))
             return false;
 
         StopWalkToClick(bot, player, bot.QuestTarget.NpcGuid);

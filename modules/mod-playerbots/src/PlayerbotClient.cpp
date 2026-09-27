@@ -237,7 +237,7 @@ void PlayerbotClient::QueueQuestGiverCompleteQuest(WorldSession* session, Object
     session->QueuePacket(std::move(packet));
 }
 
-void PlayerbotClient::QueueQuestGiverChooseReward(WorldSession* session, ObjectGuid questGiverGuid, int32 questId)
+void PlayerbotClient::QueueQuestGiverChooseReward(WorldSession* session, ObjectGuid questGiverGuid, int32 questId, LootItemType rewardType, uint32 rewardId)
 {
     if (!session || questGiverGuid.IsEmpty() || !questId)
         return;
@@ -245,14 +245,30 @@ void PlayerbotClient::QueueQuestGiverChooseReward(WorldSession* session, ObjectG
     WorldPacket packet(CMSG_QUEST_GIVER_CHOOSE_REWARD);
     packet << questGiverGuid;
     packet << int32(questId);
-    packet.WriteBits(uint32(LootItemType::Item), 2);
+    packet.WriteBits(uint32(rewardType), 2);
     packet.WriteBit(false); // no ContextFlags
-    packet << int32(0);     // ItemID
+    packet << int32(rewardId); // ItemID, or the currency id for a currency choice
     packet.WriteBit(false); // no ItemBonus
     packet.FlushBits();
     packet.WriteBits(0, 7); // ItemModList size
     packet.FlushBits();
     packet << int32(0);     // Quantity
+    session->QueuePacket(std::move(packet));
+}
+
+void PlayerbotClient::QueueAutoEquipItemSlot(WorldSession* session, Item const* item, uint8 equipSlot)
+{
+    if (!session || !item)
+        return;
+
+    // Dragging a bag item onto one slot of the character sheet.
+    WorldPacket packet(CMSG_AUTO_EQUIP_ITEM_SLOT);
+    packet.WriteBits(1, 2); // one item in the inventory update
+    packet.FlushBits();
+    packet << uint8(item->GetBagSlot());
+    packet << uint8(item->GetSlot());
+    packet << item->GetGUID();
+    packet << uint8(equipSlot);
     session->QueuePacket(std::move(packet));
 }
 
@@ -3046,7 +3062,205 @@ bool PlayerbotClient::UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUn
     return false;
 }
 
-bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target)
+namespace
+{
+    // The character sheet slots an item of this kind can go in. Only gear she wears for its stats; shirts, tabards,
+    // bags, and profession gear are not upgrades.
+    std::vector<uint8> GearSlotsFor(Player const* player, ItemTemplate const* proto)
+    {
+        switch (proto->GetInventoryType())
+        {
+            case INVTYPE_HEAD: return { EQUIPMENT_SLOT_HEAD };
+            case INVTYPE_NECK: return { EQUIPMENT_SLOT_NECK };
+            case INVTYPE_SHOULDERS: return { EQUIPMENT_SLOT_SHOULDERS };
+            case INVTYPE_CHEST:
+            case INVTYPE_ROBE: return { EQUIPMENT_SLOT_CHEST };
+            case INVTYPE_WAIST: return { EQUIPMENT_SLOT_WAIST };
+            case INVTYPE_LEGS: return { EQUIPMENT_SLOT_LEGS };
+            case INVTYPE_FEET: return { EQUIPMENT_SLOT_FEET };
+            case INVTYPE_WRISTS: return { EQUIPMENT_SLOT_WRISTS };
+            case INVTYPE_HANDS: return { EQUIPMENT_SLOT_HANDS };
+            case INVTYPE_FINGER: return { EQUIPMENT_SLOT_FINGER1, EQUIPMENT_SLOT_FINGER2 };
+            case INVTYPE_TRINKET: return { EQUIPMENT_SLOT_TRINKET1, EQUIPMENT_SLOT_TRINKET2 };
+            case INVTYPE_CLOAK: return { EQUIPMENT_SLOT_BACK };
+            case INVTYPE_WEAPON:
+                if (player->CanDualWield())
+                    return { EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND };
+                return { EQUIPMENT_SLOT_MAINHAND };
+            case INVTYPE_2HWEAPON:
+            case INVTYPE_WEAPONMAINHAND:
+            case INVTYPE_RANGED:
+            case INVTYPE_RANGEDRIGHT: return { EQUIPMENT_SLOT_MAINHAND };
+            case INVTYPE_SHIELD:
+            case INVTYPE_WEAPONOFFHAND:
+            case INVTYPE_HOLDABLE: return { EQUIPMENT_SLOT_OFFHAND };
+            default: return {};
+        }
+    }
+
+    // The item level this item would have in her hands at her level, as the tooltip on her client shows it.
+    uint32 ItemLevelForHer(Player const* player, ItemTemplate const* proto)
+    {
+        BonusData bonus{};
+        bonus.Initialize(proto);
+        return Item::GetItemLevel(proto, bonus, player->GetLevel(), 0, 0, 0, 0, false, 0, 0);
+    }
+
+    // Suits her specialization the way the game marks loot for her. Gear with no stats is marked for nobody and suits
+    // everyone who can use it.
+    bool SuitsHer(Player const* player, ItemTemplate const* proto)
+    {
+        return !proto->ItemSpecClassMask || proto->IsUsableByLootSpecialization(player, true);
+    }
+
+    // The slot she would put this item in (the emptiest or weakest of the slots it fits) and how many item levels she
+    // would gain there. Nullopt when it is not gear she can wear or it is not better than what she has on.
+    Optional<std::pair<uint8, int32>> UpgradeSlot(Player const* player, ItemTemplate const* proto)
+    {
+        if (player->CanUseItem(proto) != EQUIP_ERR_OK || !SuitsHer(player, proto))
+            return {};
+
+        Optional<std::pair<uint8, int32>> best;
+        int32 const itemLevel = int32(ItemLevelForHer(player, proto));
+        for (uint8 slot : GearSlotsFor(player, proto))
+        {
+            Item const* worn = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            int32 const gain = itemLevel - (worn ? int32(worn->GetItemLevel(player)) : 0);
+            if (gain > 0 && (!best || gain > best->second))
+                best = std::make_pair(slot, gain);
+        }
+        return best;
+    }
+
+    struct QuestRewardPick
+    {
+        LootItemType Type = LootItemType::Item;
+        uint32 Id = 0;
+        int32 Gain = 0;
+        bool Upgrade = false;
+        bool Usable = false;
+        uint32 SellPrice = 0;
+    };
+
+    bool IsBetterRewardPick(QuestRewardPick const& a, QuestRewardPick const& b)
+    {
+        if (a.Upgrade != b.Upgrade)
+            return a.Upgrade;
+        if (a.Upgrade && a.Gain != b.Gain)
+            return a.Gain > b.Gain;
+        if (a.Usable != b.Usable)
+            return a.Usable;
+        return a.SellPrice > b.SellPrice;
+    }
+
+    // The reward a player would click on the quest's reward screen: the biggest upgrade for gear she wears, otherwise
+    // the one she can use, otherwise the one worth the most at a vendor. Only choices the reward screen offers her:
+    // the quest's choice items and currencies, and its package items filtered for her class and specialization.
+    // Id 0 when the quest has no choice.
+    QuestRewardPick PickQuestReward(Player const* player, Quest const* quest)
+    {
+        std::vector<QuestRewardPick> choices;
+        auto addItem = [&](uint32 itemId)
+        {
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+            if (!proto)
+                return;
+            QuestRewardPick pick;
+            pick.Id = itemId;
+            pick.SellPrice = proto->GetSellPrice();
+            pick.Usable = player->CanUseItem(proto) == EQUIP_ERR_OK;
+            if (Optional<std::pair<uint8, int32>> upgrade = UpgradeSlot(player, proto))
+            {
+                pick.Upgrade = true;
+                pick.Gain = upgrade->second;
+            }
+            choices.push_back(pick);
+        };
+
+        for (uint32 i = 0; i < QUEST_REWARD_CHOICES_COUNT; ++i)
+        {
+            if (!quest->RewardChoiceItemId[i])
+                continue;
+            if (quest->RewardChoiceItemType[i] == LootItemType::Item)
+                addItem(quest->RewardChoiceItemId[i]);
+            else if (quest->RewardChoiceItemType[i] == LootItemType::Currency && sCurrencyTypesStore.HasRecord(quest->RewardChoiceItemId[i]))
+            {
+                QuestRewardPick pick;
+                pick.Type = LootItemType::Currency;
+                pick.Id = quest->RewardChoiceItemId[i];
+                choices.push_back(pick);
+            }
+        }
+
+        if (quest->GetQuestPackageID())
+        {
+            bool offered = false;
+            if (std::vector<QuestPackageItemEntry const*> const* items = sDB2Manager.GetQuestPackageItems(quest->GetQuestPackageID()))
+            {
+                for (QuestPackageItemEntry const* packageItem : *items)
+                {
+                    if (!player->CanSelectQuestPackageItem(packageItem))
+                        continue;
+                    addItem(uint32(packageItem->ItemID));
+                    offered = true;
+                }
+            }
+            if (!offered)
+                if (std::vector<QuestPackageItemEntry const*> const* items = sDB2Manager.GetQuestPackageItemsFallback(quest->GetQuestPackageID()))
+                    for (QuestPackageItemEntry const* packageItem : *items)
+                        addItem(uint32(packageItem->ItemID));
+        }
+
+        QuestRewardPick best;
+        bool have = false;
+        for (QuestRewardPick const& choice : choices)
+        {
+            if (!have || IsBetterRewardPick(choice, best))
+            {
+                best = choice;
+                have = true;
+            }
+        }
+        return best;
+    }
+}
+
+PlayerbotClient::WearLook PlayerbotClient::TryWearUpgrade(Player* player, uint32 itemId)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || !itemId)
+        return WearLook::Dropped;
+
+    Item* found = nullptr;
+    player->ForEachItem(ItemSearchLocation::Inventory, [itemId, &found](Item* item)
+    {
+        if (item->GetEntry() != itemId)
+            return ItemSearchCallbackResult::Continue;
+        found = item;
+        return ItemSearchCallbackResult::Stop;
+    });
+    if (!found)
+        return WearLook::NotYet;
+
+    Optional<std::pair<uint8, int32>> upgrade = UpgradeSlot(player, found->GetTemplate());
+    if (!upgrade)
+        return WearLook::Dropped;
+
+    uint16 dest = 0;
+    InventoryResult const result = player->CanEquipItem(upgrade->first, dest, found, true);
+    if (result != EQUIP_ERR_OK)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot put on {} ({}) in slot {} (equip error {}). She keeps it in her bags.",
+            player->GetName(), found->GetTemplate()->GetDefaultLocaleName(), itemId, upgrade->first, uint32(result));
+        return WearLook::Dropped;
+    }
+
+    QueueAutoEquipItemSlot(player->GetSession(), found, upgrade->first);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_AUTO_EQUIP_ITEM_SLOT to put on {} ({}) in slot {}, {} item level(s) better than what she wore.",
+        player->GetName(), found->GetTemplate()->GetDefaultLocaleName(), itemId, upgrade->first, upgrade->second);
+    return WearLook::Queued;
+}
+
+bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target, uint32* wearItemId)
 {
     if (!player || !player->IsInWorld() || !player->GetSession() || target.NpcGuid.IsEmpty() || !target.QuestId)
         return false;
@@ -3060,10 +3274,28 @@ bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target
 
     if (target.TurnIn)
     {
+        QuestRewardPick pick;
+        if (Quest const* quest = sObjectMgr->GetQuestTemplate(uint32(target.QuestId)))
+            pick = PickQuestReward(player, quest);
+
         QueueQuestGiverCompleteQuest(player->GetSession(), target.NpcGuid, target.QuestId);
-        QueueQuestGiverChooseReward(player->GetSession(), target.NpcGuid, target.QuestId);
+        QueueQuestGiverChooseReward(player->GetSession(), target.NpcGuid, target.QuestId, pick.Type, pick.Id);
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_QUEST_GIVER_COMPLETE_QUEST and CMSG_QUEST_GIVER_CHOOSE_REWARD for quest {} at {}.",
             player->GetName(), target.QuestId, target.NpcGuid.ToString());
+        if (pick.Id)
+        {
+            std::string why = "the one worth the most at a vendor";
+            if (pick.Type == LootItemType::Currency)
+                why = "the only kind of reward offered";
+            else if (pick.Upgrade)
+                why = Trinity::StringFormat("{} item level(s) better than what she wears there", pick.Gain);
+            else if (pick.Usable)
+                why = "no choice is an upgrade for her; this is the one she can use worth the most";
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} chose reward {} {} for quest {}: {}.",
+                player->GetName(), pick.Type == LootItemType::Currency ? "currency" : "item", pick.Id, target.QuestId, why);
+        }
+        if (wearItemId)
+            *wearItemId = pick.Upgrade ? pick.Id : 0;
         return true;
     }
 

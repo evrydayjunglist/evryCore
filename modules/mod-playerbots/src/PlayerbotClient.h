@@ -35,6 +35,7 @@ class WorldObject;
 class WorldSession;
 struct MovementInfo;
 enum OpcodeClient : uint32;
+enum class LootItemType : uint8;
 
 namespace PlayerbotClient
 {
@@ -158,7 +159,8 @@ namespace PlayerbotClient
     void SendMovementUpdate(WorldSession* session, MovementInfo const& movementInfo);
     void QueueQuestGiverAcceptQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);
     void QueueQuestGiverCompleteQuest(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);
-    void QueueQuestGiverChooseReward(WorldSession* session, ObjectGuid questGiverGuid, int32 questId);
+    void QueueQuestGiverChooseReward(WorldSession* session, ObjectGuid questGiverGuid, int32 questId, LootItemType rewardType, uint32 rewardId);
+    void QueueAutoEquipItemSlot(WorldSession* session, Item const* item, uint8 equipSlot);
     void QueueSetSelection(WorldSession* session, ObjectGuid guid);
     void QueueAttackSwing(WorldSession* session, ObjectGuid victim);
     void QueueAttackStop(WorldSession* session);
@@ -218,7 +220,16 @@ namespace PlayerbotClient
     Optional<UseItemOnUnitTarget> FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUnitTarget const& target);
     UseItemLook LookUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target);
-    bool TryInteractQuest(Player* player, QuestTarget const& target);
+    // On a turn-in, wearItemId gets the reward she chose when it is gear she should put on once it reaches her bags.
+    bool TryInteractQuest(Player* player, QuestTarget const& target, uint32* wearItemId = nullptr);
+
+    enum class WearLook
+    {
+        NotYet,  // not in her bags yet
+        Queued,  // equip packet queued
+        Dropped  // no longer an upgrade, or the server would refuse it
+    };
+    WearLook TryWearUpgrade(Player* player, uint32 itemId);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
     bool TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId);
     CombatSpellPick PickCombatDamageSpell(Player* player, Unit* target);

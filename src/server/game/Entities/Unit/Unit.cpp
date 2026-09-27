@@ -1808,90 +1808,11 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     return uint32(std::max(damage * (1.0f - mitigation), 0.0f));
 }
 
-/*static*/ uint32 Unit::CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
+/*static*/ uint32 Unit::CalcSpellResistedDamage(Unit const* /*attacker*/, Unit* /*victim*/, uint32 /*damage*/, SpellSchoolMask /*schoolMask*/, SpellInfo const* /*spellInfo*/)
 {
-    // Magic damage, check for resists
-    if (!(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
-        return 0;
-
-    // Npcs can have holy resistance
-    if ((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT)
-        return 0;
-
-    float const averageResist = Unit::CalculateAverageResistReduction(attacker, schoolMask, victim, spellInfo);
-    float discreteResistProbability[11] = { };
-    if (averageResist <= 0.1f)
-    {
-        discreteResistProbability[0] = 1.0f - 7.5f * averageResist;
-        discreteResistProbability[1] = 5.0f * averageResist;
-        discreteResistProbability[2] = 2.5f * averageResist;
-    }
-    else
-    {
-        for (uint32 i = 0; i < 11; ++i)
-            discreteResistProbability[i] = std::max(0.5f - 2.5f * std::fabs(0.1f * i - averageResist), 0.0f);
-    }
-
-    float roll = rand_norm();
-    float probabilitySum = 0.0f;
-
-    uint32 resistance = 0;
-    for (; resistance < 11; ++resistance)
-        if (roll < (probabilitySum += discreteResistProbability[resistance]))
-            break;
-
-    float damageResisted = damage * resistance / 10.f;
-    if (damageResisted > 0.0f) // if any damage was resisted
-    {
-        float ignoredResistance = 0.0f;
-
-        if (attacker)
-            ignoredResistance += attacker->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_IGNORE_TARGET_RESIST, schoolMask);
-
-        ignoredResistance = std::min(ignoredResistance, 100.0f);
-        ApplyPct(damageResisted, 100.0f - ignoredResistance);
-
-        // Spells with melee and magic school mask, decide whether resistance or armor absorb is higher
-        if (spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_SCHOOLMASK_NORMAL_WITH_MAGIC))
-        {
-            uint32 damageAfterArmor = Unit::CalcArmorReducedDamage(attacker, victim, damage, spellInfo, spellInfo->GetAttackType());
-            float armorReduction = damage - damageAfterArmor;
-
-            // pick the lower one, the weakest resistance counts
-            damageResisted = std::min(damageResisted, armorReduction);
-        }
-    }
-
-    damageResisted = std::max(damageResisted, 0.f);
-    return uint32(damageResisted);
-}
-
-/*static*/ float Unit::CalculateAverageResistReduction(WorldObject const* caster, SpellSchoolMask schoolMask, Unit const* victim, SpellInfo const* spellInfo /*= nullptr*/)
-{
-    float victimResistance = float(victim->GetResistance(schoolMask));
-    if (caster)
-    {
-        // pets inherit 100% of masters penetration
-        if (Player const* player = caster->GetSpellModOwner())
-        {
-            victimResistance += float(player->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
-            victimResistance -= float(player->GetSpellPenetrationItemMod());
-        }
-        else if (Unit const* unitCaster = caster->ToUnit())
-            victimResistance += float(unitCaster->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
-    }
-
-    // holy resistance exists in pve and comes from level difference, ignore template values
-    if (schoolMask & SPELL_SCHOOL_MASK_HOLY)
-        victimResistance = 0.0f;
-
-    // Chaos Bolt exception, ignore all target resistances (unknown attribute?)
-    if (spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK && spellInfo->Id == 116858)
-        victimResistance = 0.0f;
-
-    victimResistance = std::max(victimResistance, 0.0f);
-
-    return victimResistance;
+    // Retail retired resistance as a stat. Keep this entry point for older spell
+    // scripts that calculate resistance separately for each damage school.
+    return 0;
 }
 
 /*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/)

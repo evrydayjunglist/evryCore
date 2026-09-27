@@ -79,6 +79,16 @@ namespace
     // damage press; below the second, one with a long cooldown too.
     constexpr float FIGHT_SELF_DEFENCE_BELOW_HEALTH_PCT = 50.0f;
     constexpr float FIGHT_LONG_COOLDOWN_BELOW_HEALTH_PCT = 30.0f;
+    // Below this much health, with at least this many monsters hitting her and no heal or shield left to press, she runs.
+    constexpr float FLEE_BELOW_HEALTH_PCT = 30.0f;
+    constexpr size_t FLEE_MIN_ATTACKERS = 2;
+    // She runs in stretches this long, away from whatever is hitting her, and gives up and fights once she is this far
+    // from where she started running or has run this many stretches. A monster stops chasing about 133 yards from home.
+    constexpr float FLEE_LEG_YARDS = 30.0f;
+    constexpr float FLEE_MAX_YARDS = 150.0f;
+    constexpr uint32 FLEE_MAX_LEGS = 8;
+    // A stretch that ends this close to a hostile monster she can see would pull another one.
+    constexpr float FLEE_CLEAR_OF_HOSTILES_YARDS = 20.0f;
     std::string NormalizeLoginMode(std::string_view value)
     {
         while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
@@ -388,6 +398,95 @@ namespace
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is being hit by {}, so she stops going for {} and fights back.",
                 player->GetName(), attacker->CreatureGuid.ToString(), currentTarget.ToString());
         return attacker;
+    }
+
+    // Living monsters hitting her that she could hit back.
+    std::vector<Creature*> CreaturesHittingHer(Player* player)
+    {
+        std::vector<Creature*> hitting;
+        for (Unit* attacker : player->getAttackers())
+        {
+            Creature* creature = attacker ? attacker->ToCreature() : nullptr;
+            if (creature && creature->IsAlive() && player->IsValidAttackTarget(creature))
+                hitting.push_back(creature);
+        }
+        return hitting;
+    }
+
+    // Where one stretch of running could end, best first: straight away from what is hitting her, then turning further
+    // off that line. A direction whose first step she may not take is left out. An end near a hostile monster she can
+    // see, that is not already on her, goes behind every end that is clear of one.
+    std::vector<Position> FleeDestinations(Player* player, Position const& feet)
+    {
+        float awayX = 0.0f;
+        float awayY = 0.0f;
+        for (Creature* creature : CreaturesHittingHer(player))
+        {
+            float const dx = feet.GetPositionX() - creature->GetPositionX();
+            float const dy = feet.GetPositionY() - creature->GetPositionY();
+            float const dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > 0.1f)
+            {
+                awayX += dx / dist;
+                awayY += dy / dist;
+            }
+        }
+        float const away = (std::fabs(awayX) + std::fabs(awayY) > 0.01f)
+            ? std::atan2(awayY, awayX) : Position::NormalizeOrientation(player->GetOrientation() + float(M_PI));
+
+        std::vector<Creature*> nearby;
+        FindCreatureOptions options;
+        options.IsAlive = FindCreatureAliveState::Alive;
+        player->GetCreatureListWithOptionsInGrid(nearby, FLEE_LEG_YARDS + FLEE_CLEAR_OF_HOSTILES_YARDS, options);
+        std::vector<Creature*> hostiles;
+        for (Creature* creature : nearby)
+        {
+            if (creature && creature->IsHostileTo(player) && !CreatureIsHittingPlayer(player, creature->GetGUID())
+                && player->CanSeeOrDetect(creature))
+                hostiles.push_back(creature);
+        }
+
+        struct Candidate
+        {
+            Position Dest;
+            size_t Hostiles;
+        };
+        std::vector<Candidate> candidates;
+        float const step = PlayerbotWalker::HeartbeatStepLength(player);
+        for (float const offsetDegrees : { 0.0f, 40.0f, -40.0f, 80.0f, -80.0f, 120.0f, -120.0f })
+        {
+            float const angle = Position::NormalizeOrientation(away + offsetDegrees * float(M_PI) / 180.0f);
+            float const dirX = std::cos(angle);
+            float const dirY = std::sin(angle);
+
+            Position firstStep;
+            if (PlayerbotWalker::ClassifyGroundedStep(player, feet, feet.GetPositionX() + step * dirX,
+                feet.GetPositionY() + step * dirY, angle, firstStep) != PlayerbotWalker::GroundedStepFailure::None)
+                continue;
+
+            float const x = feet.GetPositionX() + FLEE_LEG_YARDS * dirX;
+            float const y = feet.GetPositionY() + FLEE_LEG_YARDS * dirY;
+            float const z = player->GetMapHeight(x, y, feet.GetPositionZ() + 10.0f);
+            if (z <= INVALID_HEIGHT)
+                continue;
+
+            Position const dest(x, y, z, angle);
+            size_t const hostilesNearEnd = std::count_if(hostiles.begin(), hostiles.end(), [&dest](Creature const* creature)
+            {
+                return creature->GetExactDist2d(dest) < FLEE_CLEAR_OF_HOSTILES_YARDS;
+            });
+            candidates.push_back({ dest, hostilesNearEnd });
+        }
+
+        std::stable_sort(candidates.begin(), candidates.end(), [](Candidate const& a, Candidate const& b)
+        {
+            return a.Hostiles < b.Hostiles;
+        });
+
+        std::vector<Position> destinations;
+        for (Candidate const& candidate : candidates)
+            destinations.push_back(candidate.Dest);
+        return destinations;
     }
 
     // Mana is what she rests for only when mana is her power; rage, energy and the rest do not come back by sitting.
@@ -2019,6 +2118,8 @@ void PlayerbotMgr::RetryServerReplies(PlayerbotRecord& bot, Player* player, uint
 void PlayerbotMgr::ForgetPositionAfterTeleport(PlayerbotRecord& bot, Player* player)
 {
     bot.CommandMovePending = false;
+    // A run is measured from where she started it, which is not where she is now.
+    bot.Fleeing = false;
     if (bot.Command.Active() || !player->IsAlive() || bot.Death != PlayerbotDeathWork::None)
         return;
 
@@ -2184,6 +2285,11 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.UnreachablePositions.clear();
         bot.Walker.Reset();
     }
+
+    // Losing a fight to more than one monster with nothing left to press, she runs, and keeps running until they stop
+    // chasing her or she has run as far as she will.
+    if (bot.Fleeing ? UpdateFlee(bot, player, diff, walkerUpdated) : TryBeginFlee(bot, player))
+        return;
 
     // Something hitting her stops a walk, including a walk to a quest mob that is not fighting her yet.
     if (bot.Walker.IsMoving() || !bot.CombatTarget.CreatureGuid.IsEmpty())
@@ -2675,6 +2781,8 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
     bot.UseItemOnUnitTarget = {};
     ClearUseItemCast(bot);
     bot.LookedForOtherYellowOnFace = false;
+    bot.Fleeing = false;
+    bot.FleeGaveUp = false;
     bot.CommandMovePending = false;
     bot.CommandDestination.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     ClearUnreachable(bot);
@@ -3807,6 +3915,128 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
     }
 
     return startMeleeApproach();
+}
+
+// A player who is losing to more than one monster and has pressed every heal and shield she has turns and runs. The
+// monsters may follow and hit her; she runs on her own heartbeats like any walk, so a wall or cliff still stops her.
+bool PlayerbotMgr::TryBeginFlee(PlayerbotRecord& bot, Player* player)
+{
+    if (bot.FleeGaveUp && !player->IsInCombat())
+        bot.FleeGaveUp = false;
+    if (bot.FleeGaveUp || !player->IsInCombat() || player->GetHealthPct() >= FLEE_BELOW_HEALTH_PCT)
+        return false;
+
+    // A heal or shield she is pressing finishes first, and one she can still press comes before running.
+    if (bot.CombatCastPending || player->IsNonMeleeSpellCast(false, false, true))
+        return false;
+
+    size_t const attackers = CreaturesHittingHer(player).size();
+    if (attackers < FLEE_MIN_ATTACKERS)
+        return false;
+
+    if (PlayerbotClient::PickSelfDefenceSpell(player, true))
+        return false;
+
+    float const healthPct = player->GetHealthPct();
+    ClearLivingWork(bot, player);
+    bot.Fleeing = true;
+    bot.FleeStart = bot.Walker.ClientFeet(player);
+    bot.FleeLegs = 0;
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is at {:.0f}% health with {} monsters hitting her and no heal or shield left to press, so she runs away from ({:.2f}, {:.2f}, {:.2f}).",
+        player->GetName(), healthPct, attackers, bot.FleeStart.GetPositionX(), bot.FleeStart.GetPositionY(), bot.FleeStart.GetPositionZ());
+
+    if (StartFleeLeg(bot, player))
+        return true;
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has nowhere to run: no way away from them starts with a step she may take. She stays and fights.",
+        player->GetName());
+    bot.Fleeing = false;
+    bot.FleeGaveUp = true;
+    bot.Walker.Reset();
+    return false;
+}
+
+bool PlayerbotMgr::StartFleeLeg(PlayerbotRecord& bot, Player* player)
+{
+    if (bot.Walker.IsMoving())
+        bot.Walker.Stop(player);
+    bot.Walker.Reset();
+
+    for (Position const& dest : FleeDestinations(player, bot.Walker.ClientFeet(player)))
+    {
+        if (!bot.Walker.Start(player, dest, 2.0f))
+            continue;
+
+        ++bot.FleeLegs;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} runs toward ({:.2f}, {:.2f}, {:.2f}), stretch {}.",
+            player->GetName(), dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), bot.FleeLegs);
+        return true;
+    }
+
+    bot.Walker.Reset();
+    return false;
+}
+
+// One tick of running. False once the run is over, so the rest of her tick picks what comes next: a rest when she got
+// away, or the fight when she did not.
+bool PlayerbotMgr::UpdateFlee(PlayerbotRecord& bot, Player* player, uint32 diff, bool walkerUpdated)
+{
+    // A root or stun made her fight from where she stood. Now she is free she runs on.
+    if (!bot.CombatTarget.CreatureGuid.IsEmpty())
+        ClearCombat(bot, player);
+
+    std::vector<Creature*> const attackers = CreaturesHittingHer(player);
+    float const ran = bot.FleeStart.GetExactDist2d(bot.Walker.ClientFeet(player));
+    if (attackers.empty() && (!player->IsInCombat() || !bot.Walker.IsMoving()))
+    {
+        if (bot.Walker.IsMoving())
+            bot.Walker.Stop(player);
+        bot.Walker.Reset();
+        bot.Fleeing = false;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} got away: nothing is hitting her {:.0f} yards from where she started running.",
+            player->GetName(), ran);
+        return false;
+    }
+
+    // An instant heal or shield that comes off cooldown is pressed on the run; one with a cast time would stop her.
+    if (bot.CombatCastPending)
+    {
+        bot.CombatCastWaitMs += diff;
+        if (PlayerbotClient::CombatCastHasStarted(player, bot.CombatCastSpellId) || bot.CombatCastWaitMs >= COMBAT_CAST_RETRY_MS)
+        {
+            bot.CombatCastPending = false;
+            bot.CombatCastSpellId = 0;
+            bot.CombatCastWaitMs = 0;
+        }
+    }
+    else if (SpellInfo const* defence = PlayerbotClient::PickSelfDefenceSpell(player, true))
+    {
+        if (defence->CalcCastTime() == 0 && PlayerbotClient::TrySelfCast(player, defence->Id))
+        {
+            bot.CombatCastSpellId = defence->Id;
+            bot.CombatCastPending = true;
+            bot.CombatCastWaitMs = 0;
+        }
+    }
+
+    if (bot.Walker.IsMoving())
+    {
+        if (!walkerUpdated)
+            bot.Walker.Update(player, diff);
+        if (bot.Walker.IsMoving())
+            return true;
+    }
+
+    // This stretch is over and something is still hitting her.
+    if (ran < FLEE_MAX_YARDS && bot.FleeLegs < FLEE_MAX_LEGS && StartFleeLeg(bot, player))
+        return true;
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} could not get away: {} monster(s) still hitting her after {:.0f} yards and {} stretch(es). She turns and fights.",
+        player->GetName(), attackers.size(), ran, bot.FleeLegs);
+    bot.Walker.Reset();
+    bot.Fleeing = false;
+    bot.FleeGaveUp = true;
+    return false;
 }
 
 bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target)

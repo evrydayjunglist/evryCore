@@ -123,6 +123,12 @@ struct PlayerbotRecord
     ObjectGuid StillShortGuid;
     std::vector<Position> StillShortFeet;
     bool LookedForOtherYellowOnFace = false;
+    // She is running from a fight she is losing: where she started running and how many stretches she has run.
+    bool Fleeing = false;
+    Position FleeStart;
+    uint32 FleeLegs = 0;
+    // Running did not shake them off. She fights this fight out before she runs again.
+    bool FleeGaveUp = false;
     // Her client's view of the root: the server's root packet sets it and its unroot packet clears it.
     bool ServerRooted = false;
     bool HeldInPlaceLogged = false;
@@ -223,6 +229,9 @@ private:
     bool TryLeaveFaceForOtherYellow(PlayerbotRecord& bot, Player* player);
     void ClearCombat(PlayerbotRecord& bot, Player* player);
     bool UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff, bool heldInPlace = false);
+    bool TryBeginFlee(PlayerbotRecord& bot, Player* player);
+    bool UpdateFlee(PlayerbotRecord& bot, Player* player, uint32 diff, bool walkerUpdated);
+    bool StartFleeLeg(PlayerbotRecord& bot, Player* player);
     void ClearItemLoot(PlayerbotRecord& bot);
     bool UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);

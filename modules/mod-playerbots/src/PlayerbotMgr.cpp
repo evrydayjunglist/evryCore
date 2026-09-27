@@ -368,6 +368,20 @@ namespace
         return false;
     }
 
+    // Something hitting her wins over a quest mob she is only going for. A target that is already hitting her keeps her,
+    // so she does not swap every tick to whichever attacker is a yard closer.
+    Optional<PlayerbotClient::CombatTarget> AttackerToAnswer(Player* player, ObjectGuid currentTarget)
+    {
+        if (!currentTarget.IsEmpty() && CreatureIsHittingPlayer(player, currentTarget))
+            return {};
+
+        Optional<PlayerbotClient::CombatTarget> attacker = PlayerbotClient::FindAttackerTarget(player);
+        if (attacker && !currentTarget.IsEmpty())
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is being hit by {}, so she stops going for {} and fights back.",
+                player->GetName(), attacker->CreatureGuid.ToString(), currentTarget.ToString());
+        return attacker;
+    }
+
     // Stay on this fight after a close-in walk fails: in melee, or this creature is hitting her.
     bool KeepCombatAfterFailedWalk(Player* player, ObjectGuid creatureGuid)
     {
@@ -2025,12 +2039,14 @@ bool PlayerbotMgr::HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff
     if (serverMovesHer)
         return true;
 
-    if (bot.CombatTarget.CreatureGuid.IsEmpty())
+    if (Optional<PlayerbotClient::CombatTarget> attacker = AttackerToAnswer(player, bot.CombatTarget.CreatureGuid))
     {
-        if (Optional<PlayerbotClient::CombatTarget> attacker = PlayerbotClient::FindAttackerTarget(player))
-            BeginCombatTarget(bot, player, *attacker, false);
+        BeginCombatTarget(bot, player, *attacker, false);
         return true;
     }
+
+    if (bot.CombatTarget.CreatureGuid.IsEmpty())
+        return true;
 
     UpdateCombat(bot, player, diff, true);
     return true;
@@ -2132,15 +2148,19 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.Walker.Reset();
     }
 
-    // Click from here before this tick's step. Do not heartbeat into a lip a player would already click over.
-    if (bot.CombatTarget.CreatureGuid.IsEmpty() && bot.Walker.IsMoving())
+    // Something hitting her stops a walk, including a walk to a quest mob that is not fighting her yet.
+    if (bot.Walker.IsMoving() || !bot.CombatTarget.CreatureGuid.IsEmpty())
     {
-        if (Optional<PlayerbotClient::CombatTarget> attacker = PlayerbotClient::FindAttackerTarget(player))
+        if (Optional<PlayerbotClient::CombatTarget> attacker = AttackerToAnswer(player, bot.CombatTarget.CreatureGuid))
         {
             BeginCombatTarget(bot, player, *attacker);
             return;
         }
+    }
 
+    // Click from here before this tick's step. Do not heartbeat into a lip a player would already click over.
+    if (bot.CombatTarget.CreatureGuid.IsEmpty() && bot.Walker.IsMoving())
+    {
         if (!bot.Walker.IsJumping() && TryClickFromHere(bot, player))
             return;
     }

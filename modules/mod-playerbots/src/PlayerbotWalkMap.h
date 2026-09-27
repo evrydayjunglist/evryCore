@@ -40,10 +40,12 @@ enum class PlayerbotWalkMapStep : std::uint8_t
     // That ground is not loaded, so the map knows nothing about it.
     NotLoaded,
     // The step leaves the area the map covers.
-    OutsideMap
+    OutsideMap,
+    // Her body does not fit standing there: something low is over that floor.
+    NoHeadroom
 };
 
-inline constexpr std::size_t PLAYERBOT_WALK_MAP_STEP_KINDS = 10;
+inline constexpr std::size_t PLAYERBOT_WALK_MAP_STEP_KINDS = 11;
 
 // One letter per step result, for the picture page.
 inline char PlayerbotWalkMapStepLetter(PlayerbotWalkMapStep step)
@@ -70,6 +72,8 @@ inline char PlayerbotWalkMapStepLetter(PlayerbotWalkMapStep step)
             return 'N';
         case PlayerbotWalkMapStep::OutsideMap:
             return 'E';
+        case PlayerbotWalkMapStep::NoHeadroom:
+            return 'H';
     }
 
     return '?';
@@ -82,7 +86,8 @@ inline bool PlayerbotWalkMapStepPlanted(PlayerbotWalkMapStep step)
         || step == PlayerbotWalkMapStep::SteepUp
         || step == PlayerbotWalkMapStep::TooFarDown
         || step == PlayerbotWalkMapStep::StaticCollision
-        || step == PlayerbotWalkMapStep::DynamicCollision;
+        || step == PlayerbotWalkMapStep::DynamicCollision
+        || step == PlayerbotWalkMapStep::NoHeadroom;
 }
 
 // Neighbours in the order north (+x), north-east, east (-y), south-east, south, south-west, west (+y), north-west.

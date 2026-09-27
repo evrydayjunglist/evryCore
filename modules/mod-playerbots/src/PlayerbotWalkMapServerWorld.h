@@ -70,6 +70,9 @@ public:
             case PlayerbotWalker::GroundedStepFailure::DynamicCollision:
                 result.Step = PlayerbotWalkMapStep::DynamicCollision;
                 break;
+            case PlayerbotWalker::GroundedStepFailure::NoHeadroom:
+                result.Step = PlayerbotWalkMapStep::NoHeadroom;
+                break;
             case PlayerbotWalker::GroundedStepFailure::NoPath:
             case PlayerbotWalker::GroundedStepFailure::InvalidPosition:
                 result.Step = PlayerbotWalkMapStep::InvalidPosition;

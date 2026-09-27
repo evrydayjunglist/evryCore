@@ -117,6 +117,7 @@ inline std::vector<std::string> DescribePlayerbotWalkMap(PlayerbotWalkMap const&
         { PlayerbotWalkMapStep::TooFarDown, "dropping too far" },
         { PlayerbotWalkMapStep::StaticCollision, "into a wall" },
         { PlayerbotWalkMapStep::DynamicCollision, "into a game object" },
+        { PlayerbotWalkMapStep::NoHeadroom, "under something too low for her body" },
         { PlayerbotWalkMapStep::InvalidPosition, "to an invalid position" }
     };
     std::string border;
@@ -464,11 +465,11 @@ inline constexpr std::string_view PLAYERBOT_WALK_MAP_PAGE_SCRIPT = R"page(</scri
   const DIR_NAMES = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
   const STEP_WORDS = {
     L: 'walkable', F: 'no floor within her climb', U: 'steeper than her climb', D: 'drops too far',
-    S: 'a wall', G: 'a game object in the way', I: 'not a valid position', N: 'ground not loaded',
-    E: 'past the edge of this map', '.': 'not tried'
+    S: 'a wall', G: 'a game object in the way', H: 'too low for her body', I: 'not a valid position',
+    N: 'ground not loaded', E: 'past the edge of this map', '.': 'not tried'
   };
-  const BORDER_ORDER = 'FUDSGI';
-  const BORDER_TOKENS = { F: 'nofloor', U: 'steep', D: 'drop', S: 'wall', G: 'object', I: 'nofloor' };
+  const BORDER_ORDER = 'FUDSGHI';
+  const BORDER_TOKENS = { F: 'nofloor', U: 'steep', D: 'drop', S: 'wall', G: 'object', H: 'wall', I: 'nofloor' };
   const KIND_WORDS = [
     'She cannot walk here from her feet, nor from here to them.',
     'She can walk here, but not back to her feet.',

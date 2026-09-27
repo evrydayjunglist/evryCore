@@ -50,6 +50,8 @@ public:
         TooFarDown,
         StaticCollision,
         DynamicCollision,
+        // Her body does not fit standing on that floor: something low is over it.
+        NoHeadroom,
         InvalidPosition
     };
 
@@ -154,6 +156,9 @@ private:
     };
 
     void QueueMove(Player* player, Position const& pos, bool moving, bool start);
+    // Her body does not fit on these feet. Stand her on the surface over her and move feet there. False when there is
+    // room, or no surface over her with room for her body.
+    bool StandUpOutOfPocket(Player* player, Position& feet);
     void QueueJumpMove(Player* player, OpcodeClient opcode, Position const& pos, uint32 fallTime);
     void FinishGroundedArrival(Player* player, Position const& pos);
     void FinishShortOfDestination(Player* player, Position const& pos);

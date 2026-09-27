@@ -34,6 +34,8 @@ namespace
         std::function<std::vector<float>(float, float)> Floors = [](float, float) { return std::vector<float>{ 0.0f }; };
         std::function<bool(float, float, float, float, float)> Wall = [](float, float, float, float, float) { return false; };
         std::function<bool(float, float)> Loaded = [](float, float) { return true; };
+        // Something too low for her body is over this floor.
+        std::function<bool(float, float, float)> LowCover = [](float, float, float) { return false; };
 
         bool IsLoaded(float x, float y) override { return Loaded(x, y); }
 
@@ -54,6 +56,8 @@ namespace
                 result.Step = PlayerbotWalkMapStep::TooFarDown;
             else if (Wall(fromX, fromY, toX, toY, result.Z))
                 result.Step = PlayerbotWalkMapStep::StaticCollision;
+            else if (LowCover(toX, toY, result.Z))
+                result.Step = PlayerbotWalkMapStep::NoHeadroom;
             else
                 result.Step = PlayerbotWalkMapStep::Legal;
             return result;
@@ -237,6 +241,37 @@ TEST_CASE("Playerbot walk map refuses a step through a wall", "[playerbots][walk
     for (PlayerbotWalkMapSpot const& spot : map.Spots())
         if (spot.Reached)
             CHECK(map.WorldX(spot.I) < 3.0f);
+}
+
+TEST_CASE("Playerbot walk map walks round a pocket too low for her body", "[playerbots][walk-map]")
+{
+    // A wrecked cart four yards north: flat dirt under it, but its planks are too low for her to stand under.
+    TestWorld world;
+    world.LowCover = [](float x, float y, float) { return x >= 4.0f && x <= 7.0f && std::fabs(y) <= 1.5f; };
+    PlayerbotWalkMap map(Settings(15.0f));
+    Finish(map, world);
+
+    PlayerbotWalkMapSummary const summary = map.Summarize();
+    CHECK(summary.BorderSteps[std::size_t(PlayerbotWalkMapStep::NoHeadroom)] > 0);
+    CHECK(PlayerbotWalkMapStepPlanted(PlayerbotWalkMapStep::NoHeadroom));
+    CHECK(PlayerbotWalkMapStepLetter(PlayerbotWalkMapStep::NoHeadroom) == 'H');
+
+    // She never stands under the cart, and she still reaches the dirt just past it by walking round.
+    for (PlayerbotWalkMapSpot const& spot : map.Spots())
+        if (spot.Reached)
+            CHECK_FALSE((map.WorldX(spot.I) >= 4.0f && map.WorldX(spot.I) <= 7.0f && std::fabs(map.WorldY(spot.J)) <= 1.5f));
+    std::int32_t const pastCart = SpotAt(map, 9.1f, 0.0f, 0.0f);
+    REQUIRE(pastCart >= 0);
+    CHECK(map.Spots()[pastCart].Reached);
+
+    PlayerbotWalkMapReport report;
+    report.Name = "Sora";
+    report.MapId = 1;
+    std::vector<std::string> const lines = DescribePlayerbotWalkMap(map, summary, report);
+    bool said = false;
+    for (std::string const& line : lines)
+        said = said || line.find("under something too low for her body") != std::string::npos;
+    CHECK(said);
 }
 
 TEST_CASE("Playerbot walk map judges a diagonal step as the heartbeats she walks", "[playerbots][walk-map]")

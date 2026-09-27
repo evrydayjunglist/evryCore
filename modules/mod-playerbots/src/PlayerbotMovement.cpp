@@ -120,6 +120,10 @@ namespace
     constexpr float SHORT_STOP_REPEAT_YARDS = 5.0f;
     constexpr float SHORT_STOP_PROGRESS_YARDS = 1.0f;
     constexpr size_t SHORT_STOP_MEMORY = 8;
+    // The headroom ray starts this far above her feet, so the floor she stands on is not the thing over her head.
+    constexpr float HEADROOM_FROM_FEET_YARDS = 0.2f;
+    // Standing up out of a pocket looks for the surface over her this far above the top of her body.
+    constexpr float STAND_UP_SEARCH_ABOVE_BODY_YARDS = 1.0f;
 
     float HeartbeatStepLen(Player const* player)
     {
@@ -269,12 +273,34 @@ namespace
         return GetSegmentWorldCollision(player, from, to, headHeight, false) != StepWorldCollision::None;
     }
 
+    // Her whole body fits standing on these feet: straight up from just above them to the top of her body meets no
+    // model and no game object. A player's client does not let them into a pocket under something lower than that; it
+    // stands them on top of it or stops them.
+    StepWorldCollision GetHeadroomCollision(Player const* player, Position const& feet)
+    {
+        if (!player)
+            return StepWorldCollision::None;
+
+        float const bodyTop = std::max(HEADROOM_FROM_FEET_YARDS + 0.1f, player->GetCollisionHeight());
+        Position top = feet;
+        top.Relocate(feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ() + bodyTop - HEADROOM_FROM_FEET_YARDS);
+        return GetSegmentWorldCollision(player, feet, top, HEADROOM_FROM_FEET_YARDS, false);
+    }
+
+    bool HasHeadroom(Player const* player, Position const& feet)
+    {
+        return GetHeadroomCollision(player, feet) == StepWorldCollision::None;
+    }
+
     bool GroundedStepIsWalkable(Player const* player, Position const& from, Position const& to)
     {
         if (!GroundedStepIsLegal(MeasureGroundedStep(from, to)))
             return false;
 
-        return GetStepWorldCollision(player, from, to) == StepWorldCollision::None;
+        if (GetStepWorldCollision(player, from, to) != StepWorldCollision::None)
+            return false;
+
+        return HasHeadroom(player, to);
     }
 
     // Dirt is this plant, not the chest-height wall ray. Search from last feet plus the most she may climb this step.
@@ -853,6 +879,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     player->UpdateAllowedPositionZ(x, y, z);
     Position from;
     from.Relocate(x, y, z, player->GetOrientation());
+    StandUpOutOfPocket(player, from);
 
     _destination = destination;
     _stopDistance = stopDistance;
@@ -948,6 +975,43 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
 
     FailNoLegalRing(player);
     return false;
+}
+
+// Her body does not fit where she stands: she is in a pocket under something low, which a player's client never lets
+// them into. It would stand a player on the surface over that pocket, so she stands there too, once, and walks on from
+// there with ordinary steps.
+bool PlayerbotWalker::StandUpOutOfPocket(Player* player, Position& feet)
+{
+    if (!player || player->GetTransport() || player->IsFlying() || HasHeadroom(player, feet))
+        return false;
+
+    float const bodyTop = std::max(HEADROOM_FROM_FEET_YARDS + 0.1f, player->GetCollisionHeight());
+    float const searchZ = feet.GetPositionZ() + bodyTop + STAND_UP_SEARCH_ABOVE_BODY_YARDS;
+    float const topZ = player->GetMapHeight(feet.GetPositionX(), feet.GetPositionY(), searchZ);
+    if (topZ <= INVALID_HEIGHT || topZ <= feet.GetPositionZ() + HEADROOM_FROM_FEET_YARDS)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} has no room for her body at ({:.2f}, {:.2f}, {:.2f}) and found no surface over her within {:.1f} yards to stand on.",
+            player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ(), bodyTop + STAND_UP_SEARCH_ABOVE_BODY_YARDS);
+        return false;
+    }
+
+    Position top;
+    top.Relocate(feet.GetPositionX(), feet.GetPositionY(), topZ, feet.GetOrientation());
+    if (!HasHeadroom(player, top))
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} has no room for her body at ({:.2f}, {:.2f}, {:.2f}), and none on the surface over her at {:.2f} either.",
+            player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ(), topZ);
+        return false;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} has no room for her body at ({:.2f}, {:.2f}, {:.2f}), so she stands up onto the surface over her at {:.2f}, {:.2f} yards up.",
+        player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ(), topZ, topZ - feet.GetPositionZ());
+    QueueMove(player, top, false, false);
+    feet = top;
+    return true;
 }
 
 void PlayerbotWalker::Update(Player* player, uint32 diff)
@@ -1339,7 +1403,18 @@ PlayerbotWalker::GroundedStepFailure PlayerbotWalker::ClassifyGroundedStep(Playe
         case StepWorldCollision::InvalidPosition:
             return GroundedStepFailure::InvalidPosition;
         case StepWorldCollision::None:
+            break;
+    }
+
+    switch (GetHeadroomCollision(player, out))
+    {
+        case StepWorldCollision::None:
             return GroundedStepFailure::None;
+        case StepWorldCollision::InvalidPosition:
+            return GroundedStepFailure::InvalidPosition;
+        case StepWorldCollision::Static:
+        case StepWorldCollision::Dynamic:
+            return GroundedStepFailure::NoHeadroom;
     }
 
     return GroundedStepFailure::InvalidPosition;
@@ -2031,6 +2106,8 @@ char const* PlayerbotWalker::GroundedStepFailureName(GroundedStepFailure failure
             return "vmap collision";
         case GroundedStepFailure::DynamicCollision:
             return "gameobject collision";
+        case GroundedStepFailure::NoHeadroom:
+            return "too low for her body";
         case GroundedStepFailure::InvalidPosition:
             return "invalid position";
     }

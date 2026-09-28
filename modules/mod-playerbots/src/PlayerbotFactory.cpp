@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotFactory.h"
+#include "PlayerbotNameGenerator.h"
 #include "AccountMgr.h"
 #include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
@@ -35,6 +36,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "RaceMask.h"
+#include "Random.h"
 #include "RealmList.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
@@ -423,9 +425,6 @@ std::vector<RaceClassSex> CollectCombos(WorldSession* session, CreateFilters con
 
             for (uint8 sex : { uint8(GENDER_MALE), uint8(GENDER_FEMALE) })
             {
-                if (RandomNameGenName(uint8(raceEntry->ID), sex).empty())
-                    continue;
-
                 WorldPackets::Character::CharacterCreateInfo probe;
                 probe.Race = raceEntry->ID;
                 probe.Class = classEntry->ID;
@@ -441,32 +440,52 @@ std::vector<RaceClassSex> CollectCombos(WorldSession* session, CreateFilters con
     return combos;
 }
 
+// The game's own name list for her race is tried first. Once those draws keep landing on names that are taken (a
+// few hundred bots of one race use it up), a made-up syllable name takes over, so any race can have as many bots as
+// the server allows.
+constexpr uint32 NAME_LIST_ATTEMPTS = 20;
+constexpr uint32 MADE_UP_NAME_ATTEMPTS = 200;
+
+bool IsFreeName(std::string& name)
+{
+    if (name.empty())
+        return false;
+
+    if (!normalizePlayerName(name))
+        return false;
+
+    if (ObjectMgr::CheckPlayerName(name, LOCALE_enUS, true) != CHAR_NAME_SUCCESS)
+        return false;
+
+    if (sObjectMgr->IsReservedName(name))
+        return false;
+
+    if (sCharacterCache->GetCharacterCacheByName(name))
+        return false;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
+    stmt->setString(0, name);
+    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+        return false;
+
+    return true;
+}
+
 bool PickName(uint8 race, uint8 sex, std::string& name)
 {
-    for (uint32 attempt = 0; attempt < 40; ++attempt)
+    for (uint32 attempt = 0; attempt < NAME_LIST_ATTEMPTS; ++attempt)
     {
         name = RandomNameGenName(race, sex);
-        if (name.empty())
-            continue;
+        if (IsFreeName(name))
+            return true;
+    }
 
-        if (!normalizePlayerName(name))
-            continue;
-
-        if (ObjectMgr::CheckPlayerName(name, LOCALE_enUS, true) != CHAR_NAME_SUCCESS)
-            continue;
-
-        if (sObjectMgr->IsReservedName(name))
-            continue;
-
-        if (sCharacterCache->GetCharacterCacheByName(name))
-            continue;
-
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
-        stmt->setString(0, name);
-        if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
-            continue;
-
-        return true;
+    auto random = [](uint32 count) { return urand(0, count - 1); };
+    for (uint32 attempt = 0; attempt < MADE_UP_NAME_ATTEMPTS; ++attempt)
+    {
+        name = MakePlayerbotName(random, sex == GENDER_FEMALE);
+        if (IsFreeName(name))
+            return true;
     }
 
     return false;

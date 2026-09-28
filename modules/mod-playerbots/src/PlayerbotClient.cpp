@@ -50,6 +50,7 @@
 #include "SharedDefines.h"
 #include "Spell.h"
 #include "SpellAuraDefines.h"
+#include "SpellAuras.h"
 #include "SpellDefines.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
@@ -3537,6 +3538,133 @@ bool PlayerbotClient::TrySelfCast(Player* player, uint32 spellId)
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on herself.",
         player->GetName(), CombatSpellName(spellInfo), spellId);
     return true;
+}
+
+namespace
+{
+    // What a food or drink item gives while she sits: health, mana, or both. Neither when it is not food or drink.
+    void RestItemKinds(Player const* player, Item const* item, bool& food, bool& drink, SpellInfo const** spellOut)
+    {
+        food = false;
+        drink = false;
+        if (spellOut)
+            *spellOut = nullptr;
+
+        ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+        if (!proto || proto->GetClass() != ITEM_CLASS_CONSUMABLE || proto->GetSubClass() != ITEM_SUBCLASS_FOOD_DRINK)
+            return;
+
+        uint32 const spellId = GetItemOnUseSpellId(item);
+        SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID()) : nullptr;
+        if (!spellInfo)
+            return;
+
+        switch (spellInfo->GetSpellSpecific())
+        {
+            case SPELL_SPECIFIC_FOOD:
+                food = true;
+                break;
+            case SPELL_SPECIFIC_DRINK:
+                drink = true;
+                break;
+            case SPELL_SPECIFIC_FOOD_AND_DRINK:
+                food = true;
+                drink = true;
+                break;
+            default:
+                return;
+        }
+
+        if (spellOut)
+            *spellOut = spellInfo;
+    }
+}
+
+void PlayerbotClient::RestAurasOnHer(Player const* player, bool& eating, bool& drinking)
+{
+    eating = false;
+    drinking = false;
+    if (!player)
+        return;
+
+    for (auto const& [spellId, application] : player->GetAppliedAuras())
+    {
+        switch (application->GetBase()->GetSpellInfo()->GetSpellSpecific())
+        {
+            case SPELL_SPECIFIC_FOOD:
+                eating = true;
+                break;
+            case SPELL_SPECIFIC_DRINK:
+                drinking = true;
+                break;
+            case SPELL_SPECIFIC_FOOD_AND_DRINK:
+                eating = true;
+                drinking = true;
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+Item* PlayerbotClient::PickRestItem(Player* player, bool wantFood, bool wantDrink, std::unordered_set<uint32> const& refused)
+{
+    if (!player || !player->GetMap() || !player->GetSpellHistory() || (!wantFood && !wantDrink)
+        || player->IsNonMeleeSpellCast(false, false, true))
+        return nullptr;
+
+    // Best is the item that covers what she needs without wasting what she does not, then the highest level one,
+    // which is the one that brings her back fastest.
+    Item* best = nullptr;
+    std::tuple<int, bool, int32, uint32> bestScore;
+    player->ForEachItem(ItemSearchLocation::Inventory, [&](Item* item)
+    {
+        if (refused.count(item->GetEntry()) || item->IsLocked())
+            return ItemSearchCallbackResult::Continue;
+
+        bool food = false;
+        bool drink = false;
+        SpellInfo const* spellInfo = nullptr;
+        RestItemKinds(player, item, food, drink, &spellInfo);
+        int const covers = int(food && wantFood) + int(drink && wantDrink);
+        if (!spellInfo || !covers)
+            return ItemSearchCallbackResult::Continue;
+
+        if (player->CanUseItem(item) != EQUIP_ERR_OK || !player->GetSpellHistory()->IsReady(spellInfo, item->GetEntry()))
+            return ItemSearchCallbackResult::Continue;
+
+        bool const wastes = (food && !wantFood) || (drink && !wantDrink);
+        ItemTemplate const* proto = item->GetTemplate();
+        std::tuple<int, bool, int32, uint32> const score{ covers, !wastes, proto->GetBaseRequiredLevel(), proto->GetBaseItemLevel() };
+        if (!best || score > bestScore)
+        {
+            best = item;
+            bestScore = score;
+        }
+        return ItemSearchCallbackResult::Continue;
+    });
+
+    return best;
+}
+
+uint32 PlayerbotClient::TryUseRestItem(Player* player, Item* item)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || !player->GetMap() || !item)
+        return 0;
+
+    bool food = false;
+    bool drink = false;
+    SpellInfo const* spellInfo = nullptr;
+    RestItemKinds(player, item, food, drink, &spellInfo);
+    if (!spellInfo)
+        return 0;
+
+    // Food and drink are cast on herself, as a click in her bags does.
+    QueueUseItem(player, item, player->GetGUID(), spellInfo->Id);
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_USE_ITEM {} ({}) to {} while she rests.",
+        player->GetName(), item->GetTemplate()->GetDefaultLocaleName(), item->GetEntry(),
+        food && drink ? "eat and drink" : food ? "eat" : "drink");
+    return spellInfo->Id;
 }
 
 bool PlayerbotClient::TryUseGameObject(Player* player, GameObjectTarget const& target)

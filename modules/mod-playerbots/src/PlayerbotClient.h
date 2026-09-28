@@ -238,6 +238,12 @@ namespace PlayerbotClient
     // A heal, shield, or damage cut she knows and could cast on herself now. Long cooldowns only when allowLongCooldown.
     SpellInfo const* PickSelfDefenceSpell(Player* player, bool allowLongCooldown);
     bool TrySelfCast(Player* player, uint32 spellId);
+    // Whether a food or drink she used is working on her now.
+    void RestAurasOnHer(Player const* player, bool& eating, bool& drinking);
+    // Food (for health) or drink (for mana) in her bags that she could use now; skips the item entries in refused.
+    Item* PickRestItem(Player* player, bool wantFood, bool wantDrink, std::unordered_set<uint32> const& refused);
+    // Queues the CMSG_USE_ITEM a player sends by clicking that food or drink. Returns the item's on-use spell, or 0.
+    uint32 TryUseRestItem(Player* player, Item* item);
     bool CombatCastHasStarted(Player const* player, uint32 spellId);
     bool CombatSpellIsMelee(SpellInfo const* spellInfo);
     float CombatSpellMaxRange(Player const* player, Unit const* target, SpellInfo const* spellInfo);

@@ -103,6 +103,11 @@ struct PlayerbotRecord
     bool ReclaimSent = false;
     bool HealerSent = false;
     bool SitSent = false;
+    // Food or drink she used during this rest: the item she is waiting on, and the ones that did not start eating.
+    uint32 RestItemEntry = 0;
+    uint32 RestItemSpellId = 0;
+    uint32 RestItemWaitMs = 0;
+    std::unordered_set<uint32> RestItemsRefused;
     Position SpiritReleasePos;
     ObjectGuid SpiritHealerGuid;
     PlayerbotClient::QuestTarget QuestTarget;

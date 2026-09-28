@@ -25,6 +25,7 @@
 #include "GameTime.h"
 #include "GridDefines.h"
 #include "Group.h"
+#include "Item.h"
 #include "Log.h"
 #include "MapManager.h"
 #include "MoveSpline.h"
@@ -77,6 +78,11 @@ namespace
     // Below this much health, or this much mana for a mana user, she sits until both are full before her next pull.
     constexpr float REST_BELOW_HEALTH_PCT = 60.0f;
     constexpr float REST_BELOW_MANA_PCT = 40.0f;
+    // While she sits she eats food from her bags below this much health and drinks below this much mana, and waits
+    // this long for one to start before she gives up on that item for this rest.
+    constexpr float REST_EAT_BELOW_HEALTH_PCT = 80.0f;
+    constexpr float REST_DRINK_BELOW_MANA_PCT = 80.0f;
+    constexpr uint32 REST_ITEM_WAIT_MS = 2000;
     // In a fight, below this much health she presses a heal, shield, or damage cut she knows on herself before her next
     // damage press; below the second, one with a long cooldown too.
     constexpr float FIGHT_SELF_DEFENCE_BELOW_HEALTH_PCT = 50.0f;
@@ -2944,6 +2950,10 @@ void PlayerbotMgr::ClearDeath(PlayerbotRecord& bot)
     bot.ReclaimSent = false;
     bot.HealerSent = false;
     bot.SitSent = false;
+    bot.RestItemEntry = 0;
+    bot.RestItemSpellId = 0;
+    bot.RestItemWaitMs = 0;
+    bot.RestItemsRefused.clear();
     bot.SpiritReleasePos.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
     bot.SpiritHealerGuid.Clear();
 }
@@ -3020,6 +3030,50 @@ bool PlayerbotMgr::UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32
         }
         ClearDeath(bot);
         return false;
+    }
+
+    // Food and drink from her bags make the rest shorter. Starting to eat sits her down on the server, as it does
+    // for a player, so no sit goes out while she waits to see whether the one she clicked started.
+    if (bot.RestItemEntry)
+    {
+        bot.RestItemWaitMs += diff;
+        if (player->HasAura(bot.RestItemSpellId))
+        {
+            bot.RestItemEntry = 0;
+            bot.RestItemSpellId = 0;
+        }
+        else if (bot.RestItemWaitMs < REST_ITEM_WAIT_MS)
+            return true;
+        else
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} clicked item {} to rest faster, but it did not start. She does not click it again this rest.",
+                player->GetName(), bot.RestItemEntry);
+            bot.RestItemsRefused.insert(bot.RestItemEntry);
+            bot.RestItemEntry = 0;
+            bot.RestItemSpellId = 0;
+        }
+    }
+
+    if (player->IsAlive())
+    {
+        bool eating = false;
+        bool drinking = false;
+        PlayerbotClient::RestAurasOnHer(player, eating, drinking);
+        bool const wantFood = !eating && player->GetHealthPct() < REST_EAT_BELOW_HEALTH_PCT;
+        bool const wantDrink = !drinking && UsesMana(player)
+            && 100.0f * float(player->GetPower(POWER_MANA)) / float(player->GetMaxPower(POWER_MANA)) < REST_DRINK_BELOW_MANA_PCT;
+        if (Item* item = PlayerbotClient::PickRestItem(player, wantFood, wantDrink, bot.RestItemsRefused))
+        {
+            uint32 const entry = item->GetEntry();
+            if (uint32 const spellId = PlayerbotClient::TryUseRestItem(player, item))
+            {
+                bot.RestItemEntry = entry;
+                bot.RestItemSpellId = spellId;
+                bot.RestItemWaitMs = 0;
+                return true;
+            }
+            bot.RestItemsRefused.insert(entry);
+        }
     }
 
     if (!player->IsSitState())

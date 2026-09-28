@@ -24,6 +24,7 @@
 #include "PlayerbotCoordinatorLease.h"
 #include "PlayerbotCoordinatorPresence.h"
 #include "PlayerbotInvitePolicy.h"
+#include "PlayerbotMapPickTurns.h"
 #include "PlayerbotMovement.h"
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotSessionPresence.h"
@@ -300,6 +301,8 @@ private:
     std::mutex _serverOrdersLock;
     std::unordered_map<uint32, std::vector<PlayerbotServerOrder>> _serverOrders;
     PlayerbotWalkMapper _walkMapper;
+    // Bots take turns to pick their next map work, a few each world tick.
+    PlayerbotMapPickTurns _mapPickTurns;
     PlayerbotTickStats _tickStats;
     std::string _lastTickReport;
     // The steps of the bot update running now, and how long until another slow update may be written to the log.

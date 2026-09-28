@@ -837,6 +837,7 @@ void PlayerbotMgr::Update(uint32 diff)
     Clock::time_point const tickStart = Clock::now();
 
     PlayerbotWalker::BeginWorldTick();
+    _mapPickTurns.BeginTick(diff);
     UpdateBridge(diff);
     ValidateRtsSessions();
 
@@ -956,6 +957,8 @@ void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
             report.WindowMs / 1000, _windowBotsMicros / 1000.0, _windowCost.Describe(_windowBotsMicros));
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s {}", report.WindowMs / 1000,
             PlayerbotWalker::DescribeWayRoundLooksAndClear());
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bots made {}", report.WindowMs / 1000,
+            _mapPickTurns.DescribeWindowAndClear());
     }
     _windowCost.Clear();
     _windowBotsMicros = 0;
@@ -3019,15 +3022,22 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     // Between looks she only stands there. The time still counts toward forgetting her skip list and the idle line.
     bot.SinceLookMs += diff;
-    if (!LookAroundNow(bot))
+    // A bot waiting in line for a map pick already looked around her; she comes straight back for her turn each tick.
+    if (!_mapPickTurns.InLine(bot.Account.Index))
+    {
+        if (!LookAroundNow(bot))
+            return;
+
+        if (TryImmediateWorld(bot, player, false) || TryBeginVendor(bot, player))
+        {
+            bot.SinceLookMs = 0;
+            return;
+        }
+    }
+
+    if (!_mapPickTurns.MayPick(bot.Account.Index))
         return;
     uint32 const idleMs = std::exchange(bot.SinceLookMs, 0);
-
-    if (TryImmediateWorld(bot, player, false))
-        return;
-
-    if (TryBeginVendor(bot, player))
-        return;
 
     if (TryMapYellow(bot, player, skipFailedQuestId, skipFailedEntry))
         return;
@@ -3847,6 +3857,21 @@ bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
 
 bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId, uint32 skipEntry)
 {
+    // Only a few bots pick in one tick. One without a turn finds nothing now and asks again on her next update.
+    if (!_mapPickTurns.MayPick(bot.Account.Index))
+        return false;
+
+    // Whichever way the pick ends, its time counts against this tick's picks.
+    struct NoteSpent
+    {
+        PlayerbotMapPickTurns& Turns;
+        std::chrono::steady_clock::time_point Start = std::chrono::steady_clock::now();
+        ~NoteSpent()
+        {
+            Turns.NoteSpent(uint64(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - Start).count()));
+        }
+    } const noteSpent{ _mapPickTurns };
+
     PlayerbotCostTimer const cost(PlayerbotCostStep::MapYellow);
     PlayerbotClient::MapYellowFilter filter = MakeMapYellowFilter(bot, skipQuestId, skipEntry, false, nullptr);
 

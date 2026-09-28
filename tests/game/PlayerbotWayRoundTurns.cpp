@@ -93,3 +93,19 @@ TEST_CASE("The way-round report says why bots looked and how they did", "[player
         "stopped looking. At most 1 bot(s) were in line at once, and the longest wait for a turn was 0.0 s.");
     turns.Leave(c);
 }
+
+TEST_CASE("The way-round report counts bots that went to another spot instead of joining the line", "[playerbots][scale]")
+{
+    PlayerbotWayRoundTurns turns;
+    turns.BeginTick();
+    turns.NoteWentElsewhere();
+    turns.NoteWentElsewhere();
+
+    // They never joined, so the line stays empty and no look is counted as started.
+    REQUIRE(turns.Waiting() == 0);
+    REQUIRE(turns.DescribeWindowAndClear() ==
+        "0 bot(s) stopped to look for a way round. 0 found a way round or a way out, 0 found none, 0 took too long and 0 "
+        "stopped looking. At most 0 bot(s) were in line at once, and the longest wait for a turn was 0.0 s. 2 bot(s) walked "
+        "to another spot of the same work instead of joining the line.");
+    REQUIRE(turns.DescribeWindowAndClear().find("another spot") == std::string::npos);
+}

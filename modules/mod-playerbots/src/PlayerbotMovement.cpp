@@ -694,6 +694,7 @@ void PlayerbotWalker::ResetNow()
 void PlayerbotWalker::ClearWayRound()
 {
     EndWayRoundTurn(PlayerbotWayRoundEnd::Abandoned);
+    _wayRoundJoinReason = nullptr;
     _wayRoundMap.reset();
     _wayRoundWaysOut.clear();
     _wayRoundProbe = 0;
@@ -716,6 +717,21 @@ void PlayerbotWalker::EndWayRoundTurn(PlayerbotWayRoundEnd end)
         _wayRoundMap ? _wayRoundMap->Spots().size() : 0);
     WayRoundTurns.Leave(_wayRoundTicket);
     _wayRoundTicket = 0;
+}
+
+void PlayerbotWalker::JoinWayRoundLine(Player* player)
+{
+    if (!WantsToLookForAWayRound())
+        return;
+    _wayRoundTicket = WayRoundTurns.Join(_wayRoundJoinReason);
+    _wayRoundJoinReason = nullptr;
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} waits for her turn to map the ground; {} bot(s) are in line ahead of her.",
+        player->GetName(), uint32(WayRoundTurns.Waiting() - 1));
+}
+
+void PlayerbotWalker::NoteWentElsewhereInsteadOfAWayRound()
+{
+    WayRoundTurns.NoteWentElsewhere();
 }
 
 // One world tick's mapping time is shared by the bots at the front of the line looking for a way round.
@@ -2322,7 +2338,8 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     _wayRoundMs = 0;
     _wayRoundMapId = player->GetMapId();
     EndWayRoundTurn(PlayerbotWayRoundEnd::Abandoned);
-    _wayRoundTicket = WayRoundTurns.Join(reason);
+    // She joins the line on her next update, unless her brain sends her to another spot of the same work first.
+    _wayRoundJoinReason = reason ? reason : "no reason given";
     _wayRoundWaitMs = 0;
     _wayRoundWork = std::chrono::steady_clock::duration::zero();
     _wayRoundHadATurn = false;
@@ -2331,8 +2348,8 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     _wayRoundFirstStepRefused = false;
     _state = State::LookingForAWayRound;
     PLAYERBOT_LOG_DETAIL(player,
-        "mod-playerbots: {} stopped to look for a way round ({}). Mapping the ground she can walk within {:.0f} yards of ({:.2f}, {:.2f}, {:.2f}); {} bot(s) are in line ahead of her.",
-        player->GetName(), reason, _wayRoundYards, x, y, z, uint32(WayRoundTurns.Waiting() - 1));
+        "mod-playerbots: {} stopped to look for a way round ({}). She will map the ground she can walk within {:.0f} yards of ({:.2f}, {:.2f}, {:.2f}).",
+        player->GetName(), _wayRoundJoinReason, _wayRoundYards, x, y, z);
     return true;
 }
 
@@ -2366,6 +2383,10 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
         Fail(player, "she could not finish looking for a way round");
         return;
     }
+
+    // Nothing sent her elsewhere since she stopped, so she takes her place in the line.
+    if (_wayRoundJoinReason)
+        JoinWayRoundLine(player);
 
     // She was dropped from the line for missing her turn, which only happens when her updates stopped for a while.
     if (!WayRoundTurns.InLine(_wayRoundTicket))

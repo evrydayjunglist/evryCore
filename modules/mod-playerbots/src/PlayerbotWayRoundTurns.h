@@ -104,6 +104,9 @@ public:
     // Her small map had no way round and ground she can walk carried on past it, so she maps the full size.
     void NoteWidened() { ++_window.Widened; }
 
+    // She stopped to look for a way round but walked to another spot of the same work instead of joining the line.
+    void NoteWentElsewhere() { ++_window.WentElsewhere; }
+
     // "12 bot(s) stopped to look for a way round (the navmesh had no route from her feet 9, too steep 3). 10 found a
     // way round or a way out, 1 found none, 0 took too long and 1 stopped looking. At most 4 bot(s) were in line at
     // once, and the longest wait for a turn was 2.5 s." Then the window starts again.
@@ -129,6 +132,12 @@ public:
             unsigned(_window.LongestLine), double(_window.LongestWaitMs) / 1000.0);
         std::string text = buffer;
 
+        if (_window.WentElsewhere)
+        {
+            std::snprintf(buffer, sizeof(buffer),
+                " %u bot(s) walked to another spot of the same work instead of joining the line.", unsigned(_window.WentElsewhere));
+            text += buffer;
+        }
         if (_window.Widened)
         {
             std::snprintf(buffer, sizeof(buffer), " %u look(s) found nothing on the small map and mapped the full size.",
@@ -179,6 +188,7 @@ private:
         uint32_t LongestLine = 0;
         uint32_t LongestWaitMs = 0;
         uint32_t Widened = 0;
+        uint32_t WentElsewhere = 0;
         uint32_t FinishedMaps = 0;
         uint64_t FinishedMappingMicros = 0;
         uint64_t FinishedFloors = 0;

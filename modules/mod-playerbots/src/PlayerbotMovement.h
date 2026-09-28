@@ -117,6 +117,12 @@ public:
     // walking to. The place she stands is the problem, not the target.
     bool FailedAtHerFeet() const { return _state == State::Failed && _failedAtHerFeet; }
     bool StartedOnAFace() const { return _startedOnAFace; }
+    // She stopped to look for a way round and has not joined the line of bots taking turns to map yet. Her brain may
+    // send her somewhere else first; otherwise she joins the line on her next update or when told to.
+    bool WantsToLookForAWayRound() const { return _state == State::LookingForAWayRound && _wayRoundJoinReason; }
+    void JoinWayRoundLine(Player* player);
+    // She stopped to look for a way round and went to another spot of the same work instead, for the one-minute report.
+    static void NoteWentElsewhereInsteadOfAWayRound();
 
 private:
     enum class State
@@ -291,6 +297,8 @@ private:
     uint32 _wayRoundMapId = 0;
     // Her place in the line of bots taking turns to map the ground, or 0.
     uint64 _wayRoundTicket = 0;
+    // Why she stopped, until she joins the line. A string that lives as long as the program.
+    char const* _wayRoundJoinReason = nullptr;
     uint32 _wayRoundWaitMs = 0;
     // World-thread time her look has taken so far, mapping and asking the navmesh from the ways out.
     std::chrono::steady_clock::duration _wayRoundWork = std::chrono::steady_clock::duration::zero();

@@ -2677,6 +2677,23 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
     }
 
+    // Before she waits in line to map the ground round what refused her, another spawn or spot of the same objective may
+    // be an easy walk. The same one look per approach as on a face; otherwise she joins the line now.
+    if (bot.Walker.WantsToLookForAWayRound())
+    {
+        if (!bot.LookedForOtherYellowOnFace && bot.FollowLeader.IsEmpty())
+        {
+            bot.LookedForOtherYellowOnFace = true;
+            if (TryLeaveFaceForOtherYellow(bot, player))
+            {
+                PlayerbotWalker::NoteWentElsewhereInsteadOfAWayRound();
+                bot.LookedForOtherYellowOnFace = true;
+                return;
+            }
+        }
+        bot.Walker.JoinWayRoundLine(player);
+    }
+
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
     {
         if (UpdateCombat(bot, player, diff))
@@ -4037,7 +4054,7 @@ bool PlayerbotMgr::TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, 
     if (!extraSkipGuid.IsEmpty())
     {
         char const* what = foundGuid.IsEmpty() ? "another yellow of the same objective" : "another spawn of the same objective";
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} this approach is a face. Walking to {}.",
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot walk this approach. Walking to {}.",
             player->GetName(), what);
     }
 

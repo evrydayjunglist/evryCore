@@ -49,6 +49,7 @@ enum class PlayerbotCostStep : uint8_t
     TurnInReport,       // explaining why a finished quest's turn-in was not picked
     Presence,           // keeping her session and character logged in
     ServerOrders,       // answering the server's movement orders
+    GridLoad,           // loading a map grid a finder wants to look in, so the spawns in it exist
     Count
 };
 
@@ -64,7 +65,7 @@ public:
         static constexpr std::array<char const*, StepCount> names = { "navmesh routes", "ground and collision looks",
             "way-round map", "navmesh join-up probes", "stand spot picks", "looks at the world around her",
             "map work picks", "quest object searches", "use-item creature searches", "quest monster searches",
-            "quest item searches", "turn-in searches", "takeable quest searches", "starting picked work", "vendor picks", "same-objective searches", "fight", "death", "turn-in explanations", "staying logged in", "answers to server movement orders" };
+            "quest item searches", "turn-in searches", "takeable quest searches", "starting picked work", "vendor picks", "same-objective searches", "fight", "death", "turn-in explanations", "staying logged in", "answers to server movement orders", "grid loads" };
         return names[std::size_t(step)];
     }
 

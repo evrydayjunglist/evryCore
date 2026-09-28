@@ -16,7 +16,9 @@
  */
 
 #include "PlayerbotClient.h"
+#include "PlayerbotCreatureIndex.h"
 #include "PlayerbotLogDetail.h"
+#include "PlayerbotUpdateCost.h"
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Containers.h"
@@ -65,6 +67,7 @@
 #include <limits>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -534,6 +537,144 @@ void PlayerbotClient::QueueRepairItem(WorldSession* session, ObjectGuid vendorGu
 
 namespace
 {
+    // Loading a grid reads its terrain and spawns from disk and the database on this thread, so it is timed on its own.
+    void LoadGridForFinder(Map* map, Position const& at)
+    {
+        if (!map || map->IsGridLoaded(at))
+            return;
+        PlayerbotCostTimer const cost(PlayerbotCostStep::GridLoad);
+        map->LoadGrid(at.GetPositionX(), at.GetPositionY());
+    }
+
+    PlayerbotCreatureIndex const& CreatureIndex()
+    {
+        static PlayerbotCreatureIndex index;
+
+        CreatureDataContainer const& spawnData = sObjectMgr->GetAllCreatureData();
+        if (!index.SpawnsAreCurrent(spawnData.size()))
+        {
+            std::vector<PlayerbotCreatureIndex::Spawn> spawns;
+            spawns.reserve(spawnData.size());
+            for (auto const& [spawnId, data] : spawnData)
+                spawns.push_back({ uint64(spawnId), data.mapId, data.id });
+            index.BuildSpawns(spawns, spawnData.size());
+        }
+
+        CreatureTemplateContainer const& templates = sObjectMgr->GetCreatureTemplates();
+        if (!index.KillCreditsAreCurrent(templates.size()))
+        {
+            std::vector<PlayerbotCreatureIndex::KillCredits> credits;
+            for (auto const& [entry, info] : templates)
+            {
+                PlayerbotCreatureIndex::KillCredits& entryCredits = credits.emplace_back();
+                entryCredits.Entry = entry;
+                for (uint8 i = 0; i < MAX_KILL_CREDIT; ++i)
+                    if (info.KillCredit[i])
+                        entryCredits.CountsAs.push_back(info.KillCredit[i]);
+            }
+            index.BuildKillCredits(credits, templates.size());
+        }
+
+        return index;
+    }
+
+    // Every creature loaded on this map from a world database spawn of one of these entries. That is the same set of
+    // creatures the map's spawn id store holds, narrowed to these entries without walking the rest.
+    template <typename Entries>
+    std::vector<Creature*> LoadedCreaturesOf(Map* map, Entries const& entries)
+    {
+        std::vector<Creature*> creatures;
+        if (!map)
+            return creatures;
+        PlayerbotCreatureIndex const& index = CreatureIndex();
+        auto const& store = map->GetCreatureBySpawnIdStore();
+        for (uint32 entry : entries)
+            for (uint64 spawnId : index.SpawnIds(map->GetId(), entry))
+                for (auto const& pair : Trinity::Containers::MapEqualRange(store, ObjectGuid::LowType(spawnId)))
+                    creatures.push_back(pair.second);
+        return creatures;
+    }
+
+    std::vector<Creature*> LoadedCreaturesGivingCredit(Map* map, uint32 creditEntry)
+    {
+        return LoadedCreaturesOf(map, CreatureIndex().EntriesGivingCredit(creditEntry));
+    }
+
+    // Every creature loaded on this map from a spawn of an entry that starts at least one quest. Only those can show a
+    // takeable ! in the quest menu (Player::PrepareQuestMenu reads the same relations). There are thousands of starter
+    // entries and most have no spawn on a given map, so the spawn ids are worked out once per map, and again if the
+    // quest starters or the spawn list change.
+    std::vector<Creature*> LoadedQuestStarters(Map* map)
+    {
+        static std::unordered_map<uint32, std::vector<uint64>> spawnIdsByMap;
+        static std::size_t relationCount = std::numeric_limits<std::size_t>::max();
+        static std::size_t spawnCount = std::numeric_limits<std::size_t>::max();
+
+        std::vector<Creature*> creatures;
+        if (!map)
+            return creatures;
+
+        PlayerbotCreatureIndex const& index = CreatureIndex();
+        QuestRelations const* relations = sObjectMgr->GetCreatureQuestRelationMapHACK();
+        std::size_t const spawns = sObjectMgr->GetAllCreatureData().size();
+        if (relations->size() != relationCount || spawns != spawnCount)
+        {
+            spawnIdsByMap.clear();
+            relationCount = relations->size();
+            spawnCount = spawns;
+        }
+
+        auto [itr, added] = spawnIdsByMap.try_emplace(map->GetId());
+        if (added)
+        {
+            for (auto relation = relations->begin(); relation != relations->end(); relation = relations->upper_bound(relation->first))
+            {
+                std::vector<uint64> const& ids = index.SpawnIds(map->GetId(), relation->first);
+                itr->second.insert(itr->second.end(), ids.begin(), ids.end());
+            }
+        }
+
+        auto const& store = map->GetCreatureBySpawnIdStore();
+        for (uint64 spawnId : itr->second)
+            for (auto const& pair : Trinity::Containers::MapEqualRange(store, ObjectGuid::LowType(spawnId)))
+                creatures.push_back(pair.second);
+        return creatures;
+    }
+
+    // Entries whose quest item list, for this difficulty or the base one, has this item. Worked out once per item and
+    // difficulty, and again if creature templates are reloaded.
+    std::vector<uint32> const& EntriesDroppingQuestItem(uint32 itemId, Difficulty difficulty)
+    {
+        static std::unordered_map<uint64, std::vector<uint32>> cache;
+        static std::size_t cacheTemplateCount = 0;
+
+        CreatureTemplateContainer const& templates = sObjectMgr->GetCreatureTemplates();
+        if (cacheTemplateCount != templates.size())
+        {
+            cache.clear();
+            cacheTemplateCount = templates.size();
+        }
+
+        uint64 const key = (uint64(itemId) << 32) | uint32(difficulty);
+        auto itr = cache.find(key);
+        if (itr != cache.end())
+            return itr->second;
+
+        auto hasItem = [itemId](std::vector<uint32> const* items)
+        {
+            return items && std::find(items->begin(), items->end(), itemId) != items->end();
+        };
+
+        std::vector<uint32>& entries = cache[key];
+        for (auto const& [entry, info] : templates)
+        {
+            if (hasItem(sObjectMgr->GetCreatureQuestItemList(entry, difficulty))
+                || (difficulty != DIFFICULTY_NONE && hasItem(sObjectMgr->GetCreatureQuestItemList(entry, DIFFICULTY_NONE))))
+                entries.push_back(entry);
+        }
+        return entries;
+    }
+
     bool CreatureGivesMonsterCredit(Creature const* creature, uint32 creditEntry)
     {
         if (!creature || !creditEntry)
@@ -1518,8 +1659,7 @@ namespace
         {
             for (Position const& point : blob.Points)
             {
-                if (!map->IsGridLoaded(point))
-                    map->LoadGrid(point.GetPositionX(), point.GetPositionY());
+                LoadGridForFinder(map, point);
             }
         }
     }
@@ -1703,9 +1843,8 @@ namespace
         Optional<PlayerbotClient::QuestTarget> best;
         float bestDist = std::numeric_limits<float>::max();
 
-        for (auto const& pair : player->GetMap()->GetCreatureBySpawnIdStore())
+        for (Creature* creature : LoadedQuestStarters(player->GetMap()))
         {
-            Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
                 continue;
             if (creature->GetZoneId() != zoneId)
@@ -1734,9 +1873,8 @@ namespace
         Creature* best = nullptr;
         float bestDist = std::numeric_limits<float>::max();
 
-        for (auto const& pair : player->GetMap()->GetCreatureBySpawnIdStore())
+        for (Creature* creature : LoadedCreaturesOf(player->GetMap(), enderEntries))
         {
-            Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
                 continue;
             if (!CreatureIsUsableEnder(player, creature, enderEntries))
@@ -1834,9 +1972,8 @@ namespace
             text += " It has no ? marker on this map, so this search takes the nearest usable ender anywhere on the map.";
 
         uint32 loaded = 0;
-        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        for (Creature const* creature : LoadedCreaturesOf(map, enderEntries))
         {
-            Creature const* creature = pair.second;
             if (!creature || !enderEntries.contains(creature->GetEntry()))
                 continue;
             if (++loaded > NAMED_ENDERS)
@@ -1872,8 +2009,8 @@ namespace
         }
 
         Optional<Position> marker = GetFinishedQuestMapMarker(questId, map->GetId(), *player);
-        if (marker && !map->IsGridLoaded(*marker))
-            map->LoadGrid(marker->GetPositionX(), marker->GetPositionY());
+        if (marker)
+            LoadGridForFinder(map, *marker);
 
         Creature* creature = FindLivingEnderOnMap(player, enderEntries, marker, skip);
         if (!creature)
@@ -2294,9 +2431,8 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
             }
         }
 
-        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        for (Creature* creature : LoadedCreaturesGivingCredit(map, credit.CreditEntry))
         {
-            Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
                 continue;
             if (PointIsSkipped(*creature, filter))
@@ -2513,9 +2649,8 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
             }
         }
 
-        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        for (Creature* creature : LoadedCreaturesOf(map, EntriesDroppingQuestItem(credit.ItemId, map->GetDifficultyID())))
         {
-            Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
                 continue;
             if (PointIsSkipped(*creature, filter))
@@ -2963,9 +3098,8 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
         LoadPoiGrids(map, blobs);
 
         bool sawSpawnForCredit = false;
-        for (auto const& pair : map->GetCreatureBySpawnIdStore())
+        for (Creature* creature : LoadedCreaturesGivingCredit(map, credit.CreditEntry))
         {
-            Creature* creature = pair.second;
             if (!creature || skip.contains(creature->GetGUID()))
                 continue;
             if (PointIsSkipped(*creature, filter))
@@ -3922,8 +4056,7 @@ bool PlayerbotClient::HostilesWouldAggroAt(Player* player, Position const& at)
         return false;
 
     Map* map = player->GetMap();
-    if (!map->IsGridLoaded(at))
-        map->LoadGrid(at.GetPositionX(), at.GetPositionY());
+    LoadGridForFinder(map, at);
 
     for (auto const& pair : map->GetCreatureBySpawnIdStore())
     {
@@ -3949,8 +4082,7 @@ Optional<Position> PlayerbotClient::PickCorpseStandPosition(Player* player)
         return {};
 
     Map* map = player->GetMap();
-    if (!map->IsGridLoaded(loc))
-        map->LoadGrid(loc.GetPositionX(), loc.GetPositionY());
+    LoadGridForFinder(map, loc);
 
     Corpse* corpse = player->GetCorpse();
     bool const hot = HostilesWouldAggroAt(player, loc);
@@ -3999,8 +4131,7 @@ Optional<PlayerbotClient::SpiritHealerTarget> PlayerbotClient::FindSpiritHealer(
         return {};
 
     Map* map = player->GetMap();
-    if (!map->IsGridLoaded(nearPos))
-        map->LoadGrid(nearPos.GetPositionX(), nearPos.GetPositionY());
+    LoadGridForFinder(map, nearPos);
 
     Creature* best = nullptr;
     float bestDist = std::numeric_limits<float>::max();
@@ -4141,8 +4272,7 @@ namespace
             return nullptr;
 
         Map* map = player->GetMap();
-        if (!map->IsGridLoaded(spawn.Pos))
-            map->LoadGrid(spawn.Pos.GetPositionX(), spawn.Pos.GetPositionY());
+        LoadGridForFinder(map, spawn.Pos);
 
         for (auto const& pair : Trinity::Containers::MapEqualRange(map->GetCreatureBySpawnIdStore(), spawn.SpawnId))
         {

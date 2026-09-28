@@ -26,6 +26,7 @@
 #include "PlayerbotWayRoundTurns.h"
 #include "Position.h"
 #include <G3D/Vector3.h>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <string>
@@ -87,6 +88,9 @@ public:
     // feet whenever a floor was found.
     static GroundedStepFailure ClassifyGroundedStep(Player* player, Position const& from, float x, float y, float orientation,
         Position& out);
+    // The plant a walk heartbeat uses at (x, y), looking down from searchZ: false when there is no floor, otherwise her
+    // body's allowed height there.
+    static bool PlantAt(Player* player, float x, float y, float searchZ, float& outZ);
     // How far she moves in one walk heartbeat at her current run speed.
     static float HeartbeatStepLength(Player const* player);
     // Starts this world tick's shared budget for mapping the ground around bots that are looking for a way round.
@@ -285,6 +289,8 @@ private:
     // Her place in the line of bots taking turns to map the ground, or 0.
     uint64 _wayRoundTicket = 0;
     uint32 _wayRoundWaitMs = 0;
+    // World-thread time her look has taken so far, mapping and asking the navmesh from the ways out.
+    std::chrono::steady_clock::duration _wayRoundWork = std::chrono::steady_clock::duration::zero();
     bool _wayRoundHadATurn = false;
     // The path she is walking is a way round the map found, not a navmesh route.
     bool _walkingAWayRound = false;

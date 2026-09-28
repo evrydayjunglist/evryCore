@@ -176,7 +176,7 @@ namespace
     StepWorldCollision GetSegmentWorldCollision(Player const* player, Position const& from, Position const& to, float heightOffset,
         bool alongOnly = true)
     {
-        PlayerbotCostTimer const cost(PlayerbotCostStep::Ground);
+        PlayerbotCostTimer const cost(PlayerbotCostStep::CollisionRay);
         if (!player || !player->IsInWorld())
             return StepWorldCollision::None;
 
@@ -311,24 +311,13 @@ namespace
     // Do not search from a navmesh chord that already went through a hill. No floor is a face: refuse it.
     bool PlantWalkZ(Player* player, float x, float y, float lastGroundedZ, float run, float& outZ)
     {
-        PlayerbotCostTimer const cost(PlayerbotCostStep::Ground);
         if (!player || !player->IsInWorld())
             return false;
         if (!Trinity::IsValidMapCoord(x, y, lastGroundedZ))
             return false;
 
         float const maxRise = std::tan(MAX_WALKABLE_SLOPE_DEGREES * (float(M_PI) / 180.0f)) * std::max(run, 0.05f);
-        float const searchZ = lastGroundedZ + maxRise;
-        if (player->GetMapHeight(x, y, searchZ) <= INVALID_HEIGHT)
-            return false;
-
-        float z = searchZ;
-        player->UpdateAllowedPositionZ(x, y, z);
-        if (z <= INVALID_HEIGHT)
-            return false;
-
-        outZ = z;
-        return true;
+        return PlayerbotWalker::PlantAt(player, x, y, lastGroundedZ + maxRise, outZ);
     }
 
     bool PlantFromFeet(Player* player, Position const& feet, float x, float y, float orientation, Position& out)
@@ -711,6 +700,7 @@ void PlayerbotWalker::ClearWayRound()
     _wayRoundMs = 0;
     _wayRoundMapId = 0;
     _wayRoundWaitMs = 0;
+    _wayRoundWork = std::chrono::steady_clock::duration::zero();
     _wayRoundHadATurn = false;
 }
 
@@ -718,7 +708,9 @@ void PlayerbotWalker::EndWayRoundTurn(PlayerbotWayRoundEnd end)
 {
     if (!_wayRoundTicket)
         return;
-    WayRoundTurns.NoteEnd(end, _wayRoundWaitMs);
+    WayRoundTurns.NoteEnd(end, _wayRoundWaitMs,
+        uint64(std::chrono::duration_cast<std::chrono::microseconds>(_wayRoundWork).count()),
+        _wayRoundMap ? _wayRoundMap->Spots().size() : 0);
     WayRoundTurns.Leave(_wayRoundTicket);
     _wayRoundTicket = 0;
 }
@@ -1445,6 +1437,33 @@ PlayerbotWalker::GroundedStepFailure PlayerbotWalker::ClassifyGroundedStep(Playe
     }
 
     return GroundedStepFailure::InvalidPosition;
+}
+
+bool PlayerbotWalker::PlantAt(Player* player, float x, float y, float searchZ, float& outZ)
+{
+    PlayerbotCostTimer const cost(PlayerbotCostStep::Floor);
+    if (!player || !Trinity::IsValidMapCoord(x, y, searchZ))
+        return false;
+
+    // UpdateAllowedPositionZ looks for the floor from the same height as GetMapHeight and reports it, so one look answers
+    // both whether there is a floor and where her body stands on it. When it found none it leaves the reported floor at
+    // the search height (and on a transport it never looks), and only then is the floor asked for on its own.
+    float z = searchZ;
+    float groundZ = searchZ;
+    player->UpdateAllowedPositionZ(x, y, z, &groundZ);
+    if (groundZ == searchZ)
+    {
+        if (player->GetMapHeight(x, y, searchZ) <= INVALID_HEIGHT)
+            return false;
+    }
+    else if (groundZ <= INVALID_HEIGHT)
+        return false;
+
+    if (z <= INVALID_HEIGHT)
+        return false;
+
+    outZ = z;
+    return true;
 }
 
 float PlayerbotWalker::HeartbeatStepLength(Player const* player)
@@ -2313,6 +2332,7 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     EndWayRoundTurn(PlayerbotWayRoundEnd::Abandoned);
     _wayRoundTicket = WayRoundTurns.Join(reason);
     _wayRoundWaitMs = 0;
+    _wayRoundWork = std::chrono::steady_clock::duration::zero();
     _wayRoundHadATurn = false;
     _walkingAWayRound = false;
     _lookedForAWayRound = true;
@@ -2368,7 +2388,9 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
     do
         finished = _wayRoundMap->Advance(world, WAY_ROUND_SPOTS_PER_CLOCK_CHECK);
     while (!finished && std::chrono::steady_clock::now() - sliceStart < WAY_ROUND_SLICE);
-    WayRoundSpentThisTick += std::chrono::steady_clock::now() - sliceStart;
+    std::chrono::steady_clock::duration const slice = std::chrono::steady_clock::now() - sliceStart;
+    WayRoundSpentThisTick += slice;
+    _wayRoundWork += slice;
 
     if (!finished)
     {
@@ -2462,7 +2484,9 @@ bool PlayerbotWalker::ProbeOneWayOut(Player* player)
     std::chrono::steady_clock::time_point const started = std::chrono::steady_clock::now();
     std::vector<G3D::Vector3> route;
     bool const routed = BuildMmapPath(player, out, _destination, route) && RouteStartsWalkable(player, out, route);
-    WayRoundSpentThisTick += std::chrono::steady_clock::now() - started;
+    std::chrono::steady_clock::duration const spent = std::chrono::steady_clock::now() - started;
+    WayRoundSpentThisTick += spent;
+    _wayRoundWork += spent;
     if (!routed)
         return false;
 

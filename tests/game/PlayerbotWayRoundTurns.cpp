@@ -74,15 +74,16 @@ TEST_CASE("The way-round report says why bots looked and how they did", "[player
     uint64_t const a = turns.Join("too steep");
     uint64_t const b = turns.Join("too steep");
     uint64_t const c = turns.Join("the navmesh had no route from her feet");
-    turns.NoteEnd(PlayerbotWayRoundEnd::Found, 0);
+    turns.NoteEnd(PlayerbotWayRoundEnd::Found, 0, 812500, 23000);
     turns.Leave(a);
-    turns.NoteEnd(PlayerbotWayRoundEnd::TookTooLong, 2500);
+    turns.NoteEnd(PlayerbotWayRoundEnd::TookTooLong, 2500, 3000000, 90000);
     turns.Leave(b);
 
     REQUIRE(turns.DescribeWindowAndClear() ==
         "3 bot(s) stopped to look for a way round (the navmesh had no route from her feet 1, too steep 2). 1 found a way round "
         "or a way out, 0 found none, 1 took too long and 0 stopped looking. At most 3 bot(s) were in line at once, and the "
-        "longest wait for a turn was 2.5 s.");
+        "longest wait for a turn was 2.5 s. A finished map took 812.5 ms of mapping and held 23000 floors on average. Looks "
+        "that did not finish had already spent 3000.0 ms mapping.");
 
     // The next window starts with the bot still in line.
     REQUIRE(turns.DescribeWindowAndClear() ==

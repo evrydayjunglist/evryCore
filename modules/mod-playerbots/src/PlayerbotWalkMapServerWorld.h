@@ -85,16 +85,7 @@ public:
     bool GroundBelow(float x, float y, float z, float& outZ) override
     {
         // The plant a walk heartbeat uses: a floor must be found, then her body's allowed height there.
-        if (!Trinity::IsValidMapCoord(x, y, z) || _player->GetMapHeight(x, y, z) <= INVALID_HEIGHT)
-            return false;
-
-        float planted = z;
-        _player->UpdateAllowedPositionZ(x, y, planted);
-        if (planted <= INVALID_HEIGHT)
-            return false;
-
-        outZ = planted;
-        return true;
+        return PlayerbotWalker::PlantAt(_player, x, y, z, outZ);
     }
 
 private:

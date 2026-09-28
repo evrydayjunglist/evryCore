@@ -85,11 +85,20 @@ public:
 
     std::size_t Waiting() const { return _line.size(); }
 
-    // Her look ended. waitedMs is the time she spent in line before her first turn.
-    void NoteEnd(PlayerbotWayRoundEnd end, uint32_t waitedMs)
+    // Her look ended. waitedMs is the time she spent in line before her first turn, mappingMicros the world-thread time
+    // her map took, and floors how many floors it held.
+    void NoteEnd(PlayerbotWayRoundEnd end, uint32_t waitedMs, uint64_t mappingMicros = 0, std::size_t floors = 0)
     {
         ++_window.Ends[std::size_t(end)];
         _window.LongestWaitMs = std::max(_window.LongestWaitMs, waitedMs);
+        if (end == PlayerbotWayRoundEnd::Found || end == PlayerbotWayRoundEnd::FoundNone)
+        {
+            ++_window.FinishedMaps;
+            _window.FinishedMappingMicros += mappingMicros;
+            _window.FinishedFloors += floors;
+        }
+        else
+            _window.UnfinishedMappingMicros += mappingMicros;
     }
 
     // "12 bot(s) stopped to look for a way round (the navmesh had no route from her feet 9, too steep 3). 10 found a
@@ -115,10 +124,25 @@ public:
             unsigned(_window.Ends[std::size_t(PlayerbotWayRoundEnd::TookTooLong)]),
             unsigned(_window.Ends[std::size_t(PlayerbotWayRoundEnd::Abandoned)]),
             unsigned(_window.LongestLine), double(_window.LongestWaitMs) / 1000.0);
+        std::string text = buffer;
+
+        if (_window.FinishedMaps)
+        {
+            std::snprintf(buffer, sizeof(buffer), " A finished map took %.1f ms of mapping and held %.0f floors on average.",
+                double(_window.FinishedMappingMicros) / 1000.0 / _window.FinishedMaps,
+                double(_window.FinishedFloors) / _window.FinishedMaps);
+            text += buffer;
+        }
+        if (_window.UnfinishedMappingMicros)
+        {
+            std::snprintf(buffer, sizeof(buffer), " Looks that did not finish had already spent %.1f ms mapping.",
+                double(_window.UnfinishedMappingMicros) / 1000.0);
+            text += buffer;
+        }
 
         _window = {};
         _window.LongestLine = uint32_t(_line.size());
-        return buffer;
+        return text;
     }
 
 private:
@@ -145,6 +169,10 @@ private:
         uint32_t Ends[4] = {};
         uint32_t LongestLine = 0;
         uint32_t LongestWaitMs = 0;
+        uint32_t FinishedMaps = 0;
+        uint64_t FinishedMappingMicros = 0;
+        uint64_t FinishedFloors = 0;
+        uint64_t UnfinishedMappingMicros = 0;
     };
 
     std::deque<uint64_t> _line;

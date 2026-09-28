@@ -67,21 +67,35 @@ TEST_CASE("A tick adds up its bot updates", "[playerbots][scale]")
     REQUIRE(tick.OutsideMicros(6000) == 1000);
 }
 
+TEST_CASE("Steps shorter than a microsecond still add up", "[playerbots][scale]")
+{
+    PlayerbotUpdateCost cost;
+    for (int look = 0; look < 2000; ++look)
+    {
+        cost.Enter();
+        cost.Leave(PlayerbotCostStep::Floor, 0.4);
+    }
+
+    REQUIRE(cost.Micros(PlayerbotCostStep::Floor) == 800);
+    REQUIRE(cost.Calls(PlayerbotCostStep::Floor) == 2000);
+    REQUIRE(cost.OutsideMicros(1000) == 200);
+}
+
 TEST_CASE("A cost timer adds nothing when no bot update is being timed", "[playerbots][scale]")
 {
     PlayerbotUpdateCost cost;
     REQUIRE(PlayerbotUpdateCost::Current() == nullptr);
     {
-        PlayerbotCostTimer const timer(PlayerbotCostStep::Ground);
+        PlayerbotCostTimer const timer(PlayerbotCostStep::CollisionRay);
     }
-    REQUIRE(cost.Calls(PlayerbotCostStep::Ground) == 0);
+    REQUIRE(cost.Calls(PlayerbotCostStep::CollisionRay) == 0);
 
     PlayerbotUpdateCost::Current() = &cost;
     {
         PlayerbotCostTimer const outer(PlayerbotCostStep::Combat);
-        PlayerbotCostTimer const inner(PlayerbotCostStep::Ground);
+        PlayerbotCostTimer const inner(PlayerbotCostStep::CollisionRay);
     }
     PlayerbotUpdateCost::Current() = nullptr;
     REQUIRE(cost.Calls(PlayerbotCostStep::Combat) == 1);
-    REQUIRE(cost.Calls(PlayerbotCostStep::Ground) == 1);
+    REQUIRE(cost.Calls(PlayerbotCostStep::CollisionRay) == 1);
 }

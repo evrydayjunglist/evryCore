@@ -29,7 +29,7 @@ inline constexpr uint32_t PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS = 1000;
 enum class PlayerbotCostStep : uint8_t
 {
     NavmeshRoute,       // a navmesh route question (PathGenerator::CalculatePath)
-    Ground,             // a floor or collision look: the plant, the chest-height ray, the headroom ray
+    CollisionRay,       // a collision ray: the chest-height ray along a step, the headroom ray, a jump's body sweep
     WayRoundMap,        // mapping the ground round an obstacle
     ConnectivityProbe,  // the recovery look at whether the navmesh around her feet joins up
     Approach,           // picking a place to stand beside a target
@@ -50,6 +50,7 @@ enum class PlayerbotCostStep : uint8_t
     Presence,           // keeping her session and character logged in
     ServerOrders,       // answering the server's movement orders
     GridLoad,           // loading a map grid a finder wants to look in, so the spawns in it exist
+    Floor,              // a floor look: the plant a walk heartbeat or the ground map uses
     Count
 };
 
@@ -62,10 +63,10 @@ public:
 
     static char const* Name(PlayerbotCostStep step)
     {
-        static constexpr std::array<char const*, StepCount> names = { "navmesh routes", "ground and collision looks",
+        static constexpr std::array<char const*, StepCount> names = { "navmesh routes", "collision rays",
             "way-round map", "navmesh join-up probes", "stand spot picks", "looks at the world around her",
             "map work picks", "quest object searches", "use-item creature searches", "quest monster searches",
-            "quest item searches", "turn-in searches", "takeable quest searches", "starting picked work", "vendor picks", "same-objective searches", "fight", "death", "turn-in explanations", "staying logged in", "answers to server movement orders", "grid loads" };
+            "quest item searches", "turn-in searches", "takeable quest searches", "starting picked work", "vendor picks", "same-objective searches", "fight", "death", "turn-in explanations", "staying logged in", "answers to server movement orders", "grid loads", "floor looks" };
         return names[std::size_t(step)];
     }
 
@@ -73,13 +74,14 @@ public:
     {
         _micros = {};
         _counts = {};
-        _topLevelMicros = 0;
+        _topLevelMicros = 0.0;
         _depth = 0;
     }
 
     void Enter() { ++_depth; }
 
-    void Leave(PlayerbotCostStep step, uint64_t micros)
+    // Fractions of a microsecond are kept: a floor look takes less than one, and a whole number would count it as nothing.
+    void Leave(PlayerbotCostStep step, double micros)
     {
         std::size_t const index = std::size_t(step);
         _micros[index] += micros;
@@ -99,9 +101,12 @@ public:
         _topLevelMicros += other._topLevelMicros;
     }
 
-    uint64_t Micros(PlayerbotCostStep step) const { return _micros[std::size_t(step)]; }
+    uint64_t Micros(PlayerbotCostStep step) const { return uint64_t(_micros[std::size_t(step)] + 0.5); }
     uint32_t Calls(PlayerbotCostStep step) const { return _counts[std::size_t(step)]; }
-    uint64_t OutsideMicros(uint64_t totalMicros) const { return totalMicros > _topLevelMicros ? totalMicros - _topLevelMicros : 0; }
+    uint64_t OutsideMicros(uint64_t totalMicros) const
+    {
+        return double(totalMicros) > _topLevelMicros ? uint64_t(double(totalMicros) - _topLevelMicros + 0.5) : 0;
+    }
 
     // "navmesh routes 1180.4 ms (3), ground and collision looks 12.0 ms (410), and 4.1 ms in no timed step", slowest
     // step first, steps that took no time left out.
@@ -119,7 +124,7 @@ public:
             if (!_counts[index])
                 continue;
             std::snprintf(buffer, sizeof(buffer), "%s%s %.1f ms (%u)", text.empty() ? "" : ", ",
-                Name(PlayerbotCostStep(index)), double(_micros[index]) / 1000.0, unsigned(_counts[index]));
+                Name(PlayerbotCostStep(index)), _micros[index] / 1000.0, unsigned(_counts[index]));
             text += buffer;
         }
         std::snprintf(buffer, sizeof(buffer), "%s%.1f ms in no timed step", text.empty() ? "" : ", and ",
@@ -137,9 +142,9 @@ public:
     }
 
 private:
-    std::array<uint64_t, StepCount> _micros = {};
+    std::array<double, StepCount> _micros = {};
     std::array<uint32_t, StepCount> _counts = {};
-    uint64_t _topLevelMicros = 0;
+    double _topLevelMicros = 0.0;
     uint32_t _depth = 0;
 };
 
@@ -161,7 +166,7 @@ public:
     ~PlayerbotCostTimer()
     {
         if (_cost)
-            _cost->Leave(_step, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - _start).count()));
+            _cost->Leave(_step, std::chrono::duration<double, std::micro>(Clock::now() - _start).count());
     }
 
     PlayerbotCostTimer(PlayerbotCostTimer const&) = delete;

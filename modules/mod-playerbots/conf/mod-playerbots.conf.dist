@@ -126,6 +126,21 @@ Playerbots.RegenerateCharacters = 0
 Playerbots.InvitePolicy = GameMaster
 
 #
+#    Playerbots.LogDetail
+#        Description: Bot character names, separated by commas, that write every
+#                     step to Playerbots.log: each walking heartbeat, each packet
+#                     she queues, each look around a lip. Every other bot writes
+#                     only what she decides and what goes wrong, so a big
+#                     population does not fill the disk. Names are not case
+#                     sensitive. * means every bot. Read at startup.
+#        Default:     "" (no bot writes step lines)
+#
+#                     Example: "Sora,Opai"
+#
+
+Playerbots.LogDetail = ""
+
+#
 #    Playerbots.Bridge.Enable
 #        Description: Listen on 127.0.0.1 for the separate playerbots.exe
 #                     coordinator while using Automatic login mode. That bridge

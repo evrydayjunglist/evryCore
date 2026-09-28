@@ -27,6 +27,7 @@
 #include "PlayerbotMovement.h"
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotSessionPresence.h"
+#include "PlayerbotTickStats.h"
 #include "PlayerbotWalkMapper.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
@@ -125,6 +126,11 @@ struct PlayerbotRecord
     uint32 StuckFeetWaitMs = 0;
     // How long she has stood with nothing to do while targets were on her skip list.
     uint32 IdleWithSkipsMs = 0;
+    // Looking around for new work is most of what a bot with nothing to do costs. After a look she waits before the
+    // next one, idle or walking; the idle time between looks still counts toward the idle waits.
+    uint32 NextLookMs = 0;
+    uint32 NextWalkLookMs = 0;
+    uint32 SinceLookMs = 0;
     // Where she already started walking the rest of the way to this target.
     ObjectGuid StillShortGuid;
     std::vector<Position> StillShortFeet;
@@ -191,6 +197,8 @@ public:
     // Maps the ground this player can walk from where her client last put her, by a bot's walk rules, and writes a
     // picture next to the server logs. False, with the reason in message, when she cannot be mapped now.
     bool StartWalkMap(Player* subject, float radius, ObjectGuid requester, std::string& message);
+    // The last report of what the bot brains cost the world tick, in the words written to the log.
+    std::string DescribeTickStats() const;
 
 private:
     friend class CommandablePlayerService;
@@ -222,6 +230,8 @@ private:
     void ResetBotSession(PlayerbotRecord& bot);
     bool UpdateSessionPresence(PlayerbotRecord& bot, uint32 diff);
     bool TryLogin(PlayerbotRecord& bot);
+    void UpdateBot(PlayerbotRecord& bot, uint32 diff);
+    void ReportTickStats(PlayerbotTickReport const& report);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
     void AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff);
@@ -232,6 +242,7 @@ private:
     void UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff);
+    static bool LookAroundNow(PlayerbotRecord& bot);
     void BeginDeath(PlayerbotRecord& bot, Player* player);
     void ClearDeath(PlayerbotRecord& bot);
     void ClearLivingWork(PlayerbotRecord& bot, Player* player);
@@ -273,6 +284,8 @@ private:
     bool TryBeginVendor(PlayerbotRecord& bot, Player* player);
 
     std::vector<PlayerbotRecord> _bots;
+    // Where each bot's character sits in _bots. Both are filled once at startup and never change afterwards.
+    std::unordered_map<ObjectGuid, std::size_t> _botIndexByGuid;
     std::unordered_set<uint32> _accountIds;
     std::unordered_set<uint64> _bridgeHandshakes;
     PlayerbotBridge _bridge;
@@ -286,6 +299,8 @@ private:
     std::mutex _serverOrdersLock;
     std::unordered_map<uint32, std::vector<PlayerbotServerOrder>> _serverOrders;
     PlayerbotWalkMapper _walkMapper;
+    PlayerbotTickStats _tickStats;
+    std::string _lastTickReport;
 };
 
 #define sPlayerbotMgr PlayerbotMgr::instance()

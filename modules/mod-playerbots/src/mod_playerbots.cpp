@@ -91,6 +91,7 @@ public:
         static ChatCommandTable playerbotsTable =
         {
             { "walkmap", HandleWalkMapCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
+            { "stats", HandleStatsCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
         };
         static ChatCommandTable commandTable =
         {
@@ -129,6 +130,13 @@ public:
         if (!started)
             handler->SetSentErrorMessage(true);
         return started;
+    }
+
+    // .playerbots stats: the last report of what the bot brains cost the world tick.
+    static bool HandleStatsCommand(ChatHandler* handler)
+    {
+        handler->SendSysMessage(sPlayerbotMgr->DescribeTickStats());
+        return true;
     }
 };
 

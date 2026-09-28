@@ -32,6 +32,7 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "PlayerbotClient.h"
+#include "PlayerbotLogDetail.h"
 #include "PlayerbotPathSearch.h"
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotWalkMapEscape.h"
@@ -578,13 +579,13 @@ void PlayerbotWalker::HoldForRoot(Player* player)
         char const* reason = "the arc could not be followed";
         if (!SampleFlight(player, held, nowMs, reason))
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was rooted in the air and keeps the arc she had: {}.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} was rooted in the air and keeps the arc she had: {}.",
                 player->GetName(), reason);
             return;
         }
 
         _jump = held;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was rooted in the air; falling straight down to ({:.2f}, {:.2f}, {:.2f}).",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} was rooted in the air; falling straight down to ({:.2f}, {:.2f}, {:.2f}).",
             player->GetName(), _jump.Landing.GetPositionX(), _jump.Landing.GetPositionY(), _jump.Landing.GetPositionZ());
         return;
     }
@@ -889,7 +890,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     {
         _state = State::Arrived;
         ClearFaceRecovery();
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is already in range of the walk destination.", player->GetName());
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} is already in range of the walk destination.", player->GetName());
         return true;
     }
 
@@ -904,7 +905,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
         LogStartConnectivity(player, from);
         if (TryLeaveFace(player, false))
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path from these feet. Walking off this face, then mmap.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} has no walkable path from these feet. Walking off this face, then mmap.",
                 player->GetName());
             return true;
         }
@@ -952,7 +953,7 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
         else
             ClearFaceRecovery();
         _state = State::Moving;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {} The route took {:.2f} ms to build.",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {} The route took {:.2f} ms to build.",
             player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(destination),
             DescribePathSearch(mmapEvidence.Search), mmapEvidence.BuildMs);
         QueueMove(player, from, true, true);
@@ -1099,7 +1100,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
         {
             _walkingAWayRound = false;
             ClearWayRound();
-            TC_LOG_INFO(PLAYERBOTS_LOG,
+            PLAYERBOT_LOG_DETAIL(player,
                 "mod-playerbots: {} walked the way round and is asking the navmesh again from ({:.2f}, {:.2f}, {:.2f}).",
                 player->GetName(), _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ());
             if (TryCommitMmap(player, _lastGrounded, true))
@@ -1143,7 +1144,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
     if (_logMs >= HEARTBEAT_LOG_INTERVAL_MS && _state == State::Moving)
     {
         _logMs = 0;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking at ({:.2f}, {:.2f}, {:.2f}).",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} walking at ({:.2f}, {:.2f}, {:.2f}).",
             player->GetName(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
     }
 
@@ -1217,7 +1218,7 @@ void PlayerbotWalker::FinishGroundedArrival(Player* player, Position const& pos)
     }
 
     _state = State::Arrived;
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} stopped at ({:.2f}, {:.2f}, {:.2f}).",
         player->GetName(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ());
 }
 
@@ -1237,7 +1238,7 @@ void PlayerbotWalker::FinishShortOfDestination(Player* player, Position const& p
     {
         _lastGrounded = pos;
         _contouring = false;
-        TC_LOG_INFO(PLAYERBOTS_LOG,
+        PLAYERBOT_LOG_DETAIL(player,
             "mod-playerbots: {} stopped short of the walk destination again at ({:.2f}, {:.2f}, {:.2f}), {:.1f} yards from an earlier short stop on this approach and no closer: goal={} map={} key={:016X}:{:016X}, type=0x{:02X}, yardsShort={:.1f}, earlierYardsShort={:.1f}, shortStops={}. Mmap does not lead closer from here; this approach is exhausted.",
             player->GetName(), pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), earlier->GetExactDist(pos),
             PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _recoveryGoal.MapId, _recoveryGoal.Secondary, _recoveryGoal.Primary,
@@ -1257,7 +1258,7 @@ void PlayerbotWalker::FinishShortOfDestination(Player* player, Position const& p
     _shortStops.push_back(pos);
 
     FinishGroundedArrival(player, pos);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is {:.1f} yards short of the walk destination where this mmap path ends (type=0x{:02X}).",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} is {:.1f} yards short of the walk destination where this mmap path ends (type=0x{:02X}).",
         player->GetName(), shortYards, _pathType);
 }
 
@@ -1269,7 +1270,7 @@ void PlayerbotWalker::UpdateOwningClientSync(Player* player, uint32 diff)
     {
         _state = State::Arrived;
         _owningClientSyncMs = 0;
-        TC_LOG_INFO(PLAYERBOTS_LOG,
+        PLAYERBOT_LOG_DETAIL(player,
             "mod-playerbots: {} owning client synchronized at commanded feet ({:.2f}, {:.2f}, {:.2f}).",
             player->GetName(), _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ());
         return;
@@ -1627,7 +1628,7 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
                 if (second.size() > 1)
                     path.insert(path.end(), second.begin() + 1, second.end());
 
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking around {} instead of through it.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} walking around {} instead of through it.",
                     player->GetName(), hit->name);
                 detoured = true;
                 break;
@@ -1708,7 +1709,7 @@ void PlayerbotWalker::LogRecoveryMmap(Player* player, char const* decision, Mmap
     if (prefix.empty())
         prefix = "none";
 
-    TC_LOG_INFO(PLAYERBOTS_LOG,
+    PLAYERBOT_LOG_DETAIL(player,
         "mod-playerbots: {} recovery mmap {}: goal={} map={} key={:016X}:{:016X}, mesh={}, calculated={}, type=0x{:02X}, actualEnd=({:.2f}, {:.2f}, {:.2f}), pathLength={:.1f}, firstPoints=[{}], episodeYards={:.1f}, visitedCells={}. {} The route took {:.2f} ms to build.",
         player->GetName(), decision, PlayerbotRecoveryGoalKindName(_recoveryGoal.Kind), _recoveryGoal.MapId,
         _recoveryGoal.Secondary, _recoveryGoal.Primary, evidence.PlayerNavMesh ? "player" : "creature",
@@ -1779,7 +1780,7 @@ void PlayerbotWalker::LogConnectivity(Player* player, Position const& from, char
             "mod-playerbots: {} recovery diagnosis: {} has an honest mmap route to the {:.0f}-yard probe at direction {} (endpoint gap {:.1f}); this is a bad destination or route leg, not an isolated pocket.",
             player->GetName(), place, connectedRadius, connectedDirection, connectedEndpointGap);
     else
-        TC_LOG_INFO(PLAYERBOTS_LOG,
+        PLAYERBOT_LOG_DETAIL(player,
             "mod-playerbots: {} recovery diagnosis: no honest mmap route from {} reached any of 16 probes at 60/120 yards. The bot may be standing in a disconnected or local navmesh pocket; this is diagnostic only and does not permit a teleport.",
             player->GetName(), place);
 }
@@ -1849,11 +1850,11 @@ bool PlayerbotWalker::TryCommitMmap(Player* player, Position const& from, bool a
     if (testingFaceRejoin)
     {
         LogRecoveryMmap(player, "testing provisional rejoin", mmapEvidence);
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is testing an mmap rejoin. {} points, length to destination {:.1f} yards; obstacle recovery remains active.",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} is testing an mmap rejoin. {} points, length to destination {:.1f} yards; obstacle recovery remains active.",
             player->GetName(), uint32(_path.size()), from.GetExactDist(_destination));
     }
     else
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {} The route took {:.2f} ms to build.",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} starting walk on the {} movement maps. {} points, length to destination {:.1f} yards. {} The route took {:.2f} ms to build.",
             player->GetName(), mmapEvidence.PlayerNavMesh ? "player" : "creature", uint32(_path.size()), from.GetExactDist(_destination),
             DescribePathSearch(mmapEvidence.Search), mmapEvidence.BuildMs);
 
@@ -2043,7 +2044,7 @@ bool PlayerbotWalker::ContinueContour(Player* player, bool alreadyMoving)
     }
 
     if (_lipSteps == 0)
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} local look found a way around.", player->GetName());
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} local look found a way around.", player->GetName());
 
     ++_lipSteps;
     return true;
@@ -2137,7 +2138,7 @@ bool PlayerbotWalker::BeginFaceRecovery(Player* player, GroundedStepFailure fail
     GroundedStep const step = MeasureGroundedStep(_lastGrounded, attempted);
     char const* floorKind = failure == GroundedStepFailure::NoFloor ? "none" : "planted";
     if (repeatedDuringRejoin)
-        TC_LOG_INFO(PLAYERBOTS_LOG,
+        PLAYERBOT_LOG_DETAIL(player,
             "mod-playerbots: {} met the same local obstruction after {:.1f} yards of a provisional mmap rejoin ({}; rise {:.2f}, slope {:.1f} degrees). Floor/layer evidence: feetZ={:.2f}, mmapZ={:.2f}, {}Z={:.2f}. Continuing goal {} with {:.1f} episode yards across {} visited cells.",
             player->GetName(), rejoinYards, GroundedStepFailureName(failure), step.rise, step.degrees,
             _lastGrounded.GetPositionZ(), _lastRequestedStep.GetPositionZ(), floorKind, attempted.GetPositionZ(),
@@ -2179,7 +2180,7 @@ void PlayerbotWalker::NoteMmapRejoinProgress(Player* player, Position const& pre
 
     float const rejoinYards = _faceRecovery.RejoinYards();
     if (player)
-        TC_LOG_INFO(PLAYERBOTS_LOG,
+        PLAYERBOT_LOG_DETAIL(player,
             "mod-playerbots: {} left the local obstruction after {:.1f} yards of legal mmap travel. Obstacle recovery is clear.",
             player->GetName(), rejoinYards);
     ClearFaceRecovery();
@@ -2281,7 +2282,7 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     _wayRoundFirstStepRefused = false;
     _lastGrounded.Relocate(x, y, z, _lastGrounded.GetOrientation());
     _state = State::LookingForAWayRound;
-    TC_LOG_INFO(PLAYERBOTS_LOG,
+    PLAYERBOT_LOG_DETAIL(player,
         "mod-playerbots: {} stopped to look for a way round ({}). Mapping the ground she can walk within {:.0f} yards of ({:.2f}, {:.2f}, {:.2f}).",
         player->GetName(), reason, WAY_ROUND_YARDS, x, y, z);
     return true;
@@ -2336,7 +2337,7 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
         _wayRoundWaysOut = FindPlayerbotWalkMapWaysOut(*_wayRoundMap, waysOut);
         _wayRoundProbe = 0;
         _wayRoundPhase = WayRoundPhase::Probing;
-        TC_LOG_INFO(PLAYERBOTS_LOG,
+        PLAYERBOT_LOG_DETAIL(player,
             "mod-playerbots: {} has nothing closer than {:.0f} yards within reach, so she is asking the navmesh for a route from {} way(s) out of this ground.",
             player->GetName(), WAY_ROUND_MIN_GAIN_YARDS, uint32(_wayRoundWaysOut.size()));
     }
@@ -2444,7 +2445,7 @@ bool PlayerbotWalker::WalkTheWayRound(Player* player, PlayerbotWalkMapWayRound c
         // Read by the look that is still going on. A refused step while she already walks a way round is not a look.
         if (wasIn == State::LookingForAWayRound)
             _wayRoundFirstStepRefused = true;
-        TC_LOG_INFO(PLAYERBOTS_LOG,
+        PLAYERBOT_LOG_DETAIL(player,
             "mod-playerbots: {} did not take a way round ({}): her first step from ({:.2f}, {:.2f}, {:.2f}) to ({:.2f}, {:.2f}, {:.2f}) is refused ({}).",
             player->GetName(), what, _lastGrounded.GetPositionX(), _lastGrounded.GetPositionY(), _lastGrounded.GetPositionZ(),
             first.GetPositionX(), first.GetPositionY(), first.GetPositionZ(), GroundedStepFailureName(firstFailure));
@@ -2460,7 +2461,7 @@ bool PlayerbotWalker::WalkTheWayRound(Player* player, PlayerbotWalkMapWayRound c
     pose.SetOrientation(Position::NormalizeOrientation(std::atan2(_path[1].y - _path[0].y, _path[1].x - _path[0].x)));
     _lastGrounded.SetOrientation(pose.GetOrientation());
     QueueMove(player, pose, true, !alreadyMoving);
-    TC_LOG_INFO(PLAYERBOTS_LOG,
+    PLAYERBOT_LOG_DETAIL(player,
         "mod-playerbots: {} {}: {:.1f} yards of walking to ({:.2f}, {:.2f}, {:.2f}), {:.1f} yards closer to where she is going{}.",
         player->GetName(), what, way.Yards, points.back()[0], points.back()[1], points.back()[2], way.Gain,
         way.CanWalkBack ? "" : ", on ground she cannot walk back from");
@@ -2661,7 +2662,7 @@ bool PlayerbotWalker::BuildJumpPlan(Player* player, JumpPlan& out, char const*& 
                 if (footClearance < -JUMP_ASCENT_GROUND_TOLERANCE)
                 {
                     if (headingOffsetDegrees == 0.0f)
-                        TC_LOG_INFO(PLAYERBOTS_LOG,
+                        PLAYERBOT_LOG_DETAIL(player,
                             "mod-playerbots: {} direct jump sweep met uphill ground at {:.3f} seconds and {:.2f} yards (arc Z {:.2f}, floor Z {:.2f}, clearance {:.2f}). Trying nearby headings.",
                             player->GetName(), time, horizontal, arcZ, floorZ, footClearance);
                     candidateReason = "the uphill face intersects the ascending jump arc";
@@ -2739,7 +2740,7 @@ bool PlayerbotWalker::BuildJumpPlan(Player* player, JumpPlan& out, char const*& 
         out.DirectionY = dirY;
         out.DurationMs = uint32(std::ceil(landingTime * 1000.0f));
         if (headingOffsetDegrees != 0.0f)
-            TC_LOG_INFO(PLAYERBOTS_LOG,
+            PLAYERBOT_LOG_DETAIL(player,
                 "mod-playerbots: {} found a clear normal-jump heading {:.0f} degrees beside the rejected step.",
                 player->GetName(), headingOffsetDegrees);
         return true;
@@ -2763,7 +2764,7 @@ bool PlayerbotWalker::TryStartJump(Player* player)
     JumpPlan plan;
     if (!BuildJumpPlan(player, plan, reason))
     {
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} did not jump this uphill lip: {}.", player->GetName(), reason);
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} did not jump this uphill lip: {}.", player->GetName(), reason);
         return false;
     }
 
@@ -2779,7 +2780,7 @@ bool PlayerbotWalker::TryStartJump(Player* player)
     if (!alreadyMoving)
         QueueMove(player, _jump.Launch, true, true);
     QueueJumpMove(player, CMSG_MOVE_JUMP, _jump.Launch, 0);
-    TC_LOG_INFO(PLAYERBOTS_LOG,
+    PLAYERBOT_LOG_DETAIL(player,
         "mod-playerbots: {} queued a normal jump over the uphill lip ({:.1f} yards, {} ms) with a verified landing and continuation.",
         player->GetName(), _jump.Launch.GetExactDist2d(_jump.Landing), _jump.DurationMs);
     return true;
@@ -2993,10 +2994,10 @@ void PlayerbotWalker::FinishJump(Player* player)
         bool const water = _jump.EndsInWater;
         QueueJumpMove(player, water ? CMSG_MOVE_START_SWIM : CMSG_MOVE_FALL_LAND, landing, durationMs);
         if (water)
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} touched deep water at ({:.2f}, {:.2f}, {:.2f}) after {} ms and queued CMSG_MOVE_START_SWIM.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} touched deep water at ({:.2f}, {:.2f}, {:.2f}) after {} ms and queued CMSG_MOVE_START_SWIM.",
                 player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ(), durationMs);
         else
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} landed the knockback at ({:.2f}, {:.2f}, {:.2f}) after {} ms and queued CMSG_MOVE_FALL_LAND.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} landed the knockback at ({:.2f}, {:.2f}, {:.2f}) after {} ms and queued CMSG_MOVE_FALL_LAND.",
                 player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ(), durationMs);
         ResetNow();
         return;
@@ -3010,7 +3011,7 @@ void PlayerbotWalker::FinishJump(Player* player)
     _stopAfterJump = false;
     _state = State::Moving;
 
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} landed the obstacle-recovery jump at ({:.2f}, {:.2f}, {:.2f}).",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} landed the obstacle-recovery jump at ({:.2f}, {:.2f}, {:.2f}).",
         player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ());
 
     if (stopAfterLanding)

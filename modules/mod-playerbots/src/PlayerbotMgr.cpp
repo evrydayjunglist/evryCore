@@ -32,6 +32,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotFactory.h"
+#include "PlayerbotLogDetail.h"
 #include "RealmList.h"
 #include "SpellInfo.h"
 #include "StringFormat.h"
@@ -43,6 +44,7 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -61,6 +63,9 @@ namespace
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
     // She could not step anywhere from where she stood: she looks again after this long.
     constexpr uint32 STUCK_FEET_WAIT_MS = 5000;
+    // A bot with nothing to do, or walking, looks around for new work this often, not every world tick. Being hit, a
+    // server movement order, death, her fight, and her walk's heartbeats do not wait for it.
+    constexpr uint32 LOOK_AROUND_INTERVAL_MS = 1000;
     // Standing with nothing to do this long while targets are on her skip list, she forgets the list.
     constexpr uint32 IDLE_FORGET_SKIPS_MS = 120000;
     // A quest reward she chose to put on that has not reached her bags by now is not coming.
@@ -653,7 +658,7 @@ namespace
             return;
 
         bot.Walker.Stop(player);
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stopped walking to click {} from here.",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} stopped walking to click {} from here.",
             player->GetName(), guid.ToString());
     }
 
@@ -740,6 +745,7 @@ void PlayerbotMgr::Start()
     }
 
     _loginMode = ReadLoginMode();
+    PlayerbotLogDetail::SetNames(sConfigMgr->GetStringDefault(PLAYERBOTS_LOG_DETAIL, ""));
 
     std::string const invitePolicy = sConfigMgr->GetStringDefault(PLAYERBOTS_INVITE_POLICY, "GameMaster");
     if (std::optional<PlayerbotInvitePolicy> parsed = ParsePlayerbotInvitePolicy(invitePolicy))
@@ -801,6 +807,7 @@ void PlayerbotMgr::Start()
         _accountIds.insert(bot.Account.AccountId);
         if (_loginMode == PlayerbotLoginMode::Automatic)
             TryLogin(bot);
+        _botIndexByGuid[bot.Account.CharacterGuid] = _bots.size();
         _bots.push_back(std::move(bot));
     }
 
@@ -826,33 +833,85 @@ void PlayerbotMgr::Stop()
 
 void PlayerbotMgr::Update(uint32 diff)
 {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point const tickStart = Clock::now();
+
     PlayerbotWalker::BeginWorldTick();
     UpdateBridge(diff);
     ValidateRtsSessions();
 
-    for (PlayerbotRecord& bot : _bots)
+    for (uint32 index = 0; index < _bots.size(); ++index)
     {
-        if (UpdateSessionPresence(bot, diff))
-            continue;
-
-        if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
-        {
-            UpdateLogin(bot);
-            WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
-            if (Player* player = session ? session->GetPlayer() : nullptr)
-                UpdateCommanded(bot, player, diff, true);
-            continue;
-        }
-
-        if (UpdateCoordinatorLogout(bot))
-            continue;
-
-        UpdateLogin(bot);
-        UpdateWorld(bot, diff);
+        PlayerbotRecord& bot = _bots[index];
+        Clock::time_point const botStart = Clock::now();
+        UpdateBot(bot, diff);
+        _tickStats.AddBotUpdate(uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - botStart).count()), index);
     }
 
     UpdateRts(diff);
     _walkMapper.Update(diff);
+
+    uint64 const tickMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - tickStart).count());
+    if (std::optional<PlayerbotTickReport> report = _tickStats.EndTick(tickMicros, diff))
+        ReportTickStats(*report);
+}
+
+void PlayerbotMgr::UpdateBot(PlayerbotRecord& bot, uint32 diff)
+{
+    if (UpdateSessionPresence(bot, diff))
+        return;
+
+    if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
+    {
+        UpdateLogin(bot);
+        WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+        if (Player* player = session ? session->GetPlayer() : nullptr)
+            UpdateCommanded(bot, player, diff, true);
+        return;
+    }
+
+    if (UpdateCoordinatorLogout(bot))
+        return;
+
+    UpdateLogin(bot);
+    UpdateWorld(bot, diff);
+}
+
+void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
+{
+    uint32 inWorld = 0;
+    for (PlayerbotRecord const& bot : _bots)
+        if (WorldSession* session = sWorld->FindSession(bot.Account.AccountId))
+            if (Player* player = session->GetPlayer(); player && player->IsInWorld())
+                ++inWorld;
+
+    std::string slowest = "no bot";
+    if (report.BotUpdates && report.MaxBotKey < _bots.size())
+    {
+        PlayerbotRecord const& bot = _bots[report.MaxBotKey];
+        WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+        Player* player = session ? session->GetPlayer() : nullptr;
+        slowest = player ? player->GetName() : Trinity::StringFormat("bot {}", bot.Account.Index);
+    }
+
+    _lastTickReport = Trinity::StringFormat(
+        "{} of {} bot(s) in the world. Over the last {} s the playerbot update took {:.2f} ms per world tick on average "
+        "({:.1f} microseconds per bot), {:.2f} ms or more in the slowest twentieth of ticks, and {:.2f} ms at most. "
+        "The slowest single bot update was {:.2f} ms ({}). World ticks averaged {:.1f} ms, {} ms at most, over {} ticks.",
+        inWorld, _bots.size(), report.WindowMs / 1000, report.AverageTickMs(), report.AverageBotMicros(),
+        report.SlowTickMicros / 1000.0, report.MaxTickMicros / 1000.0, report.MaxBotMicros / 1000.0, slowest,
+        report.AverageWorldDiffMs(), report.MaxWorldDiffMs, report.Ticks);
+
+    if (!_bots.empty())
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {}", _lastTickReport);
+}
+
+std::string PlayerbotMgr::DescribeTickStats() const
+{
+    if (_lastTickReport.empty())
+        return Trinity::StringFormat("No playerbot cost report yet; the first comes {} s after the server starts.",
+            PLAYERBOT_TICK_STATS_REPORT_MS / 1000);
+    return _lastTickReport;
 }
 
 void PlayerbotMgr::UpdateBridge(uint32 diff)
@@ -1164,6 +1223,7 @@ void PlayerbotMgr::OnBotLogin(Player* player)
     if (!player)
         return;
 
+    PlayerbotLogDetail::NoteBot(player->GetGUID().GetCounter(), player->GetName());
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is in the world. Cinematic skip, time sync, and walking run from WorldScript::OnUpdate.",
         player->GetName());
 }
@@ -1211,16 +1271,14 @@ bool PlayerbotMgr::StartWalkMap(Player* subject, float radius, ObjectGuid reques
 
 PlayerbotRecord* PlayerbotMgr::FindManagedBot(ObjectGuid subject)
 {
-    auto itr = std::ranges::find(_bots, subject,
-        [](PlayerbotRecord const& bot) { return bot.Account.CharacterGuid; });
-    return itr == _bots.end() ? nullptr : &*itr;
+    auto itr = _botIndexByGuid.find(subject);
+    return itr == _botIndexByGuid.end() ? nullptr : &_bots[itr->second];
 }
 
 PlayerbotRecord const* PlayerbotMgr::FindManagedBot(ObjectGuid subject) const
 {
-    auto itr = std::ranges::find(_bots, subject,
-        [](PlayerbotRecord const& bot) { return bot.Account.CharacterGuid; });
-    return itr == _bots.end() ? nullptr : &*itr;
+    auto itr = _botIndexByGuid.find(subject);
+    return itr == _botIndexByGuid.end() ? nullptr : &_bots[itr->second];
 }
 
 PlayerbotRecord* PlayerbotMgr::FindCommandRuntime(ObjectGuid subject)
@@ -2077,7 +2135,7 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             PlayerbotClient::FillClientMovementInfo(player, feet, status);
             status.AddMovementFlag(MOVEMENTFLAG_ROOT);
             PlayerbotClient::QueueMovementAck(session, CMSG_MOVE_FORCE_ROOT_ACK, status, order.SequenceIndex);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was rooted{} and queued CMSG_MOVE_FORCE_ROOT_ACK for sequence {} at ({:.2f}, {:.2f}, {:.2f}).",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} was rooted{} and queued CMSG_MOVE_FORCE_ROOT_ACK for sequence {} at ({:.2f}, {:.2f}, {:.2f}).",
                 player->GetName(), compound, order.SequenceIndex, feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ());
             break;
         }
@@ -2088,7 +2146,7 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             MovementInfo status;
             PlayerbotClient::FillClientMovementInfo(player, feet, status);
             PlayerbotClient::QueueMovementAck(session, CMSG_MOVE_FORCE_UNROOT_ACK, status, order.SequenceIndex);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} was unrooted{} and queued CMSG_MOVE_FORCE_UNROOT_ACK for sequence {}.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} was unrooted{} and queued CMSG_MOVE_FORCE_UNROOT_ACK for sequence {}.",
                 player->GetName(), compound, order.SequenceIndex);
             break;
         }
@@ -2104,7 +2162,7 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             status.jump.cosAngle = order.DirectionX;
             status.jump.xyspeed = order.HorizontalSpeed;
             PlayerbotClient::QueueMoveKnockBackAck(session, status, order.SequenceIndex);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_KNOCK_BACK_ACK for sequence {}.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_MOVE_KNOCK_BACK_ACK for sequence {}.",
                 player->GetName(), order.SequenceIndex);
 
             if (bot.Command.Active() && bot.Command.Directive() == CommandablePlayerDirective::Move)
@@ -2122,7 +2180,7 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             bot.TeleportReply.Arm(order.SequenceIndex, order.Mover);
             bot.UnansweredTeleportMs = 0;
             PlayerbotClient::QueueMoveTeleportAck(session, order.Mover, order.SequenceIndex);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_TELEPORT_ACK for sequence {}; the server is moving her to ({:.2f}, {:.2f}, {:.2f}).",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_MOVE_TELEPORT_ACK for sequence {}; the server is moving her to ({:.2f}, {:.2f}, {:.2f}).",
                 player->GetName(), order.SequenceIndex, order.Destination.GetPositionX(), order.Destination.GetPositionY(),
                 order.Destination.GetPositionZ());
             ForgetPositionAfterTeleport(bot, player);
@@ -2132,7 +2190,7 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             bot.SuspendTokenReply.Arm(order.SequenceIndex);
             bot.UnansweredTeleportMs = 0;
             PlayerbotClient::QueueSuspendTokenResponse(session, order.SequenceIndex);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SUSPEND_TOKEN_RESPONSE for sequence {}.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_SUSPEND_TOKEN_RESPONSE for sequence {}.",
                 player->GetName(), order.SequenceIndex);
             ForgetPositionAfterTeleport(bot, player);
             break;
@@ -2143,13 +2201,13 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             bot.WorldPortReply.Arm(0);
             bot.UnansweredTeleportMs = 0;
             PlayerbotClient::QueueWorldPortResponse(session);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_WORLD_PORT_RESPONSE.", player->GetName());
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_WORLD_PORT_RESPONSE.", player->GetName());
             break;
         case PlayerbotServerOrderKind::TimeSync:
             // One reply per request, sent when the request arrives. A client never sends it again, and nothing on the
             // server waits for it.
             PlayerbotClient::QueueTimeSyncResponse(session, order.SequenceIndex, GameTime::GetGameTimeMS());
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: account {} queued CMSG_TIME_SYNC_RESPONSE for sequence {}.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: account {} queued CMSG_TIME_SYNC_RESPONSE for sequence {}.",
                 session->GetAccountId(), order.SequenceIndex);
             break;
         case PlayerbotServerOrderKind::PartyInvite:
@@ -2369,16 +2427,19 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (!bot.CinematicSkipped)
     {
+        // Spread the bots' looks over the interval so they do not all look on the same tick.
+        bot.NextLookMs = (bot.Account.Index * 137) % LOOK_AROUND_INTERVAL_MS;
+        bot.NextWalkLookMs = bot.NextLookMs;
         PlayerbotClient::QueueCompleteCinematic(session);
         bot.CinematicSkipped = true;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_COMPLETE_CINEMATIC.", player->GetName());
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_COMPLETE_CINEMATIC.", player->GetName());
     }
 
     if (!bot.InitMoverQueued)
     {
         PlayerbotClient::QueueMoveInitActiveMoverComplete(session, GameTime::GetGameTimeMS());
         bot.InitMoverQueued = true;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE.", player->GetName());
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE.", player->GetName());
     }
 
     // Nothing she does may move her until the server has handled her teleport reply.
@@ -2398,6 +2459,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (UpdateDeath(bot, player, diff))
         return;
+
+    bot.NextLookMs = bot.NextLookMs > diff ? bot.NextLookMs - diff : 0;
+    bot.NextWalkLookMs = bot.NextWalkLookMs > diff ? bot.NextWalkLookMs - diff : 0;
 
     if (bot.VendorRetryMs)
     {
@@ -2649,7 +2713,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                 NoteWalkRestOfWay(bot, player, bot.QuestTarget.NpcGuid);
                 bot.QuestTarget.Pos = standPos;
                 bot.QuestArriveWaitMs = 0;
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
                     player->GetName(), bot.QuestTarget.NpcGuid.ToString());
                 return;
             }
@@ -2696,7 +2760,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                     NoteWalkRestOfWay(bot, player, bot.GameObjectTarget.GoGuid);
                     bot.GameObjectTarget.Pos = standPos;
                     bot.QuestArriveWaitMs = 0;
-                    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
+                    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
                         player->GetName(), bot.GameObjectTarget.GoGuid.ToString());
                     return;
                 }
@@ -2713,11 +2777,12 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
         else
         {
-            if (TryImmediateWorld(bot, player, false))
+            bool const look = LookAroundNow(bot);
+            if (look && TryImmediateWorld(bot, player, false))
                 return;
 
             bot.QuestArriveWaitMs += diff;
-            if (Optional<PlayerbotClient::GameObjectTarget> found = PlayerbotClient::FindLogIncompleteGameObjectTarget(player, bot.UnreachableGuids))
+            if (Optional<PlayerbotClient::GameObjectTarget> found = look ? PlayerbotClient::FindLogIncompleteGameObjectTarget(player, bot.UnreachableGuids) : std::nullopt)
             {
                 if (!found->GoGuid.IsEmpty())
                 {
@@ -2755,11 +2820,12 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
         else
         {
-            if (TryImmediateWorld(bot, player, false))
+            bool const look = LookAroundNow(bot);
+            if (look && TryImmediateWorld(bot, player, false))
                 return;
 
             bot.QuestArriveWaitMs += diff;
-            if (Optional<PlayerbotClient::UseItemOnUnitTarget> found = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids))
+            if (Optional<PlayerbotClient::UseItemOnUnitTarget> found = look ? PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids) : std::nullopt)
             {
                 if (!found->CreatureGuid.IsEmpty())
                 {
@@ -2791,14 +2857,15 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
         else
         {
-            if (TryImmediateWorld(bot, player, false))
+            bool const look = LookAroundNow(bot);
+            if (look && TryImmediateWorld(bot, player, false))
                 return;
 
             if (bot.QuestArriveWaitMs == 0)
                 ClearUnreachable(bot);
 
             bot.QuestArriveWaitMs += diff;
-            if (Optional<PlayerbotClient::CombatTarget> found = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids))
+            if (Optional<PlayerbotClient::CombatTarget> found = look ? PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids) : std::nullopt)
             {
                 if (!found->CreatureGuid.IsEmpty())
                 {
@@ -2831,14 +2898,15 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
         else
         {
-            if (TryImmediateWorld(bot, player, false))
+            bool const look = LookAroundNow(bot);
+            if (look && TryImmediateWorld(bot, player, false))
                 return;
 
             if (bot.QuestArriveWaitMs == 0)
                 ClearUnreachable(bot);
 
             bot.QuestArriveWaitMs += diff;
-            if (Optional<PlayerbotClient::ItemLootTarget> found = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids))
+            if (Optional<PlayerbotClient::ItemLootTarget> found = look ? PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids) : std::nullopt)
             {
                 if (!found->CreatureGuid.IsEmpty() || !found->GoGuid.IsEmpty())
                 {
@@ -2869,9 +2937,10 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
 
     if (bot.Walker.IsMoving())
     {
-        if (bot.Walker.IsJumping())
+        if (bot.Walker.IsJumping() || bot.NextWalkLookMs)
             return;
 
+        bot.NextWalkLookMs = LOOK_AROUND_INTERVAL_MS;
         TryImmediateWorld(bot, player, true);
         if (bot.Walker.IsMoving()
             && bot.VendorTarget.NpcGuid.IsEmpty()
@@ -2892,6 +2961,12 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         && TrySameObjectiveYellow(bot, player, sameObjectiveQuestId, sameObjectiveEntry, sameObjectiveSkipPos, ObjectGuid::Empty))
         return;
 
+    // Between looks she only stands there. The time still counts toward forgetting her skip list and the idle line.
+    bot.SinceLookMs += diff;
+    if (!LookAroundNow(bot))
+        return;
+    uint32 const idleMs = std::exchange(bot.SinceLookMs, 0);
+
     if (TryImmediateWorld(bot, player, false))
         return;
 
@@ -2905,7 +2980,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     // looks again, so one bad moment cannot leave her idle for good.
     if (!bot.UnreachableGuids.empty() || !bot.UnreachablePositions.empty())
     {
-        bot.IdleWithSkipsMs += diff;
+        bot.IdleWithSkipsMs += idleMs;
         if (bot.IdleWithSkipsMs >= IDLE_FORGET_SKIPS_MS)
         {
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has had nothing to do for {} seconds while {} target(s) and {} map place(s) were on her skip list. She forgets them and looks again.",
@@ -2918,15 +2993,24 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     else
         bot.IdleWithSkipsMs = 0;
 
-    bot.QuestSearchEmptyMs += diff;
+    bot.QuestSearchEmptyMs += idleMs;
     if (bot.QuestSearchEmptyMs >= QUEST_SEARCH_RETRY_MS)
     {
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no immediate work and no map yellow yet. Still looking (talk {:.0f} yards, kill {:.0f} yards).",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} has no immediate work and no map yellow yet. Still looking (talk {:.0f} yards, kill {:.0f} yards).",
             player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
         for (std::string const& line : PlayerbotClient::ExplainUnpickedTurnIns(player, bot.UnreachableGuids, skipFailedQuestId))
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} {}", player->GetName(), line);
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} {}", player->GetName(), line);
         bot.QuestSearchEmptyMs = 0;
     }
+}
+
+// True once per interval: she looks around for new work now, and not again until the interval has passed.
+bool PlayerbotMgr::LookAroundNow(PlayerbotRecord& bot)
+{
+    if (bot.NextLookMs)
+        return false;
+    bot.NextLookMs = LOOK_AROUND_INTERVAL_MS;
+    return true;
 }
 
 void PlayerbotMgr::BeginDeath(PlayerbotRecord& bot, Player* player)
@@ -3991,7 +4075,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         if (PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
         {
             if (reswing)
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} re-queued CMSG_ATTACK_SWING on {} because auto-attack was not running.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} re-queued CMSG_ATTACK_SWING on {} because auto-attack was not running.",
                     player->GetName(), bot.CombatTarget.CreatureGuid.ToString());
             bot.CombatSwingSent = true;
         }
@@ -4241,7 +4325,7 @@ bool PlayerbotMgr::StartFleeLeg(PlayerbotRecord& bot, Player* player)
             continue;
 
         ++bot.FleeLegs;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} runs toward ({:.2f}, {:.2f}, {:.2f}), stretch {}.",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} runs toward ({:.2f}, {:.2f}, {:.2f}), stretch {}.",
             player->GetName(), dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), bot.FleeLegs);
         return true;
     }
@@ -4440,7 +4524,7 @@ bool PlayerbotMgr::UpdateFollow(PlayerbotRecord& bot, Player* player, Player* le
         // She has moved on; what she could not reach from the old place may be reachable from the new one.
         ClearUnreachable(bot);
         bot.FollowAim = leader->GetPosition();
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walks after her party leader {}, {:.1f} yards away.",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} walks after her party leader {}, {:.1f} yards away.",
             player->GetName(), leader->GetName(), leaderDist);
         bot.Walker.Start(player, bot.FollowAim, FOLLOW_STAND_YARDS, goal);
         return true;
@@ -4659,7 +4743,7 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
             NoteWalkRestOfWay(bot, player, bot.UseItemOnUnitTarget.CreatureGuid);
             bot.UseItemOnUnitTarget.Pos = standPos;
             bot.QuestArriveWaitMs = 0;
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} is still short of {} and is walking the rest of the way.",
                 player->GetName(), bot.UseItemOnUnitTarget.CreatureGuid.ToString());
             return true;
         }
@@ -5208,7 +5292,7 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
                 NoteWalkRestOfWay(bot, player, bot.VendorTarget.NpcGuid);
                 bot.VendorTarget.Pos = standPos;
                 bot.QuestArriveWaitMs = 0;
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is still short of vendor {} and is walking the rest of the way.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} is still short of vendor {} and is walking the rest of the way.",
                     player->GetName(), bot.VendorTarget.NpcGuid.ToString());
                 return true;
             }

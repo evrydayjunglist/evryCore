@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotClient.h"
+#include "PlayerbotLogDetail.h"
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Containers.h"
@@ -1947,7 +1948,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
                 float const standDistance = creature->GetCombatReach() + 1.0f;
                 if (!PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos))
                 {
-                    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that npc.",
+                    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that npc.",
                         player->GetName(), creature->GetGUID().ToString());
                     skipCreature = true;
                     continue;
@@ -2389,7 +2390,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
         Optional<ItemLootTarget> target = MakeCorpseLootTarget(player, creature);
         if (!target)
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that corpse.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that corpse.",
                 player->GetName(), creature->GetGUID().ToString());
             continue;
         }
@@ -2433,7 +2434,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
             Optional<ItemLootTarget> target = MakeItemLootTargetFromGameObject(player, go, matched->QuestId, matched->ItemId);
             if (!target)
             {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
                     player->GetName(), go->GetGUID().ToString());
                 continue;
             }
@@ -2540,7 +2541,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
                 Optional<ItemLootTarget> target = MakeItemLootTarget(player, creature, credit.QuestId, credit.ItemId, true);
                 if (!target)
                 {
-                    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that corpse.",
+                    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that corpse.",
                         player->GetName(), creature->GetGUID().ToString());
                     continue;
                 }
@@ -2559,7 +2560,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
             Optional<ItemLootTarget> target = MakeItemLootTarget(player, creature, credit.QuestId, credit.ItemId, false);
             if (!target)
             {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that creature.",
                     player->GetName(), creature->GetGUID().ToString());
                 continue;
             }
@@ -2588,7 +2589,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
             Optional<ItemLootTarget> target = MakeItemLootTargetFromGameObject(player, go, credit.QuestId, credit.ItemId);
             if (!target)
             {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
                     player->GetName(), go->GetGUID().ToString());
                 continue;
             }
@@ -2709,7 +2710,7 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindNearbyGameObjec
         Optional<GameObjectTarget> target = MakeGameObjectUseTarget(player, go, matched->QuestId);
         if (!target)
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
                 player->GetName(), go->GetGUID().ToString());
             continue;
         }
@@ -2800,7 +2801,7 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
             Optional<GameObjectTarget> target = MakeGameObjectUseTarget(player, go, credit.QuestId);
             if (!target)
             {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {} without standing in a spell focus. Skipping that object.",
                     player->GetName(), go->GetGUID().ToString());
                 continue;
             }
@@ -2908,7 +2909,7 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseIte
         Optional<UseItemOnUnitTarget> target = MakeUseItemOnUnitTarget(player, creature, matched->QuestId, matched->CreditEntry, itemId);
         if (!target)
         {
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {}. Skipping that creature.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {}. Skipping that creature.",
                 player->GetName(), creature->GetGUID().ToString());
             continue;
         }
@@ -2991,7 +2992,7 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
             Optional<UseItemOnUnitTarget> target = MakeUseItemOnUnitTarget(player, creature, credit.QuestId, credit.CreditEntry, itemId);
             if (!target)
             {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside {}. Skipping that creature.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside {}. Skipping that creature.",
                     player->GetName(), creature->GetGUID().ToString());
                 continue;
             }
@@ -3341,7 +3342,7 @@ bool PlayerbotClient::TryMeleeAttack(Player* player, ObjectGuid creatureGuid)
 
     QueueSetSelection(player->GetSession(), creatureGuid);
     QueueAttackSwing(player->GetSession(), creatureGuid);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_ATTACK_SWING on {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_ATTACK_SWING on {}.",
         player->GetName(), creatureGuid.ToString());
     return true;
 }
@@ -3472,7 +3473,7 @@ bool PlayerbotClient::TryCombatCast(Player* player, ObjectGuid creatureGuid, uin
         QueueSetSelection(player->GetSession(), creatureGuid);
 
     QueueCastSpell(player, creatureGuid, spellId);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on {}.",
         player->GetName(), CombatSpellName(spellInfo), spellId, creatureGuid.ToString());
     return true;
 }
@@ -3535,7 +3536,7 @@ bool PlayerbotClient::TrySelfCast(Player* player, uint32 spellId)
 
     // A client casting on itself keeps the enemy selected; only the cast names her.
     QueueCastSpell(player, player->GetGUID(), spellId);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on herself.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on herself.",
         player->GetName(), CombatSpellName(spellInfo), spellId);
     return true;
 }
@@ -3661,7 +3662,7 @@ uint32 PlayerbotClient::TryUseRestItem(Player* player, Item* item)
 
     // Food and drink are cast on herself, as a click in her bags does.
     QueueUseItem(player, item, player->GetGUID(), spellInfo->Id);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_USE_ITEM {} ({}) to {} while she rests.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_USE_ITEM {} ({}) to {} while she rests.",
         player->GetName(), item->GetTemplate()->GetDefaultLocaleName(), item->GetEntry(),
         food && drink ? "eat and drink" : food ? "eat" : "drink");
     return spellInfo->Id;
@@ -3676,7 +3677,7 @@ bool PlayerbotClient::TryUseGameObject(Player* player, GameObjectTarget const& t
         return false;
 
     QueueGameObjUse(player->GetSession(), target.GoGuid);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_GAME_OBJ_USE on {} for quest {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_GAME_OBJ_USE on {} for quest {}.",
         player->GetName(), target.GoGuid.ToString(), target.QuestId);
     return true;
 }
@@ -3749,7 +3750,7 @@ uint32 PlayerbotClient::TryUseItemOnUnit(Player* player, UseItemOnUnitTarget con
         QueueSetSelection(player->GetSession(), target.CreatureGuid);
 
     QueueUseItem(player, item, target.CreatureGuid, spellId);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_USE_ITEM with {} on {} for quest {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_USE_ITEM with {} on {} for quest {}.",
         player->GetName(), item->GetGUID().ToString(), target.CreatureGuid.ToString(), target.QuestId);
     return spellId;
 }
@@ -3768,7 +3769,7 @@ bool PlayerbotClient::TryOpenLoot(Player* player, ObjectGuid creatureGuid)
         return false;
 
     QueueLootUnit(player->GetSession(), creatureGuid);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_LOOT_UNIT on {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_LOOT_UNIT on {}.",
         player->GetName(), creatureGuid.ToString());
     return true;
 }
@@ -3791,7 +3792,7 @@ bool PlayerbotClient::TryTakeQuestItemFromOpenLoot(Player* player, ObjectGuid lo
 
             QueueLootItem(player->GetSession(), view.first, uint8(item.LootListId));
             QueueLootRelease(player->GetSession(), lootOwner);
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_LOOT_ITEM and CMSG_LOOT_RELEASE on {} for item {}.",
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_LOOT_ITEM and CMSG_LOOT_RELEASE on {} for item {}.",
                 player->GetName(), lootOwner.ToString(), itemId);
             return true;
         }
@@ -3852,7 +3853,7 @@ bool PlayerbotClient::TryTakeAllFromOpenLoot(Player* player, ObjectGuid lootOwne
     for (ObjectGuid const& owner : owners)
         QueueLootRelease(player->GetSession(), owner);
 
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued loot-all on {} ({} item slot(s){}).",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued loot-all on {} ({} item slot(s){}).",
         player->GetName(), lootOwner.ToString(), uint32(take.size()), anyGold ? ", money" : "");
     return true;
 }
@@ -4042,7 +4043,7 @@ bool PlayerbotClient::TrySpiritHealer(Player* player, ObjectGuid healerGuid)
 
     QueueSetSelection(player->GetSession(), healerGuid);
     QueueSpiritHealerActivate(player->GetSession(), healerGuid);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_SPIRIT_HEALER_ACTIVATE on {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_SPIRIT_HEALER_ACTIVATE on {}.",
         player->GetName(), healerGuid.ToString());
     return true;
 }
@@ -4267,7 +4268,7 @@ Optional<PlayerbotClient::VendorTarget> PlayerbotClient::FindNearestVendor(Playe
             Optional<VendorTarget> target = MakeVendorTarget(player, creature);
             if (!target)
             {
-                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot stand beside vendor {} without standing in a spell focus. Skipping that npc.",
+                PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} cannot stand beside vendor {} without standing in a spell focus. Skipping that npc.",
                     player->GetName(), creature->GetGUID().ToString());
                 continue;
             }
@@ -4296,7 +4297,7 @@ bool PlayerbotClient::TryOpenVendor(Player* player, ObjectGuid vendorGuid)
 
     QueueSetSelection(player->GetSession(), vendorGuid);
     QueueListInventory(player->GetSession(), vendorGuid);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_LIST_INVENTORY on {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_SET_SELECTION and CMSG_LIST_INVENTORY on {}.",
         player->GetName(), vendorGuid.ToString());
     return true;
 }
@@ -4310,13 +4311,13 @@ bool PlayerbotClient::TryVendorTrade(Player* player, ObjectGuid vendorGuid, bool
         return false;
 
     QueueSellAllJunkItems(player->GetSession(), vendorGuid);
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SELL_ALL_JUNK_ITEMS at {}.",
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_SELL_ALL_JUNK_ITEMS at {}.",
         player->GetName(), vendorGuid.ToString());
 
     if (repair && player->GetNPCIfCanInteractWith(vendorGuid, UNIT_NPC_FLAG_REPAIR, UNIT_NPC_FLAG_2_NONE))
     {
         QueueRepairItem(player->GetSession(), vendorGuid);
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_REPAIR_ITEM (repair all) at {}.",
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_REPAIR_ITEM (repair all) at {}.",
             player->GetName(), vendorGuid.ToString());
     }
 

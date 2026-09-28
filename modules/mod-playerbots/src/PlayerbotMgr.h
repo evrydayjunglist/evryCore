@@ -232,6 +232,7 @@ private:
     bool TryLogin(PlayerbotRecord& bot);
     void UpdateBot(PlayerbotRecord& bot, uint32 diff);
     void ReportTickStats(PlayerbotTickReport const& report);
+    void ReportSlowUpdate(PlayerbotRecord const& bot, uint64 botMicros);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
     void AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff);
@@ -301,6 +302,14 @@ private:
     PlayerbotWalkMapper _walkMapper;
     PlayerbotTickStats _tickStats;
     std::string _lastTickReport;
+    // The steps of the bot update running now, and how long until another slow update may be written to the log.
+    PlayerbotUpdateCost _updateCost;
+    uint32 _slowUpdateLogGapMs = 0;
+    // The same steps summed over every bot this tick, and over the report window.
+    PlayerbotUpdateCost _tickCost;
+    PlayerbotUpdateCost _windowCost;
+    uint64 _windowBotsMicros = 0;
+    uint32 _slowTickLogGapMs = 0;
 };
 
 #define sPlayerbotMgr PlayerbotMgr::instance()

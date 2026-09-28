@@ -35,6 +35,7 @@
 #include "PlayerbotLogDetail.h"
 #include "PlayerbotPathSearch.h"
 #include "PlayerbotServerMovement.h"
+#include "PlayerbotUpdateCost.h"
 #include "PlayerbotWalkMapEscape.h"
 #include "PlayerbotWalkMapServerWorld.h"
 #include "Playerbots.h"
@@ -174,6 +175,7 @@ namespace
     StepWorldCollision GetSegmentWorldCollision(Player const* player, Position const& from, Position const& to, float heightOffset,
         bool alongOnly = true)
     {
+        PlayerbotCostTimer const cost(PlayerbotCostStep::Ground);
         if (!player || !player->IsInWorld())
             return StepWorldCollision::None;
 
@@ -308,6 +310,7 @@ namespace
     // Do not search from a navmesh chord that already went through a hill. No floor is a face: refuse it.
     bool PlantWalkZ(Player* player, float x, float y, float lastGroundedZ, float run, float& outZ)
     {
+        PlayerbotCostTimer const cost(PlayerbotCostStep::Ground);
         if (!player || !player->IsInWorld())
             return false;
         if (!Trinity::IsValidMapCoord(x, y, lastGroundedZ))
@@ -716,6 +719,7 @@ void PlayerbotWalker::BeginWorldTick()
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out,
     std::vector<StandSpotLook>* look)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::Approach);
     if (!player || !target)
         return false;
 
@@ -766,6 +770,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         // reach: it found the route and a short path could not hold it, or it ran out of search nodes on the way. The walk
         // itself asks the long search for that route, and a target no route reaches fails that walk the usual way.
         PathGenerator generator(player, NavMeshChoice::PlayerBody);
+        PlayerbotCostTimer const cost(PlayerbotCostStep::NavmeshRoute);
         if (!generator.CalculatePath(x, y, z, false))
         {
             if (look)
@@ -1560,8 +1565,12 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
     // with room for a long route: a road out of a cave and round the hills can be three times the straight line.
     PathGenerator generator(player, NavMeshChoice::PlayerBody, PathReach::Long);
     std::chrono::steady_clock::time_point const started = std::chrono::steady_clock::now();
-    bool const calculated = generator.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
-        destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+    bool calculated = false;
+    {
+        PlayerbotCostTimer const cost(PlayerbotCostStep::NavmeshRoute);
+        calculated = generator.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
+            destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+    }
     std::chrono::duration<float, std::milli> const took = std::chrono::steady_clock::now() - started;
     if (evidence)
     {
@@ -1609,6 +1618,7 @@ bool PlayerbotWalker::BuildMmapPath(Player* player, Position const& from, Positi
                     continue;
 
                 PathGenerator toVia(player, NavMeshChoice::PlayerBody, PathReach::Long);
+                PlayerbotCostTimer const cost(PlayerbotCostStep::NavmeshRoute);
                 if (!toVia.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
                     via.GetPositionX(), via.GetPositionY(), via.GetPositionZ(), false) || !PathIsWalkable(toVia))
                     continue;
@@ -1729,6 +1739,7 @@ void PlayerbotWalker::LogStartConnectivity(Player* player, Position const& from)
 
 void PlayerbotWalker::LogConnectivity(Player* player, Position const& from, char const* place) const
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::ConnectivityProbe);
     if (!player)
         return;
 
@@ -1753,6 +1764,7 @@ void PlayerbotWalker::LogConnectivity(Player* player, Position const& from, char
 
             // These probes are 60 and 120 yards out and there can be 32 of them in a row, so they keep the short search.
             PathGenerator probe(player, NavMeshChoice::PlayerBody);
+            PlayerbotCostTimer const cost(PlayerbotCostStep::NavmeshRoute);
             if (!probe.CalculatePath(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(), x, y, z, false))
                 continue;
 
@@ -2290,6 +2302,7 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
 
 void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::WayRoundMap);
     _wayRoundMs += diff;
     Map* map = player->FindMap();
     if (!_wayRoundMap || !map || player->GetMapId() != _wayRoundMapId || !player->IsAlive() || player->IsBeingTeleported()

@@ -840,26 +840,51 @@ void PlayerbotMgr::Update(uint32 diff)
     UpdateBridge(diff);
     ValidateRtsSessions();
 
+    _slowUpdateLogGapMs = _slowUpdateLogGapMs > diff ? _slowUpdateLogGapMs - diff : 0;
+    _slowTickLogGapMs = _slowTickLogGapMs > diff ? _slowTickLogGapMs - diff : 0;
+    _tickCost.Clear();
+    uint64 botsMicros = 0;
     for (uint32 index = 0; index < _bots.size(); ++index)
     {
         PlayerbotRecord& bot = _bots[index];
+        _updateCost.Clear();
+        PlayerbotUpdateCost::Current() = &_updateCost;
         Clock::time_point const botStart = Clock::now();
         UpdateBot(bot, diff);
-        _tickStats.AddBotUpdate(uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - botStart).count()), index);
+        uint64 const botMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - botStart).count());
+        PlayerbotUpdateCost::Current() = nullptr;
+        _tickStats.AddBotUpdate(botMicros, index);
+        _tickCost.Add(_updateCost);
+        botsMicros += botMicros;
+        if (botMicros > PLAYERBOT_SLOW_UPDATE_MICROS)
+            ReportSlowUpdate(bot, botMicros);
     }
 
     UpdateRts(diff);
     _walkMapper.Update(diff);
 
     uint64 const tickMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - tickStart).count());
+    _windowCost.Add(_tickCost);
+    _windowBotsMicros += botsMicros;
+    if (tickMicros > PLAYERBOT_SLOW_TICK_MICROS && !_slowTickLogGapMs)
+    {
+        _slowTickLogGapMs = PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: the playerbot update took {:.1f} ms this tick: {:.1f} ms in {} bot update(s) "
+            "and {:.1f} ms in the work shared by all bots. The bot updates spent it on: {}.",
+            tickMicros / 1000.0, botsMicros / 1000.0, _bots.size(), (tickMicros > botsMicros ? tickMicros - botsMicros : 0) / 1000.0,
+            _tickCost.Describe(botsMicros));
+    }
     if (std::optional<PlayerbotTickReport> report = _tickStats.EndTick(tickMicros, diff))
         ReportTickStats(*report);
 }
 
 void PlayerbotMgr::UpdateBot(PlayerbotRecord& bot, uint32 diff)
 {
-    if (UpdateSessionPresence(bot, diff))
-        return;
+    {
+        PlayerbotCostTimer const cost(PlayerbotCostStep::Presence);
+        if (UpdateSessionPresence(bot, diff))
+            return;
+    }
 
     if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
     {
@@ -873,8 +898,28 @@ void PlayerbotMgr::UpdateBot(PlayerbotRecord& bot, uint32 diff)
     if (UpdateCoordinatorLogout(bot))
         return;
 
-    UpdateLogin(bot);
+    {
+        PlayerbotCostTimer const cost(PlayerbotCostStep::Presence);
+        UpdateLogin(bot);
+    }
     UpdateWorld(bot, diff);
+}
+
+void PlayerbotMgr::ReportSlowUpdate(PlayerbotRecord const& bot, uint64 botMicros)
+{
+    if (_slowUpdateLogGapMs)
+        return;
+    _slowUpdateLogGapMs = PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS;
+
+    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+    Player* player = session ? session->GetPlayer() : nullptr;
+    std::string const name = player ? player->GetName() : Trinity::StringFormat("bot {}", bot.Account.Index);
+    std::string where;
+    if (player && player->IsInWorld())
+        where = Trinity::StringFormat(" at ({:.2f}, {:.2f}, {:.2f}) on map {}", player->GetPositionX(), player->GetPositionY(),
+            player->GetPositionZ(), player->GetMapId());
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {}'s update{} took {:.1f} ms: {}.", name, where, botMicros / 1000.0,
+        _updateCost.Describe(botMicros));
 }
 
 void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
@@ -897,13 +942,21 @@ void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
     _lastTickReport = Trinity::StringFormat(
         "{} of {} bot(s) in the world. Over the last {} s the playerbot update took {:.2f} ms per world tick on average "
         "({:.1f} microseconds per bot), {:.2f} ms or more in the slowest twentieth of ticks, and {:.2f} ms at most. "
-        "The slowest single bot update was {:.2f} ms ({}). World ticks averaged {:.1f} ms, {} ms at most, over {} ticks.",
+        "The slowest single bot update was {:.2f} ms ({}), and {} bot update(s) took over {} ms. "
+        "World ticks averaged {:.1f} ms, {} ms at most, over {} ticks.",
         inWorld, _bots.size(), report.WindowMs / 1000, report.AverageTickMs(), report.AverageBotMicros(),
         report.SlowTickMicros / 1000.0, report.MaxTickMicros / 1000.0, report.MaxBotMicros / 1000.0, slowest,
-        report.AverageWorldDiffMs(), report.MaxWorldDiffMs, report.Ticks);
+        report.SlowBotUpdates, PLAYERBOT_SLOW_UPDATE_MICROS / 1000, report.AverageWorldDiffMs(), report.MaxWorldDiffMs, report.Ticks);
 
     if (!_bots.empty())
+    {
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {}", _lastTickReport);
+        // Steps sit inside each other (a navmesh route inside a stand spot pick), so the steps add up to more than the whole.
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bot updates spent {:.1f} ms in all, on: {}.",
+            report.WindowMs / 1000, _windowBotsMicros / 1000.0, _windowCost.Describe(_windowBotsMicros));
+    }
+    _windowCost.Clear();
+    _windowBotsMicros = 0;
 }
 
 std::string PlayerbotMgr::DescribeTickStats() const
@@ -2089,6 +2142,7 @@ void PlayerbotMgr::UpdateLogin(PlayerbotRecord& bot)
 // client does.
 void PlayerbotMgr::AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::ServerOrders);
     if (!player || !player->GetSession())
         return;
 
@@ -2998,8 +3052,13 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     {
         PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} has no immediate work and no map yellow yet. Still looking (talk {:.0f} yards, kill {:.0f} yards).",
             player->GetName(), QUEST_SEARCH_RANGE, COMBAT_SEARCH_RANGE);
-        for (std::string const& line : PlayerbotClient::ExplainUnpickedTurnIns(player, bot.UnreachableGuids, skipFailedQuestId))
-            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} {}", player->GetName(), line);
+        // The explanation asks the navmesh about stand spots, so it is only worked out for a bot whose steps are written.
+        if (PlayerbotLogDetail::Wants(player->GetGUID().GetCounter()))
+        {
+            PlayerbotCostTimer const cost(PlayerbotCostStep::TurnInReport);
+            for (std::string const& line : PlayerbotClient::ExplainUnpickedTurnIns(player, bot.UnreachableGuids, skipFailedQuestId))
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} {}", player->GetName(), line);
+        }
         bot.QuestSearchEmptyMs = 0;
     }
 }
@@ -3259,6 +3318,7 @@ bool PlayerbotMgr::BeginHealerWalk(PlayerbotRecord& bot, Player* player)
 
 bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::Death);
     if (!player)
         return false;
 
@@ -3632,6 +3692,7 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
 
 bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking, bool allowFights)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::ImmediateWorld);
     Optional<PlayerbotClient::QuestTarget> talk;
     if (!walking || !CurrentWalkIsInReach(bot, player))
         talk = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE, PlayerbotClient::QuestSearchKind::Talk, bot.UnreachableGuids);
@@ -3784,16 +3845,29 @@ bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
 
 bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId, uint32 skipEntry)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::MapYellow);
     PlayerbotClient::MapYellowFilter filter = MakeMapYellowFilter(bot, skipQuestId, skipEntry, false, nullptr);
+
+    auto timed = [](PlayerbotCostStep step, auto&& find)
+    {
+        PlayerbotCostTimer const findCost(step);
+        return find();
+    };
 
     for (int32 attempt = 0; attempt < 5; ++attempt)
     {
-        Optional<PlayerbotClient::GameObjectTarget> go = PlayerbotClient::FindLogIncompleteGameObjectTarget(player, bot.UnreachableGuids, filter);
-        Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids, filter);
-        Optional<PlayerbotClient::CombatTarget> kill = PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids, filter);
-        Optional<PlayerbotClient::ItemLootTarget> item = PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, filter);
-        Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindLogCompleteTurnIn(player, bot.UnreachableGuids, skipQuestId);
-        Optional<PlayerbotClient::QuestTarget> takeable = PlayerbotClient::FindTakeableQuestInZone(player, bot.UnreachableGuids, skipQuestId);
+        Optional<PlayerbotClient::GameObjectTarget> go = timed(PlayerbotCostStep::FindObjectWork,
+            [&] { return PlayerbotClient::FindLogIncompleteGameObjectTarget(player, bot.UnreachableGuids, filter); });
+        Optional<PlayerbotClient::UseItemOnUnitTarget> useItem = timed(PlayerbotCostStep::FindUseItemWork,
+            [&] { return PlayerbotClient::FindLogIncompleteUseItemOnUnitTarget(player, bot.UnreachableGuids, filter); });
+        Optional<PlayerbotClient::CombatTarget> kill = timed(PlayerbotCostStep::FindKillWork,
+            [&] { return PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids, filter); });
+        Optional<PlayerbotClient::ItemLootTarget> item = timed(PlayerbotCostStep::FindItemWork,
+            [&] { return PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, filter); });
+        Optional<PlayerbotClient::QuestTarget> turnIn = timed(PlayerbotCostStep::FindTurnIn,
+            [&] { return PlayerbotClient::FindLogCompleteTurnIn(player, bot.UnreachableGuids, skipQuestId); });
+        Optional<PlayerbotClient::QuestTarget> takeable = timed(PlayerbotCostStep::FindTakeableQuest,
+            [&] { return PlayerbotClient::FindTakeableQuestInZone(player, bot.UnreachableGuids, skipQuestId); });
 
         float bestDist = std::numeric_limits<float>::max();
         uint8 kind = 0;
@@ -3823,6 +3897,7 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
 
         bool started = false;
         Position failedPos;
+        PlayerbotCostTimer const startCost(PlayerbotCostStep::StartWork);
         if (kind == 1)
         {
             failedPos = go->Pos;
@@ -3865,6 +3940,7 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
 
 bool PlayerbotMgr::TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, int32 questId, uint32 entry, Position const& skipPos, ObjectGuid extraSkipGuid)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::ObjectiveSearch);
     if (!player || !questId)
         return false;
 
@@ -3949,6 +4025,7 @@ bool PlayerbotMgr::TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, 
 
 bool PlayerbotMgr::TryLeaveFaceForOtherYellow(PlayerbotRecord& bot, Player* player)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::ObjectiveSearch);
     if (!player)
         return false;
 
@@ -4016,6 +4093,7 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
 
 bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff, bool heldInPlace)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::Combat);
     Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
     if (!creature)
     {
@@ -5199,6 +5277,7 @@ void PlayerbotMgr::ClearVendor(PlayerbotRecord& bot)
 
 bool PlayerbotMgr::TryBeginVendor(PlayerbotRecord& bot, Player* player)
 {
+    PlayerbotCostTimer const cost(PlayerbotCostStep::Vendor);
     if (bot.VendorRetryMs)
         return false;
     if (!bot.VendorTarget.NpcGuid.IsEmpty())

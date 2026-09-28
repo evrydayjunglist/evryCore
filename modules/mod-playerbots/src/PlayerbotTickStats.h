@@ -11,6 +11,7 @@
 #define EVRY_PLAYERBOT_TICK_STATS_H
 
 #include "Define.h"
+#include "PlayerbotUpdateCost.h"
 #include <array>
 #include <optional>
 
@@ -35,6 +36,8 @@ struct PlayerbotTickReport
     // The single slowest bot update, and which bot it was (the caller's key).
     uint64 MaxBotMicros = 0;
     uint32 MaxBotKey = 0;
+    // Bot updates slower than PLAYERBOT_SLOW_UPDATE_MICROS.
+    uint32 SlowBotUpdates = 0;
     // The world tick, as the time the world passes to each update since the one before.
     uint64 WorldDiffMsTotal = 0;
     uint32 MaxWorldDiffMs = 0;
@@ -56,6 +59,8 @@ public:
     {
         ++_window.BotUpdates;
         _window.BotMicros += micros;
+        if (micros > PLAYERBOT_SLOW_UPDATE_MICROS)
+            ++_window.SlowBotUpdates;
         if (micros > _window.MaxBotMicros || _window.BotUpdates == 1)
         {
             _window.MaxBotMicros = micros;

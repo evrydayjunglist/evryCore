@@ -210,6 +210,26 @@ inline std::vector<PlayerbotWalkMapWayRound> FindPlayerbotWalkMapWaysRound(Playe
     return ways;
 }
 
+// A finished map with no way round is worth mapping again over a wider circle only when ground she can walk carries on
+// past its edge, or it stopped at its floor limit. When everything she can reach lies inside it, a wider map would find
+// exactly the same ground.
+inline bool PlayerbotWalkMapWorthWidening(PlayerbotWalkMap const& map)
+{
+    if (map.HitSpotLimit())
+        return true;
+
+    for (PlayerbotWalkMapSpot const& spot : map.Spots())
+    {
+        if (!spot.Reached)
+            continue;
+        for (PlayerbotWalkMapStep const step : spot.Steps)
+            if (step == PlayerbotWalkMapStep::OutsideMap)
+                return true;
+    }
+
+    return false;
+}
+
 // The ways out of the ground she is standing on: the floors she can walk to and back from that are farthest from her
 // feet, the ones at the edge of the map first, spread apart. Nothing about them is closer to where she is going, so the
 // caller has to have another reason to walk one, such as a navmesh route that works from there.

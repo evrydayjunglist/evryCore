@@ -212,6 +212,7 @@ private:
     // movement does not allow it; the caller then gives the walk up as before.
     bool BeginWayRound(Player* player, char const* reason);
     void UpdateWayRound(Player* player, uint32 diff);
+    void StartWayRoundMap(Player* player, float yards);
     // Walk the best way round the map found toward the destination. False when nothing she can reach is closer.
     bool StartWayRoundWalk(Player* player);
     // Ask the navmesh for a route from the next way out of this ground. True once she starts walking to one.
@@ -278,6 +279,8 @@ private:
 
     // The ground she mapped. It is kept while she walks a way round, so a refused step can walk the rest from there.
     std::unique_ptr<PlayerbotWalkMap> _wayRoundMap;
+    // How far around her feet that map reaches: the small circle first, then the full one.
+    float _wayRoundYards = 0.0f;
     std::vector<PlayerbotWalkMapWayRound> _wayRoundWaysOut;
     size_t _wayRoundProbe = 0;
     int32 _wayRoundTarget = -1;

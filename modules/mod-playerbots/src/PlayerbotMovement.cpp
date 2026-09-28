@@ -92,7 +92,10 @@ namespace
     constexpr float RECOVERY_CONNECTIVITY_PROBE_YARDS[] = { 60.0f, 120.0f };
     constexpr int32 RECOVERY_CONNECTIVITY_DIRECTIONS = 8;
     constexpr float RECOVERY_PROBE_ENDPOINT_YARDS = 8.0f;
-    // How far around her feet she maps the ground when a walk is refused and the local look cannot get her round.
+    // How far around her feet she maps the ground when a walk is refused and the local look cannot get her round. She maps
+    // the small circle first, and the full one only when the small one has no way round and ground she can walk carries
+    // on past its edge. Most obstacles are passed inside the small circle, which holds about a ninth of the floors.
+    constexpr float WAY_ROUND_FIRST_YARDS = 20.0f;
     constexpr float WAY_ROUND_YARDS = 60.0f;
     // A spot is only worth walking to when it is at least this much closer to where she is going.
     constexpr float WAY_ROUND_MIN_GAIN_YARDS = 5.0f;
@@ -2309,19 +2312,8 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     if (_state == State::Moving)
         QueueMove(player, _lastGrounded, false, false);
 
-    PlayerbotWalkMapSettings settings;
-    settings.OriginX = x;
-    settings.OriginY = y;
-    settings.OriginZ = z;
-    settings.Spacing = std::clamp(HeartbeatStepLen(player), WAY_ROUND_MIN_SPACING, WAY_ROUND_MAX_SPACING);
-    settings.StepYards = HeartbeatStepLen(player);
-    settings.Radius = WAY_ROUND_YARDS;
-    settings.MaxClimbDegrees = MaxWalkableSlopeDegrees;
-    settings.MaxDropYards = MaxDownStepYards;
-    settings.LayerYards = WAY_ROUND_LAYER_YARDS;
-    settings.MaxSpots = WAY_ROUND_MAX_SPOTS;
-
-    _wayRoundMap = std::make_unique<PlayerbotWalkMap>(settings);
+    _lastGrounded.Relocate(x, y, z, _lastGrounded.GetOrientation());
+    StartWayRoundMap(player, WAY_ROUND_FIRST_YARDS);
     _wayRoundWaysOut.clear();
     _wayRoundProbe = 0;
     _wayRoundTarget = -1;
@@ -2337,12 +2329,30 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     _walkingAWayRound = false;
     _lookedForAWayRound = true;
     _wayRoundFirstStepRefused = false;
-    _lastGrounded.Relocate(x, y, z, _lastGrounded.GetOrientation());
     _state = State::LookingForAWayRound;
     PLAYERBOT_LOG_DETAIL(player,
         "mod-playerbots: {} stopped to look for a way round ({}). Mapping the ground she can walk within {:.0f} yards of ({:.2f}, {:.2f}, {:.2f}); {} bot(s) are in line ahead of her.",
-        player->GetName(), reason, WAY_ROUND_YARDS, x, y, z, uint32(WayRoundTurns.Waiting() - 1));
+        player->GetName(), reason, _wayRoundYards, x, y, z, uint32(WayRoundTurns.Waiting() - 1));
     return true;
+}
+
+// A fresh map of the ground within this many yards of the feet she stands on while she looks.
+void PlayerbotWalker::StartWayRoundMap(Player* player, float yards)
+{
+    PlayerbotWalkMapSettings settings;
+    settings.OriginX = _lastGrounded.GetPositionX();
+    settings.OriginY = _lastGrounded.GetPositionY();
+    settings.OriginZ = _lastGrounded.GetPositionZ();
+    settings.Spacing = std::clamp(HeartbeatStepLen(player), WAY_ROUND_MIN_SPACING, WAY_ROUND_MAX_SPACING);
+    settings.StepYards = HeartbeatStepLen(player);
+    settings.Radius = yards;
+    settings.MaxClimbDegrees = MaxWalkableSlopeDegrees;
+    settings.MaxDropYards = MaxDownStepYards;
+    settings.LayerYards = WAY_ROUND_LAYER_YARDS;
+    settings.MaxSpots = WAY_ROUND_MAX_SPOTS;
+
+    _wayRoundMap = std::make_unique<PlayerbotWalkMap>(settings);
+    _wayRoundYards = yards;
 }
 
 void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
@@ -2409,6 +2419,18 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
         if (StartWayRoundWalk(player))
             return;
 
+        // Nothing closer inside the small circle. Ground she can walk that carries on past it may lead round further out,
+        // so she maps the full circle, keeping her turn. When all she can reach is inside, the full map would be the same.
+        if (_wayRoundYards < WAY_ROUND_YARDS && PlayerbotWalkMapWorthWidening(*_wayRoundMap))
+        {
+            PLAYERBOT_LOG_DETAIL(player,
+                "mod-playerbots: {} has nothing {:.0f} yards closer within {:.0f} yards, and the ground she can walk carries on past it, so she maps {:.0f} yards.",
+                player->GetName(), WAY_ROUND_MIN_GAIN_YARDS, _wayRoundYards, WAY_ROUND_YARDS);
+            WayRoundTurns.NoteWidened();
+            StartWayRoundMap(player, WAY_ROUND_YARDS);
+            return;
+        }
+
         PlayerbotWalkMapWayRoundSettings waysOut;
         waysOut.DestinationX = _destination.GetPositionX();
         waysOut.DestinationY = _destination.GetPositionY();
@@ -2444,11 +2466,11 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
     if (_wayRoundFirstStepRefused)
         TC_LOG_INFO(PLAYERBOTS_LOG,
             "mod-playerbots: {} found no way round: the map found {} spots she can walk to within {:.0f} yards, but every way round or way out she tried was refused at her first step. She cannot step anywhere from where she stands.",
-            player->GetName(), summary.Reached, WAY_ROUND_YARDS);
+            player->GetName(), summary.Reached, _wayRoundYards);
     else
         TC_LOG_INFO(PLAYERBOTS_LOG,
             "mod-playerbots: {} found no way round: none of the {} spots she can walk to within {:.0f} yards is {:.0f} yards closer to where she is going, and the navmesh had no route she can start from any of the {} way(s) out. {}",
-            player->GetName(), summary.Reached, WAY_ROUND_YARDS, WAY_ROUND_MIN_GAIN_YARDS, uint32(waysOut),
+            player->GetName(), summary.Reached, _wayRoundYards, WAY_ROUND_MIN_GAIN_YARDS, uint32(waysOut),
             _failedAtHerFeet ? "She cannot step anywhere from where she stands." : "Looking for other work.");
 }
 

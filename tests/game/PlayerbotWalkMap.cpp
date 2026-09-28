@@ -15,6 +15,7 @@
 #include "tc_catch2.h"
 
 #include "../../modules/mod-playerbots/src/PlayerbotWalkMap.h"
+#include "../../modules/mod-playerbots/src/PlayerbotWalkMapEscape.h"
 #include "../../modules/mod-playerbots/src/PlayerbotWalkMapPage.h"
 #include <functional>
 #include <string>
@@ -174,6 +175,38 @@ TEST_CASE("Playerbot walk map shows a pocket she can walk down into but not out 
     for (PlayerbotWalkMapSpot const& spot : spots)
         if (spot.Reached)
             CHECK(spot.Z < 1.0f);
+}
+
+TEST_CASE("Playerbot walk map is widened only when her ground carries on past it", "[playerbots][walk-map]")
+{
+    // Open ground runs past a small map, so a wider one could find a way round further out.
+    {
+        TestWorld world;
+        PlayerbotWalkMap map(Settings(20.0f));
+        Finish(map, world);
+        CHECK(PlayerbotWalkMapWorthWidening(map));
+    }
+
+    // Everything she can reach in the bowl lies inside a small map, so a wider one would find the same ground.
+    {
+        TestWorld world;
+        world.Floors = BowlFloors;
+        PlayerbotWalkMap map(Settings(20.0f));
+        Finish(map, world);
+        CHECK_FALSE(PlayerbotWalkMapWorthWidening(map));
+    }
+
+    // A map that stopped at its floor limit is not the whole of her ground.
+    {
+        TestWorld world;
+        world.Floors = BowlFloors;
+        PlayerbotWalkMapSettings settings = Settings(20.0f);
+        settings.MaxSpots = 10;
+        PlayerbotWalkMap map(settings);
+        Finish(map, world);
+        REQUIRE(map.HitSpotLimit());
+        CHECK(PlayerbotWalkMapWorthWidening(map));
+    }
 }
 
 TEST_CASE("Playerbot walk map finds one-way ground she can walk down but not back up", "[playerbots][walk-map]")

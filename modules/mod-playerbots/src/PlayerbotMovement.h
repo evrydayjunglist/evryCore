@@ -100,6 +100,8 @@ public:
             || _state == State::LookingForAWayRound;
     }
     bool IsJumping() const { return _state == State::Jumping; }
+    // Walking a route on her heartbeats: not in the air, not standing still to look for a way round.
+    bool IsWalkingARoute() const { return _state == State::Moving; }
     bool HasArrived() const { return _state == State::Arrived; }
     bool HasFailed() const { return _state == State::Failed; }
     // The walk failed because the ground she mapped around her feet has no spot she can step to, whatever she was

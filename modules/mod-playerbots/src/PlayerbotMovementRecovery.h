@@ -32,7 +32,8 @@ enum class PlayerbotRecoveryGoalKind : std::uint8_t
     MapGameObjectObjective,
     MapUseItemObjective,
     MapItemObjective,
-    Graveyard
+    Graveyard,
+    PartyLeader
 };
 
 struct PlayerbotRecoveryGoal
@@ -88,6 +89,8 @@ inline char const* PlayerbotRecoveryGoalKindName(PlayerbotRecoveryGoalKind kind)
             return "map item objective";
         case PlayerbotRecoveryGoalKind::Graveyard:
             return "graveyard";
+        case PlayerbotRecoveryGoalKind::PartyLeader:
+            return "party leader";
     }
 
     return "unknown";

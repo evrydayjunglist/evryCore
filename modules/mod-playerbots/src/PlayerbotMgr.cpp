@@ -91,6 +91,13 @@ namespace
     constexpr uint32 FLEE_MAX_LEGS = 8;
     // A stretch that ends this close to a hostile monster she can see would pull another one.
     constexpr float FLEE_CLEAR_OF_HOSTILES_YARDS = 20.0f;
+    // Farther than this from her party leader she walks after them, and stops this close. She aims the walk again only
+    // once her leader is this far from where the walk was aimed.
+    constexpr float FOLLOW_START_YARDS = 10.0f;
+    constexpr float FOLLOW_STAND_YARDS = 3.0f;
+    constexpr float FOLLOW_REAIM_YARDS = 5.0f;
+    // After a walk to her leader fails she waits this long before she tries again.
+    constexpr uint32 FOLLOW_RETRY_MS = 5000;
     std::string NormalizeLoginMode(std::string_view value)
     {
         while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
@@ -515,6 +522,66 @@ namespace
         if (!UsesMana(player))
             return false;
         return 100.0f * float(player->GetPower(POWER_MANA)) / float(player->GetMaxPower(POWER_MANA)) < REST_BELOW_MANA_PCT;
+    }
+
+    // She is going for something of her own: a fight, a quest giver, a quest object, loot, a vendor, or away from a fight.
+    bool HasLivingTarget(PlayerbotRecord const& bot)
+    {
+        return !bot.CombatTarget.CreatureGuid.IsEmpty() || bot.CombatTarget.QuestId
+            || !bot.QuestTarget.NpcGuid.IsEmpty()
+            || bot.GameObjectTarget.QuestId
+            || bot.UseItemOnUnitTarget.QuestId
+            || bot.ItemLootTarget.QuestId || bot.ItemLootTarget.LootCorpse
+            || !bot.VendorTarget.NpcGuid.IsEmpty()
+            || bot.Fleeing;
+    }
+
+    // What her party leader is fighting: the monster the leader is attacking, else the nearest one hitting the leader or
+    // anyone else in the party on her map. Only a monster she can see and may attack. A monster the leader has only
+    // selected is not a fight yet.
+    Creature* PickAssistTarget(Player* player, Player* leader, std::unordered_set<ObjectGuid> const& skip)
+    {
+        if (!leader->IsAlive() || !leader->IsInCombat())
+            return nullptr;
+
+        auto usable = [player, &skip](Unit* unit) -> Creature*
+        {
+            Creature* creature = unit ? unit->ToCreature() : nullptr;
+            if (!creature || !creature->IsAlive() || skip.count(creature->GetGUID())
+                || !player->IsValidAttackTarget(creature) || !player->CanSeeOrDetect(creature))
+                return nullptr;
+            return creature;
+        };
+
+        if (Creature* victim = usable(leader->GetVictim()))
+            return victim;
+
+        Creature* best = nullptr;
+        float bestDist = std::numeric_limits<float>::max();
+        auto consider = [&](Player* member)
+        {
+            if (!member || member == player || !member->IsInWorld() || member->GetMap() != player->GetMap())
+                return;
+
+            for (Unit* attacker : member->getAttackers())
+            {
+                Creature* creature = usable(attacker);
+                if (!creature)
+                    continue;
+
+                float const dist = player->GetExactDist(creature);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = creature;
+                }
+            }
+        };
+
+        consider(leader);
+        if (Group* group = player->GetGroup())
+            group->BroadcastWorker(consider);
+        return best;
     }
 
     // Stay on this fight after a close-in walk fails: in melee, or this creature is hitting her.
@@ -2459,10 +2526,18 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         else if (bot.QuestTarget.QuestId)
             skipFailedQuestId = bot.QuestTarget.QuestId;
 
+        bool const followWalkFailed = !bot.FollowLeader.IsEmpty() && !HasLivingTarget(bot);
         RecoverFailedWalk(bot, player);
+        if (followWalkFailed && !bot.StuckFeetWaitMs)
+        {
+            bot.FollowRetryMs = FOLLOW_RETRY_MS;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} could not walk to her party leader. She tries again in {} seconds.",
+                player->GetName(), FOLLOW_RETRY_MS / IN_MILLISECONDS);
+        }
     }
 
-    if (bot.Walker.IsMoving() && bot.Walker.StartedOnAFace() && !bot.LookedForOtherYellowOnFace)
+    // A walk after her party leader is not quest work; a face on the way is no reason to look for another quest spot.
+    if (bot.Walker.IsMoving() && bot.Walker.StartedOnAFace() && !bot.LookedForOtherYellowOnFace && bot.FollowLeader.IsEmpty())
     {
         bot.LookedForOtherYellowOnFace = true;
         if (TryLeaveFaceForOtherYellow(bot, player))
@@ -2509,9 +2584,15 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
     }
 
+    // In a party led by a human player on her map, she follows and helps her leader instead of picking her own work.
+    Player* const leader = PartyLeaderToFollow(player);
+    NoteFollowLeader(bot, player, leader);
+    if (leader && UpdateFollow(bot, player, leader, diff))
+        return;
+
     // Hurt or out of mana between fights, she sits down before she walks or pulls again. A corpse at her feet and a
     // quest giver in talking range come first, as they would for a player. Whatever she was going to do next is kept
-    // and carries on when she stands up.
+    // and carries on when she stands up. Beside her party leader, looting was already her choice and she talks to no one.
     if (!bot.Walker.IsMoving()
         && bot.CombatTarget.CreatureGuid.IsEmpty()
         && bot.QuestTarget.NpcGuid.IsEmpty()
@@ -2519,7 +2600,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         && bot.VendorTarget.NpcGuid.IsEmpty()
         && NeedsRest(player))
     {
-        if (TryImmediateWorld(bot, player, false, false))
+        if (!leader && TryImmediateWorld(bot, player, false, false))
             return;
 
         bot.Death = PlayerbotDeathWork::SitRecover;
@@ -2534,6 +2615,10 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         UpdateSitRecover(bot, player, diff);
         return;
     }
+
+    // Following: no quest map work and no vendor trip of her own.
+    if (leader)
+        return;
 
     if (bot.Walker.HasArrived() && !bot.QuestTarget.NpcGuid.IsEmpty())
     {
@@ -2905,6 +2990,24 @@ bool PlayerbotMgr::UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32
         }
         ClearDeath(bot);
         return false;
+    }
+
+    // Her party leader walked off or started a fight: she gets up and goes with them.
+    if (Player* leader = player->IsAlive() ? PartyLeaderToFollow(player) : nullptr)
+    {
+        bool const leaderFights = leader->IsAlive() && leader->IsInCombat();
+        bool const leaderWalkedOff = leader->IsAlive() && !leader->IsInFlight() && player->GetExactDist(leader) > FOLLOW_START_YARDS;
+        if (leaderFights || leaderWalkedOff)
+        {
+            if (player->IsSitState())
+            {
+                PlayerbotClient::QueueStandStateChange(player->GetSession(), UNIT_STAND_STATE_STAND);
+                TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stood up before health was full; her party leader {} {}.",
+                    player->GetName(), leader->GetName(), leaderFights ? "is in a fight" : "walked off");
+            }
+            ClearDeath(bot);
+            return false;
+        }
     }
 
     if (HealthAndManaAreFull(player))
@@ -4153,6 +4256,153 @@ bool PlayerbotMgr::UpdateFlee(PlayerbotRecord& bot, Player* player, uint32 diff,
     bot.Fleeing = false;
     bot.FleeGaveUp = true;
     return false;
+}
+
+Player* PlayerbotMgr::PartyLeaderToFollow(Player* player) const
+{
+    Group* group = player ? player->GetGroup() : nullptr;
+    if (!group)
+        return nullptr;
+
+    ObjectGuid const leaderGuid = group->GetLeaderGUID();
+    if (leaderGuid.IsEmpty() || leaderGuid == player->GetGUID())
+        return nullptr;
+
+    Player* leader = ObjectAccessor::GetPlayer(*player, leaderGuid);
+    if (!leader || !leader->IsInWorld() || leader->IsBeingTeleported() || !leader->GetSession()
+        || leader->GetMap() != player->GetMap())
+        return nullptr;
+
+    // Another bot leading the party is not someone she follows.
+    if (IsBotAccount(leader->GetSession()->GetAccountId()))
+        return nullptr;
+
+    return leader;
+}
+
+void PlayerbotMgr::NoteFollowLeader(PlayerbotRecord& bot, Player* player, Player* leader)
+{
+    ObjectGuid const leaderGuid = leader ? leader->GetGUID() : ObjectGuid::Empty;
+    if (leaderGuid == bot.FollowLeader)
+        return;
+
+    bool const wasFollowing = !bot.FollowLeader.IsEmpty();
+    // A walk after the old leader is dropped; a fight, a corpse she is looting, or a run from a fight carries on.
+    if (wasFollowing && bot.Walker.IsMoving() && !HasLivingTarget(bot))
+    {
+        bot.Walker.Stop(player);
+        bot.Walker.Reset();
+    }
+
+    bot.FollowLeader = leaderGuid;
+    bot.FollowAim.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    bot.FollowRetryMs = 0;
+
+    if (!leader)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no party leader on her map to follow any more. She carries on with her own quests.",
+            player->GetName());
+        return;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} follows her party leader {} and fights what they fight. She stops her own quest work.",
+        player->GetName(), leader->GetName());
+
+    // Her own quest work stops. A fight with something hitting her, corpse loot, and a run from a fight are kept.
+    bool const keepFight = !bot.CombatTarget.CreatureGuid.IsEmpty() && CreatureIsHittingPlayer(player, bot.CombatTarget.CreatureGuid);
+    if (bot.Fleeing)
+        return;
+
+    if (!keepFight && !bot.ItemLootTarget.LootCorpse)
+    {
+        if (bot.Walker.IsMoving())
+            bot.Walker.Stop(player);
+        bot.Walker.Reset();
+    }
+    if (!keepFight)
+        ClearCombat(bot, player);
+    if (!bot.ItemLootTarget.LootCorpse)
+        ClearItemLoot(bot);
+    ClearVendor(bot);
+    bot.QuestTarget = {};
+    bot.GameObjectTarget = {};
+    bot.UseItemOnUnitTarget = {};
+    ClearUseItemCast(bot);
+    bot.QuestArriveWaitMs = 0;
+    bot.QuestSearchEmptyMs = 0;
+    bot.LookedForOtherYellowOnFace = false;
+}
+
+bool PlayerbotMgr::UpdateFollow(PlayerbotRecord& bot, Player* player, Player* leader, uint32 diff)
+{
+    if (bot.FollowRetryMs)
+        bot.FollowRetryMs = bot.FollowRetryMs > diff ? bot.FollowRetryMs - diff : 0;
+    if (bot.StuckFeetWaitMs)
+        bot.StuckFeetWaitMs = bot.StuckFeetWaitMs > diff ? bot.StuckFeetWaitMs - diff : 0;
+
+    // Help with the leader's fight before anything else of her own.
+    if (Creature* target = PickAssistTarget(player, leader, bot.UnreachableGuids))
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} helps her party leader {} fight {}.",
+            player->GetName(), leader->GetName(), target->GetGUID().ToString());
+        PlayerbotClient::CombatTarget fight;
+        fight.CreatureGuid = target->GetGUID();
+        fight.Pos = player->IsWithinMeleeRange(target) ? player->GetPosition() : target->GetPosition();
+        BeginCombatTarget(bot, player, fight);
+        return true;
+    }
+
+    // A dead leader, or one on a flight path, is not walked after; she waits where she is.
+    bool const followable = leader->IsAlive() && !leader->IsInFlight();
+    PlayerbotRecoveryGoal const goal = GuidRecoveryGoal(player, PlayerbotRecoveryGoalKind::PartyLeader, leader->GetGUID());
+
+    if (bot.Walker.IsMoving() && !HasLivingTarget(bot))
+    {
+        if (!followable)
+        {
+            bot.Walker.Stop(player);
+            bot.Walker.Reset();
+            return true;
+        }
+
+        // Aim again only once the leader has moved well away from where this walk ends, not every tick.
+        if (bot.Walker.IsWalkingARoute() && leader->GetExactDist(bot.FollowAim) > FOLLOW_REAIM_YARDS)
+        {
+            bot.FollowAim = leader->GetPosition();
+            bot.Walker.Start(player, bot.FollowAim, FOLLOW_STAND_YARDS, goal);
+        }
+        return true;
+    }
+
+    if (bot.Walker.HasArrived() && !HasLivingTarget(bot))
+        bot.Walker.Reset();
+
+    float const leaderDist = player->GetExactDist(leader);
+    if (followable && leaderDist > FOLLOW_START_YARDS)
+    {
+        if (bot.FollowRetryMs || bot.StuckFeetWaitMs)
+            return true;
+
+        // She has moved on; what she could not reach from the old place may be reachable from the new one.
+        ClearUnreachable(bot);
+        bot.FollowAim = leader->GetPosition();
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walks after her party leader {}, {:.1f} yards away.",
+            player->GetName(), leader->GetName(), leaderDist);
+        bot.Walker.Start(player, bot.FollowAim, FOLLOW_STAND_YARDS, goal);
+        return true;
+    }
+
+    // Beside her leader, or waiting for one she cannot walk after. A fight is not over while the leader is still in one.
+    if (leader->IsAlive() && leader->IsInCombat())
+        return true;
+
+    if (Optional<PlayerbotClient::ItemLootTarget> loot = PlayerbotClient::FindNearbyItemLootTarget(player, LOOT_SEARCH_RANGE, bot.UnreachableGuids, false))
+    {
+        if (loot->LootCorpse && BeginItemWork(bot, player, *loot))
+            return true;
+    }
+
+    return !NeedsRest(player);
 }
 
 bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target)

@@ -144,6 +144,11 @@ struct PlayerbotRecord
     // The party invite window she has open: who sent it and how long she has had it.
     ObjectGuid InviteFrom;
     uint32 InviteOpenMs = 0;
+    // The party leader she follows, where her walk after them was aimed, and how long to wait before she tries again
+    // after that walk failed.
+    ObjectGuid FollowLeader;
+    Position FollowAim;
+    uint32 FollowRetryMs = 0;
     CommandablePlayerState Command;
     Position CommandDestination;
     bool CommandMovePending = false;
@@ -242,6 +247,12 @@ private:
     bool TryBeginFlee(PlayerbotRecord& bot, Player* player);
     bool UpdateFlee(PlayerbotRecord& bot, Player* player, uint32 diff, bool walkerUpdated);
     bool StartFleeLeg(PlayerbotRecord& bot, Player* player);
+    // Her party leader when that is a human player on her map, otherwise null.
+    Player* PartyLeaderToFollow(Player* player) const;
+    void NoteFollowLeader(PlayerbotRecord& bot, Player* player, Player* leader);
+    // True while following takes this tick. False only when she stands beside her leader, nothing is going on, and she
+    // may sit down to rest.
+    bool UpdateFollow(PlayerbotRecord& bot, Player* player, Player* leader, uint32 diff);
     void ClearItemLoot(PlayerbotRecord& bot);
     bool UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target);

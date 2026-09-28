@@ -23,10 +23,12 @@
 #include "PlayerbotMovementRecovery.h"
 #include "PlayerbotPathSearch.h"
 #include "PlayerbotWalkMapEscape.h"
+#include "PlayerbotWayRoundTurns.h"
 #include "Position.h"
 #include <G3D/Vector3.h>
 #include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
 class Player;
@@ -89,6 +91,9 @@ public:
     static float HeartbeatStepLength(Player const* player);
     // Starts this world tick's shared budget for mapping the ground around bots that are looking for a way round.
     static void BeginWorldTick();
+    // One sentence on the way-round looks since the last call: how many started and why, how they ended, and how long
+    // bots waited for their turn. Then it starts counting again.
+    static std::string DescribeWayRoundLooksAndClear();
     // The destination of the last walk she started, and its map. It is kept after that walk ends so a diagnostic can
     // still show where she was going.
     bool LastWalkDestination(Position& out, uint32& mapId) const;
@@ -213,6 +218,8 @@ private:
     // Are the first yards of this route walkable from there by her step rules?
     static bool RouteStartsWalkable(Player* player, Position const& from, std::vector<G3D::Vector3> const& path);
     void ClearWayRound();
+    // Her look is over: give up her place in the line of bots taking turns to map, and count how it ended.
+    void EndWayRoundTurn(PlayerbotWayRoundEnd end);
     void ResetNow();
     static char const* GroundedStepFailureName(GroundedStepFailure failure);
     void Fail(Player* player, char const* reason);
@@ -272,8 +279,13 @@ private:
     int32 _wayRoundTarget = -1;
     uint32 _wayRoundRepairs = 0;
     WayRoundPhase _wayRoundPhase = WayRoundPhase::Mapping;
+    // Time spent mapping since her first turn. Time waiting in line for it does not count against her.
     uint32 _wayRoundMs = 0;
     uint32 _wayRoundMapId = 0;
+    // Her place in the line of bots taking turns to map the ground, or 0.
+    uint64 _wayRoundTicket = 0;
+    uint32 _wayRoundWaitMs = 0;
+    bool _wayRoundHadATurn = false;
     // The path she is walking is a way round the map found, not a navmesh route.
     bool _walkingAWayRound = false;
     // One look per approach. A second one would only find the same ground.

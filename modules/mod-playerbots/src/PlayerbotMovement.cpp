@@ -112,12 +112,13 @@ namespace
     // World-thread time one tick may spend mapping the ground for one bot.
     constexpr std::chrono::milliseconds WAY_ROUND_SLICE{ 5 };
     constexpr size_t WAY_ROUND_SPOTS_PER_CLOCK_CHECK = 8;
-    // The map has to finish inside this, or she gives the walk up instead of standing there.
+    // The map has to finish inside this, counted from her first turn, or she gives the walk up instead of standing there.
     constexpr uint32 WAY_ROUND_TIMEOUT_MS = 20000;
     // However many bots are looking at once, this is all the world-thread time one tick spends mapping ground for them.
-    // The rest of them wait for a later tick.
+    // The bots at the front of the line share it; the rest wait for their turn.
     constexpr std::chrono::milliseconds WAY_ROUND_TICK_BUDGET{ 10 };
     std::chrono::steady_clock::duration WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
+    PlayerbotWayRoundTurns WayRoundTurns;
     // Stopping short again near an earlier short stop on the same approach, and not a yard closer, means mmap does not lead closer.
     constexpr float SHORT_STOP_REPEAT_YARDS = 5.0f;
     constexpr float SHORT_STOP_PROGRESS_YARDS = 1.0f;
@@ -700,6 +701,7 @@ void PlayerbotWalker::ResetNow()
 
 void PlayerbotWalker::ClearWayRound()
 {
+    EndWayRoundTurn(PlayerbotWayRoundEnd::Abandoned);
     _wayRoundMap.reset();
     _wayRoundWaysOut.clear();
     _wayRoundProbe = 0;
@@ -708,12 +710,29 @@ void PlayerbotWalker::ClearWayRound()
     _wayRoundPhase = WayRoundPhase::Mapping;
     _wayRoundMs = 0;
     _wayRoundMapId = 0;
+    _wayRoundWaitMs = 0;
+    _wayRoundHadATurn = false;
 }
 
-// One world tick's mapping time is shared by every bot looking for a way round.
+void PlayerbotWalker::EndWayRoundTurn(PlayerbotWayRoundEnd end)
+{
+    if (!_wayRoundTicket)
+        return;
+    WayRoundTurns.NoteEnd(end, _wayRoundWaitMs);
+    WayRoundTurns.Leave(_wayRoundTicket);
+    _wayRoundTicket = 0;
+}
+
+// One world tick's mapping time is shared by the bots at the front of the line looking for a way round.
 void PlayerbotWalker::BeginWorldTick()
 {
     WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
+    WayRoundTurns.BeginTick();
+}
+
+std::string PlayerbotWalker::DescribeWayRoundLooksAndClear()
+{
+    return WayRoundTurns.DescribeWindowAndClear();
 }
 
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out,
@@ -1088,7 +1107,9 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             _faceRecovery.Refuse();
             if (BeginWayRound(player, "the route she was walking went nowhere"))
                 return;
-            if (!TryLeaveFace(player, true))
+            // She already looked once on this approach. Leaving the face again only rejoins a route that has
+            // already gone nowhere, and this check would refuse it again on the next heartbeat.
+            if (_lookedForAWayRound || !TryLeaveFace(player, true))
                 FailNoLegalRing(player);
             return;
         }
@@ -2289,21 +2310,24 @@ bool PlayerbotWalker::BeginWayRound(Player* player, char const* reason)
     _wayRoundPhase = WayRoundPhase::Mapping;
     _wayRoundMs = 0;
     _wayRoundMapId = player->GetMapId();
+    EndWayRoundTurn(PlayerbotWayRoundEnd::Abandoned);
+    _wayRoundTicket = WayRoundTurns.Join(reason);
+    _wayRoundWaitMs = 0;
+    _wayRoundHadATurn = false;
     _walkingAWayRound = false;
     _lookedForAWayRound = true;
     _wayRoundFirstStepRefused = false;
     _lastGrounded.Relocate(x, y, z, _lastGrounded.GetOrientation());
     _state = State::LookingForAWayRound;
     PLAYERBOT_LOG_DETAIL(player,
-        "mod-playerbots: {} stopped to look for a way round ({}). Mapping the ground she can walk within {:.0f} yards of ({:.2f}, {:.2f}, {:.2f}).",
-        player->GetName(), reason, WAY_ROUND_YARDS, x, y, z);
+        "mod-playerbots: {} stopped to look for a way round ({}). Mapping the ground she can walk within {:.0f} yards of ({:.2f}, {:.2f}, {:.2f}); {} bot(s) are in line ahead of her.",
+        player->GetName(), reason, WAY_ROUND_YARDS, x, y, z, uint32(WayRoundTurns.Waiting() - 1));
     return true;
 }
 
 void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
 {
     PlayerbotCostTimer const cost(PlayerbotCostStep::WayRoundMap);
-    _wayRoundMs += diff;
     Map* map = player->FindMap();
     if (!_wayRoundMap || !map || player->GetMapId() != _wayRoundMapId || !player->IsAlive() || player->IsBeingTeleported()
         || !player->movespline->Finalized())
@@ -2313,7 +2337,28 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
         return;
     }
 
-    // Another bot may already have spent this tick's mapping time. Then she simply looks on a later tick.
+    // She was dropped from the line for missing her turn, which only happens when her updates stopped for a while.
+    if (!WayRoundTurns.InLine(_wayRoundTicket))
+        _wayRoundTicket = WayRoundTurns.Join("back in line after missing her turn");
+
+    // Bots map in the order they stopped. Waiting in line does not count against her own time limit.
+    if (!WayRoundTurns.IsHerTurn(_wayRoundTicket))
+    {
+        if (!_wayRoundHadATurn)
+            _wayRoundWaitMs += diff;
+        return;
+    }
+    if (!_wayRoundHadATurn)
+    {
+        _wayRoundHadATurn = true;
+        if (_wayRoundWaitMs)
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} waited {:.1f} s for her turn to map the ground.",
+                player->GetName(), _wayRoundWaitMs / 1000.0f);
+    }
+    else
+        _wayRoundMs += diff;
+
+    // The other bot at the front of the line may already have spent this tick's mapping time. Then she maps on the next.
     if (WayRoundSpentThisTick >= WAY_ROUND_TICK_BUDGET)
         return;
 
@@ -2329,6 +2374,7 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
     {
         if (_wayRoundMs >= WAY_ROUND_TIMEOUT_MS)
         {
+            EndWayRoundTurn(PlayerbotWayRoundEnd::TookTooLong);
             ClearWayRound();
             Fail(player, "mapping the ground around her took too long");
         }
@@ -2366,6 +2412,7 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
 
     PlayerbotWalkMapSummary const summary = _wayRoundMap->Summarize();
     size_t const waysOut = _wayRoundWaysOut.size();
+    EndWayRoundTurn(PlayerbotWayRoundEnd::FoundNone);
     ClearWayRound();
     _state = State::Failed;
     _contouring = false;
@@ -2466,6 +2513,8 @@ bool PlayerbotWalker::WalkTheWayRound(Player* player, PlayerbotWalkMapWayRound c
     }
 
     bool const alreadyMoving = wasIn == State::Moving;
+    if (wasIn == State::LookingForAWayRound)
+        EndWayRoundTurn(PlayerbotWayRoundEnd::Found);
     _walkingAWayRound = true;
     _wayRoundTarget = way.Target;
     // This walk is her own, not a rejoin of the route that refused her.

@@ -954,6 +954,8 @@ void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
         // Steps sit inside each other (a navmesh route inside a stand spot pick), so the steps add up to more than the whole.
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bot updates spent {:.1f} ms in all, on: {}.",
             report.WindowMs / 1000, _windowBotsMicros / 1000.0, _windowCost.Describe(_windowBotsMicros));
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s {}", report.WindowMs / 1000,
+            PlayerbotWalker::DescribeWayRoundLooksAndClear());
     }
     _windowCost.Clear();
     _windowBotsMicros = 0;

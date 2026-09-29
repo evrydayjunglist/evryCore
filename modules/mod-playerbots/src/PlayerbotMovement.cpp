@@ -35,6 +35,7 @@
 #include "PlayerbotLogDetail.h"
 #include "PlayerbotPathSearch.h"
 #include "PlayerbotServerMovement.h"
+#include "PlayerbotStandSpotMemory.h"
 #include "PlayerbotUpdateCost.h"
 #include "PlayerbotWalkMapEscape.h"
 #include "PlayerbotWalkMapServerWorld.h"
@@ -123,6 +124,12 @@ namespace
     constexpr std::chrono::milliseconds WAY_ROUND_TICK_BUDGET{ 10 };
     std::chrono::steady_clock::duration WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
     PlayerbotWayRoundTurns WayRoundTurns;
+    // Stand spots picked in the last few seconds, by bot, so the same question from the same feet is not asked again.
+    PlayerbotStandSpotMemory StandSpots;
+    // A navmesh route is never shorter than the straight line from her feet to its end. Its ends sit on the navmesh
+    // rather than exactly at her feet and the stand spot, so the straight line is taken this much shorter before a side
+    // is judged unable to beat the best route found.
+    constexpr float STAND_SPOT_ROUTE_SLACK_YARDS = 2.0f;
     // Stopping short again near an earlier short stop on the same approach, and not a yard closer, means mmap does not lead closer.
     constexpr float SHORT_STOP_REPEAT_YARDS = 5.0f;
     constexpr float SHORT_STOP_PROGRESS_YARDS = 1.0f;
@@ -786,6 +793,26 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
     if (!player || !target)
         return false;
 
+    PlayerbotStandSpotMemory::Question question;
+    question.Bot = player->GetGUID().GetCounter();
+    question.TargetLow = target->GetGUID().GetRawValue(0);
+    question.TargetHigh = target->GetGUID().GetRawValue(1);
+    question.MapId = player->GetMapId();
+    question.StandDistance = standDistance;
+    question.Feet = { player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() };
+    question.Target = { target->GetPositionX(), target->GetPositionY(), target->GetPositionZ() };
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    // A look for a log line wants every side, so it always asks the navmesh.
+    PlayerbotStandSpotMemory::Answer answer;
+    if (!look && StandSpots.Recall(question, nowMs, answer))
+    {
+        if (!answer.Found)
+            return false;
+        out.Relocate(answer.X, answer.Y, answer.Z, answer.Orientation);
+        return true;
+    }
+
     std::vector<AvoidCircle> avoids;
     CollectSpellFocusAvoids(player, 50.0f, avoids);
     CollectSpellFocusAvoids(target, 20.0f, avoids);
@@ -803,10 +830,16 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         0.0f
     };
 
-    Position best;
-    float bestLen = std::numeric_limits<float>::max();
-    bool found = false;
-    bool foundClear = false;
+    struct Side
+    {
+        float X;
+        float Y;
+        float Z;
+        float Angle;
+        float FromFeet;
+    };
+    std::array<Side, std::size(offsets)> sides;
+    std::size_t sideCount = 0;
 
     for (float offset : offsets)
     {
@@ -828,13 +861,39 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
             continue;
         }
 
+        sides[sideCount++] = { x, y, z, angle, player->GetExactDist(x, y, z) };
+    }
+
+    // Nearest sides first. A route is never shorter than the straight line to its end, so once a clear route is found
+    // no shorter than the straight line to the next side, no side left can have a shorter route and none is asked about.
+    // A look for a log line keeps the old order and asks about every side.
+    if (!look)
+        std::stable_sort(sides.begin(), sides.begin() + sideCount, [](Side const& a, Side const& b) { return a.FromFeet < b.FromFeet; });
+
+    Position best;
+    float bestLen = std::numeric_limits<float>::max();
+    bool found = false;
+    bool foundClear = false;
+    uint32 asked = 0;
+    uint32 notNeeded = 0;
+
+    for (std::size_t i = 0; i < sideCount; ++i)
+    {
+        Side const& side = sides[i];
+        if (!look && foundClear && side.FromFeet - STAND_SPOT_ROUTE_SLACK_YARDS >= bestLen)
+        {
+            notNeeded = uint32(sideCount - i);
+            break;
+        }
+
         // Asking about eight sides of the target keeps the short search, so a far target stays cheap to look at: the work
         // finders ask this of many targets in one pick. A side the short search could not settle is still a side she may
         // reach: it found the route and a short path could not hold it, or it ran out of search nodes on the way. The walk
         // itself asks the long search for that route, and a target no route reaches fails that walk the usual way.
+        ++asked;
         PathGenerator generator(player, NavMeshChoice::PlayerBody);
         PlayerbotCostTimer const cost(PlayerbotCostStep::NavmeshRoute);
-        if (!generator.CalculatePath(x, y, z, false))
+        if (!generator.CalculatePath(side.X, side.Y, side.Z, false))
         {
             if (look)
                 look->emplace_back().What = StandSpotLook::Outcome::NotOnMap;
@@ -861,7 +920,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         {
             if (!foundClear || len < bestLen)
             {
-                best.Relocate(x, y, z, Position::NormalizeOrientation(angle + float(M_PI)));
+                best.Relocate(side.X, side.Y, side.Z, Position::NormalizeOrientation(side.Angle + float(M_PI)));
                 bestLen = len;
                 foundClear = true;
                 found = true;
@@ -869,17 +928,40 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         }
         else if (!foundClear && (!found || len < bestLen))
         {
-            best.Relocate(x, y, z, Position::NormalizeOrientation(angle + float(M_PI)));
+            best.Relocate(side.X, side.Y, side.Z, Position::NormalizeOrientation(side.Angle + float(M_PI)));
             bestLen = len;
             found = true;
         }
     }
+
+    StandSpots.NoteSides(asked, notNeeded);
+    answer = {};
+    answer.Found = found;
+    if (found)
+    {
+        answer.X = best.GetPositionX();
+        answer.Y = best.GetPositionY();
+        answer.Z = best.GetPositionZ();
+        answer.Orientation = best.GetOrientation();
+    }
+    StandSpots.Remember(question, nowMs, answer);
 
     if (!found)
         return false;
 
     out = best;
     return true;
+}
+
+void PlayerbotWalker::ForgetStandSpots(Player const* player)
+{
+    if (player)
+        StandSpots.Forget(player->GetGUID().GetCounter());
+}
+
+std::string PlayerbotWalker::DescribeStandSpotsAndClear()
+{
+    return StandSpots.DescribeWindowAndClear();
 }
 
 bool PlayerbotWalker::Start(Player* player, Position const& destination, float stopDistance, PlayerbotRecoveryGoal const& goal)

@@ -85,6 +85,11 @@ public:
     // it asked about came out, so a log line can say why none would do.
     static bool PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out,
         std::vector<StandSpotLook>* look = nullptr);
+    // Drop the stand spots she picked in the last few seconds: she logged out.
+    static void ForgetStandSpots(Player const* player);
+    // One sentence on the stand spot picks since the last call: how many, how many were answered from memory, and how
+    // many sides were asked about. Then it starts counting again.
+    static std::string DescribeStandSpotsAndClear();
 
     // One grounded step from these feet toward (x, y), planted and judged exactly as a walk heartbeat is: the floor
     // search from her feet plus her climb, the slope and drop limits, and the chest-height ray. out holds the planted

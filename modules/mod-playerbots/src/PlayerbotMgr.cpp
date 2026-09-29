@@ -1006,6 +1006,8 @@ void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
             PlayerbotWalker::DescribeWayRoundLooksAndClear());
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bots made {}", report.WindowMs / 1000,
             _mapPickTurns.DescribeWindowAndClear());
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bots made {}", report.WindowMs / 1000,
+            PlayerbotWalker::DescribeStandSpotsAndClear());
     }
     _windowCost.Clear();
     _windowBotsMicros = 0;
@@ -1725,6 +1727,8 @@ void PlayerbotMgr::OnPlayerLogout(Player* player)
 {
     if (!player)
         return;
+
+    PlayerbotWalker::ForgetStandSpots(player);
 
     ObjectGuid const subject = player->GetGUID();
     if (PlayerbotRecord* runtime = FindCommandRuntime(subject); runtime && runtime->Walker.IsJumping())

@@ -3194,6 +3194,7 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
     ClearItemLoot(bot);
     ClearVendor(bot);
     bot.VendorRetryMs = 0;
+    bot.RoomForQuestId = 0;
     bot.QuestInteractQueued = false;
     bot.QuestArriveWaitMs = 0;
     bot.QuestInteractWaitMs = 0;
@@ -4730,6 +4731,15 @@ bool PlayerbotMgr::UpdateFollow(PlayerbotRecord& bot, Player* player, Player* le
 
 bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::QuestTarget const& target)
 {
+    // The server would refuse this turn-in because the rewards do not fit in her bags. She makes room at a vendor
+    // first and comes back to hand it in; she does not give the quest up.
+    if (target.TurnIn)
+    {
+        uint32 const slotsShort = PlayerbotClient::BagSlotsShortForTurnIn(player, uint32(target.QuestId));
+        if (slotsShort && TryBeginVendorForRoom(bot, player, uint32(target.QuestId), slotsShort))
+            return true;
+    }
+
     if (bot.Walker.IsMoving())
         bot.Walker.Stop(player);
 
@@ -5396,6 +5406,7 @@ void PlayerbotMgr::ClearVendor(PlayerbotRecord& bot)
     bot.VendorTarget = {};
     bot.VendorListSent = false;
     bot.VendorActed = false;
+    bot.VendorSoldForRoom = false;
 }
 
 bool PlayerbotMgr::TryBeginVendor(PlayerbotRecord& bot, Player* player)
@@ -5419,6 +5430,56 @@ bool PlayerbotMgr::TryBeginVendor(PlayerbotRecord& bot, Player* player)
     }
 
     return BeginVendorTarget(bot, player, *found);
+}
+
+bool PlayerbotMgr::TryBeginVendorForRoom(PlayerbotRecord& bot, Player* player, uint32 questId, uint32 slotsShort)
+{
+    PlayerbotCostTimer const cost(PlayerbotCostStep::Vendor);
+    // A trip that could not make room, or found no vendor, is not tried again for a while; she hands the quest in as
+    // it is meanwhile, and the server says no as it would to a player.
+    if (bot.VendorRetryMs)
+        return false;
+    if (!bot.VendorTarget.NpcGuid.IsEmpty())
+        return false;
+
+    bool const preferRepair = PlayerbotClient::EquippedGearNeedsRepair(player);
+    Optional<PlayerbotClient::VendorTarget> found = PlayerbotClient::FindNearestVendor(player, bot.UnreachableGuids, preferRepair, true);
+    if (!found)
+    {
+        bot.VendorRetryMs = VENDOR_RETRY_MS;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} needs {} more free bag slot(s) to turn in quest {}, but no vendor is reachable on this map yet.",
+            player->GetName(), slotsShort, questId);
+        return false;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot fit the rewards of quest {} in her bags ({} slot(s) short). She goes to a vendor to make room and comes back to turn it in.",
+        player->GetName(), questId, slotsShort);
+    bot.RoomForQuestId = questId;
+    if (!BeginVendorTarget(bot, player, *found))
+    {
+        bot.RoomForQuestId = 0;
+        return false;
+    }
+    return true;
+}
+
+bool PlayerbotMgr::TryReturnToTurnIn(PlayerbotRecord& bot, Player* player)
+{
+    if (!bot.RoomForQuestId || !bot.VendorTarget.NpcGuid.IsEmpty())
+        return false;
+
+    uint32 const questId = std::exchange(bot.RoomForQuestId, 0);
+    Optional<PlayerbotClient::QuestTarget> turnIn = PlayerbotClient::FindTurnInFor(player, questId, bot.UnreachableGuids, &bot.UnreachablePositions);
+    if (!turnIn)
+    {
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} made room in her bags, but quest {} has no turn-in to walk back to now.",
+            player->GetName(), questId);
+        return false;
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} made room in her bags and goes back to turn in quest {}.",
+        player->GetName(), questId);
+    return BeginQuestTarget(bot, player, *turnIn);
 }
 
 bool PlayerbotMgr::BeginVendorTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::VendorTarget const& target)
@@ -5534,11 +5595,36 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
     if (bot.QuestArriveWaitMs < QUEST_CHAIN_PAUSE_MS)
         return true;
 
+    // Selling her junk did not make room for the quest she came for: she sells other items she can spare, once.
+    uint32 slotsShort = 0;
+    if (bot.RoomForQuestId)
+    {
+        slotsShort = PlayerbotClient::BagSlotsShortForTurnIn(player, bot.RoomForQuestId);
+        if (slotsShort && !bot.VendorSoldForRoom)
+        {
+            bot.VendorSoldForRoom = true;
+            if (PlayerbotClient::QueueSellForRoom(player, bot.VendorTarget.NpcGuid, slotsShort, bot.WearItemId))
+            {
+                bot.QuestArriveWaitMs = 0;
+                return true;
+            }
+        }
+    }
+
+    ClearVendor(bot);
+    bot.Walker.Reset();
+    if (slotsShort)
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} finished at the vendor, but has nothing more she can sell and is still {} bag slot(s) short for quest {}.",
+            player->GetName(), slotsShort, bot.RoomForQuestId);
+        bot.VendorRetryMs = VENDOR_RETRY_MS;
+        bot.RoomForQuestId = 0;
+        return false;
+    }
+
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} finished at the vendor. Returning to questing.",
         player->GetName());
-    ClearVendor(bot);
     if (PlayerbotClient::NeedsVendor(player))
         bot.VendorRetryMs = VENDOR_RETRY_MS;
-    bot.Walker.Reset();
-    return false;
+    return TryReturnToTurnIn(bot, player);
 }

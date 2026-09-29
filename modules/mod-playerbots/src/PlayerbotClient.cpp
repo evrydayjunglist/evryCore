@@ -522,6 +522,18 @@ void PlayerbotClient::QueueSellAllJunkItems(WorldSession* session, ObjectGuid ve
     session->QueuePacket(std::move(packet));
 }
 
+void PlayerbotClient::QueueSellItem(WorldSession* session, ObjectGuid vendorGuid, ObjectGuid itemGuid, uint32 amount)
+{
+    if (!session || vendorGuid.IsEmpty() || itemGuid.IsEmpty())
+        return;
+
+    WorldPacket packet(CMSG_SELL_ITEM);
+    packet << vendorGuid;
+    packet << itemGuid;
+    packet << uint32(amount);
+    session->QueuePacket(std::move(packet));
+}
+
 void PlayerbotClient::QueueRepairItem(WorldSession* session, ObjectGuid vendorGuid)
 {
     if (!session || vendorGuid.IsEmpty())
@@ -2198,6 +2210,17 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
     return best;
 }
 
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindTurnInFor(Player* player, uint32 questId, std::unordered_set<ObjectGuid> const& skip,
+    std::vector<Position> const* skipPositions)
+{
+    if (!player || !player->IsInWorld() || !player->GetMap() || !questId)
+        return {};
+    if (player->GetQuestStatus(questId) != QUEST_STATUS_COMPLETE)
+        return {};
+
+    return LookForTurnIn(player, questId, skip, skipPositions, nullptr);
+}
+
 std::vector<std::string> PlayerbotClient::ExplainUnpickedTurnIns(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId)
 {
     std::vector<std::string> lines;
@@ -3575,6 +3598,111 @@ bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target
     return true;
 }
 
+uint32 PlayerbotClient::BagSlotsShortForTurnIn(Player const* player, uint32 questId)
+{
+    if (!player)
+        return 0;
+
+    Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+    if (!quest)
+        return 0;
+
+    // The server's own check on the reward she would click. It only asks whether the items can be stored.
+    QuestRewardPick const pick = PickQuestReward(player, quest);
+    if (player->CanRewardQuest(quest, pick.Type, pick.Id, false))
+        return 0;
+
+    uint32 needed = 0;
+    for (uint32 i = 0; i < quest->GetRewItemsCount(); ++i)
+        if (quest->RewardItemId[i])
+            ++needed;
+    if (pick.Type == LootItemType::Item && pick.Id)
+        ++needed;
+
+    // With that many slots free, the refusal is something else (a unique item she already has, and the like). A trip
+    // to the vendor would not change it.
+    uint32 const free = player->GetFreeInventorySlotCount(ItemSearchLocation::Inventory);
+    return free >= needed ? 0 : needed - free;
+}
+
+namespace
+{
+    // An item some quest in her log still needs, starts, or was given for.
+    bool QuestNeedsItem(Player* player, ItemTemplate const* proto)
+    {
+        if (proto->GetStartQuest())
+            return true;
+
+        uint32 const entry = proto->GetId();
+        for (auto const& [questId, status] : player->getQuestStatusMap())
+        {
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            if (!quest)
+                continue;
+            if (quest->GetSrcItemId() == entry)
+                return true;
+            for (QuestObjective const& obj : quest->GetObjectives())
+                if (obj.Type == QUEST_OBJECTIVE_ITEM && uint32(obj.ObjectID) == entry)
+                    return true;
+        }
+        return false;
+    }
+}
+
+uint32 PlayerbotClient::QueueSellForRoom(Player* player, ObjectGuid vendorGuid, uint32 slots, uint32 keepItemId)
+{
+    if (!player || !player->IsInWorld() || !player->GetSession() || vendorGuid.IsEmpty() || !slots)
+        return 0;
+    if (!player->GetNPCIfCanInteractWith(vendorGuid, UNIT_NPC_FLAG_VENDOR, UNIT_NPC_FLAG_2_NONE))
+        return 0;
+
+    struct Candidate
+    {
+        Item* It;
+        uint64 Worth;
+    };
+    std::vector<Candidate> candidates;
+    player->ForEachItem(ItemSearchLocation::Inventory, [&](Item* item)
+    {
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || item->IsBag() || item->IsRefundable())
+            return ItemSearchCallbackResult::Continue;
+        if (proto->GetClass() == ITEM_CLASS_QUEST || proto->GetClass() == ITEM_CLASS_KEY)
+            return ItemSearchCallbackResult::Continue;
+        if (proto->GetClass() == ITEM_CLASS_CONSUMABLE && proto->GetSubClass() == ITEM_SUBCLASS_FOOD_DRINK)
+            return ItemSearchCallbackResult::Continue;
+        if (keepItemId && item->GetEntry() == keepItemId)
+            return ItemSearchCallbackResult::Continue;
+        if (UpgradeSlot(player, proto))
+            return ItemSearchCallbackResult::Continue;
+        if (QuestNeedsItem(player, proto))
+            return ItemSearchCallbackResult::Continue;
+        if (player->CanSellItemToVendor(item, item->GetCount()))
+            return ItemSearchCallbackResult::Continue;
+
+        candidates.push_back({ item, uint64(item->GetSellPrice(player, true)) * item->GetCount() });
+        return ItemSearchCallbackResult::Continue;
+    });
+
+    std::sort(candidates.begin(), candidates.end(), [](Candidate const& a, Candidate const& b)
+    {
+        return a.Worth < b.Worth;
+    });
+
+    uint32 queued = 0;
+    for (Candidate const& candidate : candidates)
+    {
+        if (queued >= slots)
+            break;
+        QueueSellItem(player->GetSession(), vendorGuid, candidate.It->GetGUID(), candidate.It->GetCount());
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} queued CMSG_SELL_ITEM for {} x{} ({}) at {} to make room in her bags.",
+            player->GetName(), candidate.It->GetTemplate()->GetDefaultLocaleName(), candidate.It->GetCount(),
+            candidate.It->GetEntry(), vendorGuid.ToString());
+        ++queued;
+    }
+    return queued;
+}
+
 bool PlayerbotClient::TryMeleeAttack(Player* player, ObjectGuid creatureGuid)
 {
     if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty())
@@ -4472,7 +4600,7 @@ bool PlayerbotClient::NeedsVendor(Player const* player)
     return BagsNeedVendor(player) || EquippedGearNeedsRepair(player);
 }
 
-Optional<PlayerbotClient::VendorTarget> PlayerbotClient::FindNearestVendor(Player* player, std::unordered_set<ObjectGuid> const& skip, bool preferRepair)
+Optional<PlayerbotClient::VendorTarget> PlayerbotClient::FindNearestVendor(Player* player, std::unordered_set<ObjectGuid> const& skip, bool preferRepair, bool mustBuy)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -4480,7 +4608,7 @@ Optional<PlayerbotClient::VendorTarget> PlayerbotClient::FindNearestVendor(Playe
     EnsureVendorSpawns();
 
     Map* map = player->GetMap();
-    bool const needSell = BagsNeedVendor(player);
+    bool const needSell = mustBuy || BagsNeedVendor(player);
     std::vector<VendorSpawn const*> candidates;
     candidates.reserve(64);
 

@@ -121,6 +121,10 @@ struct PlayerbotRecord
     bool VendorListSent = false;
     bool VendorActed = false;
     uint32 VendorRetryMs = 0;
+    // A finished quest whose rewards did not fit in her bags. She goes to a vendor to make room and then back to turn
+    // it in. VendorSoldForRoom: she has already sold other items for it at this vendor.
+    uint32 RoomForQuestId = 0;
+    bool VendorSoldForRoom = false;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     std::vector<Position> UnreachablePositions;
     std::vector<PlayerbotClient::EmptyMarker> EmptyMarkers;
@@ -289,6 +293,10 @@ private:
     bool BeginVendorTarget(PlayerbotRecord& bot, Player* player, PlayerbotClient::VendorTarget const& target);
     bool UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool TryBeginVendor(PlayerbotRecord& bot, Player* player);
+    // The turn-in's rewards do not fit in her bags: a trip to a vendor to make room first. False when she cannot go now.
+    bool TryBeginVendorForRoom(PlayerbotRecord& bot, Player* player, uint32 questId, uint32 slotsShort);
+    // Back from making room: walk to the quest giver of the quest that did not fit.
+    bool TryReturnToTurnIn(PlayerbotRecord& bot, Player* player);
 
     std::vector<PlayerbotRecord> _bots;
     // Where each bot's character sits in _bots. Both are filled once at startup and never change afterwards.

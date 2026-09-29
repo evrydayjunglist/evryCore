@@ -190,6 +190,7 @@ namespace PlayerbotClient
     void QueueStandStateChange(WorldSession* session, UnitStandStateType standState);
     void QueueListInventory(WorldSession* session, ObjectGuid vendorGuid);
     void QueueSellAllJunkItems(WorldSession* session, ObjectGuid vendorGuid);
+    void QueueSellItem(WorldSession* session, ObjectGuid vendorGuid, ObjectGuid itemGuid, uint32 amount);
     void QueueRepairItem(WorldSession* session, ObjectGuid vendorGuid);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind, std::unordered_set<ObjectGuid> const& skip);
@@ -198,6 +199,9 @@ namespace PlayerbotClient
         std::vector<Position> const* skipPositions = nullptr);
     // One sentence for each finished quest in her log whose turn-in FindLogCompleteTurnIn would not give her, naming the
     // step that dropped it and the facts that step used.
+    // The turn-in of one finished quest, found the way FindLogCompleteTurnIn finds each of them.
+    Optional<QuestTarget> FindTurnInFor(Player* player, uint32 questId, std::unordered_set<ObjectGuid> const& skip,
+        std::vector<Position> const* skipPositions = nullptr);
     std::vector<std::string> ExplainUnpickedTurnIns(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<QuestTarget> FindTakeableQuestInZone(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<CombatTarget> FindAttackerTarget(Player* player);
@@ -225,9 +229,17 @@ namespace PlayerbotClient
     bool EquippedGearNeedsRepair(Player const* player);
     bool NeedsVendor(Player const* player);
     Optional<uint32> CreatureRespawnWaitMs(Map const* map, uint32 creditEntry, Position const& near);
-    Optional<VendorTarget> FindNearestVendor(Player* player, std::unordered_set<ObjectGuid> const& skip, bool preferRepair);
+    // mustBuy asks only for a vendor who buys items, as when she goes to make room in her bags.
+    Optional<VendorTarget> FindNearestVendor(Player* player, std::unordered_set<ObjectGuid> const& skip, bool preferRepair, bool mustBuy = false);
     bool TryOpenVendor(Player* player, ObjectGuid vendorGuid);
     bool TryVendorTrade(Player* player, ObjectGuid vendorGuid, bool repair);
+    // How many more free bag slots she needs before the server would hand her this quest's rewards (the fixed ones and
+    // the choice she would click). 0 when they fit, or when the server would refuse the turn-in for another reason.
+    uint32 BagSlotsShortForTurnIn(Player const* player, uint32 questId);
+    // At an open shop, sells up to slots items to make room: the ones worth least at a vendor, never quest items, food
+    // or drink, bags, gear better than what she wears, or the reward she is waiting to put on. One CMSG_SELL_ITEM each,
+    // as a player drags them onto the vendor. Returns how many were queued.
+    uint32 QueueSellForRoom(Player* player, ObjectGuid vendorGuid, uint32 slots, uint32 keepItemId);
     Optional<GameObjectTarget> FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);

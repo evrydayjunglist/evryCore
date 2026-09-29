@@ -183,7 +183,9 @@ namespace PlayerbotClient
     void QueueRepairItem(WorldSession* session, ObjectGuid vendorGuid);
 
     Optional<QuestTarget> FindNearbyQuestTarget(Player* player, float range, QuestSearchKind kind, std::unordered_set<ObjectGuid> const& skip);
-    Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
+    // A turn-in whose ? marker is in a grid that is not loaded comes back as a walk to that marker, with no quest giver.
+    Optional<QuestTarget> FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0,
+        std::vector<Position> const* skipPositions = nullptr);
     // One sentence for each finished quest in her log whose turn-in FindLogCompleteTurnIn would not give her, naming the
     // step that dropped it and the facts that step used.
     std::vector<std::string> ExplainUnpickedTurnIns(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);

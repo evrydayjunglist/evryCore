@@ -379,7 +379,7 @@ namespace
 
         if (!bot.VendorTarget.NpcGuid.IsEmpty())
             return player->GetExactDist(bot.VendorTarget.Pos) > range;
-        if (!bot.QuestTarget.NpcGuid.IsEmpty())
+        if (!bot.QuestTarget.NpcGuid.IsEmpty() || bot.QuestTarget.QuestId)
             return player->GetExactDist(bot.QuestTarget.Pos) > range;
         if (bot.GameObjectTarget.QuestId)
             return player->GetExactDist(bot.GameObjectTarget.Pos) > range;
@@ -539,7 +539,7 @@ namespace
     bool HasLivingTarget(PlayerbotRecord const& bot)
     {
         return !bot.CombatTarget.CreatureGuid.IsEmpty() || bot.CombatTarget.QuestId
-            || !bot.QuestTarget.NpcGuid.IsEmpty()
+            || !bot.QuestTarget.NpcGuid.IsEmpty() || bot.QuestTarget.QuestId
             || bot.GameObjectTarget.QuestId
             || bot.UseItemOnUnitTarget.QuestId
             || bot.ItemLootTarget.QuestId || bot.ItemLootTarget.LootCorpse
@@ -2805,6 +2805,15 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         bot.Walker.Reset();
     }
 
+    // She walked to a ? marker whose grid was not loaded. It is loaded now, so her next look finds the quest giver there.
+    if (bot.Walker.HasArrived() && bot.QuestTarget.QuestId && bot.QuestTarget.NpcGuid.IsEmpty())
+    {
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the ? marker for quest {}. Looking for its quest giver.",
+            player->GetName(), bot.QuestTarget.QuestId);
+        bot.QuestTarget = {};
+        bot.Walker.Reset();
+    }
+
     if (bot.Walker.HasArrived() && bot.GameObjectTarget.QuestId)
     {
         if (!PlayerbotClient::GameObjectTargetStillNeeded(player, bot.GameObjectTarget))
@@ -3713,6 +3722,8 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
     }
     else if (!bot.QuestTarget.NpcGuid.IsEmpty() && blameTarget)
         bot.UnreachableGuids.insert(bot.QuestTarget.NpcGuid);
+    else if (bot.QuestTarget.QuestId && blameTarget)
+        RememberFailedYellow(bot, bot.QuestTarget.Pos);
 
     bot.QuestTarget = {};
     bot.LookedForOtherYellowOnFace = false;
@@ -3909,7 +3920,7 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
         Optional<PlayerbotClient::ItemLootTarget> item = timed(PlayerbotCostStep::FindItemWork,
             [&] { return PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids, filter); });
         Optional<PlayerbotClient::QuestTarget> turnIn = timed(PlayerbotCostStep::FindTurnIn,
-            [&] { return PlayerbotClient::FindLogCompleteTurnIn(player, bot.UnreachableGuids, skipQuestId); });
+            [&] { return PlayerbotClient::FindLogCompleteTurnIn(player, bot.UnreachableGuids, skipQuestId, &bot.UnreachablePositions); });
         Optional<PlayerbotClient::QuestTarget> takeable = timed(PlayerbotCostStep::FindTakeableQuest,
             [&] { return PlayerbotClient::FindTakeableQuestInZone(player, bot.UnreachableGuids, skipQuestId); });
 
@@ -4687,9 +4698,14 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
     if (TryClickFromHere(bot, player))
         return true;
 
-    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} ({}).",
-        player->GetName(), bot.QuestTarget.NpcGuid.ToString(), bot.QuestTarget.QuestId,
-        bot.QuestTarget.TurnIn ? "turn-in" : "accept");
+    if (bot.QuestTarget.NpcGuid.IsEmpty())
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to the ? marker at ({:.1f}, {:.1f}, {:.1f}) for quest {} (turn-in); its grid is not loaded yet.",
+            player->GetName(), bot.QuestTarget.Pos.GetPositionX(), bot.QuestTarget.Pos.GetPositionY(), bot.QuestTarget.Pos.GetPositionZ(),
+            bot.QuestTarget.QuestId);
+    else
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} walking to {} for quest {} ({}).",
+            player->GetName(), bot.QuestTarget.NpcGuid.ToString(), bot.QuestTarget.QuestId,
+            bot.QuestTarget.TurnIn ? "turn-in" : "accept");
     bot.QuestArriveWaitMs = 0;
     if (!bot.Walker.Start(player, bot.QuestTarget.Pos, bot.QuestTarget.StopDistance, RecoveryGoalFor(player, bot.QuestTarget)))
     {

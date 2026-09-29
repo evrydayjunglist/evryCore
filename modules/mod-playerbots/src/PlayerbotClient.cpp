@@ -1650,18 +1650,31 @@ namespace
         return ui && (*ui == LOOT_SLOT_TYPE_ALLOW_LOOT || *ui == LOOT_SLOT_TYPE_OWNER);
     }
 
-    void LoadPoiGrids(Map* map, std::vector<ObjectivePoiBlob> const& blobs)
+    // Work in a grid that is not loaded is found by its map marker, the way a player finds it. A pick does not load that
+    // grid: she walks to the marker and it loads as she comes near, as it does for a player. Takes the nearest point of
+    // these blobs in a grid that is not loaded when it is nearer than bestDist.
+    bool NearerUnloadedMarker(Player* player, std::vector<ObjectivePoiBlob> const& blobs, PlayerbotClient::MapYellowFilter const& filter,
+        Position& best, float& bestDist)
     {
-        if (!map)
-            return;
-
+        Map* map = player->GetMap();
+        bool found = false;
         for (ObjectivePoiBlob const& blob : blobs)
         {
             for (Position const& point : blob.Points)
             {
-                LoadGridForFinder(map, point);
+                if (map->IsGridLoaded(point) || PointIsSkipped(point, filter))
+                    continue;
+
+                float const dist = player->GetExactDist(point);
+                if (dist >= bestDist)
+                    continue;
+
+                best = point;
+                bestDist = dist;
+                found = true;
             }
         }
+        return found;
     }
 
     // Finished quests put a ? on the map. That blob uses ObjectiveIndex -1.
@@ -1995,7 +2008,7 @@ namespace
     // One finished quest's turn-in: the living ender she would walk to and where she would stand beside it. With why, a
     // turn-in that is dropped says which step dropped it and the facts that step used.
     Optional<PlayerbotClient::QuestTarget> LookForTurnIn(Player* player, uint32 questId, std::unordered_set<ObjectGuid> const& skip,
-        std::string* why)
+        std::vector<Position> const* skipPositions, std::string* why)
     {
         Map* map = player->GetMap();
 
@@ -2009,10 +2022,26 @@ namespace
         }
 
         Optional<Position> marker = GetFinishedQuestMapMarker(questId, map->GetId(), *player);
-        if (marker)
-            LoadGridForFinder(map, *marker);
 
         Creature* creature = FindLivingEnderOnMap(player, enderEntries, marker, skip);
+
+        // The ? is in a grid that is not loaded, so its ender is not there to find. She walks to the ? as a player would,
+        // and the ender turns up as the grid loads around her.
+        if (!creature && marker && !map->IsGridLoaded(*marker))
+        {
+            PlayerbotClient::MapYellowFilter filter;
+            filter.SkipPositions = skipPositions;
+            if (!PointIsSkipped(*marker, filter))
+            {
+                PlayerbotClient::QuestTarget target;
+                target.Pos = *marker;
+                target.StopDistance = 0.25f;
+                target.QuestId = int32(questId);
+                target.TurnIn = true;
+                return target;
+            }
+        }
+
         if (!creature)
         {
             if (why)
@@ -2111,7 +2140,8 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
     return best;
 }
 
-Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId)
+Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId,
+    std::vector<Position> const* skipPositions)
 {
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
@@ -2126,7 +2156,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         if (skipQuestId && int32(questId) == skipQuestId)
             continue;
 
-        Optional<QuestTarget> target = LookForTurnIn(player, questId, skip, nullptr);
+        Optional<QuestTarget> target = LookForTurnIn(player, questId, skip, skipPositions, nullptr);
         if (!target)
             continue;
 
@@ -2138,7 +2168,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindLogCompleteTurnIn(Pl
         best = *target;
     }
 
-    if (best.NpcGuid.IsEmpty())
+    if (!best.QuestId)
         return {};
 
     return best;
@@ -2161,10 +2191,14 @@ std::vector<std::string> PlayerbotClient::ExplainUnpickedTurnIns(Player* player,
         std::string why;
         if (skipQuestId && int32(questId) == skipQuestId)
             why = "her last walk for it failed, so this pick left it out.";
-        else if (Optional<QuestTarget> target = LookForTurnIn(player, questId, skip, &why))
+        else if (Optional<QuestTarget> target = LookForTurnIn(player, questId, skip, nullptr, &why))
         {
-            lines.push_back(Trinity::StringFormat("finished {} ({}), and its turn-in at {} is there to pick, {:.0f} yards away.",
-                title, questId, target->NpcGuid.ToString(), player->GetExactDist(target->Pos)));
+            if (target->NpcGuid.IsEmpty())
+                lines.push_back(Trinity::StringFormat("finished {} ({}), and its ? marker at ({:.0f}, {:.0f}) is there to walk to, {:.0f} yards away, in a grid that is not loaded.",
+                    title, questId, target->Pos.GetPositionX(), target->Pos.GetPositionY(), player->GetExactDist(target->Pos)));
+            else
+                lines.push_back(Trinity::StringFormat("finished {} ({}), and its turn-in at {} is there to pick, {:.0f} yards away.",
+                    title, questId, target->NpcGuid.ToString(), player->GetExactDist(target->Pos)));
             continue;
         }
 
@@ -2393,6 +2427,9 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
     float bestMarkerDist = std::numeric_limits<float>::max();
     int bestMarkerRank = 2;
     bool haveMarker = false;
+    Position unloadedMarker;
+    IncompleteMonsterCredit const* unloadedMarkerCredit = nullptr;
+    float unloadedMarkerDist = std::numeric_limits<float>::max();
 
     for (IncompleteMonsterCredit const& credit : credits)
     {
@@ -2406,10 +2443,11 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
         if (blobs.empty())
             continue;
 
-        LoadPoiGrids(map, blobs);
-
         if (!SkipAllMarkersForCredit(credit.QuestId, credit.CreditEntry, filter))
         {
+            if (NearerUnloadedMarker(player, blobs, filter, unloadedMarker, unloadedMarkerDist))
+                unloadedMarkerCredit = &credit;
+
             for (ObjectivePoiBlob const& blob : blobs)
             {
                 int const rank = MarkerBlobRank(blob, filter);
@@ -2462,6 +2500,15 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindLogIncompleteMonste
             bestCreatureTarget = *target;
             haveCreature = true;
         }
+    }
+
+    // A spawn that is up loses to nearer work whose grid is not loaded yet.
+    if (haveCreature && unloadedMarkerCredit && unloadedMarkerDist < bestCreatureDist)
+    {
+        haveCreature = false;
+        bestMarker = unloadedMarker;
+        bestMarkerCredit = unloadedMarkerCredit;
+        haveMarker = true;
     }
 
     if (haveCreature)
@@ -2613,6 +2660,9 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
     float bestMarkerDist = std::numeric_limits<float>::max();
     int bestMarkerRank = 2;
     bool haveMarker = false;
+    Position unloadedMarker;
+    IncompleteItemCredit const* unloadedMarkerCredit = nullptr;
+    float unloadedMarkerDist = std::numeric_limits<float>::max();
 
     for (IncompleteItemCredit const& credit : credits)
     {
@@ -2624,10 +2674,11 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
         if (blobs.empty())
             continue;
 
-        LoadPoiGrids(map, blobs);
-
         if (!SkipAllMarkersForCredit(credit.QuestId, credit.ItemId, filter))
         {
+            if (NearerUnloadedMarker(player, blobs, filter, unloadedMarker, unloadedMarkerDist))
+                unloadedMarkerCredit = &credit;
+
             for (ObjectivePoiBlob const& blob : blobs)
             {
                 int const rank = MarkerBlobRank(blob, filter);
@@ -2733,6 +2784,16 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
             bestGo = *target;
             haveGo = true;
         }
+    }
+
+    // What is up loses to nearer work whose grid is not loaded yet.
+    float const upDist = haveCorpse ? bestCorpseDist : haveGo ? bestGoDist : haveAlive ? bestAliveDist : std::numeric_limits<float>::max();
+    if ((haveCorpse || haveGo || haveAlive) && unloadedMarkerCredit && unloadedMarkerDist < upDist)
+    {
+        haveCorpse = haveGo = haveAlive = false;
+        bestMarker = unloadedMarker;
+        bestMarkerCredit = unloadedMarkerCredit;
+        haveMarker = true;
     }
 
     if (haveCorpse)
@@ -2881,6 +2942,9 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
     float bestMarkerDist = std::numeric_limits<float>::max();
     int bestMarkerRank = 2;
     bool haveMarker = false;
+    Position unloadedMarker;
+    IncompleteGameObjectCredit const* unloadedMarkerCredit = nullptr;
+    float unloadedMarkerDist = std::numeric_limits<float>::max();
 
     for (IncompleteGameObjectCredit const& credit : credits)
     {
@@ -2892,10 +2956,11 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
         if (blobs.empty())
             continue;
 
-        LoadPoiGrids(map, blobs);
-
         if (!SkipAllMarkersForCredit(credit.QuestId, credit.GoEntry, filter))
         {
+            if (NearerUnloadedMarker(player, blobs, filter, unloadedMarker, unloadedMarkerDist))
+                unloadedMarkerCredit = &credit;
+
             for (ObjectivePoiBlob const& blob : blobs)
             {
                 int const rank = MarkerBlobRank(blob, filter);
@@ -2945,6 +3010,15 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
             bestGoTarget = *target;
             haveGo = true;
         }
+    }
+
+    // A spawned object loses to nearer work whose grid is not loaded yet.
+    if (haveGo && unloadedMarkerCredit && unloadedMarkerDist < bestGoDist)
+    {
+        haveGo = false;
+        bestMarker = unloadedMarker;
+        bestMarkerCredit = unloadedMarkerCredit;
+        haveMarker = true;
     }
 
     if (haveGo)
@@ -3081,6 +3155,10 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
     float bestMarkerDist = std::numeric_limits<float>::max();
     int bestMarkerRank = 2;
     bool haveMarker = false;
+    Position unloadedMarker;
+    IncompleteMonsterCredit const* unloadedMarkerCredit = nullptr;
+    uint32 unloadedMarkerItemId = 0;
+    float unloadedMarkerDist = std::numeric_limits<float>::max();
 
     for (IncompleteMonsterCredit const& credit : credits)
     {
@@ -3095,7 +3173,13 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
         if (blobs.empty())
             continue;
 
-        LoadPoiGrids(map, blobs);
+        // The spawns in a grid that is not loaded are not seen below, so its marker counts even when others are up.
+        if (!SkipAllMarkersForCredit(credit.QuestId, credit.CreditEntry, filter)
+            && NearerUnloadedMarker(player, blobs, filter, unloadedMarker, unloadedMarkerDist))
+        {
+            unloadedMarkerCredit = &credit;
+            unloadedMarkerItemId = itemId;
+        }
 
         bool sawSpawnForCredit = false;
         for (Creature* creature : LoadedCreaturesGivingCredit(map, credit.CreditEntry))
@@ -3160,6 +3244,17 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindLogIncomplet
                 }
             }
         }
+    }
+
+    // A creature that is up loses to nearer work whose grid is not loaded yet. With none up that would take the item,
+    // a marker in a grid that is not loaded is still worth the walk.
+    if (unloadedMarkerCredit && (haveCreature ? unloadedMarkerDist < bestCreatureDist : !haveMarker))
+    {
+        haveCreature = false;
+        bestMarker = unloadedMarker;
+        bestMarkerCredit = unloadedMarkerCredit;
+        bestMarkerItemId = unloadedMarkerItemId;
+        haveMarker = true;
     }
 
     if (haveCreature)

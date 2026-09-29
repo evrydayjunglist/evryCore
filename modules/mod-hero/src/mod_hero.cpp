@@ -329,6 +329,32 @@ namespace
         });
     }
 
+    // A new character has no saved extra powers of its own. Login is the path
+    // that reads character_hero_power. Doing that on create would inherit
+    // leftover rows after the core reuses a deleted GUID (MAX(guid)+1 after
+    // restart).
+    void InitializeExtraPowers(Player* player)
+    {
+        if (!ClassHasExtraPowers(player->GetClass()))
+            return;
+
+        ApplyExtraMaxPowers(player);
+        ForEachExtraPower(player->GetClass(), [player](Powers power)
+        {
+            int32 value = InitialPowerValue(player, power);
+            if (power == POWER_RUNES)
+                RestoreRunes(player, value);
+            else
+                player->SetPower(power, value);
+        });
+    }
+
+    void DeleteExtraPowers(CharacterDatabaseTransaction transaction, ObjectGuid::LowType guid)
+    {
+        transaction->Append(Trinity::StringFormat(
+            "DELETE FROM `character_hero_power` WHERE `guid` = {}", guid).c_str());
+    }
+
     // Every table and column name in this file is written between backticks, and has to stay that
     // way. `maxvalue` is a reserved word in MySQL, so without them this statement is a syntax error,
     // and a statement the core cannot parse takes the whole server down rather than failing the one
@@ -478,9 +504,9 @@ public:
     void OnCreate(Player* player) override
     {
         EnsureSpecializationActivation(player);
-        // A new character has nothing saved, so this takes the starting value of each resource, and
-        // then writes the rows a first login will read back.
-        RestoreExtraPowers(player);
+        // Start from PowerType defaults. SaveToDB(create) already ran, and
+        // OnSaveTransaction wiped any leftover rows for this reused GUID.
+        InitializeExtraPowers(player);
         SaveExtraPowers(player);
     }
 
@@ -519,10 +545,24 @@ public:
         PanelStates.erase(player->GetGUID());
     }
 
-    void OnDelete(ObjectGuid guid, uint32 /*accountId*/) override
+    void OnSaveTransaction(Player* player, CharacterDatabaseTransaction transaction, bool create) override
     {
-        CharacterDatabase.Execute(Trinity::StringFormat(
-            "DELETE FROM `character_hero_power` WHERE `guid` = {}", guid.GetCounter()).c_str());
+        if (!create)
+            return;
+
+        // Same GUID-reuse window Free Pick already closes: the core can hand
+        // this guid to a new character after a restart. Wipe leftover extra
+        // power rows atomically with insertion of the new character row.
+        DeleteExtraPowers(transaction, player->GetGUID().GetCounter());
+    }
+
+    void OnDeleteTransaction(ObjectGuid guid, uint32 /*accountId*/, CharacterDatabaseTransaction transaction) override
+    {
+        // CHAR_DELETE_REMOVE only: client delete, `.character erase`, account
+        // wipe, and the aged purge. Soft-unlink keeps the rows for restore.
+        // OnDelete is not used: it fires only from the character-select path
+        // and is not in the delete transaction.
+        DeleteExtraPowers(transaction, guid.GetCounter());
     }
 };
 

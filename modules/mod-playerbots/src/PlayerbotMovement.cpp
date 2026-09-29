@@ -138,6 +138,8 @@ namespace
     constexpr uint32 WALK_OFF_EDGE_REFINE_STEPS = 4;
     constexpr uint32 WALK_OFF_MIN_HEALTH_PCT_AFTER = 50;
     constexpr size_t WALK_OFF_ROUTE_CHECKS = 4;
+    // After a step down steeper than she may climb back, how far along the route she looks for a step she may not take.
+    constexpr float STEP_DOWN_LOOK_AHEAD_YARDS = 6.0f;
     // Player::HandleFall does no damage for a fall shorter than this.
     constexpr float FALL_DAMAGE_MIN_YARDS = 14.57f;
 
@@ -1165,6 +1167,28 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             return;
         }
 
+        // She may step down further than she may climb, so a step down that steep is one she cannot take back. Take it
+        // only when the route carries on from there: that is how bots walked down into cracks and hollows with walls
+        // too steep to climb, and stood there for good.
+        GroundedStep const down = MeasureGroundedStep(previousGrounded, grounded);
+        if (down.rise < 0.0f && down.degrees > MAX_WALKABLE_SLOPE_DEGREES)
+        {
+            GroundedStepFailure aheadFailure = GroundedStepFailure::None;
+            Position aheadAt;
+            if (StepDownLeadsNowhere(player, grounded, stepLen, aheadFailure, aheadAt))
+            {
+                std::string const why = aheadFailure == GroundedStepFailure::None
+                    ? std::string("the route ends there with no step she may take")
+                    : Trinity::StringFormat("the route on from there is refused ({})", GroundedStepFailureName(aheadFailure));
+                PLAYERBOT_LOG_DETAIL(player,
+                    "mod-playerbots: {} does not step down {:.2f} yards to ({:.2f}, {:.2f}, {:.2f}): she could not climb back, and {} at ({:.2f}, {:.2f}, {:.2f}).",
+                    player->GetName(), -down.rise, grounded.GetPositionX(), grounded.GetPositionY(), grounded.GetPositionZ(),
+                    why, aheadAt.GetPositionX(), aheadAt.GetPositionY(), aheadAt.GetPositionZ());
+                RefuseStep(player, GroundedStepFailure::NoWayOut, grounded);
+                return;
+            }
+        }
+
         _lastGrounded = grounded;
         if (_faceRecovery.Rejoining())
             NoteMmapRejoinProgress(player, previousGrounded);
@@ -1478,6 +1502,54 @@ PlayerbotWalker::GroundedStepFailure PlayerbotWalker::PeekGroundedStepFailure(Pl
         return GroundedStepFailure::InvalidPosition;
 
     return ClassifyGroundedStep(player, _lastGrounded, next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), out);
+}
+
+bool PlayerbotWalker::StepDownLeadsNowhere(Player* player, Position const& landing, float stepLen,
+    GroundedStepFailure& aheadFailure, Position& aheadAt)
+{
+    aheadFailure = GroundedStepFailure::None;
+    aheadAt = landing;
+    if (!player || stepLen <= 0.0f)
+        return false;
+
+    // Advance has already moved the route to the landing. Walk on from there on paper and put it back afterwards.
+    size_t const savedIndex = _pointIndex;
+    float const savedProgress = _segmentProgress;
+    Position from = landing;
+    bool nowhere = false;
+    bool ended = _pointIndex + 1 >= _path.size();
+    for (float looked = 0.0f; !ended && looked < STEP_DOWN_LOOK_AHEAD_YARDS; looked += stepLen)
+    {
+        Position const next = Advance(stepLen);
+        Position out;
+        GroundedStepFailure const failure = ClassifyGroundedStep(player, from, next.GetPositionX(), next.GetPositionY(),
+            next.GetOrientation(), out);
+        if (failure != GroundedStepFailure::None)
+        {
+            aheadFailure = failure;
+            aheadAt = out;
+            nowhere = true;
+            break;
+        }
+        from = out;
+        ended = _pointIndex + 1 >= _path.size();
+    }
+    _pointIndex = savedIndex;
+    _segmentProgress = savedProgress;
+    if (nowhere || !ended)
+        return nowhere;
+
+    // The route ends within those yards. Ending there is fine while she can still step somewhere from it.
+    aheadAt = from;
+    for (uint32 i = 0; i < 8; ++i)
+    {
+        float const angle = float(i) * float(M_PI) / 4.0f;
+        Position out;
+        if (ClassifyGroundedStep(player, from, from.GetPositionX() + std::cos(angle) * stepLen,
+            from.GetPositionY() + std::sin(angle) * stepLen, angle, out) == GroundedStepFailure::None)
+            return false;
+    }
+    return true;
 }
 
 PlayerbotWalker::GroundedStepFailure PlayerbotWalker::ClassifyGroundedStep(Player* player, Position const& from,
@@ -2243,6 +2315,8 @@ char const* PlayerbotWalker::GroundedStepFailureName(GroundedStepFailure failure
             return "gameobject collision";
         case GroundedStepFailure::NoHeadroom:
             return "too low for her body";
+        case GroundedStepFailure::NoWayOut:
+            return "a step down she could not walk back out of";
         case GroundedStepFailure::InvalidPosition:
             return "invalid position";
     }

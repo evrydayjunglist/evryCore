@@ -56,6 +56,8 @@ public:
         DynamicCollision,
         // Her body does not fit standing on that floor: something low is over it.
         NoHeadroom,
+        // A step down steeper than she may climb back, onto ground whose route on is refused or goes nowhere.
+        NoWayOut,
         InvalidPosition
     };
 
@@ -189,6 +191,11 @@ private:
     Position Advance(float distance);
     bool PeekGroundedStep(Player* player, float distance, Position& out);
     GroundedStepFailure PeekGroundedStepFailure(Player* player, float distance, Position& out);
+    // She just stepped down steeper than she may climb, so she could not walk back up that step. Walk the next yards of
+    // this route from there on paper, a heartbeat at a time. True when one of them is refused, or the route ends there
+    // with no step she may take, so this step would leave her somewhere she cannot walk out of.
+    bool StepDownLeadsNowhere(Player* player, Position const& landing, float stepLen, GroundedStepFailure& aheadFailure,
+        Position& aheadAt);
     bool FirstGroundedStepIsLegal(Player* player);
     bool MmapLookIsLegal(Player* player);
     bool StepTowardDestIsLegal(Player* player) const;

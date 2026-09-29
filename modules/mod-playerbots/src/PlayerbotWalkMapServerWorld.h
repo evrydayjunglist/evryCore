@@ -74,6 +74,7 @@ public:
                 result.Step = PlayerbotWalkMapStep::NoHeadroom;
                 break;
             case PlayerbotWalker::GroundedStepFailure::NoPath:
+            case PlayerbotWalker::GroundedStepFailure::NoWayOut:
             case PlayerbotWalker::GroundedStepFailure::InvalidPosition:
                 result.Step = PlayerbotWalkMapStep::InvalidPosition;
                 break;

@@ -81,6 +81,25 @@ public:
     }
 };
 
+// Only the update and destroy hooks. An empty list would also turn on the player leave hook, which can run on a map
+// thread during a far teleport.
+class PlayerbotsAllMapScript : public AllMapScript
+{
+public:
+    PlayerbotsAllMapScript() : AllMapScript("mod_playerbots_AllMapScript", { ALLMAPHOOK_ON_UPDATE, ALLMAPHOOK_ON_DESTROY }) { }
+
+    // The map's own thread, at the end of its update. Does nothing unless Playerbots.MapThreadBrains is 1.
+    void OnMapUpdate(Map* map, uint32 diff) override
+    {
+        sPlayerbotMgr->UpdateMap(map, diff);
+    }
+
+    void OnDestroyMap(Map* map) override
+    {
+        sPlayerbotMgr->OnMapDestroyed(map);
+    }
+};
+
 class PlayerbotsCommandScript : public CommandScript
 {
 public:
@@ -144,5 +163,6 @@ void Addmod_playerbotsScripts()
 {
     new PlayerbotsWorldScript();
     new PlayerbotsPlayerScript();
+    new PlayerbotsAllMapScript();
     new PlayerbotsCommandScript();
 }

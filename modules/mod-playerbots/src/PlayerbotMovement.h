@@ -21,6 +21,7 @@
 #include "PathGenerator.h"
 #include "PlayerbotBadPlaces.h"
 #include "PlayerbotJump.h"
+#include "PlayerbotMapPass.h"
 #include "PlayerbotMovementRecovery.h"
 #include "PlayerbotPathSearch.h"
 #include "PlayerbotWalkMapEscape.h"
@@ -85,11 +86,8 @@ public:
     // it asked about came out, so a log line can say why none would do.
     static bool PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out,
         std::vector<StandSpotLook>* look = nullptr);
-    // Drop the stand spots she picked in the last few seconds: she logged out.
-    static void ForgetStandSpots(Player const* player);
-    // One sentence on the stand spot picks since the last call: how many, how many were answered from memory, and how
-    // many sides were asked about. Then it starts counting again.
-    static std::string DescribeStandSpotsAndClear();
+    // Drop the stand spots she picked in the last few seconds in this brain pass: she logged out or changed maps.
+    static void ForgetStandSpots(Player const* player, PlayerbotMapPass& pass);
 
     // One grounded step from these feet toward (x, y), planted and judged exactly as a walk heartbeat is: the floor
     // search from her feet plus her climb, the slope and drop limits, and the chest-height ray. out holds the planted
@@ -101,11 +99,6 @@ public:
     static bool PlantAt(Player* player, float x, float y, float searchZ, float& outZ);
     // How far she moves in one walk heartbeat at her current run speed.
     static float HeartbeatStepLength(Player const* player);
-    // Starts this world tick's shared budget for mapping the ground around bots that are looking for a way round.
-    static void BeginWorldTick();
-    // One sentence on the way-round looks since the last call: how many started and why, how they ended, and how long
-    // bots waited for their turn. Then it starts counting again.
-    static std::string DescribeWayRoundLooksAndClear();
     // The destination of the last walk she started, and its map. It is kept after that walk ends so a diagnostic can
     // still show where she was going.
     bool LastWalkDestination(Position& out, uint32& mapId) const;

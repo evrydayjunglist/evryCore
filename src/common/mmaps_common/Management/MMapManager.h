@@ -82,7 +82,8 @@ namespace MMAP
             dtNavMeshQuery const* GetNavMeshQuery(uint32 meshMapId, uint32 instanceMapId, uint32 instanceId);
             // A second query on the same mesh as the one above, with LONG_ROUTE_SEARCH_NODES search nodes, made the first
             // time one is asked for on a map instance and dropped with it. Only playerbots ask for these, from the world
-            // update after the maps have updated, so no creature ever shares one. Not threadsafe either.
+            // update or from the thread of the map they stand on, so no creature ever shares one. Safe to ask for from
+            // several map threads at once; the query returned is not threadsafe either, and only that map's thread uses it.
             dtNavMeshQuery const* GetLongRouteNavMeshQuery(uint32 meshMapId, uint32 instanceMapId, uint32 instanceId);
             dtNavMesh* GetNavMesh(uint32 mapId, uint32 instanceId);
 

@@ -27,6 +27,7 @@
 #include <vector>
 
 class Creature;
+class GameObject;
 class Item;
 class Map;
 class Player;
@@ -149,6 +150,22 @@ namespace PlayerbotClient
         std::vector<Position> const* SkipPositions = nullptr;
         std::vector<EmptyMarker> const* EmptyMarkers = nullptr;
     };
+
+    // Drops creatures and gameobjects already on their map's remove list. They stay in the map until the end of the
+    // world tick, and a brain on a map thread runs before they go; a player's client would no longer show them.
+    template <typename Objects>
+    void DropRemoved(Objects& objects)
+    {
+        std::erase_if(objects, [](auto const* object) { return object->IsDestroyedObject(); });
+    }
+
+    // A creature or gameobject on her map by guid, as ObjectAccessor finds it, unless it is on the map's remove list.
+    Creature* GetCreature(WorldObject const& near, ObjectGuid guid);
+    GameObject* GetGameObject(WorldObject const& near, ObjectGuid guid);
+
+    // Builds the spawn indexes, the vendor list and the item caches the finders share, or throws them away when the
+    // world database was reloaded. World thread only: bot brains on map threads only read them.
+    void RefreshSharedCaches();
 
     void QueueEnumCharacters(WorldSession* session);
     void QueuePlayerLogin(WorldSession* session, ObjectGuid characterGuid);

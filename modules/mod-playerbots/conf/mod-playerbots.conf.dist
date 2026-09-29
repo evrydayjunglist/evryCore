@@ -141,6 +141,23 @@ Playerbots.InvitePolicy = GameMaster
 Playerbots.LogDetail = ""
 
 #
+#    Playerbots.MapThreadBrains
+#        Description: Where a bot's brain runs while she stands on a map. With 1,
+#                     each map's own update thread runs the brains of the bots on
+#                     it, so bots on different maps think at the same time. With 0,
+#                     every brain runs one after another on the world thread after
+#                     the maps have updated. How a bot plays is the same either
+#                     way. Only gains anything with MapUpdate.Threads above 1 and
+#                     bots on more than one map. Read at startup.
+#        Default:     0 (world thread)
+#
+#                     1 - map threads
+#                     0 - world thread
+#
+
+Playerbots.MapThreadBrains = 0
+
+#
 #    Playerbots.Bridge.Enable
 #        Description: Listen on 127.0.0.1 for the separate playerbots.exe
 #                     coordinator while using Automatic login mode. That bridge

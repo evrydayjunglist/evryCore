@@ -119,13 +119,14 @@ namespace
     constexpr size_t WAY_ROUND_SPOTS_PER_CLOCK_CHECK = 8;
     // The map has to finish inside this, counted from her first turn, or she gives the walk up instead of standing there.
     constexpr uint32 WAY_ROUND_TIMEOUT_MS = 20000;
-    // However many bots are looking at once, this is all the world-thread time one tick spends mapping ground for them.
-    // The bots at the front of the line share it; the rest wait for their turn.
+    // However many bots are looking at once, this is all the time one tick of a brain pass spends mapping ground for
+    // them. The bots at the front of the line share it; the rest wait for their turn.
     constexpr std::chrono::milliseconds WAY_ROUND_TICK_BUDGET{ 10 };
-    std::chrono::steady_clock::duration WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
-    PlayerbotWayRoundTurns WayRoundTurns;
-    // Stand spots picked in the last few seconds, by bot, so the same question from the same feet is not asked again.
-    PlayerbotStandSpotMemory StandSpots;
+    // The line of bots mapping ground, and the stand spots picked in the last few seconds by bot, belong to the brain
+    // pass she runs in: the world's, or her map's with Playerbots.MapThreadBrains on.
+    PlayerbotWayRoundTurns& WayRoundTurnsHere() { return PlayerbotMapPass::Here().WayRoundTurns; }
+    std::chrono::steady_clock::duration& WayRoundSpentThisTick() { return PlayerbotMapPass::Here().WayRoundSpentThisTick; }
+    PlayerbotStandSpotMemory& StandSpotsHere() { return PlayerbotMapPass::Here().StandSpots; }
     // A navmesh route is never shorter than the straight line from her feet to its end. Its ends sit on the navmesh
     // rather than exactly at her feet and the stand spot, so the straight line is taken this much shorter before a side
     // is judged unable to beat the best route found.
@@ -752,10 +753,11 @@ void PlayerbotWalker::EndWayRoundTurn(PlayerbotWayRoundEnd end)
 {
     if (!_wayRoundTicket)
         return;
-    WayRoundTurns.NoteEnd(end, _wayRoundWaitMs,
+    PlayerbotWayRoundTurns& turns = WayRoundTurnsHere();
+    turns.NoteEnd(end, _wayRoundWaitMs,
         uint64(std::chrono::duration_cast<std::chrono::microseconds>(_wayRoundWork).count()),
         _wayRoundMap ? _wayRoundMap->Spots().size() : 0);
-    WayRoundTurns.Leave(_wayRoundTicket);
+    turns.Leave(_wayRoundTicket);
     _wayRoundTicket = 0;
 }
 
@@ -763,27 +765,16 @@ void PlayerbotWalker::JoinWayRoundLine(Player* player)
 {
     if (!WantsToLookForAWayRound())
         return;
-    _wayRoundTicket = WayRoundTurns.Join(_wayRoundJoinReason);
+    PlayerbotWayRoundTurns& turns = WayRoundTurnsHere();
+    _wayRoundTicket = turns.Join(_wayRoundJoinReason);
     _wayRoundJoinReason = nullptr;
     PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} waits for her turn to map the ground; {} bot(s) are in line ahead of her.",
-        player->GetName(), uint32(WayRoundTurns.Waiting() - 1));
+        player->GetName(), uint32(turns.Waiting() - 1));
 }
 
 void PlayerbotWalker::NoteWentElsewhereInsteadOfAWayRound()
 {
-    WayRoundTurns.NoteWentElsewhere();
-}
-
-// One world tick's mapping time is shared by the bots at the front of the line looking for a way round.
-void PlayerbotWalker::BeginWorldTick()
-{
-    WayRoundSpentThisTick = std::chrono::steady_clock::duration::zero();
-    WayRoundTurns.BeginTick();
-}
-
-std::string PlayerbotWalker::DescribeWayRoundLooksAndClear()
-{
-    return WayRoundTurns.DescribeWindowAndClear();
+    WayRoundTurnsHere().NoteWentElsewhere();
 }
 
 bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* target, float standDistance, Position& out,
@@ -805,7 +796,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
 
     // A look for a log line wants every side, so it always asks the navmesh.
     PlayerbotStandSpotMemory::Answer answer;
-    if (!look && StandSpots.Recall(question, nowMs, answer))
+    if (!look && StandSpotsHere().Recall(question, nowMs, answer))
     {
         if (!answer.Found)
             return false;
@@ -934,7 +925,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         }
     }
 
-    StandSpots.NoteSides(asked, notNeeded);
+    StandSpotsHere().NoteSides(asked, notNeeded);
     answer = {};
     answer.Found = found;
     if (found)
@@ -944,7 +935,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         answer.Z = best.GetPositionZ();
         answer.Orientation = best.GetOrientation();
     }
-    StandSpots.Remember(question, nowMs, answer);
+    StandSpotsHere().Remember(question, nowMs, answer);
 
     if (!found)
         return false;
@@ -953,15 +944,10 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
     return true;
 }
 
-void PlayerbotWalker::ForgetStandSpots(Player const* player)
+void PlayerbotWalker::ForgetStandSpots(Player const* player, PlayerbotMapPass& pass)
 {
     if (player)
-        StandSpots.Forget(player->GetGUID().GetCounter());
-}
-
-std::string PlayerbotWalker::DescribeStandSpotsAndClear()
-{
-    return StandSpots.DescribeWindowAndClear();
+        pass.StandSpots.Forget(player->GetGUID().GetCounter());
 }
 
 bool PlayerbotWalker::Start(Player* player, Position const& destination, float stopDistance, PlayerbotRecoveryGoal const& goal)
@@ -2617,12 +2603,14 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
     if (_wayRoundJoinReason)
         JoinWayRoundLine(player);
 
-    // She was dropped from the line for missing her turn, which only happens when her updates stopped for a while.
-    if (!WayRoundTurns.InLine(_wayRoundTicket))
-        _wayRoundTicket = WayRoundTurns.Join("back in line after missing her turn");
+    // She was dropped from the line for missing her turn, which only happens when her updates stopped for a while, or
+    // her brain moved to another map's pass.
+    PlayerbotWayRoundTurns& turns = WayRoundTurnsHere();
+    if (!turns.InLine(_wayRoundTicket))
+        _wayRoundTicket = turns.Join("back in line after missing her turn");
 
     // Bots map in the order they stopped. Waiting in line does not count against her own time limit.
-    if (!WayRoundTurns.IsHerTurn(_wayRoundTicket))
+    if (!turns.IsHerTurn(_wayRoundTicket))
     {
         if (!_wayRoundHadATurn)
             _wayRoundWaitMs += diff;
@@ -2639,7 +2627,7 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
         _wayRoundMs += diff;
 
     // The other bot at the front of the line may already have spent this tick's mapping time. Then she maps on the next.
-    if (WayRoundSpentThisTick >= WAY_ROUND_TICK_BUDGET)
+    if (WayRoundSpentThisTick() >= WAY_ROUND_TICK_BUDGET)
         return;
 
     PlayerbotWalkMapServerWorld world(player, map);
@@ -2649,7 +2637,7 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
         finished = _wayRoundMap->Advance(world, WAY_ROUND_SPOTS_PER_CLOCK_CHECK);
     while (!finished && std::chrono::steady_clock::now() - sliceStart < WAY_ROUND_SLICE);
     std::chrono::steady_clock::duration const slice = std::chrono::steady_clock::now() - sliceStart;
-    WayRoundSpentThisTick += slice;
+    WayRoundSpentThisTick() += slice;
     _wayRoundWork += slice;
 
     if (!finished)
@@ -2676,7 +2664,7 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
             PLAYERBOT_LOG_DETAIL(player,
                 "mod-playerbots: {} has nothing {:.0f} yards closer within {:.0f} yards, and the ground she can walk carries on past it, so she maps {:.0f} yards.",
                 player->GetName(), WAY_ROUND_MIN_GAIN_YARDS, _wayRoundYards, WAY_ROUND_YARDS);
-            WayRoundTurns.NoteWidened();
+            WayRoundTurnsHere().NoteWidened();
             StartWayRoundMap(player, WAY_ROUND_YARDS);
             return;
         }
@@ -2765,7 +2753,7 @@ bool PlayerbotWalker::ProbeOneWayOut(Player* player)
     std::vector<G3D::Vector3> route;
     bool const routed = BuildMmapPath(player, out, _destination, route) && RouteStartsWalkable(player, out, route);
     std::chrono::steady_clock::duration const spent = std::chrono::steady_clock::now() - started;
-    WayRoundSpentThisTick += spent;
+    WayRoundSpentThisTick() += spent;
     _wayRoundWork += spent;
     if (!routed)
         return false;

@@ -30,8 +30,14 @@ inline constexpr char const* PLAYERBOTS_RACES = "Playerbots.Races";
 inline constexpr char const* PLAYERBOTS_CLASSES = "Playerbots.Classes";
 inline constexpr char const* PLAYERBOTS_BRIDGE_ENABLE = "Playerbots.Bridge.Enable";
 inline constexpr char const* PLAYERBOTS_BRIDGE_PORT = "Playerbots.Bridge.Port";
+inline constexpr char const* PLAYERBOTS_MAP_THREAD_BRAINS = "Playerbots.MapThreadBrains";
 inline constexpr char const* PLAYERBOTS_LOG = "module.playerbots";
 inline constexpr int PLAYERBOTS_BRIDGE_PROTOCOL_VERSION = 2;
+
+// Work that must stay on the world thread calls this first. Called from a map thread running bot brains, it writes one
+// error for each kind of work (and stops a debug build), so a test run shows a brain reaching for world-only work
+// instead of racing without a trace. Costs one thread-local read otherwise.
+void PlayerbotWorldThreadOnly(char const* what);
 
 enum class PlayerbotLoginMode
 {

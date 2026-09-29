@@ -63,6 +63,11 @@ namespace
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
     // She could not step anywhere from where she stood: she looks again after this long.
     constexpr uint32 STUCK_FEET_WAIT_MS = 5000;
+    // Unable to step anywhere within this many yards of one place for this long, she uses her Hearthstone. After the
+    // press she stands still long enough for its cast, since a step would interrupt it.
+    constexpr float STUCK_FEET_SAME_PLACE_YARDS = 5.0f;
+    constexpr uint32 STUCK_FEET_HEARTH_AFTER_MS = 2 * MINUTE * IN_MILLISECONDS;
+    constexpr uint32 HEARTH_CAST_WAIT_MS = 15000;
     // A bot with nothing to do, or walking, looks around for new work this often, not every world tick. Being hit, a
     // server movement order, death, her fight, and her walk's heartbeats do not wait for it.
     constexpr uint32 LOOK_AROUND_INTERVAL_MS = 1000;
@@ -2436,6 +2441,8 @@ void PlayerbotMgr::ForgetPositionAfterTeleport(PlayerbotRecord& bot, Player* pla
     bot.CommandMovePending = false;
     // A run is measured from where she started it, which is not where she is now.
     bot.Fleeing = false;
+    // Wherever she was stuck, she is not there now.
+    bot.StuckFeetSinceMs = 0;
     if (bot.Command.Active() || !player->IsAlive() || bot.Death != PlayerbotDeathWork::None)
         return;
 
@@ -3701,6 +3708,43 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
     return true;
 }
 
+// She could not step anywhere again. Stuck in one place long enough, she does what a stuck player does and uses her
+// Hearthstone; the server casts it and moves her home, and her teleport reply is the ordinary one.
+void PlayerbotMgr::NoteStuckAtFeet(PlayerbotRecord& bot, Player* player)
+{
+    uint32 const now = GameTime::GetGameTimeMS();
+    if (!bot.StuckFeetSinceMs || bot.StuckFeetPlace.GetMapId() != player->GetMapId()
+        || bot.StuckFeetPlace.GetExactDist(player) > STUCK_FEET_SAME_PLACE_YARDS)
+    {
+        bot.StuckFeetPlace.WorldRelocate(*player);
+        bot.StuckFeetSinceMs = now ? now : 1;
+        bot.StuckFeetSaidNoHearth = false;
+        return;
+    }
+
+    uint32 const stuckMs = getMSTimeDiff(bot.StuckFeetSinceMs, now);
+    if (stuckMs < STUCK_FEET_HEARTH_AFTER_MS)
+        return;
+
+    std::string whyNot;
+    if (PlayerbotClient::TryUseHearthstone(player, whyNot))
+    {
+        bot.StuckFeetWaitMs = HEARTH_CAST_WAIT_MS;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has not been able to step anywhere near ({:.2f}, {:.2f}, {:.2f}) for {} seconds, so she uses her Hearthstone. She stands still for its cast.",
+            player->GetName(), bot.StuckFeetPlace.GetPositionX(), bot.StuckFeetPlace.GetPositionY(), bot.StuckFeetPlace.GetPositionZ(),
+            stuckMs / IN_MILLISECONDS);
+        return;
+    }
+
+    if (!bot.StuckFeetSaidNoHearth)
+    {
+        bot.StuckFeetSaidNoHearth = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has not been able to step anywhere near ({:.2f}, {:.2f}, {:.2f}) for {} seconds, but does not use her Hearthstone: {}. She keeps waiting and looking.",
+            player->GetName(), bot.StuckFeetPlace.GetPositionX(), bot.StuckFeetPlace.GetPositionY(), bot.StuckFeetPlace.GetPositionZ(),
+            stuckMs / IN_MILLISECONDS, whyNot);
+    }
+}
+
 void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
 {
     // Her walk map found no spot she can step to from where she stands. Every target would fail the same way from here,
@@ -3711,6 +3755,7 @@ void PlayerbotMgr::RecoverFailedWalk(PlayerbotRecord& bot, Player* player)
         bot.StuckFeetWaitMs = STUCK_FEET_WAIT_MS;
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot step anywhere from where she stands, so the target of this walk stays off her skip list. She waits {} seconds and looks again.",
             player->GetName(), STUCK_FEET_WAIT_MS / IN_MILLISECONDS);
+        NoteStuckAtFeet(bot, player);
     }
 
     if (bot.GameObjectTarget.QuestId)

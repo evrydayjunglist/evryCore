@@ -134,6 +134,12 @@ struct PlayerbotRecord
     bool SkipsForgotten = false;
     // She could not step anywhere from where she stood. She starts no new work until this has run out.
     uint32 StuckFeetWaitMs = 0;
+    // Where and since when (game time) she has kept failing to step anywhere. Long enough there, she uses her
+    // Hearthstone. A place more than a few yards away, or a teleport, starts it again.
+    WorldLocation StuckFeetPlace;
+    uint32 StuckFeetSinceMs = 0;
+    // She has said she has no Hearthstone ready at this place, so she does not say it every few seconds.
+    bool StuckFeetSaidNoHearth = false;
     // How long she has stood with nothing to do while targets were on her skip list.
     uint32 IdleWithSkipsMs = 0;
     // Looking around for new work is most of what a bot with nothing to do costs. After a look she waits before the
@@ -261,6 +267,7 @@ private:
     bool BeginHealerWalk(PlayerbotRecord& bot, Player* player);
     bool UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32 diff);
     void RecoverFailedWalk(PlayerbotRecord& bot, Player* player);
+    void NoteStuckAtFeet(PlayerbotRecord& bot, Player* player);
     // allowFights false keeps to talk and loot: no pull, no item used on a creature.
     bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking, bool allowFights = true);
     bool TryClickFromHere(PlayerbotRecord& bot, Player* player);

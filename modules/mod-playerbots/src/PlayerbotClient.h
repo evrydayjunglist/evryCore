@@ -269,6 +269,9 @@ namespace PlayerbotClient
     Item* PickRestItem(Player* player, bool wantFood, bool wantDrink, std::unordered_set<uint32> const& refused);
     // Queues the CMSG_USE_ITEM a player sends by clicking that food or drink. Returns the item's on-use spell, or 0.
     uint32 TryUseRestItem(Player* player, Item* item);
+    // Queues the CMSG_USE_ITEM a player sends by clicking her Hearthstone. Returns true when it went out; otherwise
+    // whyNot says why (none in her bags, cooldown seconds left, or she cannot use it now).
+    bool TryUseHearthstone(Player* player, std::string& whyNot);
     bool CombatCastHasStarted(Player const* player, uint32 spellId);
     bool CombatSpellIsMelee(SpellInfo const* spellInfo);
     float CombatSpellMaxRange(Player const* player, Unit const* target, SpellInfo const* spellInfo);

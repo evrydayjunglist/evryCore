@@ -4049,6 +4049,63 @@ uint32 PlayerbotClient::TryUseRestItem(Player* player, Item* item)
     return spellInfo->Id;
 }
 
+bool PlayerbotClient::TryUseHearthstone(Player* player, std::string& whyNot)
+{
+    // The Hearthstone every new character is given.
+    constexpr uint32 HEARTHSTONE_ITEM_ID = 6948;
+
+    whyNot.clear();
+    if (!player || !player->IsInWorld() || !player->GetSession() || !player->GetMap() || !player->GetSpellHistory())
+    {
+        whyNot = "she is not in the world";
+        return false;
+    }
+    if (player->IsNonMeleeSpellCast(false, false, true))
+    {
+        whyNot = "she is already casting";
+        return false;
+    }
+
+    Item* hearthstone = nullptr;
+    player->ForEachItem(ItemSearchLocation::Inventory, [&](Item* item)
+    {
+        if (item->GetEntry() != HEARTHSTONE_ITEM_ID)
+            return ItemSearchCallbackResult::Continue;
+        hearthstone = item;
+        return ItemSearchCallbackResult::Stop;
+    });
+    if (!hearthstone)
+    {
+        whyNot = "she has no Hearthstone in her bags";
+        return false;
+    }
+
+    uint32 const spellId = GetItemOnUseSpellId(hearthstone);
+    SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID()) : nullptr;
+    if (!spellInfo)
+    {
+        whyNot = "her Hearthstone has no spell";
+        return false;
+    }
+    if (player->CanUseItem(hearthstone) != EQUIP_ERR_OK)
+    {
+        whyNot = "she cannot use her Hearthstone now";
+        return false;
+    }
+    if (!player->GetSpellHistory()->IsReady(spellInfo, hearthstone->GetEntry()))
+    {
+        uint32 const seconds = uint32(std::chrono::duration_cast<Seconds>(player->GetSpellHistory()->GetRemainingCooldown(spellInfo)).count());
+        whyNot = Trinity::StringFormat("her Hearthstone is on cooldown for {} more seconds", seconds);
+        return false;
+    }
+
+    // Cast on herself, as a click in her bags does. The server casts it, starts its cooldown, and moves her home.
+    QueueUseItem(player, hearthstone, player->GetGUID(), spellInfo->Id);
+    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_USE_ITEM {} ({}).",
+        player->GetName(), hearthstone->GetTemplate()->GetDefaultLocaleName(), hearthstone->GetEntry());
+    return true;
+}
+
 bool PlayerbotClient::TryUseGameObject(Player* player, GameObjectTarget const& target)
 {
     if (!player || !player->IsInWorld() || !player->GetSession() || target.GoGuid.IsEmpty())

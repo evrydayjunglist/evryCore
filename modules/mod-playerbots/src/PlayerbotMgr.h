@@ -24,7 +24,7 @@
 #include "PlayerbotCoordinatorLease.h"
 #include "PlayerbotCoordinatorPresence.h"
 #include "PlayerbotInvitePolicy.h"
-#include "PlayerbotMapPickTurns.h"
+#include "PlayerbotMapPass.h"
 #include "PlayerbotMovement.h"
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotSessionPresence.h"
@@ -33,11 +33,13 @@
 #include "Playerbots.h"
 #include "ObjectGuid.h"
 #include "Position.h"
+#include <memory>
 #include <mutex>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
+class Map;
 class Player;
 class WorldPacket;
 class WorldSession;
@@ -181,6 +183,9 @@ struct PlayerbotRecord
     bool CommandMovePending = false;
     bool OriginalControlRestorePending = false;
     PlayerbotWalker Walker;
+    // With Playerbots.MapThreadBrains on: the world thread found her standing on a map, not commanded, and past login, so
+    // her map's thread runs her brain on its next update. Written only by the world thread.
+    bool BrainOnMapThread = false;
 };
 
 struct CommandableRtsSession
@@ -203,6 +208,10 @@ public:
     void Start();
     void Stop();
     void Update(uint32 diff);
+    // The map's own thread, at the end of its update: the brains of the bots standing on it, with
+    // Playerbots.MapThreadBrains on.
+    void UpdateMap(Map* map, uint32 diff);
+    void OnMapDestroyed(Map* map);
     bool IsBotAccount(uint32 accountId) const;
     void OnBotLogin(Player* player);
     void OnPlayerLogout(Player* player);
@@ -248,9 +257,12 @@ private:
     bool TryLogin(PlayerbotRecord& bot);
     void UpdateBot(PlayerbotRecord& bot, uint32 diff);
     void ReportTickStats(PlayerbotTickReport const& report);
-    void ReportSlowUpdate(PlayerbotRecord const& bot, uint64 botMicros);
+    void ReportSlowUpdate(PlayerbotRecord const& bot, Player* player, uint64 botMicros, PlayerbotMapPass& pass);
+    static uint64 MapPassKey(uint32 mapId, uint32 instanceId);
     void UpdateLogin(PlayerbotRecord& bot);
     void UpdateWorld(PlayerbotRecord& bot, uint32 diff);
+    // Everything her client does once she has a player: answering the server, then her brain once she is on a map.
+    void UpdateBrain(PlayerbotRecord& bot, WorldSession* session, Player* player, uint32 diff, bool answerInvite);
     void AnswerServerMovement(PlayerbotRecord& bot, Player* player, uint32 diff);
     void AnswerServerOrder(PlayerbotRecord& bot, Player* player, PlayerbotServerOrder const& order);
     void RetryServerReplies(PlayerbotRecord& bot, Player* player, uint32 diff);
@@ -321,18 +333,14 @@ private:
     std::mutex _serverOrdersLock;
     std::unordered_map<uint32, std::vector<PlayerbotServerOrder>> _serverOrders;
     PlayerbotWalkMapper _walkMapper;
-    // Bots take turns to pick their next map work, a few each world tick.
-    PlayerbotMapPickTurns _mapPickTurns;
     PlayerbotTickStats _tickStats;
     std::string _lastTickReport;
-    // The steps of the bot update running now, and how long until another slow update may be written to the log.
-    PlayerbotUpdateCost _updateCost;
-    uint32 _slowUpdateLogGapMs = 0;
-    // The same steps summed over every bot this tick, and over the report window.
-    PlayerbotUpdateCost _tickCost;
-    PlayerbotUpdateCost _windowCost;
-    uint64 _windowBotsMicros = 0;
-    uint32 _slowTickLogGapMs = 0;
+    // Playerbots.MapThreadBrains: the brain of a bot standing on a map runs on that map's thread. Read at startup.
+    bool _mapThreadBrains = false;
+    // One brain pass for each map instance that has run bot brains, by map and instance id. Map threads add passes; the
+    // world thread reads and drops them. The lock is held only to find, add, or drop a pass, never while one runs.
+    std::mutex _mapPassesLock;
+    std::unordered_map<uint64, std::unique_ptr<PlayerbotMapPass>> _mapPasses;
 };
 
 #define sPlayerbotMgr PlayerbotMgr::instance()

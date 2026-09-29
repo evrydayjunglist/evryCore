@@ -11,6 +11,7 @@
 #define EVRY_PLAYERBOT_WAY_ROUND_TURNS_H
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -44,10 +45,11 @@ public:
     // Called once at the start of every world tick.
     void BeginTick() { ++_tick; }
 
-    // A place at the back of the line. The ticket is never 0.
+    // A place at the back of the line. The ticket is never 0, and no two lines hand out the same ticket, so a bot that
+    // moved to another map's line cannot hold a ticket that means someone else there.
     uint64_t Join(char const* reason)
     {
-        uint64_t const ticket = _nextTicket++;
+        uint64_t const ticket = NextTicket().fetch_add(1);
         _line.push_back(ticket);
         _lastSeen[ticket] = _tick;
         ++_window.Started;
@@ -164,6 +166,12 @@ public:
     }
 
 private:
+    static std::atomic<uint64_t>& NextTicket()
+    {
+        static std::atomic<uint64_t> next{ 1 };
+        return next;
+    }
+
     void DropGoneFromFront()
     {
         std::size_t place = 0;
@@ -198,7 +206,6 @@ private:
     std::deque<uint64_t> _line;
     // The world tick on which each bot in the line last came for her turn.
     std::unordered_map<uint64_t, uint64_t> _lastSeen;
-    uint64_t _nextTicket = 1;
     uint64_t _tick = 0;
     Window _window;
 };

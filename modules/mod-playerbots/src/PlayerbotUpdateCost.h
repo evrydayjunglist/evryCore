@@ -133,11 +133,11 @@ public:
         return text;
     }
 
-    // The update being timed now, or none. The world thread runs one bot update at a time, so one is enough, and the
-    // walker and the finders can add to it without being handed it.
+    // The update being timed now on this thread, or none. Each thread runs one bot update at a time, so one each is
+    // enough, and the walker and the finders can add to it without being handed it.
     static PlayerbotUpdateCost*& Current()
     {
-        static PlayerbotUpdateCost* current = nullptr;
+        thread_local PlayerbotUpdateCost* current = nullptr;
         return current;
     }
 

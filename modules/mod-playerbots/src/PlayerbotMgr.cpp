@@ -27,6 +27,7 @@
 #include "Group.h"
 #include "Item.h"
 #include "Log.h"
+#include "Map.h"
 #include "MapManager.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
@@ -52,8 +53,36 @@
 #include <unordered_set>
 #include <utility>
 
+void PlayerbotWorldThreadOnly(char const* what)
+{
+    PlayerbotMapPass const* pass = PlayerbotMapPass::Current();
+    if (!pass || pass->World)
+        return;
+
+    static std::mutex reportedLock;
+    static std::unordered_set<std::string> reported;
+    bool first = false;
+    {
+        std::lock_guard<std::mutex> lock(reportedLock);
+        first = reported.insert(what).second;
+    }
+    if (first)
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} ran on the thread of map {} (instance {}) while it updated its bots. "
+            "That work belongs on the world thread; this is a bug in the module.", what, pass->MapId, pass->InstanceId);
+#ifdef _DEBUG
+    ASSERT(false, "mod-playerbots: %s ran on a map thread", what);
+#endif
+}
+
 namespace
 {
+    // Only the world thread looks sessions up in the world's list; a brain on a map thread uses her player's session.
+    WorldSession* FindBotSession(uint32 accountId)
+    {
+        PlayerbotWorldThreadOnly("looking a bot's session up in the world's session list");
+        return sWorld->FindSession(accountId);
+    }
+
     constexpr float QUEST_SEARCH_RANGE = 40.0f;
     constexpr float COMBAT_SEARCH_RANGE = 150.0f;
     constexpr float LOOT_SEARCH_RANGE = 10.0f;
@@ -368,7 +397,7 @@ namespace
 
         if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
         {
-            Creature* creature = ObjectAccessor::GetCreature(*player, bot.UseItemOnUnitTarget.CreatureGuid);
+            Creature* creature = PlayerbotClient::GetCreature(*player, bot.UseItemOnUnitTarget.CreatureGuid);
             return InInteractRange(player, creature);
         }
 
@@ -380,7 +409,7 @@ namespace
 
         if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
         {
-            Creature* creature = ObjectAccessor::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
+            Creature* creature = PlayerbotClient::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
             return InInteractRange(player, creature);
         }
 
@@ -473,6 +502,7 @@ namespace
         FindCreatureOptions options;
         options.IsAlive = FindCreatureAliveState::Alive;
         player->GetCreatureListWithOptionsInGrid(nearby, FLEE_LEG_YARDS + FLEE_CLEAR_OF_HOSTILES_YARDS, options);
+        PlayerbotClient::DropRemoved(nearby);
         std::vector<Creature*> hostiles;
         for (Creature* creature : nearby)
         {
@@ -619,7 +649,7 @@ namespace
         if (CreatureIsHittingPlayer(player, creatureGuid))
             return true;
 
-        Creature* creature = ObjectAccessor::GetCreature(*player, creatureGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, creatureGuid);
         return creature && player->IsWithinMeleeRange(creature);
     }
 
@@ -837,6 +867,14 @@ void PlayerbotMgr::Start()
         return;
     }
 
+    _mapThreadBrains = sConfigMgr->GetBoolDefault(PLAYERBOTS_MAP_THREAD_BRAINS, false);
+    if (_mapThreadBrains)
+    {
+        PlayerbotClient::RefreshSharedCaches();
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: Playerbots.MapThreadBrains is 1. The brain of a bot standing on a map runs on "
+            "that map's thread; MapUpdate.Threads is {}.", sWorld->getIntConfig(CONFIG_NUMTHREADS));
+    }
+
     uint32 sessionsAtStartup = sWorld->GetActiveAndQueuedSessionCount();
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: preparing {} bot(s) in {} login mode. Active sessions at OnStartup: {}.",
         count, LoginModeName(_loginMode), sessionsAtStartup);
@@ -883,51 +921,158 @@ void PlayerbotMgr::Update(uint32 diff)
     using Clock = std::chrono::steady_clock;
     Clock::time_point const tickStart = Clock::now();
 
-    PlayerbotWalker::BeginWorldTick();
-    _mapPickTurns.BeginTick(diff);
+    PlayerbotMapPass& pass = PlayerbotMapPass::WorldPass();
+    PlayerbotMapPass::Current() = &pass;
+    pass.BeginTick(diff);
+    // The map threads only read the shared caches, so the world thread builds them before the next map updates.
+    if (_mapThreadBrains)
+        PlayerbotClient::RefreshSharedCaches();
     UpdateBridge(diff);
     ValidateRtsSessions();
 
-    _slowUpdateLogGapMs = _slowUpdateLogGapMs > diff ? _slowUpdateLogGapMs - diff : 0;
-    _slowTickLogGapMs = _slowTickLogGapMs > diff ? _slowTickLogGapMs - diff : 0;
-    _tickCost.Clear();
     uint64 botsMicros = 0;
     for (uint32 index = 0; index < _bots.size(); ++index)
     {
         PlayerbotRecord& bot = _bots[index];
-        _updateCost.Clear();
-        PlayerbotUpdateCost::Current() = &_updateCost;
+        pass.UpdateCost.Clear();
+        PlayerbotUpdateCost::Current() = &pass.UpdateCost;
         Clock::time_point const botStart = Clock::now();
         UpdateBot(bot, diff);
         uint64 const botMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - botStart).count());
         PlayerbotUpdateCost::Current() = nullptr;
         _tickStats.AddBotUpdate(botMicros, index);
-        _tickCost.Add(_updateCost);
+        pass.TickCost.Add(pass.UpdateCost);
         botsMicros += botMicros;
         if (botMicros > PLAYERBOT_SLOW_UPDATE_MICROS)
-            ReportSlowUpdate(bot, botMicros);
+        {
+            WorldSession* session = FindBotSession(bot.Account.AccountId);
+            ReportSlowUpdate(bot, session ? session->GetPlayer() : nullptr, botMicros, pass);
+        }
     }
 
     UpdateRts(diff);
     _walkMapper.Update(diff);
 
-    uint64 const tickMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - tickStart).count());
-    _windowCost.Add(_tickCost);
-    _windowBotsMicros += botsMicros;
-    if (tickMicros > PLAYERBOT_SLOW_TICK_MICROS && !_slowTickLogGapMs)
+    // The brains the map threads ran this tick count as bot updates too, for the slowest bot and the time per bot.
+    if (_mapThreadBrains)
     {
-        _slowTickLogGapMs = PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: the playerbot update took {:.1f} ms this tick: {:.1f} ms in {} bot update(s) "
-            "and {:.1f} ms in the work shared by all bots. The bot updates spent it on: {}.",
-            tickMicros / 1000.0, botsMicros / 1000.0, _bots.size(), (tickMicros > botsMicros ? tickMicros - botsMicros : 0) / 1000.0,
-            _tickCost.Describe(botsMicros));
+        std::lock_guard<std::mutex> lock(_mapPassesLock);
+        for (auto const& [key, mapPass] : _mapPasses)
+        {
+            for (auto const& [micros, index] : mapPass->BotUpdates)
+                _tickStats.AddBotUpdate(micros, index);
+            mapPass->BotUpdates.clear();
+        }
     }
+
+    uint64 const tickMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - tickStart).count());
+    pass.WindowCost.Add(pass.TickCost);
+    pass.WindowBotsMicros += botsMicros;
+    if (tickMicros > PLAYERBOT_SLOW_TICK_MICROS && !pass.SlowTickLogGapMs)
+    {
+        pass.SlowTickLogGapMs = PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: the playerbot update{} took {:.1f} ms this tick: {:.1f} ms in {} bot update(s) "
+            "and {:.1f} ms in the work shared by all bots. The bot updates spent it on: {}.",
+            _mapThreadBrains ? " on the world thread" : "", tickMicros / 1000.0, botsMicros / 1000.0, _bots.size(),
+            (tickMicros > botsMicros ? tickMicros - botsMicros : 0) / 1000.0, pass.TickCost.Describe(botsMicros));
+    }
+    PlayerbotMapPass::Current() = nullptr;
     if (std::optional<PlayerbotTickReport> report = _tickStats.EndTick(tickMicros, diff))
         ReportTickStats(*report);
 }
 
+// Runs on the thread of this map, at the end of its update: the brains of the bots standing on it. The world thread is
+// waiting for the map threads meanwhile, so nothing the world pass owns changes under it.
+void PlayerbotMgr::UpdateMap(Map* map, uint32 diff)
+{
+    if (!_mapThreadBrains || _bots.empty() || !map)
+        return;
+
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point const runStart = Clock::now();
+
+    // The players list is copied first, so nothing a brain does to the list can upset the walk over it.
+    std::vector<std::pair<uint32, Player*>> brains;
+    for (MapReference const& reference : map->GetPlayers())
+    {
+        Player* player = reference.GetSource();
+        auto found = _botIndexByGuid.find(player->GetGUID());
+        if (found == _botIndexByGuid.end())
+            continue;
+        PlayerbotRecord const& bot = _bots[found->second];
+        if (bot.BrainOnMapThread && !bot.Command.Active())
+            brains.emplace_back(uint32(found->second), player);
+    }
+    if (brains.empty())
+        return;
+
+    PlayerbotMapPass* pass = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mapPassesLock);
+        std::unique_ptr<PlayerbotMapPass>& slot = _mapPasses[MapPassKey(map->GetId(), map->GetInstanceId())];
+        if (!slot)
+        {
+            slot = std::make_unique<PlayerbotMapPass>();
+            slot->MapId = map->GetId();
+            slot->InstanceId = map->GetInstanceId();
+        }
+        pass = slot.get();
+    }
+
+    PlayerbotMapPass::Current() = pass;
+    pass->BeginTick(diff);
+    for (auto const& [index, player] : brains)
+    {
+        PlayerbotRecord& bot = _bots[index];
+        WorldSession* session = player->GetSession();
+        if (!session || session->GetPlayer() != player || !player->IsInWorld() || player->GetMap() != map)
+            continue;
+
+        pass->UpdateCost.Clear();
+        PlayerbotUpdateCost::Current() = &pass->UpdateCost;
+        Clock::time_point const botStart = Clock::now();
+        UpdateBrain(bot, session, player, diff, false);
+        uint64 const botMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - botStart).count());
+        PlayerbotUpdateCost::Current() = nullptr;
+        pass->BotUpdates.emplace_back(botMicros, index);
+        pass->TickCost.Add(pass->UpdateCost);
+        pass->TickBotsMicros += botMicros;
+        if (botMicros > PLAYERBOT_SLOW_UPDATE_MICROS)
+            ReportSlowUpdate(bot, player, botMicros, *pass);
+    }
+
+    uint64 const runMicros = uint64(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - runStart).count());
+    pass->EndRun(runMicros);
+    if (runMicros > PLAYERBOT_SLOW_TICK_MICROS && !pass->SlowTickLogGapMs)
+    {
+        pass->SlowTickLogGapMs = PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: the bot brains on map {} (instance {}) took {:.1f} ms this map update, in {} bot "
+            "update(s). They spent it on: {}.", pass->MapId, pass->InstanceId, runMicros / 1000.0, pass->BotUpdates.size(),
+            pass->TickCost.Describe(pass->TickBotsMicros));
+    }
+    PlayerbotMapPass::Current() = nullptr;
+}
+
+// The map is going away (on the world thread). Its pass goes with it, and what it counted since the last report with it.
+void PlayerbotMgr::OnMapDestroyed(Map* map)
+{
+    PlayerbotWorldThreadOnly("dropping a destroyed map's brain pass");
+    if (!map)
+        return;
+    std::lock_guard<std::mutex> lock(_mapPassesLock);
+    _mapPasses.erase(MapPassKey(map->GetId(), map->GetInstanceId()));
+}
+
+uint64 PlayerbotMgr::MapPassKey(uint32 mapId, uint32 instanceId)
+{
+    return (uint64(mapId) << 32) | instanceId;
+}
+
 void PlayerbotMgr::UpdateBot(PlayerbotRecord& bot, uint32 diff)
 {
+    // Set again below when her brain may run on her map's thread next tick.
+    bot.BrainOnMapThread = false;
+
     {
         PlayerbotCostTimer const cost(PlayerbotCostStep::Presence);
         if (UpdateSessionPresence(bot, diff))
@@ -937,7 +1082,7 @@ void PlayerbotMgr::UpdateBot(PlayerbotRecord& bot, uint32 diff)
     if (!PlayerbotCoordinatorLogoutAllowed(bot.Command.Active()))
     {
         UpdateLogin(bot);
-        WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+        WorldSession* session = FindBotSession(bot.Account.AccountId);
         if (Player* player = session ? session->GetPlayer() : nullptr)
             UpdateCommanded(bot, player, diff, true);
         return;
@@ -950,31 +1095,43 @@ void PlayerbotMgr::UpdateBot(PlayerbotRecord& bot, uint32 diff)
         PlayerbotCostTimer const cost(PlayerbotCostStep::Presence);
         UpdateLogin(bot);
     }
+
+    // A bot standing on a map has her brain run by that map's thread. The world thread keeps a bot between maps, and the
+    // party invite, whose inviter can be on any map.
+    if (_mapThreadBrains && bot.ContinueLoginCalled)
+    {
+        WorldSession* session = FindBotSession(bot.Account.AccountId);
+        Player* player = session ? session->GetPlayer() : nullptr;
+        if (player && player->IsInWorld())
+        {
+            UpdatePartyInvite(bot, player, diff);
+            bot.BrainOnMapThread = true;
+            return;
+        }
+    }
     UpdateWorld(bot, diff);
 }
 
-void PlayerbotMgr::ReportSlowUpdate(PlayerbotRecord const& bot, uint64 botMicros)
+void PlayerbotMgr::ReportSlowUpdate(PlayerbotRecord const& bot, Player* player, uint64 botMicros, PlayerbotMapPass& pass)
 {
-    if (_slowUpdateLogGapMs)
+    if (pass.SlowUpdateLogGapMs)
         return;
-    _slowUpdateLogGapMs = PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS;
+    pass.SlowUpdateLogGapMs = PLAYERBOT_SLOW_UPDATE_LOG_GAP_MS;
 
-    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
-    Player* player = session ? session->GetPlayer() : nullptr;
     std::string const name = player ? player->GetName() : Trinity::StringFormat("bot {}", bot.Account.Index);
     std::string where;
     if (player && player->IsInWorld())
         where = Trinity::StringFormat(" at ({:.2f}, {:.2f}, {:.2f}) on map {}", player->GetPositionX(), player->GetPositionY(),
             player->GetPositionZ(), player->GetMapId());
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {}'s update{} took {:.1f} ms: {}.", name, where, botMicros / 1000.0,
-        _updateCost.Describe(botMicros));
+        pass.UpdateCost.Describe(botMicros));
 }
 
 void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
 {
     uint32 inWorld = 0;
     for (PlayerbotRecord const& bot : _bots)
-        if (WorldSession* session = sWorld->FindSession(bot.Account.AccountId))
+        if (WorldSession* session = FindBotSession(bot.Account.AccountId))
             if (Player* player = session->GetPlayer(); player && player->IsInWorld())
                 ++inWorld;
 
@@ -982,35 +1139,68 @@ void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
     if (report.BotUpdates && report.MaxBotKey < _bots.size())
     {
         PlayerbotRecord const& bot = _bots[report.MaxBotKey];
-        WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+        WorldSession* session = FindBotSession(bot.Account.AccountId);
         Player* player = session ? session->GetPlayer() : nullptr;
         slowest = player ? player->GetName() : Trinity::StringFormat("bot {}", bot.Account.Index);
     }
 
     _lastTickReport = Trinity::StringFormat(
-        "{} of {} bot(s) in the world. Over the last {} s the playerbot update took {:.2f} ms per world tick on average "
+        "{} of {} bot(s) in the world. Over the last {} s the playerbot update{} took {:.2f} ms per world tick on average "
         "({:.1f} microseconds per bot), {:.2f} ms or more in the slowest twentieth of ticks, and {:.2f} ms at most. "
         "The slowest single bot update was {:.2f} ms ({}), and {} bot update(s) took over {} ms. "
         "World ticks averaged {:.1f} ms, {} ms at most, over {} ticks.",
-        inWorld, _bots.size(), report.WindowMs / 1000, report.AverageTickMs(), report.AverageBotMicros(),
-        report.SlowTickMicros / 1000.0, report.MaxTickMicros / 1000.0, report.MaxBotMicros / 1000.0, slowest,
-        report.SlowBotUpdates, PLAYERBOT_SLOW_UPDATE_MICROS / 1000, report.AverageWorldDiffMs(), report.MaxWorldDiffMs, report.Ticks);
+        inWorld, _bots.size(), report.WindowMs / 1000, _mapThreadBrains ? " on the world thread" : "", report.AverageTickMs(),
+        report.AverageBotMicros(), report.SlowTickMicros / 1000.0, report.MaxTickMicros / 1000.0, report.MaxBotMicros / 1000.0,
+        slowest, report.SlowBotUpdates, PLAYERBOT_SLOW_UPDATE_MICROS / 1000, report.AverageWorldDiffMs(), report.MaxWorldDiffMs,
+        report.Ticks);
 
+    PlayerbotMapPass& world = PlayerbotMapPass::WorldPass();
+    std::lock_guard<std::mutex> lock(_mapPassesLock);
     if (!_bots.empty())
     {
+        uint32 const seconds = report.WindowMs / 1000;
+        PlayerbotUpdateCost allCost = world.WindowCost;
+        uint64 allBotsMicros = world.WindowBotsMicros;
+        std::string mapBrains;
+        for (auto const& [key, mapPass] : _mapPasses)
+        {
+            allCost.Add(mapPass->WindowCost);
+            allBotsMicros += mapPass->WindowBotsMicros;
+            if (!mapPass->WindowRuns)
+                continue;
+            mapBrains += Trinity::StringFormat("{}map {} (instance {}) {:.2f} ms per map update on average and {:.2f} ms at most, "
+                "{:.0f} bot(s) per update", mapBrains.empty() ? "" : "; ", mapPass->MapId, mapPass->InstanceId,
+                double(mapPass->WindowRunMicros) / mapPass->WindowRuns / 1000.0, mapPass->WindowMaxRunMicros / 1000.0,
+                double(mapPass->WindowBotUpdates) / mapPass->WindowRuns);
+        }
+
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {}", _lastTickReport);
+        if (_mapThreadBrains)
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bot brains on map threads took: {}.", seconds,
+                mapBrains.empty() ? std::string("no map had a bot brain to run") : mapBrains);
         // Steps sit inside each other (a navmesh route inside a stand spot pick), so the steps add up to more than the whole.
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bot updates spent {:.1f} ms in all, on: {}.",
-            report.WindowMs / 1000, _windowBotsMicros / 1000.0, _windowCost.Describe(_windowBotsMicros));
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s {}", report.WindowMs / 1000,
-            PlayerbotWalker::DescribeWayRoundLooksAndClear());
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bots made {}", report.WindowMs / 1000,
-            _mapPickTurns.DescribeWindowAndClear());
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bots made {}", report.WindowMs / 1000,
-            PlayerbotWalker::DescribeStandSpotsAndClear());
+            seconds, allBotsMicros / 1000.0, allCost.Describe(allBotsMicros));
+
+        // Each pass has its own lines of bots and its own stand spot memory. With bot brains on the world thread only, that
+        // is one pass and the lines read as they always have.
+        auto describePass = [seconds](PlayerbotMapPass& described, std::string const& where)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s{} {}", seconds, where,
+                described.WayRoundTurns.DescribeWindowAndClear());
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s{} the bots made {}", seconds, where,
+                described.MapPickTurns.DescribeWindowAndClear());
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s{} the bots made {}", seconds, where,
+                described.StandSpots.DescribeWindowAndClear());
+        };
+        describePass(world, _mapThreadBrains ? " on the world thread" : "");
+        for (auto const& [key, mapPass] : _mapPasses)
+            if (mapPass->WindowRuns)
+                describePass(*mapPass, Trinity::StringFormat(" on map {} (instance {})", mapPass->MapId, mapPass->InstanceId));
     }
-    _windowCost.Clear();
-    _windowBotsMicros = 0;
+    world.ClearWindow();
+    for (auto const& [key, mapPass] : _mapPasses)
+        mapPass->ClearWindow();
 }
 
 std::string PlayerbotMgr::DescribeTickStats() const
@@ -1023,6 +1213,7 @@ std::string PlayerbotMgr::DescribeTickStats() const
 
 void PlayerbotMgr::UpdateBridge(uint32 diff)
 {
+    PlayerbotWorldThreadOnly("the playerbots.exe bridge");
     if (!_bridgeStarted)
         return;
 
@@ -1105,7 +1296,7 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
             uint32 onlineBots = 0;
             for (PlayerbotRecord const& bot : _bots)
             {
-                WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+                WorldSession* session = FindBotSession(bot.Account.AccountId);
                 if (session && session->GetPlayer() && session->GetPlayer()->IsInWorld())
                     ++onlineBots;
             }
@@ -1135,7 +1326,7 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
             rapidjson::Value bots(rapidjson::kArrayType);
             for (PlayerbotRecord const& bot : _bots)
             {
-                WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+                WorldSession* session = FindBotSession(bot.Account.AccountId);
                 Player* player = session ? session->GetPlayer() : nullptr;
                 CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(bot.Account.CharacterGuid);
 
@@ -1177,7 +1368,7 @@ std::string PlayerbotMgr::HandleBridgeRequest(uint64 connectionId, std::string c
         uint32 loginRequestsStarted = 0;
         for (PlayerbotRecord& bot : _bots)
         {
-            WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+            WorldSession* session = FindBotSession(bot.Account.AccountId);
             if (session && session->GetPlayer() && session->GetPlayer()->IsInWorld())
                 ++onlineBots;
             if (TryLogin(bot))
@@ -1211,7 +1402,7 @@ void PlayerbotMgr::BeginCoordinatorLogout()
             ++pinnedByRts;
             continue;
         }
-        if (!bot.SessionQueued && !sWorld->FindSession(bot.Account.AccountId))
+        if (!bot.SessionQueued && !FindBotSession(bot.Account.AccountId))
             continue;
         if (bot.CoordinatorLogoutRequested)
             continue;
@@ -1241,7 +1432,7 @@ bool PlayerbotMgr::UpdateCoordinatorLogout(PlayerbotRecord& bot)
     if (!bot.CoordinatorLogoutRequested)
         return false;
 
-    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+    WorldSession* session = FindBotSession(bot.Account.AccountId);
     if (session)
     {
         bot.SessionSeen = true;
@@ -1289,7 +1480,7 @@ void PlayerbotMgr::ResetBotSession(PlayerbotRecord& bot)
 // to run.
 bool PlayerbotMgr::UpdateSessionPresence(PlayerbotRecord& bot, uint32 diff)
 {
-    bool const sessionExists = sWorld->FindSession(bot.Account.AccountId) != nullptr;
+    bool const sessionExists = FindBotSession(bot.Account.AccountId) != nullptr;
     if (PlayerbotSessionWasLost(bot.SessionQueued, bot.SessionSeen, sessionExists, bot.CoordinatorLogoutRequested))
     {
         std::string const name = BotCharacterName(bot.Account);
@@ -1360,6 +1551,7 @@ void PlayerbotMgr::ClearServerOrders(uint32 accountId)
 
 bool PlayerbotMgr::StartWalkMap(Player* subject, float radius, ObjectGuid requester, std::string& message)
 {
+    PlayerbotWorldThreadOnly("starting a walk map");
     if (!subject)
     {
         message = "That player is not online.";
@@ -1524,7 +1716,7 @@ CommandableRtsEnterResult PlayerbotMgr::EnterRts(Player* commander)
 
     for (PlayerbotRecord& bot : _bots)
     {
-        WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+        WorldSession* session = FindBotSession(bot.Account.AccountId);
         Player* player = session ? session->GetPlayer() : nullptr;
         if (!player || !player->IsInWorld() || player->GetGroup() != group)
             continue;
@@ -1728,7 +1920,13 @@ void PlayerbotMgr::OnPlayerLogout(Player* player)
     if (!player)
         return;
 
-    PlayerbotWalker::ForgetStandSpots(player);
+    PlayerbotWorldThreadOnly("a bot logging out");
+    PlayerbotWalker::ForgetStandSpots(player, PlayerbotMapPass::WorldPass());
+    {
+        std::lock_guard<std::mutex> lock(_mapPassesLock);
+        for (auto const& [key, mapPass] : _mapPasses)
+            PlayerbotWalker::ForgetStandSpots(player, *mapPass);
+    }
 
     ObjectGuid const subject = player->GetGUID();
     if (PlayerbotRecord* runtime = FindCommandRuntime(subject); runtime && runtime->Walker.IsJumping())
@@ -1760,6 +1958,7 @@ void PlayerbotMgr::OnPlayerMapChanged(Player* player)
 
 void PlayerbotMgr::ValidateRtsSessions()
 {
+    PlayerbotWorldThreadOnly("checking RTS sessions");
     std::vector<ObjectGuid> commanders;
     commanders.reserve(_rtsSessions.size());
     for (auto const& [commander, session] : _rtsSessions)
@@ -1912,6 +2111,7 @@ void PlayerbotMgr::ResumeCoordinatorLogoutAfterRelease()
 
 void PlayerbotMgr::UpdateRts(uint32 diff)
 {
+    PlayerbotWorldThreadOnly("updating RTS orders");
     for (auto& [guid, runtime] : _originalCommandRuntimes)
     {
         Player* player = ObjectAccessor::FindConnectedPlayer(guid);
@@ -2117,7 +2317,7 @@ bool PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
     if (bot.SessionQueued)
         return false;
 
-    if (sWorld->FindSession(bot.Account.AccountId))
+    if (FindBotSession(bot.Account.AccountId))
     {
         bot.SessionQueued = true;
         bot.SessionSeen = true;
@@ -2154,7 +2354,7 @@ bool PlayerbotMgr::TryLogin(PlayerbotRecord& bot)
 
 void PlayerbotMgr::UpdateLogin(PlayerbotRecord& bot)
 {
-    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+    WorldSession* session = FindBotSession(bot.Account.AccountId);
     if (!session)
         return;
 
@@ -2330,6 +2530,7 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
 
 void PlayerbotMgr::UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint32 diff)
 {
+    PlayerbotWorldThreadOnly("answering a party invite");
     if (bot.InviteFrom.IsEmpty())
         return;
 
@@ -2522,7 +2723,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (!bot.ContinueLoginCalled)
         return;
 
-    WorldSession* session = sWorld->FindSession(bot.Account.AccountId);
+    WorldSession* session = FindBotSession(bot.Account.AccountId);
     if (!session)
         return;
 
@@ -2530,12 +2731,18 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     if (!player)
         return;
 
+    UpdateBrain(bot, session, player, diff, true);
+}
+
+void PlayerbotMgr::UpdateBrain(PlayerbotRecord& bot, WorldSession* session, Player* player, uint32 diff, bool answerInvite)
+{
     AnswerServerMovement(bot, player, diff);
 
     if (!player->IsInWorld())
         return;
 
-    UpdatePartyInvite(bot, player, diff);
+    if (answerInvite)
+        UpdatePartyInvite(bot, player, diff);
 
     if (!bot.CinematicSkipped)
     {
@@ -2829,7 +3036,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             return;
         }
 
-        Creature* creature = ObjectAccessor::GetCreature(*player, bot.QuestTarget.NpcGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, bot.QuestTarget.NpcGuid);
         if (creature && creature->IsAlive()
             && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f)
             && CanWalkRestOfWay(bot, player, bot.QuestTarget.NpcGuid))
@@ -2884,7 +3091,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                 return;
             }
 
-            GameObject* go = ObjectAccessor::GetGameObject(*player, bot.GameObjectTarget.GoGuid);
+            GameObject* go = PlayerbotClient::GetGameObject(*player, bot.GameObjectTarget.GoGuid);
             if (go && go->isSpawned() && !go->IsWithinDistInMap(player)
                 && CanWalkRestOfWay(bot, player, bot.GameObjectTarget.GoGuid))
             {
@@ -3106,7 +3313,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
     // Between looks she only stands there. The time still counts toward forgetting her skip list and the idle line.
     bot.SinceLookMs += diff;
     // A bot waiting in line for a map pick already looked around her; she comes straight back for her turn each tick.
-    if (!_mapPickTurns.InLine(bot.Account.Index))
+    if (!PlayerbotMapPass::Here().MapPickTurns.InLine(bot.Account.Index))
     {
         if (!LookAroundNow(bot))
             return;
@@ -3118,7 +3325,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
         }
     }
 
-    if (!_mapPickTurns.MayPick(bot.Account.Index))
+    if (!PlayerbotMapPass::Here().MapPickTurns.MayPick(bot.Account.Index))
         return;
     uint32 const idleMs = std::exchange(bot.SinceLookMs, 0);
 
@@ -3683,7 +3890,7 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
         }
 
         bot.DeathWaitMs += diff;
-        Creature* healer = ObjectAccessor::GetCreature(*player, bot.SpiritHealerGuid);
+        Creature* healer = PlayerbotClient::GetCreature(*player, bot.SpiritHealerGuid);
         if (healer && healer->IsAlive()
             && !player->IsWithinDistInMap(healer, healer->GetCombatReach() + 4.0f)
             && CanWalkRestOfWay(bot, player, bot.SpiritHealerGuid))
@@ -3953,7 +4160,7 @@ bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
         else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
         {
             clickGuid = bot.ItemLootTarget.CreatureGuid;
-            Creature* creature = ObjectAccessor::GetCreature(*player, clickGuid);
+            Creature* creature = PlayerbotClient::GetCreature(*player, clickGuid);
             canClick = InInteractRange(player, creature);
         }
 
@@ -3982,7 +4189,8 @@ bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
 bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId, uint32 skipEntry)
 {
     // Only a few bots pick in one tick. One without a turn finds nothing now and asks again on her next update.
-    if (!_mapPickTurns.MayPick(bot.Account.Index))
+    PlayerbotMapPickTurns& turns = PlayerbotMapPass::Here().MapPickTurns;
+    if (!turns.MayPick(bot.Account.Index))
         return false;
 
     // Whichever way the pick ends, its time counts against this tick's picks.
@@ -3994,7 +4202,7 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
         {
             Turns.NoteSpent(uint64(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - Start).count()));
         }
-    } const noteSpent{ _mapPickTurns };
+    } const noteSpent{ turns };
 
     PlayerbotCostTimer const cost(PlayerbotCostStep::MapYellow);
     PlayerbotClient::MapYellowFilter filter = MakeMapYellowFilter(bot, skipQuestId, skipEntry, false, nullptr);
@@ -4251,7 +4459,7 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
 bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff, bool heldInPlace)
 {
     PlayerbotCostTimer const cost(PlayerbotCostStep::Combat);
-    Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
+    Creature* creature = PlayerbotClient::GetCreature(*player, bot.CombatTarget.CreatureGuid);
     if (!creature)
     {
         ClearCombat(bot, player);
@@ -4902,7 +5110,7 @@ bool PlayerbotMgr::UpdateUseItem(PlayerbotRecord& bot, Player* player, uint32 di
         return false;
     }
 
-    Creature* creature = ObjectAccessor::GetCreature(*player, bot.UseItemOnUnitTarget.CreatureGuid);
+    Creature* creature = PlayerbotClient::GetCreature(*player, bot.UseItemOnUnitTarget.CreatureGuid);
     if (!creature || !creature->IsAlive())
     {
         bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
@@ -5093,7 +5301,7 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
     {
-        Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, bot.CombatTarget.CreatureGuid);
         if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
         {
             bot.CombatSwingSent = true;
@@ -5127,7 +5335,7 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
         {
             LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
             bot.Walker.Reset();
-            Creature* creature = ObjectAccessor::GetCreature(*player, bot.CombatTarget.CreatureGuid);
+            Creature* creature = PlayerbotClient::GetCreature(*player, bot.CombatTarget.CreatureGuid);
             if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
                 bot.CombatSwingSent = true;
             return true;
@@ -5167,7 +5375,7 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
     if (!bot.ItemLootTarget.GoGuid.IsEmpty())
     {
         skipKind = "object";
-        GameObject* go = ObjectAccessor::GetGameObject(*player, bot.ItemLootTarget.GoGuid);
+        GameObject* go = PlayerbotClient::GetGameObject(*player, bot.ItemLootTarget.GoGuid);
         if (!go || !go->isSpawned())
         {
             bot.UnreachableGuids.insert(bot.ItemLootTarget.GoGuid);
@@ -5238,7 +5446,7 @@ bool PlayerbotMgr::UpdateItemLoot(PlayerbotRecord& bot, Player* player, uint32 d
     }
     else
     {
-        Creature* creature = ObjectAccessor::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
         if (!creature)
         {
             bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
@@ -5405,7 +5613,7 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
         canClick = player->GetGameObjectIfCanInteractWith(bot.ItemLootTarget.GoGuid) != nullptr;
     else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty() && bot.ItemLootTarget.LootCorpse)
     {
-        Creature* creature = ObjectAccessor::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, bot.ItemLootTarget.CreatureGuid);
         canClick = InInteractRange(player, creature);
     }
 
@@ -5590,7 +5798,7 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
             return true;
         }
 
-        Creature* creature = ObjectAccessor::GetCreature(*player, bot.VendorTarget.NpcGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, bot.VendorTarget.NpcGuid);
         if (creature && creature->IsAlive()
             && !player->IsWithinDistInMap(creature, creature->GetCombatReach() + 4.0f)
             && CanWalkRestOfWay(bot, player, bot.VendorTarget.NpcGuid))

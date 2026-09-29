@@ -66,6 +66,8 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -559,10 +561,18 @@ namespace
         map->LoadGrid(at.GetPositionX(), at.GetPositionY());
     }
 
-    PlayerbotCreatureIndex const& CreatureIndex()
+    // The caches below are shared by every bot. They are built or thrown away only on the world thread, which never runs
+    // at the same time as a map thread, so a map thread only reads them. The two filled one item at a time on first use
+    // take a lock, because two map threads can ask about new items at once.
+    PlayerbotCreatureIndex& CreatureIndexStore()
     {
         static PlayerbotCreatureIndex index;
+        return index;
+    }
 
+    void RefreshCreatureIndex()
+    {
+        PlayerbotCreatureIndex& index = CreatureIndexStore();
         CreatureDataContainer const& spawnData = sObjectMgr->GetAllCreatureData();
         if (!index.SpawnsAreCurrent(spawnData.size()))
         {
@@ -587,8 +597,13 @@ namespace
             }
             index.BuildKillCredits(credits, templates.size());
         }
+    }
 
-        return index;
+    PlayerbotCreatureIndex const& CreatureIndex()
+    {
+        if (!PlayerbotMapPass::OnMapThread())
+            RefreshCreatureIndex();
+        return CreatureIndexStore();
     }
 
     // Every creature loaded on this map from a world database spawn of one of these entries. That is the same set of
@@ -604,7 +619,8 @@ namespace
         for (uint32 entry : entries)
             for (uint64 spawnId : index.SpawnIds(map->GetId(), entry))
                 for (auto const& pair : Trinity::Containers::MapEqualRange(store, ObjectGuid::LowType(spawnId)))
-                    creatures.push_back(pair.second);
+                    if (!pair.second->IsDestroyedObject())
+                        creatures.push_back(pair.second);
         return creatures;
     }
 
@@ -617,82 +633,142 @@ namespace
     // takeable ! in the quest menu (Player::PrepareQuestMenu reads the same relations). There are thousands of starter
     // entries and most have no spawn on a given map, so the spawn ids are worked out once per map, and again if the
     // quest starters or the spawn list change.
+    struct QuestStarterSpawns
+    {
+        std::shared_mutex Lock;
+        std::unordered_map<uint32, std::vector<uint64>> SpawnIdsByMap;
+        std::size_t RelationCount = std::numeric_limits<std::size_t>::max();
+        std::size_t SpawnCount = std::numeric_limits<std::size_t>::max();
+    };
+
+    QuestStarterSpawns& QuestStarterSpawnStore()
+    {
+        static QuestStarterSpawns store;
+        return store;
+    }
+
+    // Throws the starter spawns away when the quest starters or the spawn list changed. World thread only.
+    void RefreshQuestStarterSpawns()
+    {
+        QuestStarterSpawns& store = QuestStarterSpawnStore();
+        std::size_t const relations = sObjectMgr->GetCreatureQuestRelationMapHACK()->size();
+        std::size_t const spawns = sObjectMgr->GetAllCreatureData().size();
+        if (relations == store.RelationCount && spawns == store.SpawnCount)
+            return;
+        std::unique_lock<std::shared_mutex> lock(store.Lock);
+        store.SpawnIdsByMap.clear();
+        store.RelationCount = relations;
+        store.SpawnCount = spawns;
+    }
+
     std::vector<Creature*> LoadedQuestStarters(Map* map)
     {
-        static std::unordered_map<uint32, std::vector<uint64>> spawnIdsByMap;
-        static std::size_t relationCount = std::numeric_limits<std::size_t>::max();
-        static std::size_t spawnCount = std::numeric_limits<std::size_t>::max();
-
         std::vector<Creature*> creatures;
         if (!map)
             return creatures;
 
         PlayerbotCreatureIndex const& index = CreatureIndex();
-        QuestRelations const* relations = sObjectMgr->GetCreatureQuestRelationMapHACK();
-        std::size_t const spawns = sObjectMgr->GetAllCreatureData().size();
-        if (relations->size() != relationCount || spawns != spawnCount)
-        {
-            spawnIdsByMap.clear();
-            relationCount = relations->size();
-            spawnCount = spawns;
-        }
+        if (!PlayerbotMapPass::OnMapThread())
+            RefreshQuestStarterSpawns();
 
-        auto [itr, added] = spawnIdsByMap.try_emplace(map->GetId());
-        if (added)
+        // A map's list is added once and never changed or removed while map threads run, so it is read outside the lock.
+        QuestStarterSpawns& store = QuestStarterSpawnStore();
+        std::vector<uint64> const* spawnIds = nullptr;
         {
+            std::shared_lock<std::shared_mutex> lock(store.Lock);
+            auto itr = store.SpawnIdsByMap.find(map->GetId());
+            if (itr != store.SpawnIdsByMap.end())
+                spawnIds = &itr->second;
+        }
+        if (!spawnIds)
+        {
+            QuestRelations const* relations = sObjectMgr->GetCreatureQuestRelationMapHACK();
+            std::vector<uint64> ids;
             for (auto relation = relations->begin(); relation != relations->end(); relation = relations->upper_bound(relation->first))
             {
-                std::vector<uint64> const& ids = index.SpawnIds(map->GetId(), relation->first);
-                itr->second.insert(itr->second.end(), ids.begin(), ids.end());
+                std::vector<uint64> const& entryIds = index.SpawnIds(map->GetId(), relation->first);
+                ids.insert(ids.end(), entryIds.begin(), entryIds.end());
             }
+            std::unique_lock<std::shared_mutex> lock(store.Lock);
+            spawnIds = &store.SpawnIdsByMap.try_emplace(map->GetId(), std::move(ids)).first->second;
         }
 
-        auto const& store = map->GetCreatureBySpawnIdStore();
-        for (uint64 spawnId : itr->second)
-            for (auto const& pair : Trinity::Containers::MapEqualRange(store, ObjectGuid::LowType(spawnId)))
-                creatures.push_back(pair.second);
+        auto const& spawnStore = map->GetCreatureBySpawnIdStore();
+        for (uint64 spawnId : *spawnIds)
+            for (auto const& pair : Trinity::Containers::MapEqualRange(spawnStore, ObjectGuid::LowType(spawnId)))
+                if (!pair.second->IsDestroyedObject())
+                    creatures.push_back(pair.second);
         return creatures;
     }
 
+    struct DroppedQuestItemEntries
+    {
+        std::shared_mutex Lock;
+        std::unordered_map<uint64, std::vector<uint32>> Cache;
+        std::size_t TemplateCount = 0;
+    };
+
+    DroppedQuestItemEntries& DroppedQuestItemStore()
+    {
+        static DroppedQuestItemEntries store;
+        return store;
+    }
+
+    // Throws the cache away when creature templates were reloaded. World thread only.
+    void RefreshDroppedQuestItemEntries()
+    {
+        DroppedQuestItemEntries& store = DroppedQuestItemStore();
+        std::size_t const templates = sObjectMgr->GetCreatureTemplates().size();
+        if (templates == store.TemplateCount)
+            return;
+        std::unique_lock<std::shared_mutex> lock(store.Lock);
+        store.Cache.clear();
+        store.TemplateCount = templates;
+    }
+
     // Entries whose quest item list, for this difficulty or the base one, has this item. Worked out once per item and
-    // difficulty, and again if creature templates are reloaded.
+    // difficulty, and again if creature templates are reloaded. An entry list is added once and never changed or removed
+    // while map threads run, so the reference returned stays good.
     std::vector<uint32> const& EntriesDroppingQuestItem(uint32 itemId, Difficulty difficulty)
     {
-        static std::unordered_map<uint64, std::vector<uint32>> cache;
-        static std::size_t cacheTemplateCount = 0;
+        if (!PlayerbotMapPass::OnMapThread())
+            RefreshDroppedQuestItemEntries();
 
-        CreatureTemplateContainer const& templates = sObjectMgr->GetCreatureTemplates();
-        if (cacheTemplateCount != templates.size())
-        {
-            cache.clear();
-            cacheTemplateCount = templates.size();
-        }
-
+        DroppedQuestItemEntries& store = DroppedQuestItemStore();
         uint64 const key = (uint64(itemId) << 32) | uint32(difficulty);
-        auto itr = cache.find(key);
-        if (itr != cache.end())
-            return itr->second;
+        {
+            std::shared_lock<std::shared_mutex> lock(store.Lock);
+            auto itr = store.Cache.find(key);
+            if (itr != store.Cache.end())
+                return itr->second;
+        }
 
         auto hasItem = [itemId](std::vector<uint32> const* items)
         {
             return items && std::find(items->begin(), items->end(), itemId) != items->end();
         };
 
-        std::vector<uint32>& entries = cache[key];
-        for (auto const& [entry, info] : templates)
+        std::vector<uint32> entries;
+        for (auto const& [entry, info] : sObjectMgr->GetCreatureTemplates())
         {
             if (hasItem(sObjectMgr->GetCreatureQuestItemList(entry, difficulty))
                 || (difficulty != DIFFICULTY_NONE && hasItem(sObjectMgr->GetCreatureQuestItemList(entry, DIFFICULTY_NONE))))
                 entries.push_back(entry);
         }
-        return entries;
+        std::unique_lock<std::shared_mutex> lock(store.Lock);
+        return store.Cache.try_emplace(key, std::move(entries)).first->second;
     }
 
     // The same index for gameobject spawns. Only its spawn half is used; gameobjects have no kill credit.
-    PlayerbotCreatureIndex const& GameObjectIndex()
+    PlayerbotCreatureIndex& GameObjectIndexStore()
     {
         static PlayerbotCreatureIndex index;
+        return index;
+    }
 
+    void RefreshGameObjectIndex()
+    {
+        PlayerbotCreatureIndex& index = GameObjectIndexStore();
         GameObjectDataContainer const& spawnData = sObjectMgr->GetAllGameObjectData();
         if (!index.SpawnsAreCurrent(spawnData.size()))
         {
@@ -702,8 +778,13 @@ namespace
                 spawns.push_back({ uint64(spawnId), data.mapId, data.id });
             index.BuildSpawns(spawns, spawnData.size());
         }
+    }
 
-        return index;
+    PlayerbotCreatureIndex const& GameObjectIndex()
+    {
+        if (!PlayerbotMapPass::OnMapThread())
+            RefreshGameObjectIndex();
+        return GameObjectIndexStore();
     }
 
     // Every gameobject loaded on this map from a world database spawn of one of these entries. The same objects the
@@ -719,30 +800,57 @@ namespace
         for (uint32 entry : entries)
             for (uint64 spawnId : index.SpawnIds(map->GetId(), entry))
                 for (auto const& pair : Trinity::Containers::MapEqualRange(store, ObjectGuid::LowType(spawnId)))
-                    objects.push_back(pair.second);
+                    if (!pair.second->IsDestroyedObject())
+                        objects.push_back(pair.second);
         return objects;
     }
 
+    struct GameObjectQuestItemEntries
+    {
+        std::shared_mutex Lock;
+        std::unordered_map<uint32, std::vector<uint32>> Cache;
+        std::size_t ListCount = std::numeric_limits<std::size_t>::max();
+    };
+
+    GameObjectQuestItemEntries& GameObjectQuestItemStore()
+    {
+        static GameObjectQuestItemEntries store;
+        return store;
+    }
+
+    // Throws the cache away when the quest item lists were reloaded. World thread only.
+    void RefreshGameObjectQuestItemEntries()
+    {
+        GameObjectQuestItemEntries& store = GameObjectQuestItemStore();
+        std::size_t const lists = sObjectMgr->GetGameObjectQuestItemMap()->size();
+        if (lists == store.ListCount)
+            return;
+        std::unique_lock<std::shared_mutex> lock(store.Lock);
+        store.Cache.clear();
+        store.ListCount = lists;
+    }
+
     // Gameobject entries whose quest item list has this item. Worked out once per item, and again if the quest item
-    // lists are reloaded.
+    // lists are reloaded. An entry list is added once and never changed or removed while map threads run.
     std::vector<uint32> const& GameObjectEntriesGivingQuestItem(uint32 itemId)
     {
-        static std::unordered_map<uint32, std::vector<uint32>> cache;
-        static std::size_t cacheListCount = std::numeric_limits<std::size_t>::max();
+        if (!PlayerbotMapPass::OnMapThread())
+            RefreshGameObjectQuestItemEntries();
 
-        GameObjectQuestItemMap const* lists = sObjectMgr->GetGameObjectQuestItemMap();
-        if (cacheListCount != lists->size())
+        GameObjectQuestItemEntries& store = GameObjectQuestItemStore();
         {
-            cache.clear();
-            cacheListCount = lists->size();
+            std::shared_lock<std::shared_mutex> lock(store.Lock);
+            auto itr = store.Cache.find(itemId);
+            if (itr != store.Cache.end())
+                return itr->second;
         }
 
-        auto [itr, added] = cache.try_emplace(itemId);
-        if (added)
-            for (auto const& [entry, items] : *lists)
-                if (std::find(items.begin(), items.end(), itemId) != items.end())
-                    itr->second.push_back(entry);
-        return itr->second;
+        std::vector<uint32> entries;
+        for (auto const& [entry, items] : *sObjectMgr->GetGameObjectQuestItemMap())
+            if (std::find(items.begin(), items.end(), itemId) != items.end())
+                entries.push_back(entry);
+        std::unique_lock<std::shared_mutex> lock(store.Lock);
+        return store.Cache.try_emplace(itemId, std::move(entries)).first->second;
     }
 
     bool CreatureGivesMonsterCredit(Creature const* creature, uint32 creditEntry)
@@ -1946,6 +2054,7 @@ namespace
         FindCreatureOptions options;
         options.IsAlive = FindCreatureAliveState::Alive;
         player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+        PlayerbotClient::DropRemoved(nearby);
 
         return NearestTakeableQuest(player, nearby, zoneId, skip, skipQuestId, -1.0f);
     }
@@ -2149,6 +2258,7 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindNearbyQuestTarget(Pl
     FindCreatureOptions options;
     options.IsAlive = FindCreatureAliveState::Alive;
     player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+    PlayerbotClient::DropRemoved(nearby);
 
     QuestTarget best;
     float bestDist = std::numeric_limits<float>::max();
@@ -2328,6 +2438,7 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindNearbyMonsterObject
     FindCreatureOptions options;
     options.IsAlive = FindCreatureAliveState::Alive;
     player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+    PlayerbotClient::DropRemoved(nearby);
 
     CombatTarget best;
     float bestDist = std::numeric_limits<float>::max();
@@ -2647,6 +2758,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
     FindCreatureOptions options;
     options.IsAlive = FindCreatureAliveState::Dead;
     player->GetCreatureListWithOptionsInGrid(nearbyCreatures, range, options);
+    PlayerbotClient::DropRemoved(nearbyCreatures);
 
     for (Creature* creature : nearbyCreatures)
     {
@@ -2679,6 +2791,7 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindNearbyItemLootTar
     {
         std::vector<GameObject*> nearbyGo;
         player->GetGameObjectListWithOptionsInGrid(nearbyGo, range, {});
+        PlayerbotClient::DropRemoved(nearbyGo);
 
         for (GameObject* go : nearbyGo)
         {
@@ -2911,7 +3024,7 @@ bool PlayerbotClient::ItemLootTargetStillNeeded(Player* player, ItemLootTarget c
 
     if (!target.CreatureGuid.IsEmpty() && target.LootCorpse)
     {
-        Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, target.CreatureGuid);
         return creature && player->isAllowedToLoot(creature);
     }
 
@@ -2964,6 +3077,7 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindNearbyGameObjec
 
     std::vector<GameObject*> nearby;
     player->GetGameObjectListWithOptionsInGrid(nearby, range, {});
+    PlayerbotClient::DropRemoved(nearby);
 
     GameObjectTarget best;
     float bestDist = std::numeric_limits<float>::max();
@@ -3165,6 +3279,7 @@ Optional<PlayerbotClient::UseItemOnUnitTarget> PlayerbotClient::FindNearbyUseIte
     FindCreatureOptions options;
     options.IsAlive = FindCreatureAliveState::Alive;
     player->GetCreatureListWithOptionsInGrid(nearby, range, options);
+    PlayerbotClient::DropRemoved(nearby);
 
     UseItemOnUnitTarget best;
     float bestDist = std::numeric_limits<float>::max();
@@ -3372,7 +3487,7 @@ bool PlayerbotClient::UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUn
 
     if (!target.CreatureGuid.IsEmpty())
     {
-        Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
+        Creature* creature = PlayerbotClient::GetCreature(*player, target.CreatureGuid);
         if (creature && !ItemSpellCanTargetCreature(player, target.ItemId, creature))
             return false;
     }
@@ -3600,7 +3715,7 @@ bool PlayerbotClient::TryInteractQuest(Player* player, QuestTarget const& target
     if (!player || !player->IsInWorld() || !player->GetSession() || target.NpcGuid.IsEmpty() || !target.QuestId)
         return false;
 
-    Creature* creature = ObjectAccessor::GetCreature(*player, target.NpcGuid);
+    Creature* creature = PlayerbotClient::GetCreature(*player, target.NpcGuid);
     if (!creature)
         return false;
 
@@ -3750,7 +3865,7 @@ bool PlayerbotClient::TryMeleeAttack(Player* player, ObjectGuid creatureGuid)
     if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty())
         return false;
 
-    Creature* creature = ObjectAccessor::GetCreature(*player, creatureGuid);
+    Creature* creature = PlayerbotClient::GetCreature(*player, creatureGuid);
     if (!creature || !creature->IsAlive())
         return false;
 
@@ -4168,7 +4283,7 @@ PlayerbotClient::UseItemLook PlayerbotClient::LookUseItemOnUnit(Player* player, 
         || target.CreatureGuid.IsEmpty() || !target.ItemId)
         return UseItemLook::Cannot;
 
-    Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
+    Creature* creature = PlayerbotClient::GetCreature(*player, target.CreatureGuid);
     if (!creature || !creature->IsAlive())
         return UseItemLook::Cannot;
     if (!CreatureIsInInteractRange(player, creature))
@@ -4208,7 +4323,7 @@ uint32 PlayerbotClient::TryUseItemOnUnit(Player* player, UseItemOnUnitTarget con
         || target.CreatureGuid.IsEmpty() || !target.ItemId)
         return 0;
 
-    Creature* creature = ObjectAccessor::GetCreature(*player, target.CreatureGuid);
+    Creature* creature = PlayerbotClient::GetCreature(*player, target.CreatureGuid);
     if (!creature || !creature->IsAlive())
         return 0;
     if (!CreatureIsInInteractRange(player, creature))
@@ -4240,7 +4355,7 @@ bool PlayerbotClient::TryOpenLoot(Player* player, ObjectGuid creatureGuid)
     if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty())
         return false;
 
-    Creature* creature = ObjectAccessor::GetCreature(*player, creatureGuid);
+    Creature* creature = PlayerbotClient::GetCreature(*player, creatureGuid);
     if (!creature || creature->IsAlive())
         return false;
     if (!player->isAllowedToLoot(creature))
@@ -4407,7 +4522,7 @@ bool PlayerbotClient::HostilesWouldAggroAt(Player* player, Position const& at)
     for (auto const& pair : map->GetCreatureBySpawnIdStore())
     {
         Creature* creature = pair.second;
-        if (!CreatureWouldPullIfAlive(player, creature))
+        if (creature->IsDestroyedObject() || !CreatureWouldPullIfAlive(player, creature))
             continue;
 
         float const pullRange = creature->GetAttackDistance(player) + creature->GetCombatReach();
@@ -4485,7 +4600,7 @@ Optional<PlayerbotClient::SpiritHealerTarget> PlayerbotClient::FindSpiritHealer(
     for (auto const& pair : map->GetCreatureBySpawnIdStore())
     {
         Creature* creature = pair.second;
-        if (!SpiritHealerIsUsable(player, creature))
+        if (creature->IsDestroyedObject() || !SpiritHealerIsUsable(player, creature))
             continue;
 
         float const dist = nearPos.GetExactDist(*creature);
@@ -4542,12 +4657,14 @@ namespace
         bool NoSell = false;
     };
 
+    // Built once, on the world thread (PlayerbotClient::RefreshSharedCaches, or the first vendor look with bot brains on
+    // the world thread), and only read after that.
     std::vector<VendorSpawn> g_vendorSpawns;
     bool g_vendorSpawnsReady = false;
 
     void EnsureVendorSpawns()
     {
-        if (g_vendorSpawnsReady)
+        if (g_vendorSpawnsReady || PlayerbotMapPass::OnMapThread())
             return;
 
         g_vendorSpawnsReady = true;
@@ -4574,7 +4691,7 @@ namespace
 
     bool VendorIsUsable(Player const* player, Creature const* creature, bool needSell)
     {
-        if (!player || !creature || !creature->IsAlive())
+        if (!player || !creature || creature->IsDestroyedObject() || !creature->IsAlive())
             return false;
         if (!creature->HasNpcFlag(UNIT_NPC_FLAG_VENDOR))
             return false;
@@ -4829,4 +4946,27 @@ Optional<uint32> PlayerbotClient::CreatureRespawnWaitMs(Map const* map, uint32 c
     if (!soonest)
         return {};
     return uint32(*soonest - now) * IN_MILLISECONDS;
+}
+
+void PlayerbotClient::RefreshSharedCaches()
+{
+    PlayerbotWorldThreadOnly("rebuilding the shared spawn and item caches");
+    RefreshCreatureIndex();
+    RefreshGameObjectIndex();
+    RefreshQuestStarterSpawns();
+    RefreshDroppedQuestItemEntries();
+    RefreshGameObjectQuestItemEntries();
+    EnsureVendorSpawns();
+}
+
+Creature* PlayerbotClient::GetCreature(WorldObject const& near, ObjectGuid guid)
+{
+    Creature* creature = ObjectAccessor::GetCreature(near, guid);
+    return creature && !creature->IsDestroyedObject() ? creature : nullptr;
+}
+
+GameObject* PlayerbotClient::GetGameObject(WorldObject const& near, ObjectGuid guid)
+{
+    GameObject* go = ObjectAccessor::GetGameObject(near, guid);
+    return go && !go->IsDestroyedObject() ? go : nullptr;
 }

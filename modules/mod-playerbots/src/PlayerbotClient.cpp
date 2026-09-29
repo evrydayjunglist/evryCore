@@ -64,6 +64,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <string>
 #include <tuple>
@@ -685,6 +686,63 @@ namespace
                 entries.push_back(entry);
         }
         return entries;
+    }
+
+    // The same index for gameobject spawns. Only its spawn half is used; gameobjects have no kill credit.
+    PlayerbotCreatureIndex const& GameObjectIndex()
+    {
+        static PlayerbotCreatureIndex index;
+
+        GameObjectDataContainer const& spawnData = sObjectMgr->GetAllGameObjectData();
+        if (!index.SpawnsAreCurrent(spawnData.size()))
+        {
+            std::vector<PlayerbotCreatureIndex::Spawn> spawns;
+            spawns.reserve(spawnData.size());
+            for (auto const& [spawnId, data] : spawnData)
+                spawns.push_back({ uint64(spawnId), data.mapId, data.id });
+            index.BuildSpawns(spawns, spawnData.size());
+        }
+
+        return index;
+    }
+
+    // Every gameobject loaded on this map from a world database spawn of one of these entries. The same objects the
+    // map's spawn id store holds, narrowed to these entries without walking the rest.
+    template <typename Entries>
+    std::vector<GameObject*> LoadedGameObjectsOf(Map* map, Entries const& entries)
+    {
+        std::vector<GameObject*> objects;
+        if (!map)
+            return objects;
+        PlayerbotCreatureIndex const& index = GameObjectIndex();
+        auto const& store = map->GetGameObjectBySpawnIdStore();
+        for (uint32 entry : entries)
+            for (uint64 spawnId : index.SpawnIds(map->GetId(), entry))
+                for (auto const& pair : Trinity::Containers::MapEqualRange(store, ObjectGuid::LowType(spawnId)))
+                    objects.push_back(pair.second);
+        return objects;
+    }
+
+    // Gameobject entries whose quest item list has this item. Worked out once per item, and again if the quest item
+    // lists are reloaded.
+    std::vector<uint32> const& GameObjectEntriesGivingQuestItem(uint32 itemId)
+    {
+        static std::unordered_map<uint32, std::vector<uint32>> cache;
+        static std::size_t cacheListCount = std::numeric_limits<std::size_t>::max();
+
+        GameObjectQuestItemMap const* lists = sObjectMgr->GetGameObjectQuestItemMap();
+        if (cacheListCount != lists->size())
+        {
+            cache.clear();
+            cacheListCount = lists->size();
+        }
+
+        auto [itr, added] = cache.try_emplace(itemId);
+        if (added)
+            for (auto const& [entry, items] : *lists)
+                if (std::find(items.begin(), items.end(), itemId) != items.end())
+                    itr->second.push_back(entry);
+        return itr->second;
     }
 
     bool CreatureGivesMonsterCredit(Creature const* creature, uint32 creditEntry)
@@ -1774,7 +1832,6 @@ namespace
         return true;
     }
 
-    constexpr float TAKEABLE_SEARCH_NEAR = 80.0f;
     constexpr float TAKEABLE_SEARCH_FAR = 150.0f;
 
     Optional<PlayerbotClient::QuestTarget> MakeQuestTarget(Player* player, Creature* creature, int32 questId, bool turnIn,
@@ -1849,6 +1906,37 @@ namespace
         return MakeQuestTarget(player, creature, questId, false);
     }
 
+    // The nearest of these creatures farther than minDist that offers her a quest she can take and has a place to stand.
+    // Cheap checks come first and the quest menu and stand spot are only worked out nearest first, so the first one
+    // that passes is the answer; the old way built a menu and asked the navmesh for every creature nearer than the best
+    // so far, in whatever order the grid returned them.
+    Optional<PlayerbotClient::QuestTarget> NearestTakeableQuest(Player* player, std::vector<Creature*> const& candidates, uint32 zoneId,
+        std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, float minDist)
+    {
+        std::vector<std::pair<float, Creature*>> byDistance;
+        for (Creature* creature : candidates)
+        {
+            if (!creature || skip.contains(creature->GetGUID()))
+                continue;
+            if (creature->GetZoneId() != zoneId)
+                continue;
+            if (!CreatureIsUsableQuestGiver(player, creature))
+                continue;
+
+            float const dist = player->GetExactDist(creature);
+            if (dist <= minDist)
+                continue;
+            byDistance.emplace_back(dist, creature);
+        }
+
+        std::sort(byDistance.begin(), byDistance.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
+        for (auto const& [dist, creature] : byDistance)
+            if (Optional<PlayerbotClient::QuestTarget> target = MakeTakeableTarget(player, creature, skipQuestId))
+                return target;
+
+        return {};
+    }
+
     Optional<PlayerbotClient::QuestTarget> FindTakeableQuestInRange(Player* player, float range, uint32 zoneId, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId)
     {
         if (!player || !player->IsInWorld())
@@ -1859,29 +1947,7 @@ namespace
         options.IsAlive = FindCreatureAliveState::Alive;
         player->GetCreatureListWithOptionsInGrid(nearby, range, options);
 
-        Optional<PlayerbotClient::QuestTarget> best;
-        float bestDist = std::numeric_limits<float>::max();
-
-        for (Creature* creature : nearby)
-        {
-            if (!creature || skip.contains(creature->GetGUID()))
-                continue;
-            if (creature->GetZoneId() != zoneId)
-                continue;
-
-            float const dist = player->GetExactDist(creature);
-            if (dist >= bestDist)
-                continue;
-
-            Optional<PlayerbotClient::QuestTarget> target = MakeTakeableTarget(player, creature, skipQuestId);
-            if (!target)
-                continue;
-
-            bestDist = dist;
-            best = target;
-        }
-
-        return best;
+        return NearestTakeableQuest(player, nearby, zoneId, skip, skipQuestId, -1.0f);
     }
 
     Optional<PlayerbotClient::QuestTarget> FindTakeableQuestRestOfZone(Player* player, uint32 zoneId, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId, float minDist)
@@ -1889,29 +1955,7 @@ namespace
         if (!player || !player->GetMap())
             return {};
 
-        Optional<PlayerbotClient::QuestTarget> best;
-        float bestDist = std::numeric_limits<float>::max();
-
-        for (Creature* creature : LoadedQuestStarters(player->GetMap()))
-        {
-            if (!creature || skip.contains(creature->GetGUID()))
-                continue;
-            if (creature->GetZoneId() != zoneId)
-                continue;
-
-            float const dist = player->GetExactDist(creature);
-            if (dist <= minDist || dist >= bestDist)
-                continue;
-
-            Optional<PlayerbotClient::QuestTarget> target = MakeTakeableTarget(player, creature, skipQuestId);
-            if (!target)
-                continue;
-
-            bestDist = dist;
-            best = target;
-        }
-
-        return best;
+        return NearestTakeableQuest(player, LoadedQuestStarters(player->GetMap()), zoneId, skip, skipQuestId, minDist);
     }
 
     Creature* FindLivingEnderOnMap(Player* player, std::unordered_set<uint32> const& enderEntries, Optional<Position> const& marker, std::unordered_set<ObjectGuid> const& skip)
@@ -2261,9 +2305,9 @@ Optional<PlayerbotClient::QuestTarget> PlayerbotClient::FindTakeableQuestInZone(
     if (!player || !player->IsInWorld() || !player->GetMap())
         return {};
 
+    // Nearest first within 150 yards finds the same giver the old 80-yard look and then the 150-yard look did, with one
+    // grid search instead of two.
     uint32 const zoneId = player->GetZoneId();
-    if (Optional<QuestTarget> found = FindTakeableQuestInRange(player, TAKEABLE_SEARCH_NEAR, zoneId, skip, skipQuestId))
-        return found;
     if (Optional<QuestTarget> found = FindTakeableQuestInRange(player, TAKEABLE_SEARCH_FAR, zoneId, skip, skipQuestId))
         return found;
 
@@ -2803,9 +2847,8 @@ Optional<PlayerbotClient::ItemLootTarget> PlayerbotClient::FindLogIncompleteItem
             haveAlive = true;
         }
 
-        for (auto const& pair : map->GetGameObjectBySpawnIdStore())
+        for (GameObject* go : LoadedGameObjectsOf(map, GameObjectEntriesGivingQuestItem(credit.ItemId)))
         {
-            GameObject* go = pair.second;
             if (!go || skip.contains(go->GetGUID()))
                 continue;
             if (PointIsSkipped(*go, filter))
@@ -3029,9 +3072,8 @@ Optional<PlayerbotClient::GameObjectTarget> PlayerbotClient::FindLogIncompleteGa
             }
         }
 
-        for (auto const& pair : map->GetGameObjectBySpawnIdStore())
+        for (GameObject* go : LoadedGameObjectsOf(map, std::array<uint32, 1>{ credit.GoEntry }))
         {
-            GameObject* go = pair.second;
             if (!go || skip.contains(go->GetGUID()))
                 continue;
             if (PointIsSkipped(*go, filter))

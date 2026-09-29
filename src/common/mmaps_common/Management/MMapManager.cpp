@@ -23,6 +23,7 @@
 #include "MapUtils.h"
 #include "Memory.h"
 #include <algorithm>
+#include <mutex>
 
 namespace MMAP
 {
@@ -49,6 +50,9 @@ namespace MMAP
         NavMeshQuerySet navMeshQueries;     // instanceId to query
         // The same, with room for a long route, for the instances a playerbot has asked one of.
         NavMeshQuerySet longRouteQueries;
+        // Playerbots can ask for a long route query from several map threads at once, and every instance of one map
+        // shares this set, so adding to it, looking in it and dropping from it take this lock.
+        std::mutex longRouteQueriesLock;
 
         static uint32 GetInstanceIdForMeshLookup(uint32 mapId, uint32 instanceId)
         {
@@ -436,7 +440,10 @@ namespace MMAP
         std::size_t erased = mmap->navMeshQueries.erase({ instanceMapId, instanceId });
         if (!erased)
             TC_LOG_DEBUG("maps", "MMAP:unloadMapInstance: Asked to unload not loaded dtNavMeshQuery mapId {:04} instanceId {}", instanceMapId, instanceId);
-        mmap->longRouteQueries.erase({ instanceMapId, instanceId });
+        {
+            std::lock_guard<std::mutex> lock(mmap->longRouteQueriesLock);
+            mmap->longRouteQueries.erase({ instanceMapId, instanceId });
+        }
 
         if (isRebuildingTilesEnabledOnMap(meshMapId))
         {
@@ -499,6 +506,9 @@ namespace MMAP
         if (queryItr == mmap->navMeshQueries.end())
             return nullptr;
 
+        // The set is changed under the lock. The query itself is used only by the thread of the map it belongs to, and it
+        // does not move when the set grows, so it is handed out and used outside the lock.
+        std::lock_guard<std::mutex> lock(mmap->longRouteQueriesLock);
         auto [longItr, inserted] = mmap->longRouteQueries.try_emplace({ instanceMapId, instanceId });
         if (inserted && dtStatusFailed(longItr->second.init(queryItr->second.getAttachedNavMesh(), LONG_ROUTE_SEARCH_NODES)))
         {

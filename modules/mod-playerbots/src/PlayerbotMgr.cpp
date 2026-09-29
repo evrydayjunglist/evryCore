@@ -34,6 +34,7 @@
 #include "Player.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotLogDetail.h"
+#include "PlayerbotWipe.h"
 #include "RealmList.h"
 #include "SpellInfo.h"
 #include "StringFormat.h"
@@ -810,14 +811,16 @@ PlayerbotMgr::~PlayerbotMgr()
 
 void PlayerbotMgr::Start()
 {
-    if (sConfigMgr->GetBoolDefault(PLAYERBOTS_REGENERATE_CHARACTERS, false))
+    if (sConfigMgr->GetBoolDefault(PLAYERBOTS_OLD_REGENERATE_CHARACTERS, false))
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, but that key does nothing any more. {} = 1 deletes every bot and bot account.",
+            PLAYERBOTS_OLD_REGENERATE_CHARACTERS, PLAYERBOTS_DELETE_BOTS);
+
+    if (sConfigMgr->GetBoolDefault(PLAYERBOTS_DELETE_BOTS, false))
     {
-        uint32 deleted = PlayerbotFactory::DeleteAllBotCharacters();
-        TC_LOG_INFO(PLAYERBOTS_LOG,
-            "mod-playerbots: Playerbots.RegenerateCharacters is 1. Deleted {} bot character(s). Battlenet accounts were kept. "
-            "Set Playerbots.RegenerateCharacters to 0, then start worldserver again. This process is stopping so those new bots are not created and wiped on the next boot.",
-            deleted);
-        World::StopNow(SHUTDOWN_EXIT_CODE);
+        // No bot is made or logged in on this start. Update runs the wipe and then stops worldserver.
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is 1. Deleting every bot and bot account, then stopping worldserver.",
+            PLAYERBOTS_DELETE_BOTS);
+        _wipe = std::make_unique<PlayerbotWipe>();
         return;
     }
 
@@ -879,23 +882,41 @@ void PlayerbotMgr::Start()
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: preparing {} bot(s) in {} login mode. Active sessions at OnStartup: {}.",
         count, LoginModeName(_loginMode), sessionsAtStartup);
 
-    for (int32 i = 1; i <= count; ++i)
+    _prepareCount = uint32(count);
+    _preparedUpTo = 0;
+    _prepareStartedMs = getMSTime();
+}
+
+void PlayerbotMgr::PrepareBots()
+{
+    // Making a new account and character waits on the database, about 75 ms a bot, so a whole roster from nothing
+    // takes more than a minute. At least one bot a tick, then back to the world once this tick's share is spent.
+    constexpr uint32 PREPARE_SLICE_MS = 50;
+    uint32 const sliceStart = getMSTime();
+    while (PreparingBots())
     {
         PlayerbotRecord bot;
-        bot.Account.Index = uint32(i);
+        bot.Account.Index = ++_preparedUpTo;
         if (!PlayerbotFactory::EnsureAccount(bot.Account) || !PlayerbotFactory::EnsureCharacter(bot.Account))
+            TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: bot {} was not created.", bot.Account.Index);
+        else
         {
-            TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: bot {} was not created.", i);
-            continue;
+            _accountIds.insert(bot.Account.AccountId);
+            if (_loginMode == PlayerbotLoginMode::Automatic)
+                TryLogin(bot);
+            _botIndexByGuid[bot.Account.CharacterGuid] = _bots.size();
+            _bots.push_back(std::move(bot));
         }
 
-        _accountIds.insert(bot.Account.AccountId);
-        if (_loginMode == PlayerbotLoginMode::Automatic)
-            TryLogin(bot);
-        _botIndexByGuid[bot.Account.CharacterGuid] = _bots.size();
-        _bots.push_back(std::move(bot));
+        if (getMSTimeDiff(sliceStart, getMSTime()) >= PREPARE_SLICE_MS)
+            break;
     }
 
+    if (PreparingBots())
+        return;
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: prepared {} of {} bot(s) in {} seconds.", _bots.size(), _prepareCount,
+        getMSTimeDiff(_prepareStartedMs, getMSTime()) / 1000);
     if (_loginMode == PlayerbotLoginMode::Coordinator)
     {
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: prepared {} bot(s); they will remain offline until playerbots.exe requests ensureBotsOnline.",
@@ -918,6 +939,28 @@ void PlayerbotMgr::Stop()
 
 void PlayerbotMgr::Update(uint32 diff)
 {
+    if (_wipe)
+    {
+        PlayerbotWipe::State const state = _wipe->Update();
+        if (state == PlayerbotWipe::State::Running)
+            return;
+
+        if (state == PlayerbotWipe::State::Done)
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, and every bot character and bot account is deleted. Set {} to 0, "
+                "then start worldserver again to create new bots from the settings at that time. worldserver is stopping now.",
+                PLAYERBOTS_DELETE_BOTS, PLAYERBOTS_DELETE_BOTS);
+        else
+            TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, but the wipe did not finish; the lines above say what is left. "
+                "worldserver is stopping now. Starting it again with {} still at 1 runs the wipe again.",
+                PLAYERBOTS_DELETE_BOTS, PLAYERBOTS_DELETE_BOTS);
+        _wipe.reset();
+        World::StopNow(SHUTDOWN_EXIT_CODE);
+        return;
+    }
+
+    if (PreparingBots())
+        PrepareBots();
+
     using Clock = std::chrono::steady_clock;
     Clock::time_point const tickStart = Clock::now();
 
@@ -927,7 +970,10 @@ void PlayerbotMgr::Update(uint32 diff)
     // The map threads only read the shared caches, so the world thread builds them before the next map updates.
     if (_mapThreadBrains)
         PlayerbotClient::RefreshSharedCaches();
-    UpdateBridge(diff);
+    // playerbots.exe asks for the roster and to bring it online once per connection, so it waits until every bot is
+    // prepared; its requests stay queued until then.
+    if (!PreparingBots())
+        UpdateBridge(diff);
     ValidateRtsSessions();
 
     uint64 botsMicros = 0;

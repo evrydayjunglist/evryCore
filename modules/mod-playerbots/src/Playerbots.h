@@ -25,7 +25,9 @@
 inline constexpr char const* PLAYERBOTS_ENABLE = "Playerbots.Enable";
 inline constexpr char const* PLAYERBOTS_LOGIN_MODE = "Playerbots.LoginMode";
 inline constexpr char const* PLAYERBOTS_COUNT = "Playerbots.Count";
-inline constexpr char const* PLAYERBOTS_REGENERATE_CHARACTERS = "Playerbots.RegenerateCharacters";
+inline constexpr char const* PLAYERBOTS_DELETE_BOTS = "Playerbots.DeleteBots";
+// The old name of the wipe switch. It does nothing now; a conf that still sets it gets one warning.
+inline constexpr char const* PLAYERBOTS_OLD_REGENERATE_CHARACTERS = "Playerbots.RegenerateCharacters";
 inline constexpr char const* PLAYERBOTS_RACES = "Playerbots.Races";
 inline constexpr char const* PLAYERBOTS_CLASSES = "Playerbots.Classes";
 inline constexpr char const* PLAYERBOTS_BRIDGE_ENABLE = "Playerbots.Bridge.Enable";

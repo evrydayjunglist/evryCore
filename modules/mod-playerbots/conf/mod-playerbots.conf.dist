@@ -88,20 +88,27 @@ Playerbots.Races =
 Playerbots.Classes =
 
 #
-#    Playerbots.RegenerateCharacters
-#        Description: On the next worldserver start, delete every character on
-#                     PLAYERBOTn@PLAYERBOTS.LOCAL through the same path as a
-#                     character-list delete. Battlenet accounts are kept.
-#                     That boot does not create or log in bots. The process then
-#                     stops. Set this back to 0 before the next start, or the
-#                     new bots will be wiped again.
+#    Playerbots.DeleteBots
+#        Description: On the next worldserver start, delete every bot: each
+#                     character on a PLAYERBOTn@PLAYERBOTS.LOCAL Battle.net
+#                     account (through the same path as a character-list
+#                     delete), then the bot game accounts, then the bot
+#                     Battle.net accounts and their collections. Only an email of
+#                     exactly that shape counts as a bot. Mail a human sent a bot
+#                     goes back to the human with its items and money; a guild a
+#                     bot leads passes to the highest-ranked member left. A bot's
+#                     auction stays up and ends as auctions do.
+#                     That boot does not create or log in bots. It waits until the
+#                     database shows every delete done, then stops. Set this back
+#                     to 0 and start again: new bots are made from Count, Races
+#                     and Classes at that time. Left at 1, every start wipes.
 #        Default:     0
 #
-#                     1 - wipe bot characters and stop
+#                     1 - wipe all bots and bot accounts, then stop
 #                     0 - leave existing bot characters
 #
 
-Playerbots.RegenerateCharacters = 0
+Playerbots.DeleteBots = 0
 
 #
 #    Playerbots.InvitePolicy

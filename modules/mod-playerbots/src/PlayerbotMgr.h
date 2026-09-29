@@ -30,6 +30,7 @@
 #include "PlayerbotSessionPresence.h"
 #include "PlayerbotTickStats.h"
 #include "PlayerbotWalkMapper.h"
+#include "PlayerbotWipe.h"
 #include "Playerbots.h"
 #include "ObjectGuid.h"
 #include "Position.h"
@@ -317,8 +318,19 @@ private:
     // Back from making room: walk to the quest giver of the quest that did not fit.
     bool TryReturnToTurnIn(PlayerbotRecord& bot, Player* player);
 
+    // Playerbots.DeleteBots: the wipe runs here, a slice each world tick, and then worldserver stops.
+    std::unique_ptr<PlayerbotWipe> _wipe;
+    // The bots Start asked for that are not in _bots yet. Update makes and logs them in a slice each world tick, so a
+    // thousand new bots do not hold the world thread past MaxCoreStuckTime.
+    uint32 _preparedUpTo = 0;
+    uint32 _prepareCount = 0;
+    uint32 _prepareStartedMs = 0;
+    bool PreparingBots() const { return _preparedUpTo < _prepareCount; }
+    void PrepareBots();
+
     std::vector<PlayerbotRecord> _bots;
-    // Where each bot's character sits in _bots. Both are filled once at startup and never change afterwards.
+    // Where each bot's character sits in _bots. Both are filled while the bots are prepared, in the first world ticks,
+    // and never change afterwards. Nothing reads them from a map thread while the world update adds to them.
     std::unordered_map<ObjectGuid, std::size_t> _botIndexByGuid;
     std::unordered_set<uint32> _accountIds;
     std::unordered_set<uint64> _bridgeHandshakes;

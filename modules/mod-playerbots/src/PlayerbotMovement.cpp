@@ -44,6 +44,7 @@
 #include "UnitDefines.h"
 #include "VMapFactory.h"
 #include "VMapManager.h"
+#include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
 #include <array>
@@ -130,6 +131,15 @@ namespace
     constexpr float HEADROOM_FROM_FEET_YARDS = 0.2f;
     // Standing up out of a pocket looks for the surface over her this far above the top of her body.
     constexpr float STAND_UP_SEARCH_ABOVE_BODY_YARDS = 1.0f;
+    // Walking off an edge when she cannot step anywhere: the headings she tries, how finely she feels for the edge, how
+    // much health the fall must leave her, and how many of the shortest drops are asked for a navmesh route onward.
+    constexpr int32 WALK_OFF_DIRECTIONS = 16;
+    constexpr float WALK_OFF_EDGE_STEP_YARDS = 0.25f;
+    constexpr uint32 WALK_OFF_EDGE_REFINE_STEPS = 4;
+    constexpr uint32 WALK_OFF_MIN_HEALTH_PCT_AFTER = 50;
+    constexpr size_t WALK_OFF_ROUTE_CHECKS = 4;
+    // Player::HandleFall does no damage for a fall shorter than this.
+    constexpr float FALL_DAMAGE_MIN_YARDS = 14.57f;
 
     float HeartbeatStepLen(Player const* player)
     {
@@ -297,6 +307,25 @@ namespace
     bool HasHeadroom(Player const* player, Position const& feet)
     {
         return GetHeadroomCollision(player, feet) == StepWorldCollision::None;
+    }
+
+    // The damage Player::HandleFall would do to her for landing this far below where she left the ground, worked out the
+    // same way from her auras and the server's fall damage rate.
+    uint32 PredictedFallDamage(Player const* player, float drop)
+    {
+        if (!player || drop < FALL_DAMAGE_MIN_YARDS || player->IsGameMaster() || player->HasAuraType(SPELL_AURA_HOVER)
+            || player->HasAuraType(SPELL_AURA_FEATHER_FALL) || player->HasAuraType(SPELL_AURA_FLY)
+            || player->IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL))
+            return 0;
+
+        float const safeFall = float(player->GetTotalAuraModifier(SPELL_AURA_SAFE_FALL));
+        float const damagePct = 0.018f * (drop - safeFall) - 0.2426f;
+        if (damagePct <= 0.0f)
+            return 0;
+
+        float damage = float(uint32(damagePct * player->GetMaxHealth() * sWorld->getRate(RATE_DAMAGE_FALL)));
+        damage *= player->GetTotalAuraMultiplier(SPELL_AURA_MODIFY_FALL_DAMAGE_PCT);
+        return std::min(uint32(damage), uint32(player->GetMaxHealth()));
     }
 
     bool GroundedStepIsWalkable(Player const* player, Position const& from, Position const& to)
@@ -2541,6 +2570,10 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
             "mod-playerbots: {} found no way round: none of the {} spots she can walk to within {:.0f} yards is {:.0f} yards closer to where she is going, and the navmesh had no route she can start from any of the {} way(s) out. {}",
             player->GetName(), summary.Reached, _wayRoundYards, WAY_ROUND_MIN_GAIN_YARDS, uint32(waysOut),
             _failedAtHerFeet ? "She cannot step anywhere from where she stands." : "Looking for other work.");
+
+    // A player standing here would walk off the edge and fall. She does the same when the fall is safe.
+    if (_failedAtHerFeet)
+        TryWalkOffLedge(player);
 }
 
 bool PlayerbotWalker::StartWayRoundWalk(Player* player)
@@ -3113,6 +3146,217 @@ bool PlayerbotWalker::SampleFlight(Player* player, JumpPlan& plan, uint32 fromMs
     return true;
 }
 
+bool PlayerbotWalker::TryWalkOffLedge(Player* player)
+{
+    char const* reason = "walking off was not valid";
+    if (!JumpMovementIsAllowed(player, reason))
+    {
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} does not walk off an edge: {}.", player ? player->GetName() : "", reason);
+        return false;
+    }
+
+    struct Candidate
+    {
+        JumpPlan Plan;
+        float Drop = 0.0f;
+        uint32 Damage = 0;
+    };
+
+    Position const feet = _lastGrounded;
+    float const stepLen = HeartbeatStepLen(player);
+    // The first heartbeat each way was refused, so an edge worth walking off is inside it.
+    float const maxEdge = std::max(stepLen, WALK_OFF_EDGE_STEP_YARDS);
+    uint32 const health = player->GetHealth();
+    uint32 const maxHealth = player->GetMaxHealth();
+    std::vector<Candidate> candidates;
+    // Why each edge she found was not walked off, for the log.
+    std::string refused;
+    auto refuse = [&](float angle, char const* why, Position const* landing)
+    {
+        if (!refused.empty())
+            refused += ", ";
+        refused += Trinity::StringFormat("{:.0f} degrees {}", angle * 180.0f / float(M_PI), why);
+        if (landing)
+            refused += Trinity::StringFormat(" (lands at {:.2f}, {:.2f}, {:.2f})", landing->GetPositionX(), landing->GetPositionY(),
+                landing->GetPositionZ());
+    };
+
+    for (int32 i = 0; i < WALK_OFF_DIRECTIONS; ++i)
+    {
+        float const angle = float(i) * 2.0f * float(M_PI) / float(WALK_OFF_DIRECTIONS);
+        float const dirX = std::cos(angle);
+        float const dirY = std::sin(angle);
+
+        // Feel along the ground for where it ends in a drop she may not step down.
+        Position edge = feet;
+        float walked = 0.0f;
+        float over = 0.0f;
+        while (walked + 0.001f < maxEdge)
+        {
+            float const next = std::min(maxEdge, walked + WALK_OFF_EDGE_STEP_YARDS);
+            Position out;
+            GroundedStepFailure const failure = ClassifyGroundedStep(player, edge, feet.GetPositionX() + dirX * next,
+                feet.GetPositionY() + dirY * next, angle, out);
+            if (failure == GroundedStepFailure::None)
+            {
+                edge = out;
+                walked = next;
+                continue;
+            }
+            if (failure == GroundedStepFailure::TooFarDown)
+                over = next;
+            break;
+        }
+        if (over <= 0.0f)
+            continue;
+
+        // Close in on the edge, so the fall starts where the ground ends and not on the ledge.
+        for (uint32 k = 0; k < WALK_OFF_EDGE_REFINE_STEPS; ++k)
+        {
+            float const mid = (walked + over) * 0.5f;
+            Position out;
+            GroundedStepFailure const failure = ClassifyGroundedStep(player, edge, feet.GetPositionX() + dirX * mid,
+                feet.GetPositionY() + dirY * mid, angle, out);
+            if (failure == GroundedStepFailure::None)
+            {
+                edge = out;
+                walked = mid;
+            }
+            else if (failure == GroundedStepFailure::TooFarDown)
+                over = mid;
+            else
+                break;
+        }
+
+        Candidate candidate;
+        JumpPlan& plan = candidate.Plan;
+        plan.Launch = edge;
+        plan.Launch.SetOrientation(Position::NormalizeOrientation(angle));
+        plan.DirectionX = dirX;
+        plan.DirectionY = dirY;
+        plan.Trajectory.HorizontalSpeed = player->GetSpeed(MOVE_RUN);
+        plan.Trajectory.VerticalSpeed = 0.0f;
+        plan.Trajectory.Gravity = Movement::gravity;
+        plan.Trajectory.TerminalVelocity = player->m_movementInfo.HasMovementFlag(MOVEMENTFLAG_FALLING_SLOW)
+            ? PLAYERBOT_FEATHER_FALL_TERMINAL_SPEED
+            : PLAYERBOT_TERMINAL_FALL_SPEED;
+        plan.WalkOff = true;
+        char const* flightReason = "the fall could not be followed";
+        if (!SampleFlight(player, plan, 0, flightReason))
+        {
+            refuse(angle, flightReason, nullptr);
+            continue;
+        }
+        if (plan.EndsBelowWorld)
+        {
+            refuse(angle, "has no floor under the fall", nullptr);
+            continue;
+        }
+
+        candidate.Drop = edge.GetPositionZ() - plan.Landing.GetPositionZ();
+        if (!plan.EndsInWater)
+        {
+            // Caught again on the ground she stands on: that is not off the ledge.
+            if (candidate.Drop <= MAX_DOWN_STEP_YARDS)
+            {
+                refuse(angle, "lands on the ledge again", &plan.Landing);
+                continue;
+            }
+            if (!HasHeadroom(player, plan.Landing))
+            {
+                refuse(angle, "lands where her body has no room", &plan.Landing);
+                continue;
+            }
+
+            // Do not fall into a pocket as tight as this one.
+            bool canStep = false;
+            for (uint32 j = 0; j < 8 && !canStep; ++j)
+            {
+                float const stepAngle = float(j) * float(M_PI) / 4.0f;
+                Position out;
+                canStep = ClassifyGroundedStep(player, plan.Landing, plan.Landing.GetPositionX() + std::cos(stepAngle) * stepLen,
+                    plan.Landing.GetPositionY() + std::sin(stepAngle) * stepLen, stepAngle, out) == GroundedStepFailure::None;
+            }
+            if (!canStep)
+            {
+                refuse(angle, "lands where she cannot step anywhere either", &plan.Landing);
+                continue;
+            }
+
+            candidate.Damage = PredictedFallDamage(player, candidate.Drop);
+        }
+
+        if (candidate.Damage >= health
+            || uint64(health - candidate.Damage) * 100 <= uint64(maxHealth) * WALK_OFF_MIN_HEALTH_PCT_AFTER)
+        {
+            refuse(angle, "would leave her at half health or less", &plan.Landing);
+            continue;
+        }
+
+        candidates.push_back(candidate);
+    }
+
+    if (candidates.empty())
+    {
+        // Once for this place, unless her steps are logged.
+        bool const again = _haveWalkOffExplained && _walkOffExplained.GetExactDist(feet) < 1.0f;
+        if (again && !PlayerbotLogDetail::IsNamed(player->GetName()))
+            return false;
+        _walkOffExplained = feet;
+        _haveWalkOffExplained = true;
+
+        if (refused.empty())
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no edge to walk off at ({:.2f}, {:.2f}, {:.2f}): no heading ends in a drop she may not step down.",
+                player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ());
+        else
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} does not walk off an edge at ({:.2f}, {:.2f}, {:.2f}). Each heading that ends in a drop: {}.",
+                player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ(), refused);
+        return false;
+    }
+
+    // The shortest drop that the navmesh can route on from; otherwise the shortest drop.
+    std::sort(candidates.begin(), candidates.end(), [](Candidate const& a, Candidate const& b) { return a.Drop < b.Drop; });
+    Candidate const* chosen = &candidates.front();
+    bool routeOn = false;
+    for (size_t i = 0; i < candidates.size() && i < WALK_OFF_ROUTE_CHECKS; ++i)
+    {
+        std::vector<G3D::Vector3> continuation;
+        if (BuildMmapPath(player, candidates[i].Plan.Landing, _destination, continuation))
+        {
+            chosen = &candidates[i];
+            routeOn = true;
+            break;
+        }
+    }
+
+    _jump = chosen->Plan;
+    _jumpElapsedMs = 0;
+    _jumpHeartbeatMs = 0;
+    _jumpMapId = player->GetMapId();
+    _stopAfterJump = false;
+    _skipNextJumpDiff = true;
+    _contouring = false;
+    _failedAtHerFeet = false;
+    _state = State::Jumping;
+
+    // Forward from her feet, one heartbeat on the last ground before the drop, then falling heartbeats from there.
+    Position start = feet;
+    start.SetOrientation(_jump.Launch.GetOrientation());
+    QueueMove(player, start, true, true);
+    if (_jump.Launch.GetExactDist2d(start) > 0.01f)
+        QueueMove(player, _jump.Launch, true, false);
+    _lastGrounded = _jump.Launch;
+
+    char const* ending = _jump.EndsInWater ? "into deep water" : "onto the ground";
+    TC_LOG_INFO(PLAYERBOTS_LOG,
+        "mod-playerbots: {} cannot step anywhere from ({:.2f}, {:.2f}, {:.2f}), so she walks off the edge at ({:.2f}, {:.2f}, {:.2f}) and falls {:.1f} yards {} at ({:.2f}, {:.2f}, {:.2f}), expecting {} fall damage of {} health. {}",
+        player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ(), _jump.Launch.GetPositionX(),
+        _jump.Launch.GetPositionY(), _jump.Launch.GetPositionZ(), chosen->Drop, ending, _jump.Landing.GetPositionX(),
+        _jump.Landing.GetPositionY(), _jump.Landing.GetPositionZ(), chosen->Damage, health,
+        routeOn ? "The navmesh has a route on from there." : "The navmesh has no route on from there; she looks again after landing.");
+    return true;
+}
+
 void PlayerbotWalker::UpdateJump(Player* player, uint32 diff)
 {
     float const allowedDrift = std::max(FLIGHT_MIN_ALLOWED_DRIFT, _jump.Trajectory.HorizontalSpeed * FLIGHT_DRIFT_SECONDS);
@@ -3188,8 +3432,12 @@ void PlayerbotWalker::FinishJump(Player* player)
     _stopAfterJump = false;
     _state = State::Moving;
 
-    PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} landed the obstacle-recovery jump at ({:.2f}, {:.2f}, {:.2f}).",
-        player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ());
+    if (_jump.WalkOff)
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} landed at ({:.2f}, {:.2f}, {:.2f}) after walking off the edge and queued CMSG_MOVE_FALL_LAND; the server applies any fall damage.",
+            player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ());
+    else
+        PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} landed the obstacle-recovery jump at ({:.2f}, {:.2f}, {:.2f}).",
+            player->GetName(), landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ());
 
     if (stopAfterLanding)
     {

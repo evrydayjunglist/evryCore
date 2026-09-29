@@ -155,6 +155,8 @@ private:
         uint32 CeilingMs = std::numeric_limits<uint32>::max();
         // The server threw her. No key is held, and she replans after landing.
         bool Knockback = false;
+        // She walked off the edge of ground she could not step off any other way.
+        bool WalkOff = false;
         // The arc ends where she touches water deep enough to swim in, with the swim-start packet instead of a landing.
         bool EndsInWater = false;
         // No floor caught her before the bottom of the world.
@@ -216,6 +218,10 @@ private:
     bool FlightMovementIsAllowed(Player const* player, char const*& reason) const;
     static Position ArcPosition(JumpPlan const& plan, uint32 timeMs);
     bool SampleFlight(Player* player, JumpPlan& plan, uint32 fromMs, char const*& reason);
+    // She cannot step anywhere from her feet. Walk off an edge whose drop a player would walk off, as a player does,
+    // with the forward key held, and fall with ordinary falling movement. Only when the landing leaves her above half
+    // health, or is deep water, has room for her body, and has ground she can step on. False when there is no such edge.
+    bool TryWalkOffLedge(Player* player);
     void UpdateJump(Player* player, uint32 diff);
     void FinishJump(Player* player);
     // Stop and start mapping the ground around her feet. False when she has already looked on this approach or her
@@ -332,6 +338,9 @@ private:
     // The feet whose refused steps were last written to the log, so a bot stuck there says it once.
     Position _stuckFeetExplained;
     bool _haveStuckFeetExplained = false;
+    // The feet where she last said why she did not walk off an edge.
+    Position _walkOffExplained;
+    bool _haveWalkOffExplained = false;
 };
 
 #endif

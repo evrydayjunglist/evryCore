@@ -689,6 +689,8 @@ void PlayerbotWalker::ResetNow()
     _lookedForAWayRound = false;
     _wayRoundFirstStepRefused = false;
     _failedAtHerFeet = false;
+    _haveApproachRefusal = false;
+    _haveEpisodeRefusal = false;
 }
 
 void PlayerbotWalker::ClearWayRound()
@@ -851,6 +853,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
 
 bool PlayerbotWalker::Start(Player* player, Position const& destination, float stopDistance, PlayerbotRecoveryGoal const& goal)
 {
+    _startMetBadPlace = false;
     if (!player || !player->IsInWorld() || !player->GetSession())
     {
         _state = State::Failed;
@@ -887,15 +890,24 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     PlayerbotFaceRecovery const savedFaceRecovery = preserveEpisode ? _faceRecovery : PlayerbotFaceRecovery();
     GroundedStepFailure const savedStepFailure = preserveEpisode ? _lastGroundedStepFailure : GroundedStepFailure::None;
     Position const savedRefusedStep = preserveEpisode ? _lastRefusedStep : Position();
+    bool const savedHaveEpisodeRefusal = preserveEpisode && _haveEpisodeRefusal;
+    Position const savedEpisodeFeet = _episodeFeet;
+    Position const savedEpisodeRefused = _episodeRefused;
     // A new stand spot for the same goal is still the same approach, so it keeps the short stops.
     bool const sameApproach = sameGoal || (goal.Empty() && _recoveryGoal.Empty() && sameDest);
     bool const savedLookedForAWayRound = sameApproach && _lookedForAWayRound;
+    bool const savedHaveApproachRefusal = sameApproach && _haveApproachRefusal;
+    Position const savedApproachFeet = _approachFeet;
+    Position const savedApproachRefused = _approachRefused;
     std::vector<Position> savedShortStops;
     if (sameApproach)
         savedShortStops.swap(_shortStops);
 
     Reset();
     _shortStops.swap(savedShortStops);
+    _haveApproachRefusal = savedHaveApproachRefusal;
+    _approachFeet = savedApproachFeet;
+    _approachRefused = savedApproachRefused;
     _lookedForAWayRound = savedLookedForAWayRound;
     _lipSteps = savedLipSteps;
     _lipDestDist = savedLipDestDist;
@@ -907,6 +919,9 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
     _faceRecovery = savedFaceRecovery;
     _lastGroundedStepFailure = savedStepFailure;
     _lastRefusedStep = savedRefusedStep;
+    _haveEpisodeRefusal = savedHaveEpisodeRefusal;
+    _episodeFeet = savedEpisodeFeet;
+    _episodeRefused = savedEpisodeRefused;
     _recoveryGoal = goal;
 
     float x = player->GetPositionX();
@@ -952,6 +967,25 @@ bool PlayerbotWalker::Start(Player* player, Position const& destination, float s
             player->GetName());
         _state = State::Failed;
         return false;
+    }
+
+    // This route goes past a place where a walk of hers failed after every way round, going the same way. It would fail
+    // there again, so she does not walk it and her brain picks other work. A walk back to her body or after her party
+    // leader has no other work to pick instead, so it walks and tries, and so does a walk in a fight, which is to the
+    // monster she is fighting.
+    if (goal.Kind != PlayerbotRecoveryGoalKind::Corpse && goal.Kind != PlayerbotRecoveryGoalKind::Graveyard
+        && goal.Kind != PlayerbotRecoveryGoalKind::PartyLeader && !player->IsInCombat())
+    {
+        uint64 const nowMs = uint64(GameTime::GetGameTime()) * IN_MILLISECONDS;
+        if (PlayerbotBadPlace const* bad = _badPlaces.RouteMeets(player->GetMapId(), path, nowMs))
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG,
+                "mod-playerbots: {} will not walk this route: it goes past ({:.2f}, {:.2f}, {:.2f}) the way a walk of hers failed there {} time(s), last {} seconds ago. Looking for other work.",
+                player->GetName(), bad->X, bad->Y, bad->Z, bad->Failures, (nowMs - bad->FailedAtMs) / IN_MILLISECONDS);
+            _startMetBadPlace = true;
+            _state = State::Failed;
+            return false;
+        }
     }
 
     _path = std::move(path);
@@ -2198,6 +2232,15 @@ bool PlayerbotWalker::BeginFaceRecovery(Player* player, GroundedStepFailure fail
     {
         _faceRecovery.Begin(_lastGrounded.GetPositionX(), _lastGrounded.GetPositionY());
         NoteLipOrigin();
+        _episodeFeet = _lastGrounded;
+        _episodeRefused = attempted;
+        _haveEpisodeRefusal = true;
+        if (!_haveApproachRefusal)
+        {
+            _approachFeet = _lastGrounded;
+            _approachRefused = attempted;
+            _haveApproachRefusal = true;
+        }
     }
 
     _lastGroundedStepFailure = failure;
@@ -2229,6 +2272,7 @@ void PlayerbotWalker::ClearFaceRecovery()
     _faceRecovery.Reset();
     _lastGroundedStepFailure = GroundedStepFailure::None;
     _lastRefusedStep.Relocate(0.0f, 0.0f, 0.0f, 0.0f);
+    _haveEpisodeRefusal = false;
     _startedOnAFace = false;
     _lipSteps = 0;
     _lipDestDist = 0.0f;
@@ -2484,6 +2528,10 @@ void PlayerbotWalker::UpdateWayRound(Player* player, uint32 diff)
     // The only spot she can walk to is the one she stands on, or every way she found was refused at her first step, so
     // no destination could have been reached from here.
     _failedAtHerFeet = summary.Reached <= 1 || _wayRoundFirstStepRefused;
+    if (!_failedAtHerFeet)
+        NoteBadPlace(player);
+    else if (summary.Reached <= 1)
+        ExplainStuckFeet(player, _lastGrounded);
     if (_wayRoundFirstStepRefused)
         TC_LOG_INFO(PLAYERBOTS_LOG,
             "mod-playerbots: {} found no way round: the map found {} spots she can walk to within {:.0f} yards, but every way round or way out she tried was refused at her first step. She cannot step anywhere from where she stands.",
@@ -3170,11 +3218,71 @@ void PlayerbotWalker::FinishJump(Player* player)
     FailNoLegalRing(player);
 }
 
+void PlayerbotWalker::NoteBadPlace(Player* player)
+{
+    if (!player)
+        return;
+
+    uint64 const nowMs = uint64(GameTime::GetGameTime()) * IN_MILLISECONDS;
+    auto note = [&](Position const& feet, Position const& refused)
+    {
+        _badPlaces.Note(player->GetMapId(), refused.GetPositionX(), refused.GetPositionY(), refused.GetPositionZ(),
+            refused.GetPositionX() - feet.GetPositionX(), refused.GetPositionY() - feet.GetPositionY(), nowMs);
+    };
+
+    // Where the navmesh route first met the obstacle, and where the recovery that just failed began, which is often a
+    // step of a way round beside it.
+    if (_haveApproachRefusal)
+        note(_approachFeet, _approachRefused);
+    if (_haveEpisodeRefusal && _episodeRefused.GetExactDist(_approachRefused) > PLAYERBOT_BAD_PLACE_YARDS)
+        note(_episodeFeet, _episodeRefused);
+
+    if (_haveApproachRefusal)
+        TC_LOG_INFO(PLAYERBOTS_LOG,
+            "mod-playerbots: {} remembers ({:.2f}, {:.2f}, {:.2f}) as a place she could not get past going this way, and takes no route past it that way for {} minutes.",
+            player->GetName(), _approachRefused.GetPositionX(), _approachRefused.GetPositionY(), _approachRefused.GetPositionZ(),
+            PLAYERBOT_BAD_PLACE_FORGET_MS / MINUTE / IN_MILLISECONDS);
+}
+
+void PlayerbotWalker::ExplainStuckFeet(Player* player, Position const& feet)
+{
+    if (!player)
+        return;
+
+    bool const again = _haveStuckFeetExplained && _stuckFeetExplained.GetExactDist(feet) < 1.0f;
+    if (again && !PlayerbotLogDetail::IsNamed(player->GetName()))
+        return;
+    _stuckFeetExplained = feet;
+    _haveStuckFeetExplained = true;
+
+    static char const* const directions[] = { "east", "north-east", "north", "north-west", "west", "south-west", "south", "south-east" };
+    float const stepLen = HeartbeatStepLen(player);
+    std::string steps;
+    for (uint32 i = 0; i < 8; ++i)
+    {
+        float const angle = float(i) * float(M_PI) / 4.0f;
+        Position out;
+        GroundedStepFailure const failure = ClassifyGroundedStep(player, feet, feet.GetPositionX() + std::cos(angle) * stepLen,
+            feet.GetPositionY() + std::sin(angle) * stepLen, angle, out);
+        if (!steps.empty())
+            steps += ", ";
+        steps += Trinity::StringFormat("{} {}", directions[i],
+            failure == GroundedStepFailure::None ? "walkable" : GroundedStepFailureName(failure));
+        if (failure != GroundedStepFailure::NoFloor)
+            steps += Trinity::StringFormat(" (floor {:.2f})", out.GetPositionZ());
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} cannot step from ({:.2f}, {:.2f}, {:.2f}), her body {} room there. One step each way: {}.",
+        player->GetName(), feet.GetPositionX(), feet.GetPositionY(), feet.GetPositionZ(),
+        HasHeadroom(player, feet) ? "has" : "has no", steps);
+}
+
 void PlayerbotWalker::FailNoLegalRing(Player* player)
 {
     if (_state == State::Moving && player && player->GetSession())
         QueueMove(player, _lastGrounded, false, false);
 
+    NoteBadPlace(player);
     _state = State::Failed;
     _contouring = false;
     if (player)

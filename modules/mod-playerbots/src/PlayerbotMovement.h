@@ -19,6 +19,7 @@
 #define EVRY_MOD_PLAYERBOT_MOVEMENT_H
 
 #include "PathGenerator.h"
+#include "PlayerbotBadPlaces.h"
 #include "PlayerbotJump.h"
 #include "PlayerbotMovementRecovery.h"
 #include "PlayerbotPathSearch.h"
@@ -116,6 +117,9 @@ public:
     // The walk failed because the ground she mapped around her feet has no spot she can step to, whatever she was
     // walking to. The place she stands is the problem, not the target.
     bool FailedAtHerFeet() const { return _state == State::Failed && _failedAtHerFeet; }
+    // The last walk she was asked to start was given up at once because its route went past a place where a walk of
+    // hers failed. Kept after Reset so the caller can still ask.
+    bool LastStartMetABadPlace() const { return _startMetBadPlace; }
     bool StartedOnAFace() const { return _startedOnAFace; }
     // She stopped to look for a way round and has not joined the line of bots taking turns to map yet. Her brain may
     // send her somewhere else first; otherwise she joins the line on her next update or when told to.
@@ -235,6 +239,10 @@ private:
     static char const* GroundedStepFailureName(GroundedStepFailure failure);
     void Fail(Player* player, char const* reason);
     void FailNoLegalRing(Player* player);
+    // This walk failed after every way round was tried: remember where it first refused her and which way she was going.
+    void NoteBadPlace(Player* player);
+    // She cannot step anywhere from her feet: say, once for this place, what refuses each of the eight steps round her.
+    void ExplainStuckFeet(Player* player, Position const& feet);
 
     State _state = State::Idle;
     std::vector<G3D::Vector3> _path;
@@ -310,6 +318,20 @@ private:
     // This look found a way round or a way out and her first step onto it was refused.
     bool _wayRoundFirstStepRefused = false;
     bool _failedAtHerFeet = false;
+    // The first step refused on this approach, where its navmesh route met the obstacle, and her feet then.
+    Position _approachFeet;
+    Position _approachRefused;
+    bool _haveApproachRefusal = false;
+    // The step that began the obstacle recovery going on now, and her feet then.
+    Position _episodeFeet;
+    Position _episodeRefused;
+    bool _haveEpisodeRefusal = false;
+    // Places where her walks failed. Kept across walks and resets; see PlayerbotBadPlaces.
+    PlayerbotBadPlaces _badPlaces;
+    bool _startMetBadPlace = false;
+    // The feet whose refused steps were last written to the log, so a bot stuck there says it once.
+    Position _stuckFeetExplained;
+    bool _haveStuckFeetExplained = false;
 };
 
 #endif

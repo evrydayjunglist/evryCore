@@ -68,6 +68,8 @@ namespace
     constexpr uint32 LOOK_AROUND_INTERVAL_MS = 1000;
     // Standing with nothing to do this long while targets are on her skip list, she forgets the list.
     constexpr uint32 IDLE_FORGET_SKIPS_MS = 120000;
+    // Reaching a map marker wipes her skip list only this far from where it last did.
+    constexpr float ARRIVAL_FORGET_SKIPS_YARDS = 30.0f;
     // A quest reward she chose to put on that has not reached her bags by now is not coming.
     constexpr uint32 WEAR_REWARD_WAIT_MS = 5000;
     constexpr uint32 LOOT_WINDOW_MS = 1000;
@@ -706,6 +708,19 @@ namespace
     void RememberFailedYellow(PlayerbotRecord& bot, Position const& pos)
     {
         bot.UnreachablePositions.push_back(pos);
+    }
+
+    // She reached a map marker. What she could not reach from where she was may be reachable from here, so she forgets
+    // her skip list, but only when this is somewhere new: a marker she stands on is reached again every few seconds,
+    // and wiping the list each time brings back the target she just gave up on.
+    void ForgetSkipsOnArrival(PlayerbotRecord& bot, Player const* player)
+    {
+        if (bot.SkipsForgotten && player->GetExactDist(bot.SkipsForgottenAt) < ARRIVAL_FORGET_SKIPS_YARDS)
+            return;
+
+        ClearUnreachable(bot);
+        bot.SkipsForgottenAt = player->GetPosition();
+        bot.SkipsForgotten = true;
     }
 
     PlayerbotClient::MapYellowFilter MakeMapYellowFilter(PlayerbotRecord const& bot, int32 questId, uint32 entry, bool keepQuest, Position const* skipPos)
@@ -2947,7 +2962,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                 return;
 
             if (bot.QuestArriveWaitMs == 0)
-                ClearUnreachable(bot);
+                ForgetSkipsOnArrival(bot, player);
 
             bot.QuestArriveWaitMs += diff;
             if (Optional<PlayerbotClient::CombatTarget> found = look ? PlayerbotClient::FindLogIncompleteMonsterTarget(player, bot.UnreachableGuids) : std::nullopt)
@@ -2988,7 +3003,7 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
                 return;
 
             if (bot.QuestArriveWaitMs == 0)
-                ClearUnreachable(bot);
+                ForgetSkipsOnArrival(bot, player);
 
             bot.QuestArriveWaitMs += diff;
             if (Optional<PlayerbotClient::ItemLootTarget> found = look ? PlayerbotClient::FindLogIncompleteItemTarget(player, bot.UnreachableGuids) : std::nullopt)
@@ -3988,6 +4003,12 @@ bool PlayerbotMgr::TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skip
             return true;
 
         RememberFailedYellow(bot, failedPos);
+
+        // Its route goes past a place where a walk of hers failed. Only this spot or spawn is skipped, not the
+        // objective, but this look ends here instead of asking for route after route; her next look, about a second
+        // later, tries the next spot of the same work.
+        if (bot.Walker.LastStartMetABadPlace())
+            return false;
     }
 
     return false;
@@ -4711,6 +4732,8 @@ bool PlayerbotMgr::BeginQuestTarget(PlayerbotRecord& bot, Player* player, Player
     {
         if (!bot.QuestTarget.NpcGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.QuestTarget.NpcGuid);
+        else
+            RememberFailedYellow(bot, bot.QuestTarget.Pos);
         bot.QuestTarget = {};
         bot.Walker.Reset();
         return false;
@@ -4755,8 +4778,11 @@ bool PlayerbotMgr::BeginGameObjectTarget(PlayerbotRecord& bot, Player* player, P
         if (!bot.GameObjectTarget.GoGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.GameObjectTarget.GoGuid);
         else
+        {
+            RememberFailedYellow(bot, bot.GameObjectTarget.Pos);
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the gameobject map marker for quest {}. Looking for other work.",
                 player->GetName(), bot.GameObjectTarget.QuestId);
+        }
         bot.GameObjectTarget = {};
         bot.Walker.Reset();
         return false;
@@ -4938,8 +4964,11 @@ bool PlayerbotMgr::BeginUseItemOnUnitTarget(PlayerbotRecord& bot, Player* player
         if (!bot.UseItemOnUnitTarget.CreatureGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.UseItemOnUnitTarget.CreatureGuid);
         else
+        {
+            RememberFailedYellow(bot, bot.UseItemOnUnitTarget.Pos);
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the map marker for quest {}. Looking for other work.",
                 player->GetName(), bot.UseItemOnUnitTarget.QuestId);
+        }
         bot.UseItemOnUnitTarget = {};
         ClearUseItemCast(bot);
         bot.Walker.Reset();
@@ -5318,8 +5347,11 @@ bool PlayerbotMgr::BeginItemLootTarget(PlayerbotRecord& bot, Player* player, Pla
         else if (!bot.ItemLootTarget.CreatureGuid.IsEmpty())
             bot.UnreachableGuids.insert(bot.ItemLootTarget.CreatureGuid);
         else
+        {
+            RememberFailedYellow(bot, bot.ItemLootTarget.Pos);
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has no walkable path to the item map marker for quest {}. Looking for other work.",
                 player->GetName(), bot.ItemLootTarget.QuestId);
+        }
         ClearItemLoot(bot);
         bot.Walker.Reset();
         return false;

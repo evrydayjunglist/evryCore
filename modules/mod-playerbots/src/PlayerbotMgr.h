@@ -123,6 +123,10 @@ struct PlayerbotRecord
     uint32 VendorRetryMs = 0;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     std::vector<Position> UnreachablePositions;
+    // Where she stood when reaching a map marker last wiped her skip list. Reaching a marker wipes it again only once
+    // she has come somewhere new, so standing on a marker does not wipe it every few seconds.
+    Position SkipsForgottenAt;
+    bool SkipsForgotten = false;
     // She could not step anywhere from where she stood. She starts no new work until this has run out.
     uint32 StuckFeetWaitMs = 0;
     // How long she has stood with nothing to do while targets were on her skip list.

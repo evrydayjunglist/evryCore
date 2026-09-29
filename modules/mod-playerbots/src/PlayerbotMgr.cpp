@@ -70,6 +70,14 @@ namespace
     constexpr uint32 IDLE_FORGET_SKIPS_MS = 120000;
     // Reaching a map marker wipes her skip list only this far from where it last did.
     constexpr float ARRIVAL_FORGET_SKIPS_YARDS = 30.0f;
+    // A map marker point she stood on with nothing there is walked to again after the creature there respawns, or after
+    // this long when the map has no respawn time for it (an object, a creature another player is fighting, or one not
+    // spawned near the point). The wait is never shorter or longer than the next two.
+    constexpr uint32 EMPTY_MARKER_RETRY_MS = 60000;
+    constexpr uint32 EMPTY_MARKER_MIN_RETRY_MS = 10000;
+    constexpr uint32 EMPTY_MARKER_MAX_RETRY_MS = 600000;
+    // Time after the respawn before she goes back, so the creature is up when she gets there.
+    constexpr uint32 EMPTY_MARKER_RESPAWN_MARGIN_MS = 5000;
     // A quest reward she chose to put on that has not reached her bags by now is not coming.
     constexpr uint32 WEAR_REWARD_WAIT_MS = 5000;
     constexpr uint32 LOOT_WINDOW_MS = 1000;
@@ -710,6 +718,24 @@ namespace
         bot.UnreachablePositions.push_back(pos);
     }
 
+    // She stood on a map marker and nothing for that work turned up. It may only be waiting to respawn, so the next look
+    // takes another point of the marker or other work, and she comes back to this point once it has had time to
+    // respawn. A marker arrival or quest click does not wipe these; only the wait does. Returns the wait.
+    uint32 RememberEmptyMarker(PlayerbotRecord& bot, Player const* player, Position const& pos, uint32 creatureCreditEntry)
+    {
+        uint32 waitMs = EMPTY_MARKER_RETRY_MS;
+        if (Optional<uint32> respawnMs = PlayerbotClient::CreatureRespawnWaitMs(player->GetMap(), creatureCreditEntry, pos))
+            waitMs = std::clamp(*respawnMs + EMPTY_MARKER_RESPAWN_MARGIN_MS, EMPTY_MARKER_MIN_RETRY_MS, EMPTY_MARKER_MAX_RETRY_MS);
+
+        uint32 const now = GameTime::GetGameTimeMS();
+        std::erase_if(bot.EmptyMarkers, [now](PlayerbotClient::EmptyMarker const& marker)
+        {
+            return int32(marker.RetryAtMs - now) <= 0;
+        });
+        bot.EmptyMarkers.push_back({ pos, now + waitMs });
+        return waitMs;
+    }
+
     // She reached a map marker. What she could not reach from where she was may be reachable from here, so she forgets
     // her skip list, but only when this is somewhere new: a marker she stands on is reached again every few seconds,
     // and wiping the list each time brings back the target she just gave up on.
@@ -731,6 +757,7 @@ namespace
         filter.KeepQuest = keepQuest;
         filter.SkipPos = skipPos;
         filter.SkipPositions = &bot.UnreachablePositions;
+        filter.EmptyMarkers = &bot.EmptyMarkers;
         return filter;
     }
 }
@@ -2894,8 +2921,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             if (bot.QuestArriveWaitMs < QUEST_SEARCH_RETRY_MS)
                 return;
 
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the gameobject map marker but no spawned object is there yet. Looking for other work.",
-                player->GetName());
+            uint32 const retryMs = RememberEmptyMarker(bot, player, bot.GameObjectTarget.Pos, 0);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the gameobject map marker but no spawned object is there yet. Looking for other work; she comes back to this point in {} s.",
+                player->GetName(), retryMs / IN_MILLISECONDS);
             int32 const skipQuestId = bot.GameObjectTarget.QuestId;
             uint32 const skipEntry = bot.GameObjectTarget.GoEntry;
             bot.GameObjectTarget = {};
@@ -2937,8 +2965,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             if (bot.QuestArriveWaitMs < QUEST_SEARCH_RETRY_MS)
                 return;
 
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the map marker but no spawned creature is there yet. Looking for other work.",
-                player->GetName());
+            uint32 const retryMs = RememberEmptyMarker(bot, player, bot.UseItemOnUnitTarget.Pos, bot.UseItemOnUnitTarget.CreditEntry);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the map marker but no spawned creature is there yet. Looking for other work; she comes back to this point in {} s.",
+                player->GetName(), retryMs / IN_MILLISECONDS);
             int32 const skipQuestId = bot.UseItemOnUnitTarget.QuestId;
             uint32 const skipEntry = bot.UseItemOnUnitTarget.CreditEntry;
             bot.UseItemOnUnitTarget = {};
@@ -2977,8 +3006,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             if (bot.QuestArriveWaitMs < QUEST_SEARCH_RETRY_MS)
                 return;
 
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the kill map marker but no spawned creature is there yet. Looking for other work.",
-                player->GetName());
+            uint32 const retryMs = RememberEmptyMarker(bot, player, bot.CombatTarget.Pos, bot.CombatTarget.CreditEntry);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the kill map marker but no spawned creature is there yet. Looking for other work; she comes back to this point in {} s.",
+                player->GetName(), retryMs / IN_MILLISECONDS);
             int32 const skipQuestId = bot.CombatTarget.QuestId;
             uint32 const skipEntry = bot.CombatTarget.CreditEntry;
             ClearCombat(bot, player);
@@ -3018,8 +3048,9 @@ void PlayerbotMgr::UpdateWorld(PlayerbotRecord& bot, uint32 diff)
             if (bot.QuestArriveWaitMs < QUEST_SEARCH_RETRY_MS)
                 return;
 
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the item map marker but nothing to loot is there yet. Looking for other work.",
-                player->GetName());
+            uint32 const retryMs = RememberEmptyMarker(bot, player, bot.ItemLootTarget.Pos, 0);
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} reached the item map marker but nothing to loot is there yet. Looking for other work; she comes back to this point in {} s.",
+                player->GetName(), retryMs / IN_MILLISECONDS);
             int32 const skipQuestId = bot.ItemLootTarget.QuestId;
             uint32 const skipEntry = bot.ItemLootTarget.ItemId;
             ClearItemLoot(bot);

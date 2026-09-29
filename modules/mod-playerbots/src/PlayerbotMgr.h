@@ -123,6 +123,7 @@ struct PlayerbotRecord
     uint32 VendorRetryMs = 0;
     std::unordered_set<ObjectGuid> UnreachableGuids;
     std::vector<Position> UnreachablePositions;
+    std::vector<PlayerbotClient::EmptyMarker> EmptyMarkers;
     // Where she stood when reaching a map marker last wiped her skip list. Reaching a marker wipes it again only once
     // she has come somewhere new, so standing on a marker does not wipe it every few seconds.
     Position SkipsForgottenAt;

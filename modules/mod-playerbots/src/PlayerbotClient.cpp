@@ -1008,6 +1008,12 @@ namespace
         return pos.GetExactDist(blob.Centroid) <= blob.Radius + 5.0f;
     }
 
+    // An empty marker point whose wait for a respawn is not over yet.
+    bool IsWaitingEmptyMarker(PlayerbotClient::EmptyMarker const& marker)
+    {
+        return int32(marker.RetryAtMs - GameTime::GetGameTimeMS()) > 0;
+    }
+
     bool PointIsSkipped(Position const& point, PlayerbotClient::MapYellowFilter const& filter)
     {
         if (filter.SkipPos && point.GetExactDist(*filter.SkipPos) <= SKIP_YELLOW_YARDS)
@@ -1018,6 +1024,15 @@ namespace
             for (Position const& skip : *filter.SkipPositions)
             {
                 if (point.GetExactDist(skip) <= SKIP_YELLOW_YARDS)
+                    return true;
+            }
+        }
+
+        if (filter.EmptyMarkers)
+        {
+            for (PlayerbotClient::EmptyMarker const& marker : *filter.EmptyMarkers)
+            {
+                if (IsWaitingEmptyMarker(marker) && point.GetExactDist(marker.Pos) <= SKIP_YELLOW_YARDS)
                     return true;
             }
         }
@@ -1060,6 +1075,15 @@ namespace
             for (Position const& skip : *filter.SkipPositions)
             {
                 if (BlobContains(blob, skip))
+                    return 0;
+            }
+        }
+
+        if (filter.EmptyMarkers)
+        {
+            for (PlayerbotClient::EmptyMarker const& marker : *filter.EmptyMarkers)
+            {
+                if (IsWaitingEmptyMarker(marker) && BlobContains(blob, marker.Pos))
                     return 0;
             }
         }
@@ -4277,7 +4301,8 @@ bool PlayerbotClient::TrySpiritHealer(Player* player, ObjectGuid healerGuid)
 namespace
 {
     constexpr uint32 VENDOR_DURABILITY_PCT = 20;
-    constexpr uint32 VENDOR_BAG_FREE_SLOTS = 1;
+    // Four free slots, not one, so she sells her junk while a quest reward still fits and a turn-in is not refused.
+    constexpr uint32 VENDOR_BAG_FREE_SLOTS = 4;
     constexpr uint32 VENDOR_LOAD_ATTEMPTS = 16;
 
     struct VendorSpawn
@@ -4547,4 +4572,34 @@ bool PlayerbotClient::TryVendorTrade(Player* player, ObjectGuid vendorGuid, bool
     }
 
     return true;
+}
+
+// How long until the next creature that gives this kill credit respawns near a map marker point, from the respawn times
+// the map keeps for its dead spawns. Nothing when none of those spawns near the point is waiting to respawn.
+Optional<uint32> PlayerbotClient::CreatureRespawnWaitMs(Map const* map, uint32 creditEntry, Position const& near)
+{
+    constexpr float RESPAWN_NEAR_MARKER_YARDS = 50.0f;
+    if (!map || !creditEntry)
+        return {};
+
+    time_t const now = GameTime::GetGameTime();
+    Optional<time_t> soonest;
+    PlayerbotCreatureIndex const& index = CreatureIndex();
+    for (uint32 entry : index.EntriesGivingCredit(creditEntry))
+    {
+        for (uint64 spawnId : index.SpawnIds(map->GetId(), entry))
+        {
+            CreatureData const* data = sObjectMgr->GetCreatureData(ObjectGuid::LowType(spawnId));
+            if (!data || data->spawnPoint.GetExactDist2d(near) > RESPAWN_NEAR_MARKER_YARDS)
+                continue;
+
+            time_t const respawnAt = map->GetCreatureRespawnTime(ObjectGuid::LowType(spawnId));
+            if (respawnAt > now && (!soonest || respawnAt < *soonest))
+                soonest = respawnAt;
+        }
+    }
+
+    if (!soonest)
+        return {};
+    return uint32(*soonest - now) * IN_MILLISECONDS;
 }

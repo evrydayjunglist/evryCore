@@ -28,6 +28,7 @@
 
 class Creature;
 class Item;
+class Map;
 class Player;
 class SpellInfo;
 class Unit;
@@ -130,6 +131,14 @@ namespace PlayerbotClient
         Press
     };
 
+    // A map marker point she stood on with nothing there. She walks to it again once what belongs there has had time
+    // to respawn.
+    struct EmptyMarker
+    {
+        Position Pos;
+        uint32 RetryAtMs = 0;
+    };
+
     // KeepQuest: only this quest and entry. Otherwise QuestId/Entry skip that objective's map markers.
     struct MapYellowFilter
     {
@@ -138,6 +147,7 @@ namespace PlayerbotClient
         bool KeepQuest = false;
         Position const* SkipPos = nullptr;
         std::vector<Position> const* SkipPositions = nullptr;
+        std::vector<EmptyMarker> const* EmptyMarkers = nullptr;
     };
 
     void QueueEnumCharacters(WorldSession* session);
@@ -214,6 +224,7 @@ namespace PlayerbotClient
     bool BagsNeedVendor(Player const* player);
     bool EquippedGearNeedsRepair(Player const* player);
     bool NeedsVendor(Player const* player);
+    Optional<uint32> CreatureRespawnWaitMs(Map const* map, uint32 creditEntry, Position const& near);
     Optional<VendorTarget> FindNearestVendor(Player* player, std::unordered_set<ObjectGuid> const& skip, bool preferRepair);
     bool TryOpenVendor(Player* player, ObjectGuid vendorGuid);
     bool TryVendorTrade(Player* player, ObjectGuid vendorGuid, bool repair);

@@ -100,6 +100,10 @@ struct PlayerbotRecord
     bool CombatCastPending = false;
     uint32 CombatCastWaitMs = 0;
     bool CombatFacingWait = false;
+    // Where she stood when a player she fights back against attacked her; she does not walk far from it after them.
+    // The refusal to walk after them is logged once per fight.
+    Position PlayerFightStart;
+    bool PlayerChaseRefusedLogged = false;
     bool UseItemCastPending = false;
     bool UseItemCastSeenGcd = false;
     bool UseItemFacingWait = false;

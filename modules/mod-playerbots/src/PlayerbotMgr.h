@@ -163,9 +163,20 @@ struct PlayerbotRecord
     ObjectGuid StillShortGuid;
     std::vector<Position> StillShortFeet;
     bool LookedForOtherYellowOnFace = false;
-    // The quest reward she chose to put on, and how long she has waited for it to reach her bags.
-    uint32 WearItemId = 0;
-    uint32 WearWaitMs = 0;
+    // Her gear. She looks through her bags for something better to wear when an item reaches them, when her level or
+    // specialization changes, and once after login; GearLookWaitMs holds the next look back while the server handles
+    // the equip she just asked for. GearJudged: items she has already said she keeps in this specialization.
+    // GearRefused: items the server would not put on. GearLastQueued: the item she asked to put on last, and how long
+    // and how many looks she has waited for it to go on.
+    bool GearLookDue = true;
+    uint32 GearLookWaitMs = 0;
+    uint32 GearQueuedWaitedMs = 0;
+    uint8 GearQueuedLooks = 0;
+    uint8 GearLevel = 0;
+    uint32 GearSpec = 0;
+    std::unordered_set<ObjectGuid> GearJudged;
+    std::unordered_set<ObjectGuid> GearRefused;
+    ObjectGuid GearLastQueued;
     // She is running from a fight she is losing: where she started running and how many stretches she has run.
     bool Fleeing = false;
     Position FleeStart;
@@ -293,8 +304,10 @@ private:
     // allowFights false keeps to talk and loot: no pull, no item used on a creature.
     bool TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool walking, bool allowFights = true);
     bool TryClickFromHere(PlayerbotRecord& bot, Player* player);
-    // Talks to bot.QuestTarget, and remembers a quest reward she chose to put on.
+    // Talks to bot.QuestTarget.
     bool TryInteractQuest(PlayerbotRecord& bot, Player* player);
+    // Out of a fight, puts on the best upgrade in her bags when something new may be there. One equip packet at a time.
+    void UpdateGear(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool TryMapYellow(PlayerbotRecord& bot, Player* player, int32 skipQuestId = 0, uint32 skipEntry = 0);
     bool TrySameObjectiveYellow(PlayerbotRecord& bot, Player* player, int32 questId, uint32 entry, Position const& skipPos, ObjectGuid extraSkipGuid);
     bool TryLeaveFaceForOtherYellow(PlayerbotRecord& bot, Player* player);

@@ -33,6 +33,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotFactory.h"
+#include "PlayerbotGear.h"
 #include "PlayerbotLogDetail.h"
 #include "PlayerbotVariety.h"
 #include "PlayerbotWipe.h"
@@ -128,8 +129,17 @@ namespace
     constexpr uint32 EMPTY_MARKER_MAX_RETRY_MS = 600000;
     // Time after the respawn before she goes back, so the creature is up when she gets there.
     constexpr uint32 EMPTY_MARKER_RESPAWN_MARGIN_MS = 5000;
-    // A quest reward she chose to put on that has not reached her bags by now is not coming.
-    constexpr uint32 WEAR_REWARD_WAIT_MS = 5000;
+    // After she asks to put an item on, the next look through her bags waits this long so the server has handled it.
+    constexpr uint32 GEAR_LOOK_AFTER_EQUIP_MS = 1500;
+    // While the item she asked to put on is still in her bags she waits, and gives up on it only after this long and
+    // this many looks, because slow world ticks at login held the server's answer back for more than one look.
+    constexpr uint32 GEAR_EQUIP_GIVE_UP_MS = 10000;
+    constexpr uint8 GEAR_EQUIP_GIVE_UP_LOOKS = 4;
+    // A reward or loot that reaches her bags is looked at after this long, so several items arriving together are one look.
+    constexpr uint32 GEAR_LOOK_AFTER_ITEM_MS = 500;
+    // Items she has said she keeps are remembered so each is named once; past this many (most long gone from her bags)
+    // the list starts again at her next level.
+    constexpr std::size_t GEAR_JUDGED_KEPT = 256;
     constexpr uint32 LOOT_WINDOW_MS = 1000;
     constexpr uint32 VENDOR_RETRY_MS = 60000;
     constexpr uint32 GHOST_SETTLE_MS = 500;
@@ -840,6 +850,8 @@ void PlayerbotMgr::Start()
 
     _loginMode = ReadLoginMode();
     PlayerbotLogDetail::SetNames(sConfigMgr->GetStringDefault(PLAYERBOTS_LOG_DETAIL, ""));
+
+    PlayerbotGear::LoadConfig();
 
     std::string const invitePolicy = sConfigMgr->GetStringDefault(PLAYERBOTS_INVITE_POLICY, "GameMaster");
     if (std::optional<PlayerbotInvitePolicy> parsed = ParsePlayerbotInvitePolicy(invitePolicy))
@@ -2482,6 +2494,9 @@ void PlayerbotMgr::AnswerServerMovement(PlayerbotRecord& bot, Player* player, ui
 void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, PlayerbotServerOrder const& order)
 {
     WorldSession* session = player->GetSession();
+    // In a party the server shows her what the others loot too. Only her own items are hers to look at.
+    if (order.Kind == PlayerbotServerOrderKind::ItemPushed && order.Mover != player->GetGUID())
+        return;
     if (!order.Mover.IsEmpty() && order.Mover != player->GetGUID())
     {
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} did not answer a server {} for another unit, {}.",
@@ -2579,6 +2594,12 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             PlayerbotClient::QueueTimeSyncResponse(session, order.SequenceIndex, GameTime::GetGameTimeMS());
             PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: account {} queued CMSG_TIME_SYNC_RESPONSE for sequence {}.",
                 session->GetAccountId(), order.SequenceIndex);
+            break;
+        case PlayerbotServerOrderKind::ItemPushed:
+            // Something reached her bags: she looks at it once she is out of a fight.
+            bot.GearLookDue = true;
+            if (!bot.GearLookWaitMs)
+                bot.GearLookWaitMs = GEAR_LOOK_AFTER_ITEM_MS;
             break;
         case PlayerbotServerOrderKind::PartyInvite:
             // The window stays open until she clicks; UpdatePartyInvite answers it after she has read it.
@@ -3038,21 +3059,9 @@ void PlayerbotMgr::UpdateBrain(PlayerbotRecord& bot, WorldSession* session, Play
         return;
     }
 
-    // A quest reward she chose as an upgrade goes on once it is in her bags and she is out of a fight, as a player
-    // would drag it onto the character sheet. It does not stop her walk or her next pick.
-    if (bot.WearItemId && !player->IsInCombat() && !player->IsNonMeleeSpellCast(false))
-    {
-        bot.WearWaitMs += diff;
-        PlayerbotClient::WearLook const look = PlayerbotClient::TryWearUpgrade(player, bot.WearItemId);
-        if (look == PlayerbotClient::WearLook::NotYet && bot.WearWaitMs >= WEAR_REWARD_WAIT_MS)
-            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} chose item {} as a quest reward, but it is not in her bags after {} seconds. She does not wait for it.",
-                player->GetName(), bot.WearItemId, WEAR_REWARD_WAIT_MS / IN_MILLISECONDS);
-        if (look != PlayerbotClient::WearLook::NotYet || bot.WearWaitMs >= WEAR_REWARD_WAIT_MS)
-        {
-            bot.WearItemId = 0;
-            bot.WearWaitMs = 0;
-        }
-    }
+    // Something better to wear in her bags goes on once she is out of a fight, as a player would drag it onto the
+    // character sheet. It does not stop her walk or her next pick.
+    UpdateGear(bot, player, diff);
 
     // In a party led by a human player on her map, she follows and helps her leader instead of picking her own work.
     Player* const leader = PartyLeaderToFollow(player);
@@ -4180,16 +4189,58 @@ bool PlayerbotMgr::TryImmediateWorld(PlayerbotRecord& bot, Player* player, bool 
 
 bool PlayerbotMgr::TryInteractQuest(PlayerbotRecord& bot, Player* player)
 {
-    uint32 wearItemId = 0;
-    if (!PlayerbotClient::TryInteractQuest(player, bot.QuestTarget, &wearItemId))
-        return false;
+    // A reward she chose reaches her bags like any other item, and that starts her look through them (UpdateGear).
+    return PlayerbotClient::TryInteractQuest(player, bot.QuestTarget);
+}
 
-    if (wearItemId)
+void PlayerbotMgr::UpdateGear(PlayerbotRecord& bot, Player* player, uint32 diff)
+{
+    // A new level can let her wear what was too high for her and changes what scaling items are worth; a new
+    // specialization changes her stat weights. Either way she looks through her bags again. A new specialization also
+    // names again what she keeps, because the reasons change with her weights.
+    uint32 const spec = uint32(AsUnderlyingType(player->GetPrimarySpecialization()));
+    if (bot.GearLevel != player->GetLevel() || bot.GearSpec != spec)
     {
-        bot.WearItemId = wearItemId;
-        bot.WearWaitMs = 0;
+        if (bot.GearSpec != spec || bot.GearJudged.size() > GEAR_JUDGED_KEPT)
+            bot.GearJudged.clear();
+        bot.GearLevel = player->GetLevel();
+        bot.GearSpec = spec;
+        bot.GearRefused.clear();
+        bot.GearLookDue = true;
     }
-    return true;
+
+    if (bot.GearLookWaitMs)
+        bot.GearLookWaitMs = bot.GearLookWaitMs > diff ? bot.GearLookWaitMs - diff : 0;
+    if (!bot.GearLastQueued.IsEmpty())
+        bot.GearQueuedWaitedMs += diff;
+    if (!bot.GearLookDue || bot.GearLookWaitMs)
+        return;
+    if (!player->IsAlive() || player->IsInCombat() || player->IsNonMeleeSpellCast(false))
+        return;
+
+    // The item she asked to put on is still in her bags: the server may not have handled her click yet. She asks for
+    // nothing else meanwhile, and only once she has waited long enough does the look below count it as refused.
+    if (!bot.GearLastQueued.IsEmpty())
+    {
+        Item const* queued = player->GetItemByGuid(bot.GearLastQueued);
+        if (queued && !queued->IsEquipped()
+            && (bot.GearQueuedWaitedMs < GEAR_EQUIP_GIVE_UP_MS || bot.GearQueuedLooks < GEAR_EQUIP_GIVE_UP_LOOKS))
+        {
+            ++bot.GearQueuedLooks;
+            bot.GearLookWaitMs = GEAR_LOOK_AFTER_EQUIP_MS;
+            return;
+        }
+    }
+
+    bot.GearQueuedWaitedMs = 0;
+    bot.GearQueuedLooks = 0;
+    if (PlayerbotGear::TryWearBestFromBags(player, bot.GearJudged, bot.GearRefused, bot.GearLastQueued) == PlayerbotGear::Look::Queued)
+    {
+        // Look again once the server has put it on: another upgrade may be waiting, or it did not go on.
+        bot.GearLookWaitMs = GEAR_LOOK_AFTER_EQUIP_MS;
+        return;
+    }
+    bot.GearLookDue = false;
 }
 
 bool PlayerbotMgr::TryClickFromHere(PlayerbotRecord& bot, Player* player)
@@ -5937,7 +5988,7 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
         if (slotsShort && !bot.VendorSoldForRoom)
         {
             bot.VendorSoldForRoom = true;
-            if (PlayerbotClient::QueueSellForRoom(player, bot.VendorTarget.NpcGuid, slotsShort, bot.WearItemId))
+            if (PlayerbotClient::QueueSellForRoom(player, bot.VendorTarget.NpcGuid, slotsShort))
             {
                 bot.QuestArriveWaitMs = 0;
                 return true;

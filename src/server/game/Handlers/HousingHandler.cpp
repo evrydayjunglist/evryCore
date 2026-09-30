@@ -5446,9 +5446,11 @@ void WorldSession::RespawnHousingAfterBlueprintImport(Player* player, Housing* h
     std::vector<ObjectGuid> const& removedDecor)
 {
     // Rebuild every loaded copy of the house, not only the map the importer stands on: the interior instance is keyed
-    // by owner and may hold visitors, and the plot is on a neighborhood map others are watching. Session packets are
-    // processed between map updates, so touching another map here is safe.
-    ObjectGuid const ownerGuid = player->GetGUID();
+    // by house (one instance per house database id) and may hold visitors, and the plot is on a neighborhood map
+    // others are watching. Session packets are processed between map updates, so touching another map here is safe.
+    // Match the house GUID, not the map's cosmetic-owner GUID: any character of the Battle.net account may import,
+    // and CreateHouseInterior stores the shown owner as _owner.
+    ObjectGuid const houseGuid = housing->GetHouseGuid();
     ObjectGuid const neighborhoodGuid = housing->GetNeighborhoodGuid();
     int32 const faction = player->GetTeamId() == TEAM_ALLIANCE ? NEIGHBORHOOD_FACTION_ALLIANCE : NEIGHBORHOOD_FACTION_HORDE;
 
@@ -5456,7 +5458,7 @@ void WorldSession::RespawnHousingAfterBlueprintImport(Player* player, Housing* h
     {
         if (HouseInteriorMap* interiorMap = dynamic_cast<HouseInteriorMap*>(map))
         {
-            if (!interiorChanged || interiorMap->GetOwnerGuid() != ownerGuid)
+            if (!interiorChanged || interiorMap->GetHouseGuid() != houseGuid)
                 return;
 
             for (ObjectGuid const& decorGuid : removedDecor)
@@ -5467,7 +5469,7 @@ void WorldSession::RespawnHousingAfterBlueprintImport(Player* player, Housing* h
             interiorMap->SpawnRoomMeshObjects(housing, faction);
             interiorMap->SpawnInteriorDecor(housing);
 
-            TC_LOG_DEBUG("housing", "RespawnHousingAfterBlueprintImport: rebuilt interior instance {} of {}", map->GetInstanceId(), ownerGuid.ToString());
+            TC_LOG_DEBUG("housing", "RespawnHousingAfterBlueprintImport: rebuilt interior instance {} of house {}", map->GetInstanceId(), houseGuid.ToString());
             return;
         }
 

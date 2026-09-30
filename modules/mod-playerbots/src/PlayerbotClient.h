@@ -254,9 +254,9 @@ namespace PlayerbotClient
     // the choice she would click). 0 when they fit, or when the server would refuse the turn-in for another reason.
     uint32 BagSlotsShortForTurnIn(Player const* player, uint32 questId);
     // At an open shop, sells up to slots items to make room: the ones worth least at a vendor, never quest items, food
-    // or drink, bags, gear better than what she wears, or the reward she is waiting to put on. One CMSG_SELL_ITEM each,
-    // as a player drags them onto the vendor. Returns how many were queued.
-    uint32 QueueSellForRoom(Player* player, ObjectGuid vendorGuid, uint32 slots, uint32 keepItemId);
+    // or drink, bags, or gear she would put on over what she wears. One CMSG_SELL_ITEM each, as a player drags them onto
+    // the vendor. Returns how many were queued.
+    uint32 QueueSellForRoom(Player* player, ObjectGuid vendorGuid, uint32 slots);
     Optional<GameObjectTarget> FindNearbyGameObjectObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip, bool mustBeInUseRange = false);
     Optional<GameObjectTarget> FindLogIncompleteGameObjectTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool GameObjectTargetStillNeeded(Player* player, GameObjectTarget const& target);
@@ -264,16 +264,8 @@ namespace PlayerbotClient
     Optional<UseItemOnUnitTarget> FindLogIncompleteUseItemOnUnitTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});
     bool UseItemOnUnitTargetStillNeeded(Player* player, UseItemOnUnitTarget const& target);
     UseItemLook LookUseItemOnUnit(Player* player, UseItemOnUnitTarget const& target);
-    // On a turn-in, wearItemId gets the reward she chose when it is gear she should put on once it reaches her bags.
-    bool TryInteractQuest(Player* player, QuestTarget const& target, uint32* wearItemId = nullptr);
-
-    enum class WearLook
-    {
-        NotYet,  // not in her bags yet
-        Queued,  // equip packet queued
-        Dropped  // no longer an upgrade, or the server would refuse it
-    };
-    WearLook TryWearUpgrade(Player* player, uint32 itemId);
+    // On a turn-in she clicks the reward a player would (the biggest upgrade by her stat weights first).
+    bool TryInteractQuest(Player* player, QuestTarget const& target);
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
     bool TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId);
     CombatSpellPick PickCombatDamageSpell(Player* player, Unit* target);

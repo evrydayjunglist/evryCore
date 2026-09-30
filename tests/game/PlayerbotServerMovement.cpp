@@ -14,6 +14,7 @@
 
 #include "tc_catch2.h"
 
+#include "ItemPackets.h"
 #include "MiscPackets.h"
 #include "MovementPackets.h"
 #include "MovementTypedefs.h"
@@ -113,6 +114,21 @@ TEST_CASE("Playerbot reads the map change packets", "[playerbots][server-movemen
     orders = Read(newWorld.Write());
     REQUIRE(orders.size() == 1);
     REQUIRE(orders[0].Kind == PlayerbotServerOrderKind::NewWorld);
+}
+
+TEST_CASE("Playerbot reads whose bags a new item reached", "[playerbots][server-movement]")
+{
+    WorldPackets::Item::ItemPushResult push;
+    push.PlayerGUID = PlayerGuid(12);
+    push.Slot = 255;
+    push.SlotInBag = 3;
+    push.Item.ItemID = 2362;
+    push.Quantity = 1;
+    push.QuantityInInventory = 1;
+    std::vector<PlayerbotServerOrder> const orders = Read(push.Write());
+    REQUIRE(orders.size() == 1);
+    REQUIRE(orders[0].Kind == PlayerbotServerOrderKind::ItemPushed);
+    REQUIRE(orders[0].Mover == PlayerGuid(12));
 }
 
 TEST_CASE("Playerbot reads one order per time sync request, even when a number repeats", "[playerbots][server-movement]")

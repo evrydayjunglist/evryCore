@@ -26,8 +26,8 @@
 #include <cstdint>
 #include <vector>
 
-// Something the server sent her client that a real client answers: a movement order, a time sync request, or a party
-// invite window.
+// Something the server sent her client that a real client answers: a movement order, a time sync request, a party
+// invite window, or an item reaching her bags.
 enum class PlayerbotServerOrderKind : std::uint8_t
 {
     Root,
@@ -37,7 +37,8 @@ enum class PlayerbotServerOrderKind : std::uint8_t
     SuspendToken,
     NewWorld,
     TimeSync,
-    PartyInvite
+    PartyInvite,
+    ItemPushed
 };
 
 inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
@@ -60,6 +61,8 @@ inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
             return "time sync request";
         case PlayerbotServerOrderKind::PartyInvite:
             return "party invite";
+        case PlayerbotServerOrderKind::ItemPushed:
+            return "new item";
     }
 
     return "unknown";
@@ -68,7 +71,8 @@ inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
 struct PlayerbotServerOrder
 {
     PlayerbotServerOrderKind Kind = PlayerbotServerOrderKind::Root;
-    // The unit whose movement the order is for. Empty for the map change and time sync packets, which name no unit.
+    // The unit whose movement the order is for. Empty for the map change and time sync packets, which name no unit. For a
+    // new item, the player whose bags it reached.
     ObjectGuid Mover;
     // The number her reply must echo.
     std::uint32_t SequenceIndex = 0;
@@ -162,9 +166,8 @@ namespace PlayerbotServerMovementDetail
     }
 }
 
-// Reads what a client has to answer from one packet the server sent: movement orders, time sync requests, and party
-// invites. Any
-// other packet adds nothing, and so does a packet that cannot be read. Only a handful of opcodes are copied; every
+// Reads what a client has to answer from one packet the server sent: movement orders, time sync requests, party
+// invites, and items reaching her bags. Any other packet adds nothing, and so does a packet that cannot be read. Only a handful of opcodes are copied; every
 // other packet returns at the switch.
 inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<PlayerbotServerOrder>& out)
 {
@@ -179,6 +182,7 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
         case SMSG_MOVE_SET_COMPOUND_STATE:
         case SMSG_TIME_SYNC_REQUEST:
         case SMSG_PARTY_INVITE:
+        case SMSG_ITEM_PUSH_RESULT:
             break;
         default:
             return;
@@ -255,6 +259,12 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
                     out.push_back(order);
                 break;
             }
+            case SMSG_ITEM_PUSH_RESULT:
+                // Only whose bags it reached, the first thing in the packet. She looks through her bags herself.
+                order.Kind = PlayerbotServerOrderKind::ItemPushed;
+                data >> order.Mover;
+                out.push_back(order);
+                break;
             default:
                 break;
         }

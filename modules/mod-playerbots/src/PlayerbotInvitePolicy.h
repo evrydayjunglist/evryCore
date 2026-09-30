@@ -35,9 +35,6 @@ inline constexpr uint8 PLAYERBOT_INVITE_PEER_LEVEL_GAP = 5;
 // Once both are at the top level, level says nothing, so average equipped item level decides instead.
 inline constexpr float PLAYERBOT_INVITE_PEER_ITEM_LEVEL_GAP = 15.0f;
 
-// How long she takes to click Accept or Decline on the invite window, about as long as a player reading it.
-inline constexpr uint32 PLAYERBOT_INVITE_ANSWER_DELAY_MS = 1500;
-
 struct PlayerbotInviteFacts
 {
     bool InviterIsGameMaster = false;

@@ -51,6 +51,7 @@ enum class PlayerbotCostStep : uint8_t
     ServerOrders,       // answering the server's movement orders
     GridLoad,           // loading a map grid a finder wants to look in, so the spawns in it exist
     Floor,              // a floor look: the plant a walk heartbeat or the ground map uses
+    StandSpotCrowd,     // inside a stand spot pick: the players she can see standing beside the target
     Count
 };
 
@@ -66,7 +67,7 @@ public:
         static constexpr std::array<char const*, StepCount> names = { "navmesh routes", "collision rays",
             "way-round map", "navmesh join-up probes", "stand spot picks", "looks at the world around her",
             "map work picks", "quest object searches", "use-item creature searches", "quest monster searches",
-            "quest item searches", "turn-in searches", "takeable quest searches", "starting picked work", "vendor picks", "same-objective searches", "fight", "death", "turn-in explanations", "staying logged in", "answers to server movement orders", "grid loads", "floor looks" };
+            "quest item searches", "turn-in searches", "takeable quest searches", "starting picked work", "vendor picks", "same-objective searches", "fight", "death", "turn-in explanations", "staying logged in", "answers to server movement orders", "grid loads", "floor looks", "stand spot crowd looks" };
         return names[std::size_t(step)];
     }
 

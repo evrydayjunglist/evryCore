@@ -34,6 +34,7 @@
 #include "Player.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotLogDetail.h"
+#include "PlayerbotVariety.h"
 #include "PlayerbotWipe.h"
 #include "RealmList.h"
 #include "SpellInfo.h"
@@ -77,6 +78,20 @@ void PlayerbotWorldThreadOnly(char const* what)
 
 namespace
 {
+    // How long she waits this time: a little different for each bot and each wait.
+    uint32 PickWait(PlayerbotRecord& bot, PlayerbotWaitKind kind, uint32 minMs, uint32 maxMs)
+    {
+        return PickPlayerbotWait(bot.Account.CharacterGuid.GetCounter(), kind, bot.WaitsPicked++, minMs, maxMs);
+    }
+
+    // The two pauses at a vendor, after she arrives and after she trades, are the same for her on every visit but differ
+    // from other bots'.
+    uint32 VendorPauseMs(PlayerbotRecord const& bot)
+    {
+        return PickPlayerbotWait(bot.Account.CharacterGuid.GetCounter(), PlayerbotWaitKind::QuestChainPause, bot.VendorActed ? 1 : 0,
+            PLAYERBOT_QUEST_CHAIN_PAUSE_MIN_MS, PLAYERBOT_QUEST_CHAIN_PAUSE_MAX_MS);
+    }
+
     // Only the world thread looks sessions up in the world's list; a brain on a map thread uses her player's session.
     WorldSession* FindBotSession(uint32 accountId)
     {
@@ -89,7 +104,6 @@ namespace
     constexpr float LOOT_SEARCH_RANGE = 10.0f;
     constexpr uint32 COMBAT_CAST_RETRY_MS = 100;
     constexpr uint32 USE_ITEM_CAST_START_MS = 400;
-    constexpr uint32 QUEST_CHAIN_PAUSE_MS = 750;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
     // She could not step anywhere from where she stood: she looks again after this long.
     constexpr uint32 STUCK_FEET_WAIT_MS = 5000;
@@ -98,8 +112,9 @@ namespace
     constexpr float STUCK_FEET_SAME_PLACE_YARDS = 5.0f;
     constexpr uint32 STUCK_FEET_HEARTH_AFTER_MS = 2 * MINUTE * IN_MILLISECONDS;
     constexpr uint32 HEARTH_CAST_WAIT_MS = 15000;
-    // A bot with nothing to do, or walking, looks around for new work this often, not every world tick. Being hit, a
-    // server movement order, death, her fight, and her walk's heartbeats do not wait for it.
+    // A bot with nothing to do, or walking, looks around for new work about this often, not every world tick. Being hit,
+    // a server movement order, death, her fight, and her walk's heartbeats do not wait for it. After each look the next
+    // one comes a little sooner or later (PLAYERBOT_LOOK_AROUND_MIN_MS to PLAYERBOT_LOOK_AROUND_MAX_MS).
     constexpr uint32 LOOK_AROUND_INTERVAL_MS = 1000;
     // Standing with nothing to do this long while targets are on her skip list, she forgets the list.
     constexpr uint32 IDLE_FORGET_SKIPS_MS = 120000;
@@ -117,7 +132,6 @@ namespace
     constexpr uint32 WEAR_REWARD_WAIT_MS = 5000;
     constexpr uint32 LOOT_WINDOW_MS = 1000;
     constexpr uint32 VENDOR_RETRY_MS = 60000;
-    constexpr uint32 RELEASE_WAIT_MS = 3000;
     constexpr uint32 GHOST_SETTLE_MS = 500;
     constexpr uint32 PACKET_RETRY_MS = 2000;
     constexpr uint32 CAMPED_WAIT_MS = 20000;
@@ -2570,6 +2584,7 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             // The window stays open until she clicks; UpdatePartyInvite answers it after she has read it.
             bot.InviteFrom = order.Inviter;
             bot.InviteOpenMs = 0;
+            bot.InviteAnswerMs = PickWait(bot, PlayerbotWaitKind::InviteAnswer, PLAYERBOT_INVITE_ANSWER_MIN_MS, PLAYERBOT_INVITE_ANSWER_MAX_MS);
             break;
     }
 }
@@ -2588,7 +2603,7 @@ void PlayerbotMgr::UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint3
     }
 
     bot.InviteOpenMs += diff;
-    if (bot.InviteOpenMs < PLAYERBOT_INVITE_ANSWER_DELAY_MS)
+    if (bot.InviteOpenMs < bot.InviteAnswerMs)
         return;
 
     ObjectGuid const inviterGuid = bot.InviteFrom;
@@ -2851,12 +2866,15 @@ void PlayerbotMgr::UpdateBrain(PlayerbotRecord& bot, WorldSession* session, Play
 
     if (bot.QuestInteractQueued)
     {
+        if (!bot.QuestChainPauseMs)
+            bot.QuestChainPauseMs = PickWait(bot, PlayerbotWaitKind::QuestChainPause, PLAYERBOT_QUEST_CHAIN_PAUSE_MIN_MS, PLAYERBOT_QUEST_CHAIN_PAUSE_MAX_MS);
         bot.QuestInteractWaitMs += diff;
-        if (bot.QuestInteractWaitMs < QUEST_CHAIN_PAUSE_MS)
+        if (bot.QuestInteractWaitMs < bot.QuestChainPauseMs)
             return;
 
         bot.QuestInteractQueued = false;
         bot.QuestInteractWaitMs = 0;
+        bot.QuestChainPauseMs = 0;
         bot.QuestArriveWaitMs = 0;
         bot.QuestSearchEmptyMs = 0;
         bot.IdleWithSkipsMs = 0;
@@ -3335,7 +3353,7 @@ void PlayerbotMgr::UpdateBrain(PlayerbotRecord& bot, WorldSession* session, Play
         if (bot.Walker.IsJumping() || bot.NextWalkLookMs)
             return;
 
-        bot.NextWalkLookMs = LOOK_AROUND_INTERVAL_MS;
+        bot.NextWalkLookMs = PickWait(bot, PlayerbotWaitKind::LookAround, PLAYERBOT_LOOK_AROUND_MIN_MS, PLAYERBOT_LOOK_AROUND_MAX_MS);
         TryImmediateWorld(bot, player, true);
         if (bot.Walker.IsMoving()
             && bot.VendorTarget.NpcGuid.IsEmpty()
@@ -3416,7 +3434,7 @@ bool PlayerbotMgr::LookAroundNow(PlayerbotRecord& bot)
 {
     if (bot.NextLookMs)
         return false;
-    bot.NextLookMs = LOOK_AROUND_INTERVAL_MS;
+    bot.NextLookMs = PickWait(bot, PlayerbotWaitKind::LookAround, PLAYERBOT_LOOK_AROUND_MIN_MS, PLAYERBOT_LOOK_AROUND_MAX_MS);
     return true;
 }
 
@@ -3433,6 +3451,9 @@ void PlayerbotMgr::ClearDeath(PlayerbotRecord& bot)
 {
     bot.Death = PlayerbotDeathWork::None;
     bot.DeathWaitMs = 0;
+    bot.ReleaseWaitMs = 0;
+    bot.StandUpWaitMs = 0;
+    bot.StandUpWaitedMs = 0;
     bot.GhostMs = 0;
     bot.CampedMs = 0;
     bot.HadSickness = false;
@@ -3462,6 +3483,7 @@ void PlayerbotMgr::ClearLivingWork(PlayerbotRecord& bot, Player* player)
     bot.QuestInteractQueued = false;
     bot.QuestArriveWaitMs = 0;
     bot.QuestInteractWaitMs = 0;
+    bot.QuestChainPauseMs = 0;
     bot.QuestSearchEmptyMs = 0;
     bot.IdleWithSkipsMs = 0;
     bot.StuckFeetWaitMs = 0;
@@ -3516,6 +3538,13 @@ bool PlayerbotMgr::UpdateSitRecover(PlayerbotRecord& bot, Player* player, uint32
     {
         if (player->IsSitState())
         {
+            // A player does not jump up the moment the bar fills.
+            if (!bot.StandUpWaitMs)
+                bot.StandUpWaitMs = PickWait(bot, PlayerbotWaitKind::StandUpAfterRest, PLAYERBOT_STAND_UP_AFTER_REST_MIN_MS, PLAYERBOT_STAND_UP_AFTER_REST_MAX_MS);
+            bot.StandUpWaitedMs += diff;
+            if (bot.StandUpWaitedMs < bot.StandUpWaitMs)
+                return true;
+
             PlayerbotClient::QueueStandStateChange(player->GetSession(), UNIT_STAND_STATE_STAND);
             TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} health{} full. Standing and returning to the living brain.",
                 player->GetName(), UsesMana(player) ? " and mana are" : " is");
@@ -3721,7 +3750,9 @@ bool PlayerbotMgr::UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff
             return true;
         }
 
-        if (bot.DeathWaitMs < RELEASE_WAIT_MS)
+        if (!bot.ReleaseWaitMs)
+            bot.ReleaseWaitMs = PickWait(bot, PlayerbotWaitKind::ReleaseSpirit, PLAYERBOT_RELEASE_WAIT_MIN_MS, PLAYERBOT_RELEASE_WAIT_MAX_MS);
+        if (bot.DeathWaitMs < bot.ReleaseWaitMs)
             return true;
 
         PlayerbotClient::QueueRepopRequest(player->GetSession());
@@ -5878,7 +5909,7 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
     bot.QuestArriveWaitMs += diff;
     if (!bot.VendorActed)
     {
-        if (bot.QuestArriveWaitMs < QUEST_CHAIN_PAUSE_MS)
+        if (bot.QuestArriveWaitMs < VendorPauseMs(bot))
             return true;
 
         bool const repair = PlayerbotClient::EquippedGearNeedsRepair(player);
@@ -5895,7 +5926,7 @@ bool PlayerbotMgr::UpdateVendor(PlayerbotRecord& bot, Player* player, uint32 dif
         return true;
     }
 
-    if (bot.QuestArriveWaitMs < QUEST_CHAIN_PAUSE_MS)
+    if (bot.QuestArriveWaitMs < VendorPauseMs(bot))
         return true;
 
     // Selling her junk did not make room for the quest she came for: she sells other items she can spare, once.

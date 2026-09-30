@@ -86,6 +86,15 @@ struct PlayerbotRecord
     uint32 QuestArriveWaitMs = 0;
     uint32 QuestInteractWaitMs = 0;
     uint32 QuestSearchEmptyMs = 0;
+    // How long this bot waits this time, picked when the wait starts; 0 until it is picked. Every bot waits a little
+    // differently, so bots that arrive together do not all act on the same tick.
+    uint32 QuestChainPauseMs = 0;
+    uint32 ReleaseWaitMs = 0;
+    uint32 InviteAnswerMs = 0;
+    uint32 StandUpWaitMs = 0;
+    uint32 StandUpWaitedMs = 0;
+    // How many waits she has picked, so the next one differs from the last.
+    uint32 WaitsPicked = 0;
     bool CombatSwingSent = false;
     uint32 CombatCastSpellId = 0;
     bool CombatCastPending = false;

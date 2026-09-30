@@ -56,6 +56,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Pet.h"
+#include "PhasingHandler.h"
 #include "Player.h"
 #include "PlayerDump.h"
 #include "QueryHolder.h"
@@ -1870,6 +1871,86 @@ void WorldSession::HandleSetWatchedFactionOpcode(WorldPackets::Character::SetWat
 void WorldSession::HandleSetFactionInactiveOpcode(WorldPackets::Character::SetFactionInactive& packet)
 {
     _player->GetReputationMgr().SetInactive(packet.Index, packet.State);
+}
+
+enum NeutralPlayerFactionChoice
+{
+    QUEST_A_NEW_FATE                        = 31450,
+    SPELL_FACTION_CHOICE_TRIGGER_ALLIANCE   = 113244,
+    SPELL_FACTION_CHOICE_TRIGGER_HORDE      = 113245,
+
+    // The client sends its faction group index
+    NEUTRAL_PLAYER_CHOOSES_HORDE            = 0,
+    NEUTRAL_PLAYER_CHOOSES_ALLIANCE         = 1
+};
+
+void WorldSession::HandleNeutralPlayerSelectFaction(WorldPackets::Character::NeutralPlayerSelectFaction& packet)
+{
+    Player* player = GetPlayer();
+    if (player->GetRace() != RACE_PANDAREN_NEUTRAL)
+        return;
+
+    // The choice is offered at the end of the Wandering Isle, while "A New Fate" is waiting for it
+    if (player->GetQuestStatus(QUEST_A_NEW_FATE) != QUEST_STATUS_INCOMPLETE)
+    {
+        TC_LOG_DEBUG("network", "WORLD: {} sent CMSG_NEUTRAL_PLAYER_SELECT_FACTION without quest {} in progress", player->GetGUID().ToString(), uint32(QUEST_A_NEW_FATE));
+        return;
+    }
+
+    uint8 newRace = 0;
+    uint32 choiceSpellId = 0;
+    switch (packet.Faction)
+    {
+        case NEUTRAL_PLAYER_CHOOSES_HORDE:
+            newRace = RACE_PANDAREN_HORDE;
+            choiceSpellId = SPELL_FACTION_CHOICE_TRIGGER_HORDE;
+            break;
+        case NEUTRAL_PLAYER_CHOOSES_ALLIANCE:
+            newRace = RACE_PANDAREN_ALLIANCE;
+            choiceSpellId = SPELL_FACTION_CHOICE_TRIGGER_ALLIANCE;
+            break;
+        default:
+            TC_LOG_DEBUG("network", "WORLD: {} sent CMSG_NEUTRAL_PLAYER_SELECT_FACTION with unknown faction {}", player->GetGUID().ToString(), uint32(packet.Faction));
+            return;
+    }
+
+    if (!sObjectMgr->GetPlayerInfo(newRace, player->GetClass()))
+    {
+        TC_LOG_ERROR("entities.player", "{} cannot become race {}: no create data for race {} and class {}", player->GetGUID().ToString(), newRace, newRace, player->GetClass());
+        return;
+    }
+
+    uint8 oldRace = player->GetRace();
+    uint32 oldFaction = player->GetFaction();
+
+    player->SetRace(newRace);
+    player->SetFactionForRace(newRace);
+
+    // Pets and other controlled units took the player's old faction when they were summoned
+    for (Unit* controlled : player->m_Controlled)
+        if (controlled->GetFaction() == oldFaction)
+            controlled->SetFaction(player->GetFaction());
+
+    // What a character created as this race starts with: its languages and its capital's flight paths
+    player->LearnDefaultSkills();
+    player->InitTaxiNodesForLevel();
+
+    player->GetReputationMgr().UpdateForRaceChange(oldRace);
+    player->GetReputationMgr().SendInitialReputations();
+
+    sCharacterCache->UpdateCharacterData(player->GetGUID(), player->GetName(), {}, newRace);
+
+    PhasingHandler::OnConditionChange(player);
+
+    WorldPackets::Character::NeutralPlayerFactionSelectResult result;
+    result.Success = true;
+    result.NewRaceID = newRace;
+    SendPacket(result.Write());
+
+    // Gives the "Faction Chosen" credit for "A New Fate" and completes the faction tracking quest
+    player->CastSpell(player, choiceSpellId, true);
+
+    player->SaveToDB();
 }
 
 void WorldSession::HandleCheckCharacterNameAvailability(WorldPackets::Character::CheckCharacterNameAvailability& checkCharacterNameAvailability)

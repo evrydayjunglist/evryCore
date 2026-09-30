@@ -310,6 +310,7 @@ namespace WorldPackets
         class SetFactionNotAtWar;
         class SetFactionInactive;
         class SetWatchedFaction;
+        class NeutralPlayerSelectFaction;
         class SetPlayerDeclinedNames;
         class SavePersonalEmblem;
 
@@ -1629,6 +1630,7 @@ class TC_GAME_API WorldSession
         void HandleSetFactionNotAtWar(WorldPackets::Character::SetFactionNotAtWar& packet);
         void HandleSetWatchedFactionOpcode(WorldPackets::Character::SetWatchedFaction& packet);
         void HandleSetFactionInactiveOpcode(WorldPackets::Character::SetFactionInactive& packet);
+        void HandleNeutralPlayerSelectFaction(WorldPackets::Character::NeutralPlayerSelectFaction& packet);
 
         void HandleUpdateAccountData(WorldPackets::ClientConfig::UserClientUpdateAccountData& packet);
         void HandleRequestAccountData(WorldPackets::ClientConfig::RequestAccountData& request);

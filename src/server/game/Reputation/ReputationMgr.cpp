@@ -319,11 +319,55 @@ void ReputationMgr::ApplyForceReaction(uint32 faction_id, ReputationRank rank, b
     }
 }
 
+void ReputationMgr::UpdateForRaceChange(uint8 oldRace)
+{
+    uint8 playerClass = _player->GetClass();
+    for (auto& [reputationListId, state] : _factions)
+    {
+        FactionEntry const* factionEntry = sFactionStore.LookupEntry(state.ID);
+        if (!factionEntry)
+            continue;
+
+        // Standing is stored on top of the race's base reputation, so the rank can move
+        // even though the stored standing does not.
+        if (!factionEntry->FriendshipRepID)
+            UpdateRankCounters(ReputationToRank(factionEntry, GetBaseReputation(factionEntry, oldRace, playerClass) + state.Standing), GetRank(factionEntry));
+
+        // Only the flags the race decides change; anything the player set stays.
+        uint16 oldDefaults = static_cast<uint16>(GetDefaultStateFlags(factionEntry, oldRace, playerClass));
+        uint16 newDefaults = static_cast<uint16>(GetDefaultStateFlags(factionEntry));
+        if (oldDefaults != newDefaults)
+        {
+            bool wasVisible = state.Flags.HasFlag(ReputationFlags::Visible);
+            state.Flags = static_cast<ReputationFlags>((state.Flags.AsUnderlyingType() & ~(oldDefaults & ~newDefaults)) | (newDefaults & ~oldDefaults));
+            bool isVisible = state.Flags.HasFlag(ReputationFlags::Visible);
+            if (wasVisible != isVisible)
+            {
+                if (isVisible)
+                    ++_visibleFactionCount;
+                else
+                    --_visibleFactionCount;
+            }
+
+            state.needSend = true;
+            state.needSave = true;
+        }
+
+        if (GetRank(factionEntry) <= REP_HOSTILE)
+            SetAtWar(&state, true);
+    }
+}
+
 ReputationFlags ReputationMgr::GetDefaultStateFlags(FactionEntry const* factionEntry) const
+{
+    return GetDefaultStateFlags(factionEntry, _player->GetRace(), _player->GetClass());
+}
+
+ReputationFlags ReputationMgr::GetDefaultStateFlags(FactionEntry const* factionEntry, uint8 race, uint8 playerClass)
 {
     ReputationFlags flags = ReputationFlags::None;
 
-    if (int32 dataIndex = GetFactionDataIndexForRaceAndClass(factionEntry); dataIndex >= 0)
+    if (int32 dataIndex = GetFactionDataIndexForRaceAndClass(factionEntry, race, playerClass); dataIndex >= 0)
         flags |= static_cast<ReputationFlags>(factionEntry->ReputationFlags[dataIndex]);
 
     if (sDB2Manager.GetParagonReputation(factionEntry->ID))

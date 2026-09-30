@@ -37,6 +37,7 @@
 #include "PlayerbotServerMovement.h"
 #include "PlayerbotStandSpotMemory.h"
 #include "PlayerbotUpdateCost.h"
+#include "PlayerbotVariety.h"
 #include "PlayerbotWalkMapEscape.h"
 #include "PlayerbotWalkMapServerWorld.h"
 #include "Playerbots.h"
@@ -131,6 +132,12 @@ namespace
     // rather than exactly at her feet and the stand spot, so the straight line is taken this much shorter before a side
     // is judged unable to beat the best route found.
     constexpr float STAND_SPOT_ROUTE_SLACK_YARDS = 2.0f;
+    // Her own side of a target is kept unless another side's route is this much shorter.
+    constexpr float STAND_SPOT_OWN_SIDE_YARDS = 5.0f;
+    // A stand spot farther out than the caller asked stays this far inside her melee range of a creature.
+    constexpr float STAND_SPOT_INSIDE_REACH_YARDS = 0.5f;
+    // A player standing within this height of a stand spot is on it, not on a floor above or below.
+    constexpr float STAND_SPOT_CROWD_HEIGHT_YARDS = 2.0f;
     // Stopping short again near an earlier short stop on the same approach, and not a yard closer, means mmap does not lead closer.
     constexpr float SHORT_STOP_REPEAT_YARDS = 5.0f;
     constexpr float SHORT_STOP_PROGRESS_YARDS = 1.0f;
@@ -808,18 +815,30 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
     CollectSpellFocusAvoids(player, 50.0f, avoids);
     CollectSpellFocusAvoids(target, 20.0f, avoids);
 
-    float const fromTargetToPlayer = target->GetAbsoluteAngle(player);
-    float const offsets[] =
+    // Each bot has her own side of the target and her own distance from it, so bots coming down the same road do not
+    // stand on one spot. Farther out stays inside the melee range and the talk range the server checks.
+    PlayerbotStandPreference const preference = PickPlayerbotStandPreference(question.Bot, question.TargetLow, question.TargetHigh);
+    float distance = standDistance;
+    if (Unit const* unit = target->ToUnit())
+        distance = std::min(standDistance + preference.ExtraYards,
+            std::max(standDistance, player->GetMeleeRange(unit) - STAND_SPOT_INSIDE_REACH_YARDS));
+
+    // Players she can see standing beside the target. A spot one of them already stands on is taken, as a player would
+    // see it; one who is walking is only passing through.
+    std::vector<Player*> standing;
+    if (!look)
     {
-        float(M_PI) / 2.0f,
-        -float(M_PI) / 2.0f,
-        float(M_PI),
-        3.0f * float(M_PI) / 4.0f,
-        -3.0f * float(M_PI) / 4.0f,
-        float(M_PI) / 4.0f,
-        -float(M_PI) / 4.0f,
-        0.0f
-    };
+        PlayerbotCostTimer const crowdCost(PlayerbotCostStep::StandSpotCrowd);
+        target->GetPlayerListInGrid(standing, distance + PLAYERBOT_STAND_CROWD_YARDS + 1.0f);
+        std::erase_if(standing, [player](Player* other)
+        {
+            return other == player || other->isMoving() || !player->CanSeeOrDetect(other);
+        });
+    }
+
+    float const fromTargetToPlayer = target->GetAbsoluteAngle(player);
+    // Her own side first, then the others round the target, a quarter of a half turn apart.
+    constexpr std::size_t SIDES = 8;
 
     struct Side
     {
@@ -828,15 +847,17 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
         float Z;
         float Angle;
         float FromFeet;
+        bool Preferred;
+        bool Crowded;
     };
-    std::array<Side, std::size(offsets)> sides;
+    std::array<Side, SIDES> sides;
     std::size_t sideCount = 0;
 
-    for (float offset : offsets)
+    for (std::size_t k = 0; k < SIDES; ++k)
     {
-        float const angle = Position::NormalizeOrientation(fromTargetToPlayer + offset);
-        float x = target->GetPositionX() + std::cos(angle) * standDistance;
-        float y = target->GetPositionY() + std::sin(angle) * standDistance;
+        float const angle = Position::NormalizeOrientation(fromTargetToPlayer + preference.AngleOffset + float(k) * float(M_PI) / 4.0f);
+        float x = target->GetPositionX() + std::cos(angle) * distance;
+        float y = target->GetPositionY() + std::sin(angle) * distance;
         float z = target->GetPositionZ();
         player->UpdateAllowedPositionZ(x, y, z);
 
@@ -852,14 +873,33 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
             continue;
         }
 
-        sides[sideCount++] = { x, y, z, angle, player->GetExactDist(x, y, z) };
+        bool const crowded = std::any_of(standing.begin(), standing.end(), [x, y, z](Player const* other)
+        {
+            return other->GetExactDist2d(x, y) < PLAYERBOT_STAND_CROWD_YARDS && std::abs(other->GetPositionZ() - z) < STAND_SPOT_CROWD_HEIGHT_YARDS;
+        });
+        sides[sideCount++] = { x, y, z, angle, player->GetExactDist(x, y, z), k == 0, crowded };
     }
 
-    // Nearest sides first. A route is never shorter than the straight line to its end, so once a clear route is found
-    // no shorter than the straight line to the next side, no side left can have a shorter route and none is asked about.
-    // A look for a log line keeps the old order and asks about every side.
+    // A side someone stands on is only taken when every side is.
+    if (std::any_of(sides.begin(), sides.begin() + sideCount, [](Side const& side) { return !side.Crowded; }))
+    {
+        auto const end = std::remove_if(sides.begin(), sides.begin() + sideCount, [](Side const& side) { return side.Crowded; });
+        sideCount = std::size_t(end - sides.begin());
+    }
+
+    // Her own side is asked about first, then the nearest sides. Another side takes the spot only when its route is
+    // shorter by more than STAND_SPOT_OWN_SIDE_YARDS. A route is never shorter than the straight line to its end, so once
+    // a clear route is found that no side left could beat, none is asked about. A look for a log line keeps the order
+    // round the target and asks about every side.
     if (!look)
-        std::stable_sort(sides.begin(), sides.begin() + sideCount, [](Side const& a, Side const& b) { return a.FromFeet < b.FromFeet; });
+        std::stable_sort(sides.begin(), sides.begin() + sideCount, [](Side const& a, Side const& b)
+        {
+            if (a.Preferred != b.Preferred)
+                return a.Preferred;
+            return a.FromFeet < b.FromFeet;
+        });
+
+    auto const scoreOf = [](Side const& side, float len) { return side.Preferred ? len : len + STAND_SPOT_OWN_SIDE_YARDS; };
 
     Position best;
     float bestLen = std::numeric_limits<float>::max();
@@ -871,7 +911,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
     for (std::size_t i = 0; i < sideCount; ++i)
     {
         Side const& side = sides[i];
-        if (!look && foundClear && side.FromFeet - STAND_SPOT_ROUTE_SLACK_YARDS >= bestLen)
+        if (!look && foundClear && !side.Preferred && scoreOf(side, side.FromFeet - STAND_SPOT_ROUTE_SLACK_YARDS) >= bestLen)
         {
             notNeeded = uint32(sideCount - i);
             break;
@@ -906,7 +946,7 @@ bool PlayerbotWalker::PickApproachPosition(Player* player, WorldObject const* ta
             continue;
 
         bool const hits = PathHitsAvoid(generator.GetPath(), avoids);
-        float const len = generator.GetPathLength();
+        float const len = scoreOf(side, generator.GetPathLength());
         if (!hits)
         {
             if (!foundClear || len < bestLen)

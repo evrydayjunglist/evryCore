@@ -177,6 +177,8 @@ namespace PlayerbotClient
     void QueueWorldPortResponse(WorldSession* session);
     // Accept or Decline on the party invite window.
     void QueuePartyInviteResponse(WorldSession* session, bool accept);
+    // The Horde or Alliance button on the faction choice window at the end of a neutral start: 0 Horde, 1 Alliance.
+    void QueueNeutralPlayerSelectFaction(WorldSession* session, uint8 faction);
     // Her client's movement status at pos. It keeps only the modes the server granted her from its record of her movement;
     // the caller adds what she is doing.
     void FillClientMovementInfo(Player const* player, Position const& pos, MovementInfo& out);

@@ -172,6 +172,17 @@ void PlayerbotClient::QueuePartyInviteResponse(WorldSession* session, bool accep
     session->QueuePacket(std::move(packet));
 }
 
+void PlayerbotClient::QueueNeutralPlayerSelectFaction(WorldSession* session, uint8 faction)
+{
+    if (!session)
+        return;
+
+    WorldPacket packet(CMSG_NEUTRAL_PLAYER_SELECT_FACTION);
+    packet << uint8(faction);
+    packet.SetReceiveTime(GameTime::Now());
+    session->QueuePacket(std::move(packet));
+}
+
 void PlayerbotClient::FillClientMovementInfo(Player const* player, Position const& pos, MovementInfo& out)
 {
     out = player->m_movementInfo;

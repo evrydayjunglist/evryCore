@@ -27,7 +27,7 @@
 #include <vector>
 
 // Something the server sent her client that a real client answers: a movement order, a time sync request, a party
-// invite window, or an item reaching her bags.
+// invite window, an item reaching her bags, or the faction choice window at the end of a neutral start.
 enum class PlayerbotServerOrderKind : std::uint8_t
 {
     Root,
@@ -38,7 +38,8 @@ enum class PlayerbotServerOrderKind : std::uint8_t
     NewWorld,
     TimeSync,
     PartyInvite,
-    ItemPushed
+    ItemPushed,
+    FactionChoice
 };
 
 inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
@@ -63,6 +64,8 @@ inline char const* PlayerbotServerOrderKindName(PlayerbotServerOrderKind kind)
             return "party invite";
         case PlayerbotServerOrderKind::ItemPushed:
             return "new item";
+        case PlayerbotServerOrderKind::FactionChoice:
+            return "faction choice window";
     }
 
     return "unknown";
@@ -167,7 +170,7 @@ namespace PlayerbotServerMovementDetail
 }
 
 // Reads what a client has to answer from one packet the server sent: movement orders, time sync requests, party
-// invites, and items reaching her bags. Any other packet adds nothing, and so does a packet that cannot be read. Only a handful of opcodes are copied; every
+// invites, items reaching her bags, and the faction choice window. Any other packet adds nothing, and so does a packet that cannot be read. Only a handful of opcodes are copied; every
 // other packet returns at the switch.
 inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<PlayerbotServerOrder>& out)
 {
@@ -183,6 +186,7 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
         case SMSG_TIME_SYNC_REQUEST:
         case SMSG_PARTY_INVITE:
         case SMSG_ITEM_PUSH_RESULT:
+        case SMSG_SHOW_NEUTRAL_PLAYER_FACTION_SELECT_UI:
             break;
         default:
             return;
@@ -263,6 +267,11 @@ inline void ReadPlayerbotServerOrders(WorldPacket const& packet, std::vector<Pla
                 // Only whose bags it reached, the first thing in the packet. She looks through her bags herself.
                 order.Kind = PlayerbotServerOrderKind::ItemPushed;
                 data >> order.Mover;
+                out.push_back(order);
+                break;
+            case SMSG_SHOW_NEUTRAL_PLAYER_FACTION_SELECT_UI:
+                // The packet carries nothing; the window it opens is always hers.
+                order.Kind = PlayerbotServerOrderKind::FactionChoice;
                 out.push_back(order);
                 break;
             default:

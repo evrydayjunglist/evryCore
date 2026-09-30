@@ -279,3 +279,18 @@ TEST_CASE("Playerbot movement packets keep granted modes and drop pressed keys, 
     REQUIRE(PlayerbotClientModeFlags(server)
         == (MOVEMENTFLAG_WATERWALKING | MOVEMENTFLAG_FALLING_SLOW | MOVEMENTFLAG_CAN_FLY));
 }
+
+TEST_CASE("Playerbot reads the faction choice window at the end of a neutral start", "[playerbots][server-movement][pandaren]")
+{
+    // The window's packet carries nothing.
+    WorldPacket window(SMSG_SHOW_NEUTRAL_PLAYER_FACTION_SELECT_UI, 0);
+    std::vector<PlayerbotServerOrder> orders = Read(&window);
+    REQUIRE(orders.size() == 1);
+    REQUIRE(orders[0].Kind == PlayerbotServerOrderKind::FactionChoice);
+    REQUIRE(orders[0].Mover.IsEmpty());
+
+    // The result the server sends after her choice is not an order.
+    WorldPacket result(SMSG_NEUTRAL_PLAYER_FACTION_SELECT_RESULT, 2);
+    result << uint8(0x80) << uint8(26);
+    REQUIRE(Read(&result).empty());
+}

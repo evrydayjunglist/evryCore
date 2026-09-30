@@ -23,6 +23,7 @@
 #include "CommandablePlayerState.h"
 #include "PlayerbotCoordinatorLease.h"
 #include "PlayerbotCoordinatorPresence.h"
+#include "PlayerbotFactory.h"
 #include "PlayerbotInvitePolicy.h"
 #include "PlayerbotMapPass.h"
 #include "PlayerbotMovement.h"
@@ -194,6 +195,8 @@ struct PlayerbotRecord
     // The party invite window she has open: who sent it and how long she has had it.
     ObjectGuid InviteFrom;
     uint32 InviteOpenMs = 0;
+    // The server opened the Horde or Alliance choice window at the end of her neutral start.
+    bool FactionChoiceOpen = false;
     // The party leader she follows, where her walk after them was aimed, and how long to wait before she tries again
     // after that walk failed.
     ObjectGuid FollowLeader;
@@ -290,6 +293,7 @@ private:
     void ForgetPositionAfterTeleport(PlayerbotRecord& bot, Player* player);
     void ClearServerOrders(uint32 accountId);
     void UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint32 diff);
+    void UpdateFactionChoice(PlayerbotRecord& bot, Player* player);
     bool HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff);
     bool UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff);
     static bool LookAroundNow(PlayerbotRecord& bot);
@@ -347,6 +351,7 @@ private:
     uint32 _preparedUpTo = 0;
     uint32 _prepareCount = 0;
     uint32 _prepareStartedMs = 0;
+    PlayerbotRosterFactions _rosterFactions;
     bool PreparingBots() const { return _preparedUpTo < _prepareCount; }
     void PrepareBots();
 

@@ -16,7 +16,9 @@
  */
 
 #include "PlayerbotFactory.h"
+#include "PlayerbotCreateFilter.h"
 #include "PlayerbotNameGenerator.h"
+#include "PlayerbotWipe.h"
 #include "AccountMgr.h"
 #include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
@@ -59,6 +61,7 @@ struct RaceClassSex
     uint8 Race = 0;
     uint8 Class = 0;
     uint8 Sex = 0;
+    PlayerbotFaction Faction = PlayerbotFaction::Horde;
 };
 
 std::string MakePassword()
@@ -189,42 +192,139 @@ bool PassesCreateChecks(WorldSession* session, uint8 race, uint8 playerClass)
     return true;
 }
 
-bool IsFirstFactoryClass(uint8 playerClass)
+PlayerbotClassKind ClassKind(uint8 playerClass)
 {
     switch (playerClass)
     {
         case CLASS_DEATH_KNIGHT:
+            return PlayerbotClassKind::DeathKnight;
         case CLASS_DEMON_HUNTER:
+            return PlayerbotClassKind::DemonHunter;
         case CLASS_EVOKER:
-        case CLASS_ADVENTURER:
-        case CLASS_TRAVELER:
+            return PlayerbotClassKind::Evoker;
         case CLASS_HERO:
+            return PlayerbotClassKind::Hero;
         case CLASS_REAPER:
-        case CLASS_NONE:
-            return false;
+            return PlayerbotClassKind::ConquestOfAzeroth;
         default:
-            return true;
+            break;
+    }
+
+    if (playerClass == CLASS_NONE || playerClass > 32 || !((1u << (playerClass - 1)) & CLASSMASK_ALL_PLAYABLE))
+        return PlayerbotClassKind::NotPlayable;
+
+    return PlayerbotClassKind::Ordinary;
+}
+
+PlayerbotFaction FactionForTeam(uint32 team)
+{
+    switch (team)
+    {
+        case HORDE:
+            return PlayerbotFaction::Horde;
+        case ALLIANCE:
+            return PlayerbotFaction::Alliance;
+        default:
+            return PlayerbotFaction::Neutral;
     }
 }
 
-bool IsFirstFactoryRace(ChrRacesEntry const* raceEntry)
+PlayerbotRaceFacts RaceFacts(ChrRacesEntry const* raceEntry)
 {
-    if (!raceEntry)
-        return false;
+    PlayerbotRaceFacts facts;
+    facts.Id = uint8(raceEntry->ID);
+    facts.NpcOnly = raceEntry->GetFlags().HasFlag(ChrRacesFlag::NPCOnly);
+    facts.AlliedRace = raceEntry->GetFlags().HasFlag(ChrRacesFlag::IsAlliedRace);
+    facts.Dracthyr = raceEntry->ID == RACE_DRACTHYR_ALLIANCE || raceEntry->ID == RACE_DRACTHYR_HORDE;
+    facts.StartingLevel = raceEntry->StartingLevel;
+    if (!facts.NpcOnly)
+        facts.Faction = FactionForTeam(Player::TeamForRace(raceEntry->ID));
+    if (raceEntry->NeutralRaceID > 0 && uint32(raceEntry->NeutralRaceID) != raceEntry->ID
+        && Player::TeamForRace(uint8(raceEntry->NeutralRaceID)) == PANDARIA_NEUTRAL)
+        facts.NeutralStartRace = uint8(raceEntry->NeutralRaceID);
+    return facts;
+}
 
-    if (raceEntry->GetFlags().HasFlag(ChrRacesFlag::NPCOnly))
-        return false;
+PlayerbotCreateSettings LoadCreateSettings()
+{
+    PlayerbotCreateSettings settings;
+    for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
+        settings.Switches[i] = sConfigMgr->GetBoolDefault(PLAYERBOT_CREATE_SWITCH_KEYS[i], PLAYERBOT_CREATE_SWITCH_DEFAULTS[i]);
+    settings.HordePercent = sConfigMgr->GetIntDefault(PLAYERBOTS_HORDE_PERCENT, PLAYERBOT_HORDE_PERCENT_DEFAULT);
+    return settings;
+}
 
-    if (raceEntry->GetFlags().HasFlag(ChrRacesFlag::IsAlliedRace))
-        return false;
+PlayerbotCreateRules LoadCreateRules()
+{
+    PlayerbotCreateRules rules;
+    rules.StartPlayerLevel = int32(sWorld->getIntConfig(CONFIG_START_PLAYER_LEVEL));
+    rules.MinLevelForDemonHunter = sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_MIN_LEVEL_FOR_DEMON_HUNTER);
+    rules.MinLevelForEvoker = sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_MIN_LEVEL_FOR_EVOKER);
+    rules.EvokersPerRealm = int32(sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_EVOKERS_PER_REALM));
+    return rules;
+}
 
-    if (Player::TeamForRace(raceEntry->ID) != HORDE)
-        return false;
+// The keys are read again for every new bot, so each of these is said once per run, not once per bot.
+void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
+{
+    static std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> unsupportedSaid{};
+    static bool bothOffSaid = false;
+    static bool clampSaid = false;
+    static bool oneSidedSaid = false;
+    static bool neutralStartSaid = false;
 
-    if (raceEntry->StartingLevel > int32(sWorld->getIntConfig(CONFIG_START_PLAYER_LEVEL)))
-        return false;
+    if (!settings.NeutralStartPlayable && !neutralStartSaid)
+    {
+        neutralStartSaid = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: no new Pandaren bot is made: {}. Existing bots are not changed.",
+            DescribePlayerbotCreateRefusal({ PlayerbotCreateRefusal::NeutralStartNotPlayable }));
+    }
 
-    return true;
+    for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
+    {
+        PlayerbotCreateSwitch const which = PlayerbotCreateSwitch(i);
+        if (!settings.IsOn(which) || settings.IsSupported(which) || unsupportedSaid[i])
+            continue;
+        unsupportedSaid[i] = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, but bots of that kind have not passed their playtest yet, so it makes "
+            "no bots. Existing bots are not changed.", PlayerbotCreateSwitchKey(which));
+    }
+
+    bool const horde = settings.IsOn(PlayerbotCreateSwitch::Horde);
+    bool const alliance = settings.IsOn(PlayerbotCreateSwitch::Alliance);
+    if (!horde && !alliance && !bothOffSaid)
+    {
+        bothOffSaid = true;
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: {} and {} are both 0, so no new bot character can be made. Existing bots still "
+            "log in.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Horde), PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Alliance));
+    }
+
+    int32 const percent = ClampPlayerbotHordePercent(settings.HordePercent);
+    if (percent != settings.HordePercent && !clampSaid)
+    {
+        clampSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is {}; it must be 0 to 100, so {} is used.", PLAYERBOTS_HORDE_PERCENT,
+            settings.HordePercent, percent);
+    }
+
+    if (horde && alliance && (percent == 0 || percent == 100) && !oneSidedSaid)
+    {
+        oneSidedSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is {}, so every new bot is {} and {} has no effect.", PLAYERBOTS_HORDE_PERCENT,
+            percent, percent == 0 ? "Alliance" : "Horde",
+            PlayerbotCreateSwitchKey(percent == 0 ? PlayerbotCreateSwitch::Horde : PlayerbotCreateSwitch::Alliance));
+    }
+}
+
+// Every key that decides which bot is made, with its value, for the error when they leave nothing to make.
+std::string DescribeCreateKeys(PlayerbotCreateSettings const& settings)
+{
+    std::string text;
+    for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
+        text += Trinity::StringFormat("{} = {}, ", PLAYERBOT_CREATE_SWITCH_KEYS[i], settings.Switches[i] ? 1 : 0);
+    text += Trinity::StringFormat("{} = \"{}\", {} = \"{}\"", PLAYERBOTS_RACES, sConfigMgr->GetStringDefault(PLAYERBOTS_RACES, ""),
+        PLAYERBOTS_CLASSES, sConfigMgr->GetStringDefault(PLAYERBOTS_CLASSES, ""));
+    return text;
 }
 
 std::string NormalizeListName(std::string_view text)
@@ -277,7 +377,7 @@ struct CreateFilters
     std::unordered_set<uint8> Classes;
 };
 
-CreateFilters LoadCreateFilters()
+CreateFilters LoadCreateFilters(PlayerbotCreateSettings const& settings, PlayerbotCreateRules const& rules)
 {
     CreateFilters filter;
 
@@ -307,16 +407,24 @@ CreateFilters LoadCreateFilters()
                 continue;
             }
 
+            // One English name can match several rows (an NPC copy, or Pandaren for each faction). The name is only
+            // refused when none of them may be made, and the reason given is the first one that is not an NPC row.
             bool accepted = false;
+            std::optional<PlayerbotCreateVerdict> refusal;
             for (ChrRacesEntry const* raceEntry : hits)
             {
-                if (!IsFirstFactoryRace(raceEntry))
-                    continue;
-                filter.Races.insert(uint8(raceEntry->ID));
-                accepted = true;
+                PlayerbotCreateVerdict const verdict = JudgePlayerbotRace(RaceFacts(raceEntry), settings, rules);
+                if (verdict.Allowed())
+                {
+                    filter.Races.insert(uint8(raceEntry->ID));
+                    accepted = true;
+                }
+                else if (!refusal || refusal->Refusal == PlayerbotCreateRefusal::NotPlayableRace)
+                    refusal = verdict;
             }
             if (!accepted)
-                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: race '{}' is not a Horde level-1 race this factory creates. Skipping it.", name);
+                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: race '{}' in {} is not made for new bots: {}. Skipping it.", name,
+                    PLAYERBOTS_RACES, DescribePlayerbotCreateRefusal(*refusal));
         }
     }
 
@@ -347,15 +455,21 @@ CreateFilters LoadCreateFilters()
             }
 
             bool accepted = false;
+            std::optional<PlayerbotCreateVerdict> refusal;
             for (ChrClassesEntry const* classEntry : hits)
             {
-                if (!IsFirstFactoryClass(classEntry->ID))
-                    continue;
-                filter.Classes.insert(classEntry->ID);
-                accepted = true;
+                PlayerbotCreateVerdict const verdict = JudgePlayerbotClass(ClassKind(classEntry->ID), settings, rules);
+                if (verdict.Allowed())
+                {
+                    filter.Classes.insert(classEntry->ID);
+                    accepted = true;
+                }
+                else if (!refusal || refusal->Refusal == PlayerbotCreateRefusal::NotPlayableClass)
+                    refusal = verdict;
             }
             if (!accepted)
-                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: class '{}' is not a level-1 class this factory creates. Skipping it.", name);
+                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: class '{}' in {} is not made for new bots: {}. Skipping it.", name,
+                    PLAYERBOTS_CLASSES, DescribePlayerbotCreateRefusal(*refusal));
         }
     }
 
@@ -401,20 +515,24 @@ std::string RandomNameGenName(uint8 race, uint8 sex)
     return {};
 }
 
-std::vector<RaceClassSex> CollectCombos(WorldSession* session, CreateFilters const& filter)
+std::vector<RaceClassSex> CollectCombos(WorldSession* session, CreateFilters const& filter, PlayerbotCreateSettings const& settings,
+    PlayerbotCreateRules const& rules)
 {
     std::vector<RaceClassSex> combos;
 
     for (ChrRacesEntry const* raceEntry : sChrRacesStore)
     {
-        if (!IsFirstFactoryRace(raceEntry))
+        if (!raceEntry)
+            continue;
+        PlayerbotRaceFacts const race = RaceFacts(raceEntry);
+        if (!JudgePlayerbotRace(race, settings, rules).Allowed())
             continue;
         if (filter.LimitRaces && !filter.Races.contains(uint8(raceEntry->ID)))
             continue;
 
         for (ChrClassesEntry const* classEntry : sChrClassesStore)
         {
-            if (!classEntry || !IsFirstFactoryClass(classEntry->ID))
+            if (!classEntry || !JudgePlayerbotClass(ClassKind(classEntry->ID), settings, rules).Allowed())
                 continue;
             if (filter.LimitClasses && !filter.Classes.contains(classEntry->ID))
                 continue;
@@ -431,7 +549,7 @@ std::vector<RaceClassSex> CollectCombos(WorldSession* session, CreateFilters con
                 if (!FillDefaultCustomizations(session, probe))
                     continue;
 
-                combos.push_back({ uint8(raceEntry->ID), uint8(classEntry->ID), sex });
+                combos.push_back({ uint8(raceEntry->ID), uint8(classEntry->ID), sex, race.Faction });
             }
         }
     }
@@ -490,20 +608,99 @@ bool PickName(uint8 race, uint8 sex, std::string& name)
     return false;
 }
 
-bool CreateCharacter(WorldSession* session, PlayerbotAccount& account)
+// Counts the bot characters already in the database by faction, once per start, so a new bot can go to the faction
+// furthest below Playerbots.HordePercent. Only asked when both factions can be made.
+void CountRosterFactions(PlayerbotRosterFactions& roster)
 {
-    CreateFilters const filter = LoadCreateFilters();
+    roster = {};
+    roster.Counted = true;
+
+    std::string accounts;
+    // The LIKE only narrows the search; each email must then match exactly.
+    if (QueryResult found = LoginDatabase.Query("SELECT a.id, b.email FROM account a JOIN battlenet_accounts b ON a.battlenet_account = b.id "
+        "WHERE b.email LIKE 'PLAYERBOT%@PLAYERBOTS.LOCAL'"))
+    {
+        do
+        {
+            if (!IsPlayerbotBattlenetEmail((*found)[1].GetString()))
+                continue;
+            if (!accounts.empty())
+                accounts += ',';
+            accounts += std::to_string((*found)[0].GetUInt32());
+        } while (found->NextRow());
+    }
+
+    if (!accounts.empty())
+    {
+        if (QueryResult characters = CharacterDatabase.Query(Trinity::StringFormat(
+            "SELECT race FROM characters WHERE deleteDate IS NULL AND account IN ({})", accounts).c_str()))
+        {
+            do
+            {
+                switch (Player::TeamForRace((*characters)[0].GetUInt8()))
+                {
+                    case HORDE:
+                        ++roster.Horde;
+                        break;
+                    case ALLIANCE:
+                        ++roster.Alliance;
+                        break;
+                    default:
+                        break;
+                }
+            } while (characters->NextRow());
+        }
+    }
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: the roster has {} Horde and {} Alliance bot character(s); new bots move it toward {} = {}.",
+        roster.Horde, roster.Alliance, PLAYERBOTS_HORDE_PERCENT, ClampPlayerbotHordePercent(sConfigMgr->GetIntDefault(PLAYERBOTS_HORDE_PERCENT,
+        PLAYERBOT_HORDE_PERCENT_DEFAULT)));
+}
+
+bool CreateCharacter(WorldSession* session, PlayerbotAccount& account, PlayerbotRosterFactions& roster)
+{
+    PlayerbotCreateSettings const settings = LoadCreateSettings();
+    PlayerbotCreateRules const rules = LoadCreateRules();
+    WarnAboutSettingsOnce(settings);
+
+    CreateFilters const filter = LoadCreateFilters(settings, rules);
     if (filter.LimitRaces || filter.LimitClasses)
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: generation is limited by Playerbots.Races and Playerbots.Classes. Those keys do not change an existing bot character.");
 
-    std::vector<RaceClassSex> combos = CollectCombos(session, filter);
+    std::vector<RaceClassSex> const combos = CollectCombos(session, filter, settings, rules);
     if (combos.empty())
     {
-        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: no legal Horde level-1 race/class combo to create. Check Playerbots.Races and Playerbots.Classes in modules/mod-playerbots.conf next to the server (empty means no filter). Those keys only apply when a new bot character is created.");
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: no legal race and class is left to make a new bot with {}. Check those keys in "
+            "modules/mod-playerbots.conf next to the server (an empty list means no filter). They only apply when a new bot character "
+            "is created.", DescribeCreateKeys(settings));
         return false;
     }
 
-    RaceClassSex const& pick = Trinity::Containers::SelectRandomContainerElement(combos);
+    // A neutral race chooses its faction at the end of its start, by the same split, so it may be made for either side
+    // that is open to her.
+    std::vector<RaceClassSex> hordeCombos;
+    std::vector<RaceClassSex> allianceCombos;
+    for (RaceClassSex const& combo : combos)
+    {
+        if (combo.Faction != PlayerbotFaction::Alliance && (combo.Faction != PlayerbotFaction::Neutral || settings.Opens(PlayerbotCreateSwitch::Horde)))
+            hordeCombos.push_back(combo);
+        if (combo.Faction != PlayerbotFaction::Horde && (combo.Faction != PlayerbotFaction::Neutral || settings.Opens(PlayerbotCreateSwitch::Alliance)))
+            allianceCombos.push_back(combo);
+    }
+
+    if (!hordeCombos.empty() && !allianceCombos.empty() && !roster.Counted)
+        CountRosterFactions(roster);
+
+    std::optional<PlayerbotFaction> const faction = PickPlayerbotFaction(!hordeCombos.empty(), !allianceCombos.empty(),
+        settings.HordePercent, roster.Horde, roster.Alliance);
+    std::vector<RaceClassSex> const& pool = faction == PlayerbotFaction::Alliance ? allianceCombos : hordeCombos;
+    if (pool.empty())
+    {
+        TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: no faction is open to the races left to make a new bot with {}.",
+            DescribeCreateKeys(settings));
+        return false;
+    }
+    RaceClassSex const& pick = Trinity::Containers::SelectRandomContainerElement(pool);
 
     WorldPackets::Character::CharacterCreateInfo createInfo;
     createInfo.Race = pick.Race;
@@ -571,6 +768,9 @@ bool CreateCharacter(WorldSession* session, PlayerbotAccount& account)
     sScriptMgr->OnPlayerCreate(newChar.get());
     sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), session->GetAccountId(), newChar->GetName(),
         newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel(), false);
+
+    if (roster.Counted)
+        ++(faction == PlayerbotFaction::Alliance ? roster.Alliance : roster.Horde);
 
     account.CharacterGuid = newChar->GetGUID();
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: created {} {} on account {} ({}).",
@@ -673,7 +873,7 @@ bool PlayerbotFactory::EnsureAccount(PlayerbotAccount& account)
     return true;
 }
 
-bool PlayerbotFactory::EnsureCharacter(PlayerbotAccount& account)
+bool PlayerbotFactory::EnsureCharacter(PlayerbotAccount& account, PlayerbotRosterFactions& roster)
 {
     if (LoadExistingCharacter(account))
         return true;
@@ -682,5 +882,15 @@ bool PlayerbotFactory::EnsureCharacter(PlayerbotAccount& account)
     if (!session)
         return false;
 
-    return CreateCharacter(session.get(), account);
+    return CreateCharacter(session.get(), account, roster);
+}
+
+void PlayerbotFactory::CheckCreateSettings()
+{
+    WarnAboutSettingsOnce(LoadCreateSettings());
+}
+
+std::optional<PlayerbotFaction> PlayerbotFactory::PickNeutralStartFaction(uint32 hordeBots, uint32 allianceBots)
+{
+    return PickPlayerbotNeutralStartFaction(LoadCreateSettings(), hordeBots, allianceBots);
 }

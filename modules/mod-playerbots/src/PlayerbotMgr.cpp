@@ -908,8 +908,11 @@ void PlayerbotMgr::Start()
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: preparing {} bot(s) in {} login mode. Active sessions at OnStartup: {}.",
         count, LoginModeName(_loginMode), sessionsAtStartup);
 
+    PlayerbotFactory::CheckCreateSettings();
+
     _prepareCount = uint32(count);
     _preparedUpTo = 0;
+    _rosterFactions = {};
     _prepareStartedMs = getMSTime();
 }
 
@@ -923,7 +926,7 @@ void PlayerbotMgr::PrepareBots()
     {
         PlayerbotRecord bot;
         bot.Account.Index = ++_preparedUpTo;
-        if (!PlayerbotFactory::EnsureAccount(bot.Account) || !PlayerbotFactory::EnsureCharacter(bot.Account))
+        if (!PlayerbotFactory::EnsureAccount(bot.Account) || !PlayerbotFactory::EnsureCharacter(bot.Account, _rosterFactions))
             TC_LOG_ERROR(PLAYERBOTS_LOG, "mod-playerbots: bot {} was not created.", bot.Account.Index);
         else
         {
@@ -1177,6 +1180,7 @@ void PlayerbotMgr::UpdateBot(PlayerbotRecord& bot, uint32 diff)
         if (player && player->IsInWorld())
         {
             UpdatePartyInvite(bot, player, diff);
+            UpdateFactionChoice(bot, player);
             bot.BrainOnMapThread = true;
             return;
         }
@@ -2607,7 +2611,55 @@ void PlayerbotMgr::AnswerServerOrder(PlayerbotRecord& bot, Player* player, Playe
             bot.InviteOpenMs = 0;
             bot.InviteAnswerMs = PickWait(bot, PlayerbotWaitKind::InviteAnswer, PLAYERBOT_INVITE_ANSWER_MIN_MS, PLAYERBOT_INVITE_ANSWER_MAX_MS);
             break;
+        case PlayerbotServerOrderKind::FactionChoice:
+            // UpdateFactionChoice answers it on the world thread, where she can count the other bots.
+            bot.FactionChoiceOpen = true;
+            break;
     }
+}
+
+// At the end of the Wandering Isle the server opens the Horde or Alliance window for a neutral Pandaren. She clicks the
+// faction the roster split and the switches give her, as the one CMSG_NEUTRAL_PLAYER_SELECT_FACTION a client sends.
+void PlayerbotMgr::UpdateFactionChoice(PlayerbotRecord& bot, Player* player)
+{
+    PlayerbotWorldThreadOnly("answering the faction choice");
+    if (!bot.FactionChoiceOpen)
+        return;
+    bot.FactionChoiceOpen = false;
+
+    // Once she has chosen, the server has made her a Horde or Alliance Pandaren and the window means nothing.
+    if (player->GetRace() != RACE_PANDAREN_NEUTRAL)
+        return;
+
+    uint32 hordeBots = 0;
+    uint32 allianceBots = 0;
+    for (PlayerbotRecord const& other : _bots)
+        if (WorldSession* session = FindBotSession(other.Account.AccountId))
+            if (Player* otherPlayer = session->GetPlayer(); otherPlayer && otherPlayer->IsInWorld())
+                switch (Player::TeamForRace(otherPlayer->GetRace()))
+                {
+                    case HORDE:
+                        ++hordeBots;
+                        break;
+                    case ALLIANCE:
+                        ++allianceBots;
+                        break;
+                    default:
+                        break;
+                }
+
+    std::optional<PlayerbotFaction> const faction = PlayerbotFactory::PickNeutralStartFaction(hordeBots, allianceBots);
+    if (!faction)
+    {
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} has the faction choice open, but neither {} nor {} is open, so she leaves it.",
+            player->GetName(), PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Horde), PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Alliance));
+        return;
+    }
+
+    PlayerbotClient::QueueNeutralPlayerSelectFaction(player->GetSession(), PlayerbotNeutralFactionChoiceByte(*faction));
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} chose the {} ({} Horde and {} Alliance bots in the world) and queued "
+        "CMSG_NEUTRAL_PLAYER_SELECT_FACTION.", player->GetName(), *faction == PlayerbotFaction::Alliance ? "Alliance" : "Horde",
+        hordeBots, allianceBots);
 }
 
 void PlayerbotMgr::UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint32 diff)
@@ -2824,7 +2876,10 @@ void PlayerbotMgr::UpdateBrain(PlayerbotRecord& bot, WorldSession* session, Play
         return;
 
     if (answerInvite)
+    {
         UpdatePartyInvite(bot, player, diff);
+        UpdateFactionChoice(bot, player);
+    }
 
     if (!bot.CinematicSkipped)
     {

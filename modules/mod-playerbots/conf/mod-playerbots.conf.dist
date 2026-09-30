@@ -55,12 +55,13 @@ Playerbots.Count = 1
 #
 #    Playerbots.Races
 #        Description: Comma-separated English race names for new bot characters.
-#                     Empty means any Horde level-1 race the factory already allows.
+#                     Empty means every race the switches below allow.
 #                     Names match the character create screen (Tauren, Orc, Blood Elf).
 #                     Spaces and capitalization do not matter. Only used when a new
 #                     bot character is created. Existing bots are not changed.
-#                     A name that is not a Horde level-1 factory race is skipped
-#                     and logged. If nothing legal remains, no character is created.
+#                     A name the switches below exclude is skipped and logged with
+#                     the switch that excluded it. If nothing legal remains, no
+#                     character is created and one error names every key involved.
 #        Default:     "" (no filter)
 #
 #        Example:     Tauren
@@ -72,13 +73,15 @@ Playerbots.Races =
 #
 #    Playerbots.Classes
 #        Description: Comma-separated English class names for new bot characters.
-#                     Empty means any level-1 class the factory already allows.
+#                     Empty means every class the switches below allow.
 #                     Names match the character create screen (Warrior, Hunter, Shaman).
 #                     Spaces and capitalization do not matter. Only used when a new
 #                     bot character is created. Existing bots are not changed.
-#                     Death Knight, Demon Hunter, Evoker, and similar are skipped
-#                     and logged. If the race and class lists have no legal combo,
-#                     no character is created.
+#                     A name the switches below exclude (Death Knight, Demon Hunter,
+#                     Evoker, Hero, Reaper) is skipped and logged with the switch
+#                     that excluded it. Adventurer and Traveler are never made. If
+#                     the race and class lists have no legal combo, no character is
+#                     created.
 #        Default:     "" (no filter)
 #
 #        Example:     Warrior
@@ -86,6 +89,77 @@ Playerbots.Races =
 #
 
 Playerbots.Classes =
+
+#
+#    Playerbots.Horde
+#    Playerbots.Alliance
+#    Playerbots.AlliedRaces
+#    Playerbots.Dracthyr
+#    Playerbots.DeathKnight
+#    Playerbots.DemonHunter
+#    Playerbots.Evoker
+#    Playerbots.HeroClass
+#    Playerbots.CoAClasses
+#        Description: Which new bot characters may be made. Each switch is 1 (on)
+#                     or 0 (off). A bot is made only when every switch she needs is
+#                     on, Playerbots.Races and Playerbots.Classes allow her, and she
+#                     passes the same create checks a player gets, including
+#                     CharacterCreating.Disabled, CharacterCreating.MinLevelForDemonHunter,
+#                     CharacterCreating.MinLevelForEvoker and
+#                     CharacterCreating.EvokersPerRealm. A Dracthyr Evoker needs
+#                     Dracthyr, Evoker and the switch for her faction.
+#                     Horde         - Horde races.
+#                     Alliance      - Alliance races.
+#                     AlliedRaces   - every race the game marks as an allied race.
+#                     Dracthyr      - Dracthyr (not part of AlliedRaces).
+#                     DeathKnight   - the Death Knight class.
+#                     DemonHunter   - the Demon Hunter class.
+#                     Evoker        - the Evoker class.
+#                     HeroClass     - evryCore's custom Hero class (needs mod-hero).
+#                     CoAClasses    - every Conquest of Azeroth class, Reaper today
+#                                     (needs mod-coa).
+#                     Ordinary races and classes (Goblin, Worgen, Monk and the rest)
+#                     come with their faction. A Pandaren bot starts as a neutral
+#                     Pandaren on the Wandering Isle and chooses the Horde or the
+#                     Alliance at its end by HordePercent and these switches, as a
+#                     player does; she is never made as a Horde or Alliance
+#                     Pandaren. No Pandaren bot is made yet, because the bot brain
+#                     cannot do the Wandering Isle's quests; Playerbots.log says so
+#                     once.
+#                     Only Horde has passed its playtest so far. Any other switch
+#                     turned on makes no bots and says so once in Playerbots.log.
+#                     With Horde and Alliance both 0, no new bot is made; one error
+#                     names both keys and existing bots still log in.
+#                     Read when a new bot character is created. Turning a switch off
+#                     never deletes, logs out or changes a bot that already exists;
+#                     to replace the bots use Playerbots.DeleteBots.
+#        Default:     Playerbots.Horde = 1, every other switch 0
+#
+
+Playerbots.Horde = 1
+Playerbots.Alliance = 0
+Playerbots.AlliedRaces = 0
+Playerbots.Dracthyr = 0
+Playerbots.DeathKnight = 0
+Playerbots.DemonHunter = 0
+Playerbots.Evoker = 0
+Playerbots.HeroClass = 0
+Playerbots.CoAClasses = 0
+
+#
+#    Playerbots.HordePercent
+#        Description: The share of bot characters, 0 to 100, that should be Horde
+#                     when both Playerbots.Horde and Playerbots.Alliance can make
+#                     bots; the rest are Alliance. Each new bot goes to the faction
+#                     furthest below its share, counting the bots that already
+#                     exist, so the whole roster moves toward this split. Existing
+#                     bots are never changed to reach it. Ignored when only one
+#                     faction can make bots. A value outside 0 to 100 is clamped and
+#                     logged once.
+#        Default:     50
+#
+
+Playerbots.HordePercent = 50
 
 #
 #    Playerbots.DeleteBots

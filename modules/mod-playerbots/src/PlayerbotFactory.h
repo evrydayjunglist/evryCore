@@ -18,17 +18,33 @@
 #ifndef EVRY_MOD_PLAYERBOT_FACTORY_H
 #define EVRY_MOD_PLAYERBOT_FACTORY_H
 
+#include "PlayerbotCreateFilter.h"
 #include "Playerbots.h"
 #include <memory>
+#include <optional>
 
 class WorldSession;
+
+// How many bot characters of each faction exist, counted from the database the first time a new bot could be either
+// faction, then kept up as bots are made. Reset at each start.
+struct PlayerbotRosterFactions
+{
+    bool Counted = false;
+    uint32 Horde = 0;
+    uint32 Alliance = 0;
+};
 
 namespace PlayerbotFactory
 {
     std::string MakeBattlenetEmail(uint32 index);
     std::unique_ptr<WorldSession> MakeSession(PlayerbotAccount const& account);
     bool EnsureAccount(PlayerbotAccount& account);
-    bool EnsureCharacter(PlayerbotAccount& account);
+    bool EnsureCharacter(PlayerbotAccount& account, PlayerbotRosterFactions& roster);
+    // Says once what the creation switches will do (a switch not yet supported, both factions off, a split out of range).
+    void CheckCreateSettings();
+    // The faction a neutral bot chooses at the end of her start, by the switches and Playerbots.HordePercent as they are
+    // now, given the Horde and Alliance bots in the world. None when neither faction is open.
+    std::optional<PlayerbotFaction> PickNeutralStartFaction(uint32 hordeBots, uint32 allianceBots);
 }
 
 #endif

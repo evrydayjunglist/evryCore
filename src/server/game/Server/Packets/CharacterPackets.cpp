@@ -923,6 +923,20 @@ WorldPacket const* SetFactionVisible::Write()
     return &_worldPacket;
 }
 
+void NeutralPlayerSelectFaction::Read()
+{
+    _worldPacket >> Faction;
+}
+
+WorldPacket const* NeutralPlayerFactionSelectResult::Write()
+{
+    _worldPacket << Bits<1>(Success);
+    _worldPacket.FlushBits();
+    _worldPacket << uint8(NewRaceID);
+
+    return &_worldPacket;
+}
+
 void SetPlayerDeclinedNames::Read()
 {
     _worldPacket >> Player;

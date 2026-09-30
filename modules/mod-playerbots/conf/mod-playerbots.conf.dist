@@ -100,6 +100,7 @@ Playerbots.Classes =
 #    Playerbots.Evoker
 #    Playerbots.HeroClass
 #    Playerbots.CoAClasses
+#    Playerbots.Pandaren
 #        Description: Which new bot characters may be made. Each switch is 1 (on)
 #                     or 0 (off). A bot is made only when every switch she needs is
 #                     on, Playerbots.Races and Playerbots.Classes allow her, and she
@@ -118,16 +119,23 @@ Playerbots.Classes =
 #                     HeroClass     - evryCore's custom Hero class (needs mod-hero).
 #                     CoAClasses    - every Conquest of Azeroth class, Reaper today
 #                                     (needs mod-coa).
+#                     Pandaren      - Pandaren. A Pandaren bot starts as a neutral
+#                                     Pandaren on the Wandering Isle and chooses
+#                                     the Horde or the Alliance at its end by
+#                                     HordePercent and the Horde and Alliance
+#                                     switches, as a player does; she is never
+#                                     made as a Horde or Alliance Pandaren. The
+#                                     bot brain cannot yet do most of the
+#                                     Wandering Isle's quests (balance poles,
+#                                     clicking a spirit or a cart, the balloon,
+#                                     escorts), so a Pandaren bot will probably
+#                                     stop partway; Playerbots.log says so once
+#                                     when this is 1.
 #                     Ordinary races and classes (Goblin, Worgen, Monk and the rest)
-#                     come with their faction. A Pandaren bot starts as a neutral
-#                     Pandaren on the Wandering Isle and chooses the Horde or the
-#                     Alliance at its end by HordePercent and these switches, as a
-#                     player does; she is never made as a Horde or Alliance
-#                     Pandaren. No Pandaren bot is made yet, because the bot brain
-#                     cannot do the Wandering Isle's quests; Playerbots.log says so
-#                     once.
-#                     Only Horde has passed its playtest so far. Any other switch
-#                     turned on makes no bots and says so once in Playerbots.log.
+#                     come with their faction.
+#                     Only Horde has passed its playtest so far; Pandaren may be
+#                     turned on anyway. Any other switch turned on makes no bots and
+#                     says so once in Playerbots.log.
 #                     With Horde and Alliance both 0, no new bot is made; one error
 #                     names both keys and existing bots still log in.
 #                     Read when a new bot character is created. Turning a switch off
@@ -145,6 +153,7 @@ Playerbots.DemonHunter = 0
 Playerbots.Evoker = 0
 Playerbots.HeroClass = 0
 Playerbots.CoAClasses = 0
+Playerbots.Pandaren = 0
 
 #
 #    Playerbots.HordePercent

@@ -79,9 +79,14 @@ namespace
     // What the contract says, written out separately from the code under test.
     bool Expected(PlayerbotRaceFacts const& race, PlayerbotClassKind kind, uint32 bits)
     {
-        if (race.NpcOnly || race.NeutralStartRace || race.Faction == PlayerbotFaction::Neutral || kind == PlayerbotClassKind::NotPlayable)
+        if (race.NpcOnly || race.NeutralStartRace || kind == PlayerbotClassKind::NotPlayable)
             return false;
-        if (!On(bits, race.Faction == PlayerbotFaction::Horde ? Switch::Horde : Switch::Alliance))
+        if (race.Faction == PlayerbotFaction::Neutral)
+        {
+            if (!On(bits, Switch::Pandaren) || (!On(bits, Switch::Horde) && !On(bits, Switch::Alliance)))
+                return false;
+        }
+        else if (!On(bits, race.Faction == PlayerbotFaction::Horde ? Switch::Horde : Switch::Alliance))
             return false;
         if (race.Dracthyr && !On(bits, Switch::Dracthyr))
             return false;
@@ -121,6 +126,7 @@ TEST_CASE("The switch keys and defaults match the conf", "[playerbots][create]")
 {
     REQUIRE(std::string(PlayerbotCreateSwitchKey(Switch::Horde)) == "Playerbots.Horde");
     REQUIRE(std::string(PlayerbotCreateSwitchKey(Switch::CoAClasses)) == "Playerbots.CoAClasses");
+    REQUIRE(std::string(PlayerbotCreateSwitchKey(Switch::Pandaren)) == "Playerbots.Pandaren");
     PlayerbotCreateSettings const defaults;
     REQUIRE(defaults.IsOn(Switch::Horde));
     for (std::size_t i = 1; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
@@ -167,39 +173,43 @@ TEST_CASE("Monster races and unplayable classes are never made", "[playerbots][c
 
 TEST_CASE("A Pandaren bot is never made as a Horde or Alliance Pandaren", "[playerbots][create][pandaren]")
 {
-    PlayerbotCreateSettings everything = AllSupported((1u << PLAYERBOT_CREATE_SWITCH_COUNT) - 1);
-    PlayerbotCreateRules const rules;
-    for (bool neutralPlayable : { false, true })
+    for (uint32 pandaren : { 0u, 1u })
     {
-        everything.NeutralStartPlayable = neutralPlayable;
+        PlayerbotCreateSettings const everything = AllSupported(((1u << PLAYERBOT_CREATE_SWITCH_COUNT) - 1)
+            & ~(pandaren ? 0u : 1u << uint32(Switch::Pandaren)));
+        PlayerbotCreateRules const rules;
         REQUIRE(JudgePlayerbotRace(HORDE_PANDAREN, everything, rules).Refusal == PlayerbotCreateRefusal::StartsNeutral);
         REQUIRE(JudgePlayerbotRace(ALLIANCE_PANDAREN, everything, rules).Refusal == PlayerbotCreateRefusal::StartsNeutral);
     }
 }
 
-TEST_CASE("No neutral Pandaren is made while the bot brain cannot finish the Wandering Isle", "[playerbots][create][pandaren]")
+TEST_CASE("Playerbots.Pandaren is off by default and names itself when it refuses", "[playerbots][create][pandaren]")
 {
-    REQUIRE_FALSE(PLAYERBOT_NEUTRAL_START_PLAYABLE);
-    PlayerbotCreateSettings const everything = AllSupported((1u << PLAYERBOT_CREATE_SWITCH_COUNT) - 1);
     PlayerbotCreateRules const rules;
-    REQUIRE(JudgePlayerbotRace(NEUTRAL_PANDAREN, everything, rules).Refusal == PlayerbotCreateRefusal::NeutralStartNotPlayable);
-    REQUIRE(JudgePlayerbotRace(NEUTRAL_PANDAREN, PlayerbotCreateSettings{}, rules).Refusal == PlayerbotCreateRefusal::NeutralStartNotPlayable);
+    PlayerbotCreateSettings settings;
+    REQUIRE_FALSE(settings.IsOn(Switch::Pandaren));
+    REQUIRE(settings.IsSupported(Switch::Pandaren));
+    PlayerbotCreateVerdict const verdict = JudgePlayerbotRace(NEUTRAL_PANDAREN, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Pandaren);
+
+    settings.Switches[std::size_t(Switch::Pandaren)] = true;
+    REQUIRE(JudgePlayerbotRace(NEUTRAL_PANDAREN, settings, rules).Allowed());
 }
 
-TEST_CASE("Once the Wandering Isle is playable, a neutral Pandaren needs one faction open to choose", "[playerbots][create][pandaren]")
+TEST_CASE("A neutral Pandaren needs one faction open to choose", "[playerbots][create][pandaren]")
 {
     PlayerbotCreateRules const rules;
     for (uint32 bits = 0; bits < 4; ++bits)
     {
-        PlayerbotCreateSettings settings = AllSupported(bits);
-        settings.NeutralStartPlayable = true;
+        PlayerbotCreateSettings const settings = AllSupported(bits | (1u << uint32(Switch::Pandaren)));
         INFO("horde " << On(bits, Switch::Horde) << " alliance " << On(bits, Switch::Alliance));
         REQUIRE(JudgePlayerbotRace(NEUTRAL_PANDAREN, settings, rules).Allowed() == (bits != 0));
     }
 
     // Alliance on but not yet through its playtest does not count as open.
     PlayerbotCreateSettings settings;
-    settings.NeutralStartPlayable = true;
+    settings.Switches[std::size_t(Switch::Pandaren)] = true;
     settings.Switches[std::size_t(Switch::Horde)] = false;
     settings.Switches[std::size_t(Switch::Alliance)] = true;
     PlayerbotCreateVerdict const verdict = JudgePlayerbotRace(NEUTRAL_PANDAREN, settings, rules);
@@ -252,9 +262,9 @@ TEST_CASE("A switch that is on but has not passed its playtest makes no bots", "
     REQUIRE(evoker.Refusal == PlayerbotCreateRefusal::NotYetSupported);
     REQUIRE(evoker.Switch == Switch::Evoker);
 
-    // Only the Horde has passed so far.
+    // Only the Horde has passed so far; the owner may turn Pandaren on anyway.
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
-        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) == Switch::Horde));
+        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) == Switch::Horde || Switch(i) == Switch::Pandaren));
 }
 
 TEST_CASE("An off switch is named before a switch that is not yet supported", "[playerbots][create]")

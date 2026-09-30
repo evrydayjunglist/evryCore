@@ -34,10 +34,11 @@ enum class PlayerbotCreateSwitch : uint8
     DemonHunter,
     Evoker,
     HeroClass,
-    CoAClasses
+    CoAClasses,
+    Pandaren
 };
 
-inline constexpr std::size_t PLAYERBOT_CREATE_SWITCH_COUNT = 9;
+inline constexpr std::size_t PLAYERBOT_CREATE_SWITCH_COUNT = 10;
 
 inline constexpr std::array<char const*, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_KEYS =
 {
@@ -49,27 +50,24 @@ inline constexpr std::array<char const*, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBO
     "Playerbots.DemonHunter",
     "Playerbots.Evoker",
     "Playerbots.HeroClass",
-    "Playerbots.CoAClasses"
+    "Playerbots.CoAClasses",
+    "Playerbots.Pandaren"
 };
 
 // Every new switch is off unless the owner turns it on. Horde is on so a fresh install makes the same bots as before.
 inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_DEFAULTS =
 {
-    true, false, false, false, false, false, false, false, false
+    true, false, false, false, false, false, false, false, false, false
 };
 
 // Which switches have passed their playtest. A switch that is on but not here yet makes no bots, and the factory says
-// so once. Raise one only when bots of that kind have been played through their starting zone.
+// so once. Raise one only when bots of that kind have been played through their starting zone. Pandaren is the owner's
+// to turn on (30 September 2026) even though the bot brain cannot yet do most of the Wandering Isle's quests (balance
+// poles, clicking a spirit or a cart, the balloon, escorts); the factory says so once when it is on.
 inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_SUPPORTED =
 {
-    true, false, false, false, false, false, false, false, false
+    true, false, false, false, false, false, false, false, false, true
 };
-
-// Whether a bot can play through a neutral start (the Pandaren's Wandering Isle) to the faction choice at its end. Not
-// yet: most of that zone's quests are finished by balancing on poles, clicking a spirit or a cart, riding a balloon, or
-// escorting, and the bot brain does none of those. Until it does, no Pandaren bot is made, and none is made as a Horde
-// or Alliance Pandaren in a capital instead.
-inline constexpr bool PLAYERBOT_NEUTRAL_START_PLAYABLE = false;
 
 inline constexpr char const* PLAYERBOTS_HORDE_PERCENT = "Playerbots.HordePercent";
 inline constexpr int32 PLAYERBOT_HORDE_PERCENT_DEFAULT = 50;
@@ -125,7 +123,6 @@ struct PlayerbotCreateSettings
     std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> Switches = PLAYERBOT_CREATE_SWITCH_DEFAULTS;
     std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> Supported = PLAYERBOT_CREATE_SWITCH_SUPPORTED;
     int32 HordePercent = PLAYERBOT_HORDE_PERCENT_DEFAULT;
-    bool NeutralStartPlayable = PLAYERBOT_NEUTRAL_START_PLAYABLE;
 
     bool IsOn(PlayerbotCreateSwitch which) const { return Switches[std::size_t(which)]; }
     bool IsSupported(PlayerbotCreateSwitch which) const { return Supported[std::size_t(which)]; }
@@ -138,7 +135,6 @@ enum class PlayerbotCreateRefusal : uint8
     NotPlayableRace,
     NotPlayableClass,
     StartsNeutral,        // a player of this race starts as its neutral race, so a bot is made as that race
-    NeutralStartNotPlayable, // the bot brain cannot yet finish the neutral starting zone
     SwitchOff,
     NotYetSupported,
     StartsAboveStartLevel,
@@ -184,10 +180,9 @@ inline PlayerbotCreateVerdict JudgePlayerbotRace(PlayerbotRaceFacts const& race,
     std::optional<PlayerbotCreateVerdict> refused;
     if (race.Faction == PlayerbotFaction::Neutral)
     {
-        if (!settings.NeutralStartPlayable)
-            return { PlayerbotCreateRefusal::NeutralStartNotPlayable };
+        refused = JudgePlayerbotSwitches(settings, { PlayerbotCreateSwitch::Pandaren });
         // She chooses the Horde or the Alliance at the end of her start, so one of them must be open to her.
-        if (!settings.Opens(PlayerbotCreateSwitch::Horde) && !settings.Opens(PlayerbotCreateSwitch::Alliance))
+        if (!refused && !settings.Opens(PlayerbotCreateSwitch::Horde) && !settings.Opens(PlayerbotCreateSwitch::Alliance))
             refused = JudgePlayerbotSwitches(settings, { PlayerbotCreateSwitch::Horde });
     }
     else if (race.Dracthyr)
@@ -270,9 +265,6 @@ inline std::string DescribePlayerbotCreateRefusal(PlayerbotCreateVerdict const& 
         case PlayerbotCreateRefusal::StartsNeutral:
             return "a player of this race starts as its neutral race and chooses a faction at the end of that start, so a bot is made "
                 "as the neutral race or not at all";
-        case PlayerbotCreateRefusal::NeutralStartNotPlayable:
-            return "a neutral Pandaren has to finish the Wandering Isle to choose a faction, and the bot brain cannot do that zone's "
-                "quests yet";
         case PlayerbotCreateRefusal::SwitchOff:
             return std::string(PlayerbotCreateSwitchKey(verdict.Switch)) + " is 0";
         case PlayerbotCreateRefusal::NotYetSupported:

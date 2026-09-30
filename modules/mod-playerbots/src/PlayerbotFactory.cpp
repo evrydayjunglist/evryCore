@@ -271,13 +271,14 @@ void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
     static bool bothOffSaid = false;
     static bool clampSaid = false;
     static bool oneSidedSaid = false;
-    static bool neutralStartSaid = false;
+    static bool pandarenSaid = false;
 
-    if (!settings.NeutralStartPlayable && !neutralStartSaid)
+    if (settings.Opens(PlayerbotCreateSwitch::Pandaren) && !pandarenSaid)
     {
-        neutralStartSaid = true;
-        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: no new Pandaren bot is made: {}. Existing bots are not changed.",
-            DescribePlayerbotCreateRefusal({ PlayerbotCreateRefusal::NeutralStartNotPlayable }));
+        pandarenSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new Pandaren bots start on the Wandering Isle. The bot brain cannot "
+            "yet do most of that zone's quests (balance poles, clicking a spirit or a cart, the balloon, escorts), so they will "
+            "probably stop partway and not reach the faction choice.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Pandaren));
     }
 
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)

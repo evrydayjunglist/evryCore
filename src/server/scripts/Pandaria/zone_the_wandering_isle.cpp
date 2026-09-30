@@ -18,6 +18,7 @@
 #include "AreaTrigger.h"
 #include "AreaTriggerDataStore.h"
 #include "CellImpl.h"
+#include "CharacterPackets.h"
 #include "Containers.h"
 #include "CreatureAI.h"
 #include "CreatureAIImpl.h" // for RAND()
@@ -1638,6 +1639,23 @@ private:
     EventMap _events;
     CartData _data;
 };
+
+// 108897 - Pandaren Faction Choice
+class spell_pandaren_faction_choice : public SpellScript
+{
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        // Opens the client's Horde or Alliance choice; the answer is CMSG_NEUTRAL_PLAYER_SELECT_FACTION
+        if (Player* player = GetHitPlayer())
+            if (player->GetRace() == RACE_PANDAREN_NEUTRAL)
+                player->SendDirectMessage(WorldPackets::Character::ShowNeutralPlayerFactionSelectUI().Write());
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_pandaren_faction_choice::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
 }
 
 void AddSC_zone_the_wandering_isle()
@@ -1679,4 +1697,6 @@ void AddSC_zone_the_wandering_isle()
     RegisterSpellScript(spell_flying_shadow_kick);
 
     RegisterCreatureAI(npc_delivery_cart);
+
+    RegisterSpellScript(spell_pandaren_faction_choice);
 }

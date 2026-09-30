@@ -140,6 +140,11 @@ class TC_GAME_API ReputationMgr
 
         void ApplyForceReaction(uint32 faction_id, ReputationRank rank, bool apply);
 
+        // The player's race has just changed in the world (a neutral pandaren choosing a faction).
+        // Earned standing is kept on top of the new race's base reputation, and the flags that
+        // come from the race (shown, at war, hidden) follow the new race.
+        void UpdateForRaceChange(uint8 oldRace);
+
         //! Public for chat command needs
         bool SetOneFactionReputation(FactionEntry const* factionEntry, int32 standing, bool incremental);
 
@@ -150,6 +155,7 @@ class TC_GAME_API ReputationMgr
     private:                                                // internal helper functions
         void Initialize();
         ReputationFlags GetDefaultStateFlags(FactionEntry const* factionEntry) const;
+        static ReputationFlags GetDefaultStateFlags(FactionEntry const* factionEntry, uint8 race, uint8 playerClass);
         bool SetReputation(FactionEntry const* factionEntry, int32 standing, bool incremental, bool spillOverOnly, bool noSpillover);
         void SetVisible(FactionState* faction);
         void SetAtWar(FactionState* faction, bool atWar) const;

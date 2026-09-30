@@ -1258,6 +1258,20 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
     _stuckMs += diff;
     _logMs += diff;
 
+    // Every 100 ms step is judged against the ground, but only her newest heartbeat goes out, as a client that
+    // hitched sends one heartbeat from where it is now. Every packet queued this tick carries the same time, so a
+    // burst of heartbeats after a long world tick showed her older steps as "now" and snapped her back and forward.
+    // A step that ends the walk sends her last heartbeat first, so the stop or new start follows it in order.
+    bool heartbeatDue = false;
+    Position heartbeatAt;
+    auto sendHeartbeat = [&]()
+    {
+        if (!heartbeatDue)
+            return;
+        heartbeatDue = false;
+        QueueMove(player, heartbeatAt, true, false);
+    };
+
     float const speed = player->GetSpeed(MOVE_RUN);
     while (_heartbeatMs >= HEARTBEAT_INTERVAL_MS && _state == State::Moving)
     {
@@ -1271,6 +1285,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             next.GetPositionX(), next.GetPositionY(), next.GetOrientation(), grounded);
         if (failure != GroundedStepFailure::None)
         {
+            sendHeartbeat();
             RefuseStep(player, failure, grounded);
             return;
         }
@@ -1292,6 +1307,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
                     "mod-playerbots: {} does not step down {:.2f} yards to ({:.2f}, {:.2f}, {:.2f}): she could not climb back, and {} at ({:.2f}, {:.2f}, {:.2f}).",
                     player->GetName(), -down.rise, grounded.GetPositionX(), grounded.GetPositionY(), grounded.GetPositionZ(),
                     why, aheadAt.GetPositionX(), aheadAt.GetPositionY(), aheadAt.GetPositionZ());
+                sendHeartbeat();
                 RefuseStep(player, GroundedStepFailure::NoWayOut, grounded);
                 return;
             }
@@ -1310,6 +1326,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             TC_LOG_INFO(PLAYERBOTS_LOG,
                 "mod-playerbots: {} walked {:.1f} yards of this route without reaching new ground, so that route is going nowhere.",
                 player->GetName(), _faceRecovery.StalledYards());
+            sendHeartbeat();
             _faceRecovery.Refuse();
             if (BeginWayRound(player, "the route she was walking went nowhere"))
                 return;
@@ -1322,6 +1339,8 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
 
         bool const atDest = grounded.GetExactDist(_destination) <= _stopDistance;
         bool const pathDone = _pointIndex + 1 >= _path.size();
+        if (atDest || pathDone)
+            sendHeartbeat();
         if (atDest)
         {
             FinishGroundedArrival(player, grounded);
@@ -1364,7 +1383,8 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             return;
         }
 
-        QueueMove(player, grounded, true, false);
+        heartbeatDue = true;
+        heartbeatAt = grounded;
 
         if (grounded.GetExactDist2d(_lastProgressPos) > 0.25f)
         {
@@ -1372,6 +1392,7 @@ void PlayerbotWalker::Update(Player* player, uint32 diff)
             _stuckMs = 0;
         }
     }
+    sendHeartbeat();
 
     if (_logMs >= HEARTBEAT_LOG_INTERVAL_MS && _state == State::Moving)
     {
@@ -3563,6 +3584,10 @@ void PlayerbotWalker::UpdateJump(Player* player, uint32 diff)
     _jumpElapsedMs += advanceMs;
     _jumpHeartbeatMs += advanceMs;
 
+    // Only her newest falling heartbeat goes out, for the same reason as a walk's: every packet queued this tick
+    // carries the same time.
+    bool heartbeatDue = false;
+    uint32 heartbeatDueMs = 0;
     while (_jumpHeartbeatMs >= HEARTBEAT_INTERVAL_MS)
     {
         _jumpHeartbeatMs -= HEARTBEAT_INTERVAL_MS;
@@ -3570,10 +3595,12 @@ void PlayerbotWalker::UpdateJump(Player* player, uint32 diff)
         if (heartbeatTimeMs >= _jump.DurationMs)
             break;
 
-        Position const airborne = ArcPosition(_jump, heartbeatTimeMs);
-        QueueJumpMove(player, CMSG_MOVE_HEARTBEAT, airborne, heartbeatTimeMs);
-        _lastGrounded = airborne;
+        _lastGrounded = ArcPosition(_jump, heartbeatTimeMs);
+        heartbeatDue = true;
+        heartbeatDueMs = heartbeatTimeMs;
     }
+    if (heartbeatDue)
+        QueueJumpMove(player, CMSG_MOVE_HEARTBEAT, _lastGrounded, heartbeatDueMs);
 
     if (_jumpElapsedMs >= _jump.DurationMs)
         FinishJump(player);

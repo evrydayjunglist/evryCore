@@ -19,7 +19,9 @@
 #include "PlayerbotCreatureIndex.h"
 #include "PlayerbotGear.h"
 #include "PlayerbotLogDetail.h"
+#include "PlayerbotPlayerAttacker.h"
 #include "PlayerbotUpdateCost.h"
+#include "CombatManager.h"
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Containers.h"
@@ -2504,11 +2506,33 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindAttackerTarget(Play
         return {};
 
     Creature* best = nullptr;
+    Player* bestPlayer = nullptr;
     float bestDist = std::numeric_limits<float>::max();
+
+    auto considerPlayer = [&](Player* attacker)
+    {
+        if (!attacker || attacker == player || attacker == bestPlayer)
+            return;
+        float const dist = player->GetExactDist(attacker);
+        if (dist >= bestDist || JudgePlayerAttacker(player, attacker) != PlayerbotPlayerAttackerVerdict::Answer)
+            return;
+
+        bestDist = dist;
+        best = nullptr;
+        bestPlayer = attacker;
+    };
 
     for (Unit* attacker : player->getAttackers())
     {
-        Creature* creature = attacker ? attacker->ToCreature() : nullptr;
+        if (!attacker)
+            continue;
+        if (Player* attackingPlayer = attacker->ToPlayer())
+        {
+            considerPlayer(attackingPlayer);
+            continue;
+        }
+
+        Creature* creature = attacker->ToCreature();
         if (!creature || !creature->IsAlive())
             continue;
         if (!player->IsValidAttackTarget(creature))
@@ -2520,6 +2544,23 @@ Optional<PlayerbotClient::CombatTarget> PlayerbotClient::FindAttackerTarget(Play
 
         bestDist = dist;
         best = creature;
+        bestPlayer = nullptr;
+    }
+
+    // A caster or hunter never swings at her; the fight their spell or shot started, with her selected, is the attack.
+    for (auto const& [guid, ref] : player->GetCombatManager().GetPvPCombatRefs())
+    {
+        Unit* other = ref ? ref->GetOther(player) : nullptr;
+        considerPlayer(other ? other->ToPlayer() : nullptr);
+    }
+
+    if (bestPlayer)
+    {
+        CombatTarget target;
+        target.CreatureGuid = bestPlayer->GetGUID();
+        target.Pos = player->IsWithinMeleeRange(bestPlayer) ? player->GetPosition() : bestPlayer->GetPosition();
+        target.StopDistance = 0.25f;
+        return target;
     }
 
     if (!best)
@@ -3774,17 +3815,17 @@ bool PlayerbotClient::TryMeleeAttack(Player* player, ObjectGuid creatureGuid)
     if (!player || !player->IsInWorld() || !player->GetSession() || creatureGuid.IsEmpty())
         return false;
 
-    Creature* creature = PlayerbotClient::GetCreature(*player, creatureGuid);
-    if (!creature || !creature->IsAlive())
+    Unit* target = PlayerbotClient::GetCombatUnit(*player, creatureGuid);
+    if (!target || !target->IsAlive())
         return false;
 
-    if (!player->IsValidAttackTarget(creature))
+    if (!player->IsValidAttackTarget(target))
         return false;
 
-    if (!player->IsWithinMeleeRange(creature))
+    if (!player->IsWithinMeleeRange(target))
         return false;
 
-    if (player->GetVictim() == creature && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+    if (player->GetVictim() == target && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
         return true;
 
     QueueSetSelection(player->GetSession(), creatureGuid);
@@ -4878,4 +4919,40 @@ GameObject* PlayerbotClient::GetGameObject(WorldObject const& near, ObjectGuid g
 {
     GameObject* go = ObjectAccessor::GetGameObject(near, guid);
     return go && !go->IsDestroyedObject() ? go : nullptr;
+}
+
+Unit* PlayerbotClient::GetCombatUnit(WorldObject const& near, ObjectGuid guid)
+{
+    if (guid.IsPlayer())
+        return ObjectAccessor::GetPlayer(near, guid);
+    return GetCreature(near, guid);
+}
+
+PlayerbotPlayerAttackerVerdict PlayerbotClient::JudgePlayerAttacker(Player* player, Player* attacker)
+{
+    PlayerbotPlayerAttackerFacts facts;
+    facts.OnHerMap = player && attacker && attacker->IsInWorld() && attacker->GetMap() == player->GetMap();
+    if (facts.OnHerMap)
+    {
+        facts.Alive = attacker->IsAlive();
+        facts.SheSeesThem = player->CanSeeOrDetect(attacker);
+        facts.ValidAttackTarget = player->IsValidAttackTarget(attacker);
+        facts.SwingingAtHer = attacker->GetVictim() == player;
+        facts.InCombatWithHer = player->GetCombatManager().IsInCombatWith(attacker);
+        facts.TargetingHer = attacker->GetTarget() == player->GetGUID();
+    }
+    return JudgePlayerbotPlayerAttacker(facts);
+}
+
+bool PlayerbotClient::IsEnemyLandFor(Player* player, Position const& pos)
+{
+    if (!player || !player->GetMap())
+        return false;
+
+    FactionTemplateEntry const* faction = player->GetFactionTemplateEntry();
+    AreaTableEntry const* zone = sAreaTableStore.LookupEntry(player->GetMap()->GetZoneId(player->GetPhaseShift(), pos));
+    if (!faction || !zone)
+        return false;
+
+    return PlayerbotAreaIsEnemyLand(zone->FactionGroupMask, faction->FriendGroup, faction->EnemyGroup, zone->IsSanctuary());
 }

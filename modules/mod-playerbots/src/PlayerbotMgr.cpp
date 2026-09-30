@@ -35,6 +35,7 @@
 #include "PlayerbotFactory.h"
 #include "PlayerbotGear.h"
 #include "PlayerbotLogDetail.h"
+#include "PlayerbotPlayerAttacker.h"
 #include "PlayerbotVariety.h"
 #include "PlayerbotWipe.h"
 #include "RealmList.h"
@@ -461,10 +462,18 @@ namespace
         return false;
     }
 
-    bool CreatureIsHittingPlayer(Player const* player, ObjectGuid guid)
+    // A monster hitting her, or a player attacking her by PlayerbotClient::JudgePlayerAttacker (a caster attacks her
+    // without swinging).
+    bool IsAttackingHer(Player* player, ObjectGuid guid)
     {
         if (!player || guid.IsEmpty())
             return false;
+
+        if (guid.IsPlayer())
+        {
+            Player* attacker = ObjectAccessor::GetPlayer(*player, guid);
+            return attacker && PlayerbotClient::JudgePlayerAttacker(player, attacker) == PlayerbotPlayerAttackerVerdict::Answer;
+        }
 
         for (Unit* attacker : player->getAttackers())
         {
@@ -479,7 +488,7 @@ namespace
     // so she does not swap every tick to whichever attacker is a yard closer.
     Optional<PlayerbotClient::CombatTarget> AttackerToAnswer(Player* player, ObjectGuid currentTarget)
     {
-        if (!currentTarget.IsEmpty() && CreatureIsHittingPlayer(player, currentTarget))
+        if (!currentTarget.IsEmpty() && IsAttackingHer(player, currentTarget))
             return {};
 
         Optional<PlayerbotClient::CombatTarget> attacker = PlayerbotClient::FindAttackerTarget(player);
@@ -531,7 +540,7 @@ namespace
         std::vector<Creature*> hostiles;
         for (Creature* creature : nearby)
         {
-            if (creature && creature->IsHostileTo(player) && !CreatureIsHittingPlayer(player, creature->GetGUID())
+            if (creature && creature->IsHostileTo(player) && !IsAttackingHer(player, creature->GetGUID())
                 && player->CanSeeOrDetect(creature))
                 hostiles.push_back(creature);
         }
@@ -665,17 +674,41 @@ namespace
         return best;
     }
 
-    // Stay on this fight after a close-in walk fails: in melee, or this creature is hitting her.
+    // Stay on this fight after a close-in walk fails: in melee, or this creature or player is attacking her.
     bool KeepCombatAfterFailedWalk(Player* player, ObjectGuid creatureGuid)
     {
         if (!player || creatureGuid.IsEmpty())
             return false;
 
-        if (CreatureIsHittingPlayer(player, creatureGuid))
+        if (IsAttackingHer(player, creatureGuid))
             return true;
 
-        Creature* creature = PlayerbotClient::GetCreature(*player, creatureGuid);
-        return creature && player->IsWithinMeleeRange(creature);
+        Unit* target = PlayerbotClient::GetCombatUnit(*player, creatureGuid);
+        return target && player->IsWithinMeleeRange(target);
+    }
+
+    // A player who attacked her is walked after only to a spot outside the other faction's land and near where she
+    // stood when they attacked her; otherwise she answers them from where she stands. Monsters are walked after as
+    // before.
+    bool MayWalkAfterTarget(PlayerbotRecord& bot, Player* player, Position const& dest)
+    {
+        if (!bot.CombatTarget.CreatureGuid.IsPlayer())
+            return true;
+
+        PlayerbotPlayerChaseVerdict const verdict = JudgePlayerbotPlayerChase(PlayerbotClient::IsEnemyLandFor(player, dest),
+            bot.PlayerFightStart.GetExactDist(dest));
+        if (verdict == PlayerbotPlayerChaseVerdict::Walk)
+            return true;
+
+        if (!bot.PlayerChaseRefusedLogged)
+        {
+            bot.PlayerChaseRefusedLogged = true;
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} does not walk after {} to ({:.2f}, {:.2f}, {:.2f}): {}. She answers them from where she stands.",
+                player->GetName(), bot.CombatTarget.CreatureGuid.ToString(), dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(),
+                verdict == PlayerbotPlayerChaseVerdict::EnemyLand ? std::string("that is the other faction's land")
+                    : Trinity::StringFormat("that is more than {:.0f} yards from where they attacked her", PLAYERBOT_PLAYER_CHASE_YARDS));
+        }
+        return false;
     }
 
     // A fear, a confuse, or another server spline moves her itself. Her own movement packets would be ignored.
@@ -4642,15 +4675,36 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
 bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff, bool heldInPlace)
 {
     PlayerbotCostTimer const cost(PlayerbotCostStep::Combat);
-    Creature* creature = PlayerbotClient::GetCreature(*player, bot.CombatTarget.CreatureGuid);
-    if (!creature)
+    Unit* target = PlayerbotClient::GetCombatUnit(*player, bot.CombatTarget.CreatureGuid);
+    Player* targetPlayer = target ? target->ToPlayer() : nullptr;
+    if (targetPlayer)
     {
+        // A player is fought only while they attack her. She never loots or chases one who stopped.
+        PlayerbotPlayerAttackerVerdict const verdict = PlayerbotClient::JudgePlayerAttacker(player, targetPlayer);
+        if (verdict != PlayerbotPlayerAttackerVerdict::Answer)
+        {
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stops fighting {}: that player {}.",
+                player->GetName(), targetPlayer->GetName(), PlayerbotPlayerAttackerVerdictText(verdict));
+            if (bot.Walker.IsMoving())
+                bot.Walker.Stop(player);
+            ClearCombat(bot, player);
+            bot.Walker.Reset();
+            return false;
+        }
+    }
+
+    Creature* creature = target ? target->ToCreature() : nullptr;
+    if (!target || (!creature && !targetPlayer))
+    {
+        if (!target && bot.CombatTarget.CreatureGuid.IsPlayer())
+            TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} stops fighting {}: that player is no longer on her map.",
+                player->GetName(), bot.CombatTarget.CreatureGuid.ToString());
         ClearCombat(bot, player);
         bot.Walker.Reset();
         return false;
     }
 
-    if (!creature->IsAlive())
+    if (creature && !creature->IsAlive())
     {
         if (player->isAllowedToLoot(creature))
         {
@@ -4675,14 +4729,14 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         return false;
     }
 
-    if (!player->IsValidAttackTarget(creature))
+    if (!player->IsValidAttackTarget(target))
     {
         ClearCombat(bot, player);
         bot.Walker.Reset();
         return false;
     }
 
-    bool const inMelee = player->IsWithinMeleeRange(creature);
+    bool const inMelee = player->IsWithinMeleeRange(target);
     if (!inMelee)
         bot.CombatSwingSent = false;
 
@@ -4694,7 +4748,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         if (bot.Walker.IsMoving())
             bot.Walker.Stop(player);
 
-        if (player->GetVictim() == creature && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+        if (player->GetVictim() == target && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
             return;
 
         bool const reswing = bot.CombatSwingSent;
@@ -4728,9 +4782,15 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         if (bot.Walker.IsMoving())
             return true;
 
+        if (!MayWalkAfterTarget(bot, player, target->GetPosition()))
+        {
+            swingIfMelee();
+            return true;
+        }
+
         Position standPos;
-        float const standDistance = creature->GetCombatReach() + 1.0f;
-        if (PlayerbotWalker::PickApproachPosition(player, creature, standDistance, standPos)
+        float const standDistance = target->GetCombatReach() + 1.0f;
+        if (PlayerbotWalker::PickApproachPosition(player, target, standDistance, standPos)
             && player->GetExactDist(standPos) > bot.CombatTarget.StopDistance
             && bot.Walker.Start(player, standPos, bot.CombatTarget.StopDistance, RecoveryGoalFor(player, bot.CombatTarget)))
         {
@@ -4738,7 +4798,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
             return true;
         }
 
-        Position const dest = creature->GetPosition();
+        Position const dest = target->GetPosition();
         if (player->GetExactDist(dest) <= bot.CombatTarget.StopDistance)
             return failCloseInWalk();
 
@@ -4802,7 +4862,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         }
     }
 
-    PlayerbotClient::CombatSpellPick const pick = PlayerbotClient::PickCombatDamageSpell(player, creature);
+    PlayerbotClient::CombatSpellPick const pick = PlayerbotClient::PickCombatDamageSpell(player, target);
 
     if (heldInPlace)
     {
@@ -4847,7 +4907,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
             return true;
         }
 
-        PlayerbotClient::QueueSetFacing(player, creature);
+        PlayerbotClient::QueueSetFacing(player, target);
         bot.CombatFacingWait = true;
         swingIfMelee();
         return true;
@@ -4861,10 +4921,22 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
             return true;
         }
 
-        Position dest = creature->GetPosition();
-        float const stop = std::max(1.0f, PlayerbotClient::CombatSpellMaxRange(player, creature, pick.Approach) - 1.0f);
+        Position dest = target->GetPosition();
+        float const stop = std::max(1.0f, PlayerbotClient::CombatSpellMaxRange(player, target, pick.Approach) - 1.0f);
         bot.CombatTarget.Pos = dest;
-        if (player->GetExactDist(dest) <= stop)
+        float const dist = player->GetExactDist(dest);
+        if (dist <= stop)
+        {
+            swingIfMelee();
+            return true;
+        }
+
+        // The walk ends where the spell reaches, about that far short of them along the way to them.
+        float const part = (dist - stop) / dist;
+        Position const end(player->GetPositionX() + (dest.GetPositionX() - player->GetPositionX()) * part,
+            player->GetPositionY() + (dest.GetPositionY() - player->GetPositionY()) * part,
+            player->GetPositionZ() + (dest.GetPositionZ() - player->GetPositionZ()) * part);
+        if (!MayWalkAfterTarget(bot, player, end))
         {
             swingIfMelee();
             return true;
@@ -5041,6 +5113,10 @@ Player* PlayerbotMgr::PartyLeaderToFollow(Player* player) const
     if (IsBotAccount(leader->GetSession()->GetAccountId()))
         return nullptr;
 
+    // Nor is a leader of the other faction, where the server lets the two share a party.
+    if (leader->GetTeam() != player->GetTeam())
+        return nullptr;
+
     return leader;
 }
 
@@ -5073,7 +5149,7 @@ void PlayerbotMgr::NoteFollowLeader(PlayerbotRecord& bot, Player* player, Player
         player->GetName(), leader->GetName());
 
     // Her own quest work stops. A fight with something hitting her, corpse loot, and a run from a fight are kept.
-    bool const keepFight = !bot.CombatTarget.CreatureGuid.IsEmpty() && CreatureIsHittingPlayer(player, bot.CombatTarget.CreatureGuid);
+    bool const keepFight = !bot.CombatTarget.CreatureGuid.IsEmpty() && IsAttackingHer(player, bot.CombatTarget.CreatureGuid);
     if (bot.Fleeing)
         return;
 
@@ -5480,20 +5556,30 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
     bot.CombatCastWaitMs = 0;
     bot.CombatFacingWait = false;
     bot.LookedForOtherYellowOnFace = false;
+    bot.PlayerChaseRefusedLogged = false;
     bot.Walker.Reset();
+
+    if (bot.CombatTarget.CreatureGuid.IsPlayer())
+    {
+        bot.PlayerFightStart = bot.Walker.ClientFeet(player);
+        Player const* attacker = ObjectAccessor::GetPlayer(*player, bot.CombatTarget.CreatureGuid);
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} is attacked by the player {} ({}) and fights back.",
+            player->GetName(), attacker ? attacker->GetName() : std::string("?"), bot.CombatTarget.CreatureGuid.ToString());
+    }
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
     {
-        Creature* creature = PlayerbotClient::GetCreature(*player, bot.CombatTarget.CreatureGuid);
-        if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
+        Unit* unit = PlayerbotClient::GetCombatUnit(*player, bot.CombatTarget.CreatureGuid);
+        if (unit && player->IsWithinMeleeRange(unit) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
         {
             bot.CombatSwingSent = true;
             return true;
         }
     }
 
-    // Held in place: take the fight, but walk to it only once the server lets her go.
-    if (!mayWalk)
+    // Held in place: take the fight, but walk to it only once the server lets her go. A player she may not walk after
+    // is answered from where she stands.
+    if (!mayWalk || !MayWalkAfterTarget(bot, player, bot.CombatTarget.Pos))
         return true;
 
     if (!bot.CombatTarget.CreatureGuid.IsEmpty())
@@ -5518,8 +5604,8 @@ bool PlayerbotMgr::BeginCombatTarget(PlayerbotRecord& bot, Player* player, Playe
         {
             LogStayOnCombatWalkFail(player, bot.CombatTarget.CreatureGuid);
             bot.Walker.Reset();
-            Creature* creature = PlayerbotClient::GetCreature(*player, bot.CombatTarget.CreatureGuid);
-            if (creature && player->IsWithinMeleeRange(creature) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
+            Unit* unit = PlayerbotClient::GetCombatUnit(*player, bot.CombatTarget.CreatureGuid);
+            if (unit && player->IsWithinMeleeRange(unit) && PlayerbotClient::TryMeleeAttack(player, bot.CombatTarget.CreatureGuid))
                 bot.CombatSwingSent = true;
             return true;
         }

@@ -38,6 +38,7 @@ class WorldSession;
 struct MovementInfo;
 enum OpcodeClient : uint32;
 enum class LootItemType : uint8;
+enum class PlayerbotPlayerAttackerVerdict;
 
 namespace PlayerbotClient
 {
@@ -59,6 +60,7 @@ namespace PlayerbotClient
 
     struct CombatTarget
     {
+        // A creature, or a player who attacked her (FindAttackerTarget is the only finder that gives a player).
         ObjectGuid CreatureGuid;
         Position Pos;
         float StopDistance = 0.25f;
@@ -162,6 +164,12 @@ namespace PlayerbotClient
     // A creature or gameobject on her map by guid, as ObjectAccessor finds it, unless it is on the map's remove list.
     Creature* GetCreature(WorldObject const& near, ObjectGuid guid);
     GameObject* GetGameObject(WorldObject const& near, ObjectGuid guid);
+    // What she is fighting: a creature as GetCreature finds it, or a player in the world on her map.
+    Unit* GetCombatUnit(WorldObject const& near, ObjectGuid guid);
+    // Whether this player is attacking her now, and if not why not.
+    PlayerbotPlayerAttackerVerdict JudgePlayerAttacker(Player* player, Player* attacker);
+    // Whether this spot is in land that belongs to the other faction, by the zone it is in.
+    bool IsEnemyLandFor(Player* player, Position const& pos);
 
     // Builds the spawn indexes, the vendor list and the item caches the finders share, or throws them away when the
     // world database was reloaded. World thread only: bot brains on map threads only read them.
@@ -223,6 +231,8 @@ namespace PlayerbotClient
         std::vector<Position> const* skipPositions = nullptr);
     std::vector<std::string> ExplainUnpickedTurnIns(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
     Optional<QuestTarget> FindTakeableQuestInZone(Player* player, std::unordered_set<ObjectGuid> const& skip, int32 skipQuestId = 0);
+    // The nearest monster hitting her, or player attacking her, that she may hit back. No finder gives her a player
+    // who is not attacking her.
     Optional<CombatTarget> FindAttackerTarget(Player* player);
     Optional<CombatTarget> FindNearbyMonsterObjectiveTarget(Player* player, float range, std::unordered_set<ObjectGuid> const& skip);
     Optional<CombatTarget> FindLogIncompleteMonsterTarget(Player* player, std::unordered_set<ObjectGuid> const& skip, MapYellowFilter const& filter = {});

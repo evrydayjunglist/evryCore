@@ -1400,7 +1400,9 @@ namespace
         return "unknown";
     }
 
-    bool SpellHasCombatDamage(SpellInfo const* spellInfo)
+    // A spell can do its damage through a spell it launches: Frostbolt's only effect fires the missile spell that hits.
+    // The launched spell is looked at too, two launches deep at most.
+    bool SpellHasCombatDamage(SpellInfo const* spellInfo, uint8 launchesLeft = 2)
     {
         if (!spellInfo)
             return false;
@@ -1441,6 +1443,12 @@ namespace
                         default:
                             break;
                     }
+                    break;
+                case SPELL_EFFECT_TRIGGER_MISSILE:
+                case SPELL_EFFECT_TRIGGER_SPELL:
+                    if (launchesLeft && effect.TriggerSpell && effect.TriggerSpell != spellInfo->Id
+                        && SpellHasCombatDamage(sSpellMgr->GetSpellInfo(effect.TriggerSpell, spellInfo->Difficulty), launchesLeft - 1))
+                        return true;
                     break;
                 default:
                     break;

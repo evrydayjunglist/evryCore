@@ -112,7 +112,22 @@ Playerbots.Classes =
 #                     Dracthyr, Evoker and the switch for her faction.
 #                     Horde         - Horde races.
 #                     Alliance      - Alliance races.
-#                     AlliedRaces   - every race the game marks as an allied race.
+#                     AlliedRaces   - every race the game marks as an allied race,
+#                                     Earthen and Haranir included, with the
+#                                     switch for her faction also on. She starts
+#                                     at StartAlliedRacePlayerLevel in her own
+#                                     home, as a player does. The bot brain
+#                                     cannot yet do the Earthen start's extra
+#                                     action button and gossip or the Haranir
+#                                     start's gossip and spellclick, so those
+#                                     bots will probably stop partway;
+#                                     Playerbots.log says so once when this is 1.
+#                                     In the playtest, Highmountain, Zandalari,
+#                                     Nightborne and Earthen bots found no first
+#                                     quest to take, Kul Tiran bots stopped on
+#                                     a quest whose credit creature has no
+#                                     spawn, and the Lightforged bot stopped at
+#                                     a turn-in in Stormwind, on another map.
 #                     Dracthyr      - Dracthyr (not part of AlliedRaces).
 #                     DeathKnight   - the Death Knight class.
 #                     DemonHunter   - the Demon Hunter class.
@@ -140,9 +155,10 @@ Playerbots.Classes =
 #                                     Playerbots.Alliance are both 1.
 #                     Ordinary races and classes (Goblin, Monk and the rest) come
 #                     with their faction.
-#                     Only Horde has passed its playtest so far. Alliance, Pandaren
-#                     and Worgen may be turned on to playtest them; with Alliance on,
-#                     Dwarf and Gnome bots will probably stop partway too (the Dwarf
+#                     Only Horde has passed its playtest so far. Alliance,
+#                     AlliedRaces, Pandaren and Worgen may be turned on to playtest
+#                     them; with Alliance on, Dwarf and Gnome bots will probably
+#                     stop partway too (the Dwarf
 #                     gyrocopter ride; the Gnome spellclick, gossip and teleport).
 #                     Any other switch turned on makes no bots and says so once in
 #                     Playerbots.log.

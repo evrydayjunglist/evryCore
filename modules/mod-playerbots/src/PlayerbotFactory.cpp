@@ -237,7 +237,6 @@ PlayerbotRaceFacts RaceFacts(ChrRacesEntry const* raceEntry)
     facts.AlliedRace = raceEntry->GetFlags().HasFlag(ChrRacesFlag::IsAlliedRace);
     facts.Dracthyr = raceEntry->ID == RACE_DRACTHYR_ALLIANCE || raceEntry->ID == RACE_DRACTHYR_HORDE;
     facts.Worgen = raceEntry->ID == RACE_WORGEN;
-    facts.StartingLevel = raceEntry->StartingLevel;
     if (!facts.NpcOnly)
         facts.Faction = FactionForTeam(Player::TeamForRace(raceEntry->ID));
     if (raceEntry->NeutralRaceID > 0 && uint32(raceEntry->NeutralRaceID) != raceEntry->ID
@@ -258,7 +257,6 @@ PlayerbotCreateSettings LoadCreateSettings()
 PlayerbotCreateRules LoadCreateRules()
 {
     PlayerbotCreateRules rules;
-    rules.StartPlayerLevel = int32(sWorld->getIntConfig(CONFIG_START_PLAYER_LEVEL));
     rules.MinLevelForDemonHunter = sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_MIN_LEVEL_FOR_DEMON_HUNTER);
     rules.MinLevelForEvoker = sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_MIN_LEVEL_FOR_EVOKER);
     rules.EvokersPerRealm = int32(sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_EVOKERS_PER_REALM));
@@ -275,6 +273,7 @@ void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
     static bool pandarenSaid = false;
     static bool allianceSaid = false;
     static bool worgenSaid = false;
+    static bool alliedSaid = false;
 
     if (settings.Opens(PlayerbotCreateSwitch::Pandaren) && !pandarenSaid)
     {
@@ -297,6 +296,15 @@ void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
         worgenSaid = true;
         TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new Worgen bots start in Gilneas. The bot brain cannot yet do that "
             "start's vehicle and pet-bar steps, so they will probably stop partway.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Worgen));
+    }
+
+    if (settings.Opens(PlayerbotCreateSwitch::AlliedRaces) && !alliedSaid)
+    {
+        alliedSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new bots may be allied races, Earthen or Haranir of an open faction. "
+            "They start at StartAlliedRacePlayerLevel in their own home, as a player does. Their starts have not been playtested yet, "
+            "and the bot brain cannot yet do the Earthen start's extra action button and gossip or the Haranir start's gossip and "
+            "spellclick, so those bots will probably stop partway.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::AlliedRaces));
     }
 
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)

@@ -278,6 +278,8 @@ void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
     static bool demonHunterSaid = false;
     static bool evokerSaid = false;
     static bool dracthyrSaid = false;
+    static bool heroSaid = false;
+    static bool coaSaid = false;
 
     if (settings.Opens(PlayerbotCreateSwitch::Pandaren) && !pandarenSaid)
     {
@@ -333,18 +335,35 @@ void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
     if (settings.Opens(PlayerbotCreateSwitch::Evoker) && !evokerSaid)
     {
         evokerSaid = true;
-        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new bots may be Evokers. The Forbidden Reach intro moves on only when "
-            "the client says the intro scene finished, which the bot brain does not say yet, so they will probably stay in the intro "
-            "room. An empowered spell is pressed once and the server lets it go at its last stage.",
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new bots may be Evokers. In the Forbidden Reach playtest a bot got "
+            "out of the intro and then stopped at a ledge on the way to her first quest giver, so they will probably stop partway. "
+            "An empowered spell is pressed once and the server lets it go at its last stage.",
             PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Evoker));
+    }
+
+    if (settings.Opens(PlayerbotCreateSwitch::HeroClass) && !heroSaid)
+    {
+        heroSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new bots may be evryCore's Hero class, in their race's own start. A "
+            "new Hero has no class spells and no starting kit, so she may have no weapon and no Hearthstone, and the bot cannot "
+            "choose a Hero mode; neither the class nor its bots have passed gameplay acceptance yet. A player without the evry "
+            "client changes sees these bots wrongly.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::HeroClass));
+    }
+
+    if (settings.Opens(PlayerbotCreateSwitch::CoAClasses) && !coaSaid)
+    {
+        coaSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new bots may be Reapers, in their race's own start. A Reaper presses "
+            "Reap and Murder like any other damage spell; neither the class nor its bots have passed gameplay acceptance yet. A "
+            "player without the evry client changes sees these bots wrongly.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::CoAClasses));
     }
 
     if (settings.Opens(PlayerbotCreateSwitch::Dracthyr) && !dracthyrSaid)
     {
         dracthyrSaid = true;
         TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new bots may be Dracthyr of an open faction. A Dracthyr Evoker also "
-            "needs {}; a Dracthyr of another class starts on map 2785. Neither start has been playtested, so those bots may stop "
-            "partway.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Dracthyr), PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Evoker));
+            "needs {}; a Dracthyr of another class starts on map 2785. In the Forbidden Reach playtest a Dracthyr Evoker got out of "
+            "the intro and then stopped at a ledge; the other start has not been playtested, so those bots may stop partway.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Dracthyr), PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Evoker));
     }
 
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)

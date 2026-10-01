@@ -49,7 +49,7 @@ original layered rendering for Soul Strike's hands/impact and Soulrend's hands.
 The four model references are recorded in `data/reaper-fidelity-69814.json`.
 All 32 focused visual/deployment tests passed at that checkpoint.
 
-This module now implements a bounded **first-rank kit at levels 1–7**, with the complete starter loop available at level 6. It is an implementation for owner testing, not a completed Reaper class or an accepted gameplay result. Class 17 remains separate from Hero class 16. Native specialization IDs 610–613, the level-10 specialization gate, and the playerbot exclusion are unchanged.
+This module now implements a bounded **first-rank kit at levels 1–7**, with the complete starter loop available at level 6. It is an implementation for owner testing, not a completed Reaper class or an accepted gameplay result. Class 17 remains separate from Hero class 16. Native specialization IDs 610–613 and the level-10 specialization gate are unchanged. Playerbots make Reapers only with `Playerbots.CoAClasses = 1` in `modules/mod-playerbots.conf` (off by default).
 
 The authoritative combat state is native Runic Power and three caster-owned native auras. There is no resource service, client prediction, background player-pointer map, new core hook, purchase API, or Hero economy dependency. Normal client casts use native equipment, target, range, line-of-sight, power and GCD checks; module SpellScript callbacks handle the class-specific rewards and consumption.
 

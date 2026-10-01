@@ -263,9 +263,12 @@ TEST_CASE("The faction choice byte is the one the client's window sends", "[play
 
 TEST_CASE("A switch that is on but has not passed its playtest makes no bots", "[playerbots][create]")
 {
+    // Every switch is open for a playtest now, so mark two as not yet supported by hand to keep the rule tested.
     PlayerbotCreateSettings settings;
     settings.Switches[std::size_t(Switch::HeroClass)] = true;
     settings.Switches[std::size_t(Switch::CoAClasses)] = true;
+    settings.Supported[std::size_t(Switch::HeroClass)] = false;
+    settings.Supported[std::size_t(Switch::CoAClasses)] = false;
     PlayerbotCreateRules const rules;
 
     PlayerbotCreateVerdict const hero = JudgePlayerbotClass(PlayerbotClassKind::Hero, settings, rules);
@@ -276,9 +279,47 @@ TEST_CASE("A switch that is on but has not passed its playtest makes no bots", "
     REQUIRE(coa.Refusal == PlayerbotCreateRefusal::NotYetSupported);
     REQUIRE(coa.Switch == Switch::CoAClasses);
 
-    // Only the Horde has passed so far; the owner may turn every other switch on to playtest it, except the custom classes.
+    // Only the Horde has passed so far; the owner may turn every other switch on to playtest it.
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
-        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) != Switch::HeroClass && Switch(i) != Switch::CoAClasses));
+        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i]);
+}
+
+TEST_CASE("Playerbots.HeroClass and Playerbots.CoAClasses each need their own switch", "[playerbots][create][customclass]")
+{
+    PlayerbotCreateRules const rules;
+    PlayerbotCreateSettings settings;
+    PlayerbotRaceFacts const undead = Race(5, PlayerbotFaction::Horde);
+
+    // Default keys: both are off and name themselves, so a fresh install makes the same bots as before.
+    PlayerbotCreateVerdict verdict = JudgePlayerbotRaceClass(undead, PlayerbotClassKind::Hero, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::HeroClass);
+    verdict = JudgePlayerbotRaceClass(undead, PlayerbotClassKind::ConquestOfAzeroth, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::CoAClasses);
+
+    // One does not open the other.
+    settings.Switches[std::size_t(Switch::HeroClass)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(undead, PlayerbotClassKind::Hero, settings, rules).Allowed());
+    REQUIRE(JudgePlayerbotRaceClass(undead, PlayerbotClassKind::ConquestOfAzeroth, settings, rules).Switch == Switch::CoAClasses);
+    settings.Switches[std::size_t(Switch::CoAClasses)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(undead, PlayerbotClassKind::ConquestOfAzeroth, settings, rules).Allowed());
+
+    // Her race still needs its own switches: an Alliance Hero needs the Alliance, an allied-race Reaper the allied races.
+    verdict = JudgePlayerbotRaceClass(Race(1, PlayerbotFaction::Alliance), PlayerbotClassKind::Hero, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Alliance);
+    verdict = JudgePlayerbotRaceClass(Race(28, PlayerbotFaction::Horde, true), PlayerbotClassKind::ConquestOfAzeroth, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::AlliedRaces);
+
+    // The Demon Hunter and Evoker level rules are not theirs.
+    PlayerbotCreateRules strict;
+    strict.MinLevelForDemonHunter = 10;
+    strict.MinLevelForEvoker = 58;
+    strict.EvokersPerRealm = -1;
+    REQUIRE(JudgePlayerbotClass(PlayerbotClassKind::Hero, settings, strict).Allowed());
+    REQUIRE(JudgePlayerbotClass(PlayerbotClassKind::ConquestOfAzeroth, settings, strict).Allowed());
 }
 
 TEST_CASE("Death Knight, Demon Hunter, Evoker and Dracthyr each need their own switch", "[playerbots][create][heroclass]")

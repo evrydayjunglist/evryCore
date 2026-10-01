@@ -2881,9 +2881,41 @@ bool PlayerbotMgr::HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff
     }
 
     if (bot.CombatTarget.CreatureGuid.IsEmpty())
+    {
+        TryTalkWhileHeld(bot, player);
         return true;
+    }
 
     UpdateCombat(bot, player, diff, true);
+    return true;
+}
+
+bool PlayerbotMgr::TryTalkWhileHeld(PlayerbotRecord& bot, Player* player)
+{
+    // A root or stun does not stop a player clicking a quest giver already within reach of their feet: she may accept or
+    // hand in a quest from where she stands, and the server checks the click as it checks a player's. A new Undead is
+    // stunned in her grave until she takes Agatha's first quest. She does not walk or turn for a giver out of reach.
+    if (bot.QuestInteractQueued || !LookAroundNow(bot))
+        return false;
+
+    Optional<PlayerbotClient::QuestTarget> talk = PlayerbotClient::FindNearbyQuestTarget(player, QUEST_SEARCH_RANGE,
+        PlayerbotClient::QuestSearchKind::Talk, bot.UnreachableGuids);
+    if (!talk || talk->NpcGuid.IsEmpty())
+        return false;
+
+    // A turn-in whose rewards do not fit would be refused; she makes room at a vendor once the server lets her go.
+    if (talk->TurnIn && PlayerbotClient::BagSlotsShortForTurnIn(player, uint32(talk->QuestId)))
+        return false;
+
+    if (!PlayerbotClient::TryInteractQuest(player, *talk))
+        return false;
+
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} clicked {} for quest {} ({}) from where the server holds her ({}).",
+        player->GetName(), talk->NpcGuid.ToString(), talk->QuestId, talk->TurnIn ? "turn-in" : "accept",
+        ServerHoldReason(bot, player));
+    bot.QuestTarget = *talk;
+    bot.QuestInteractQueued = true;
+    bot.QuestInteractWaitMs = 0;
     return true;
 }
 

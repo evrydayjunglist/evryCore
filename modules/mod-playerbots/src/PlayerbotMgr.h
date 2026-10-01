@@ -303,6 +303,7 @@ private:
     void UpdatePartyInvite(PlayerbotRecord& bot, Player* player, uint32 diff);
     void UpdateFactionChoice(PlayerbotRecord& bot, Player* player);
     bool HoldInPlace(PlayerbotRecord& bot, Player* player, uint32 diff);
+    bool TryTalkWhileHeld(PlayerbotRecord& bot, Player* player);
     bool UpdateDeath(PlayerbotRecord& bot, Player* player, uint32 diff);
     static bool LookAroundNow(PlayerbotRecord& bot);
     void BeginDeath(PlayerbotRecord& bot, Player* player);

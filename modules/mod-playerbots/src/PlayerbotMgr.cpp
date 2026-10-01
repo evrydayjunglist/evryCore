@@ -4749,8 +4749,20 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         if (!inMelee)
             return;
 
-        if (bot.Walker.IsMoving())
+        bool const stopped = bot.Walker.IsMoving();
+        if (stopped)
             bot.Walker.Stop(player);
+
+        // The server lands a swing only on a target in front of her (Unit::AttackerStateUpdate), so she turns to it as a
+        // player does. She turns from her feet a tick after a stop, and a root or stun lets her swing but not turn.
+        if (!stopped && !heldInPlace && !bot.CombatFacingWait && !player->IsWithinBoundaryRadius(target)
+            && !player->HasInArc(2 * float(M_PI) / 3, target))
+        {
+            PlayerbotClient::QueueSetFacing(player, target);
+            bot.CombatFacingWait = true;
+            PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_MOVE_SET_FACING to turn to {}, which is not in front of her for a swing.",
+                player->GetName(), bot.CombatTarget.CreatureGuid.ToString());
+        }
 
         if (player->GetVictim() == target && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
             return;

@@ -128,10 +128,42 @@ Playerbots.Classes =
 #                                     a quest whose credit creature has no
 #                                     spawn, and the Lightforged bot stopped at
 #                                     a turn-in in Stormwind, on another map.
-#                     Dracthyr      - Dracthyr (not part of AlliedRaces).
-#                     DeathKnight   - the Death Knight class.
-#                     DemonHunter   - the Demon Hunter class.
-#                     Evoker        - the Evoker class.
+#                     Dracthyr      - Dracthyr (not part of AlliedRaces), with the
+#                                     switch for her faction also on. A Dracthyr
+#                                     of a class other than Evoker starts on map
+#                                     2785. Playerbots.log says once when this
+#                                     is 1 that she may stop partway. In the
+#                                     playtest a Horde Dracthyr Evoker left the
+#                                     intro and stopped at a ledge on her way to
+#                                     her first quest giver.
+#                     DeathKnight   - the Death Knight class, at
+#                                     StartDeathKnightPlayerLevel. Most races
+#                                     start in Acherus, whose quests ride the Eye
+#                                     of Acherus, horses, a mine cart, a cannon
+#                                     and a dragon; Pandaren and allied races
+#                                     start on map 2297 (an extra action button
+#                                     and gossip). The bot brain cannot do those
+#                                     yet, so she will probably stop partway.
+#                                     In the playtest Acherus bots took their
+#                                     first quest and stopped on the steep
+#                                     ground on the way to the next giver.
+#                     DemonHunter   - the Demon Hunter class, at
+#                                     StartDemonHunterPlayerLevel in Mardum.
+#                                     Mardum moves on only when the client says
+#                                     the intro scene finished, and needs gossip,
+#                                     a player choice and vehicles, so she will
+#                                     probably stop partway. In the playtest they
+#                                     stood where they started.
+#                     Evoker        - the Evoker class. The Forbidden Reach intro
+#                                     moves on only when the client says the
+#                                     intro scene finished, which the bot brain
+#                                     does not say yet, so she may stop partway
+#                                     (the one Evoker in the playtest got out
+#                                     and stopped at a ledge). She presses an empowered
+#                                     spell once and the server lets it go at its
+#                                     last stage.
+#                                     Playerbots.log says once, for each of these
+#                                     three classes, when its switch is 1.
 #                     HeroClass     - evryCore's custom Hero class (needs mod-hero).
 #                     CoAClasses    - every Conquest of Azeroth class, Reaper today
 #                                     (needs mod-coa).
@@ -155,13 +187,13 @@ Playerbots.Classes =
 #                                     Playerbots.Alliance are both 1.
 #                     Ordinary races and classes (Goblin, Monk and the rest) come
 #                     with their faction.
-#                     Only Horde has passed its playtest so far. Alliance,
-#                     AlliedRaces, Pandaren and Worgen may be turned on to playtest
-#                     them; with Alliance on, Dwarf and Gnome bots will probably
+#                     Only Horde has passed its playtest so far. Every other switch
+#                     except HeroClass and CoAClasses may be turned on to playtest
+#                     it; with Alliance on, Dwarf and Gnome bots will probably
 #                     stop partway too (the Dwarf
 #                     gyrocopter ride; the Gnome spellclick, gossip and teleport).
-#                     Any other switch turned on makes no bots and says so once in
-#                     Playerbots.log.
+#                     HeroClass or CoAClasses turned on makes no bots and says so
+#                     once in Playerbots.log.
 #                     With Horde and Alliance both 0, no new bot is made; one error
 #                     names both keys and existing bots still log in.
 #                     Read when a new bot character is created. Turning a switch off

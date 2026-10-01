@@ -164,10 +164,28 @@ Playerbots.Classes =
 #                                     last stage.
 #                                     Playerbots.log says once, for each of these
 #                                     three classes, when its switch is 1.
-#                     HeroClass     - evryCore's custom Hero class (needs mod-hero).
+#                     HeroClass     - evryCore's custom Hero class (needs mod-hero),
+#                                     any race, in that race's own start. A new
+#                                     Hero has no class spells and no starting kit,
+#                                     so she may have no weapon and no Hearthstone,
+#                                     and the bot cannot choose a Hero mode.
 #                     CoAClasses    - every Conquest of Azeroth class, Reaper today
-#                                     (needs mod-coa).
-#                     Pandaren      - Pandaren. A Pandaren bot starts as a neutral
+#                                     (needs mod-coa): Human, Undead, Troll, Blood
+#                                     Elf and Draenei, in that race's own start.
+#                                     She presses Reap and Murder like any other
+#                                     damage spell.
+#                                     Neither class has passed its own gameplay
+#                                     acceptance, and a player without the evry
+#                                     client changes sees these bots wrongly.
+#                                     Playerbots.log says so once for each of
+#                                     these two when its switch is 1.
+#                                     In the playtest Hero and Reaper bots quested
+#                                     in the Undead and Blood Elf starts, Orc and
+#                                     Goblin ones stopped on steep ground, and a
+#                                     Troll one never got a first
+#                                     quest: every first quest at the Troll start
+#                                     is for one ordinary class only.
+#                     Pandaren     - Pandaren. A Pandaren bot starts as a neutral
 #                                     Pandaren on the Wandering Isle and chooses
 #                                     the Horde or the Alliance at its end by
 #                                     HordePercent and the Horde and Alliance
@@ -188,12 +206,9 @@ Playerbots.Classes =
 #                     Ordinary races and classes (Goblin, Monk and the rest) come
 #                     with their faction.
 #                     Only Horde has passed its playtest so far. Every other switch
-#                     except HeroClass and CoAClasses may be turned on to playtest
-#                     it; with Alliance on, Dwarf and Gnome bots will probably
-#                     stop partway too (the Dwarf
+#                     may be turned on to playtest it; with Alliance on, Dwarf and
+#                     Gnome bots will probably stop partway too (the Dwarf
 #                     gyrocopter ride; the Gnome spellclick, gossip and teleport).
-#                     HeroClass or CoAClasses turned on makes no bots and says so
-#                     once in Playerbots.log.
 #                     With Horde and Alliance both 0, no new bot is made; one error
 #                     names both keys and existing bots still log in.
 #                     Read when a new bot character is created. Turning a switch off

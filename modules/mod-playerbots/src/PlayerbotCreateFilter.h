@@ -72,9 +72,12 @@ inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREAT
 // brain cannot yet do the Earthen start's extra action button and gossip, or the Haranir start's gossip and spellclick.
 // Dracthyr, Death Knight, Demon Hunter and Evoker are open for a playtest the same way (1 October 2026); their starts
 // need vehicles, scenes, gossip and an extra action button the bot brain cannot do yet, and the factory says so once.
+// evryCore's Hero class and the Conquest of Azeroth classes are open for a playtest the same way (1 October 2026), before
+// either class has passed its own gameplay acceptance: a new Hero has no class spells and the bot cannot choose a Hero
+// mode; she has no starting kit either, so she may have no weapon and no Hearthstone; and a player without the evry client changes sees these bots wrongly.
 inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_SUPPORTED =
 {
-    true, true, true, true, true, true, true, false, false, true, true
+    true, true, true, true, true, true, true, true, true, true, true
 };
 
 inline constexpr char const* PLAYERBOTS_HORDE_PERCENT = "Playerbots.HordePercent";

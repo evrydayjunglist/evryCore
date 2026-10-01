@@ -68,10 +68,11 @@ inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREAT
 // poles, clicking a spirit or a cart, the balloon, escorts); the factory says so once when it is on. Alliance and Worgen
 // are the owner's to turn on too (30 September 2026) so their starts can be playtested; the bot brain cannot yet do the
 // Dwarf gyrocopter ride, the Gnome start's spellclick, gossip and teleport, or Gilneas's vehicle and pet-bar steps, and
-// the factory says so once when each is on.
+// the factory says so once when each is on. Allied races are open for a playtest the same way (1 October 2026); the bot
+// brain cannot yet do the Earthen start's extra action button and gossip, or the Haranir start's gossip and spellclick.
 inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_SUPPORTED =
 {
-    true, true, false, false, false, false, false, false, false, true, true
+    true, true, true, false, false, false, false, false, false, true, true
 };
 
 inline constexpr char const* PLAYERBOTS_HORDE_PERCENT = "Playerbots.HordePercent";
@@ -97,7 +98,6 @@ struct PlayerbotRaceFacts
     bool AlliedRace = false; // ChrRaces IsAlliedRace
     bool Dracthyr = false;   // Dracthyr have their own switch, whatever the allied flag says
     bool Worgen = false;     // Worgen have their own switch as well as the Alliance one: the Gilneas start needs verbs bots lack
-    int32 StartingLevel = 1; // ChrRaces StartingLevel
     // ChrRaces NeutralRaceID when that race is neutral: a player of this race starts as that race and chooses her faction
     // in its starting zone (the Horde and Alliance Pandaren). 0 for every other race.
     uint8 NeutralStartRace = 0;
@@ -116,9 +116,10 @@ enum class PlayerbotClassKind : uint8
 
 // The server's own create rules that decide something for a bot. Each bot account holds only her, so a rule that
 // needs another character on the account (a level for Demon Hunter or Evoker) refuses her as it would a new player.
+// Her start level is not one of them: the server gives her the level a player of her race and class gets
+// (Player::GetStartLevel, from StartPlayerLevel, StartAlliedRacePlayerLevel and the class start levels).
 struct PlayerbotCreateRules
 {
-    int32 StartPlayerLevel = 1;         // StartPlayerLevel
     uint32 MinLevelForDemonHunter = 0;  // CharacterCreating.MinLevelForDemonHunter
     uint32 MinLevelForEvoker = 0;       // CharacterCreating.MinLevelForEvoker
     int32 EvokersPerRealm = 1;          // CharacterCreating.EvokersPerRealm (0 means no limit)
@@ -143,7 +144,6 @@ enum class PlayerbotCreateRefusal : uint8
     StartsNeutral,        // a player of this race starts as its neutral race, so a bot is made as that race
     SwitchOff,
     NotYetSupported,
-    StartsAboveStartLevel,
     HeroClassLevelRule,   // MinLevelForDemonHunter or MinLevelForEvoker needs another character on the account
     EvokerLimit
 };
@@ -175,7 +175,7 @@ inline std::optional<PlayerbotCreateVerdict> JudgePlayerbotSwitches(PlayerbotCre
 }
 
 inline PlayerbotCreateVerdict JudgePlayerbotRace(PlayerbotRaceFacts const& race, PlayerbotCreateSettings const& settings,
-    PlayerbotCreateRules const& rules)
+    PlayerbotCreateRules const& /*rules*/)
 {
     if (race.NpcOnly)
         return { PlayerbotCreateRefusal::NotPlayableRace };
@@ -201,12 +201,6 @@ inline PlayerbotCreateVerdict JudgePlayerbotRace(PlayerbotRaceFacts const& race,
         refused = JudgePlayerbotSwitches(settings, { faction });
     if (refused)
         return *refused;
-
-    // A race that starts above the server's start level is not made yet; which of those starts a bot can play is
-    // still to be found out, race by race.
-    if (race.StartingLevel > rules.StartPlayerLevel)
-        return { PlayerbotCreateRefusal::StartsAboveStartLevel };
-
     return {};
 }
 
@@ -277,8 +271,6 @@ inline std::string DescribePlayerbotCreateRefusal(PlayerbotCreateVerdict const& 
             return std::string(PlayerbotCreateSwitchKey(verdict.Switch)) + " is 0";
         case PlayerbotCreateRefusal::NotYetSupported:
             return std::string(PlayerbotCreateSwitchKey(verdict.Switch)) + " is on, but bots of that kind have not passed their playtest yet";
-        case PlayerbotCreateRefusal::StartsAboveStartLevel:
-            return "it starts above StartPlayerLevel, and those starts are not made for bots yet";
         case PlayerbotCreateRefusal::HeroClassLevelRule:
             return "CharacterCreating.MinLevelForDemonHunter or CharacterCreating.MinLevelForEvoker needs another character on the account, and a bot account has only her";
         case PlayerbotCreateRefusal::EvokerLimit:

@@ -19,7 +19,7 @@ namespace
 {
     using Switch = PlayerbotCreateSwitch;
 
-    PlayerbotRaceFacts Race(uint8 id, PlayerbotFaction faction, bool allied = false, bool dracthyr = false, int32 startingLevel = 1,
+    PlayerbotRaceFacts Race(uint8 id, PlayerbotFaction faction, bool allied = false, bool dracthyr = false,
         bool npcOnly = false, uint8 neutralStartRace = 0)
     {
         PlayerbotRaceFacts race;
@@ -27,15 +27,14 @@ namespace
         race.Faction = faction;
         race.AlliedRace = allied;
         race.Dracthyr = dracthyr;
-        race.StartingLevel = startingLevel;
         race.NpcOnly = npcOnly;
         race.NeutralStartRace = neutralStartRace;
         return race;
     }
 
     PlayerbotRaceFacts const NEUTRAL_PANDAREN = Race(24, PlayerbotFaction::Neutral);
-    PlayerbotRaceFacts const HORDE_PANDAREN = Race(26, PlayerbotFaction::Horde, false, false, 1, false, 24);
-    PlayerbotRaceFacts const ALLIANCE_PANDAREN = Race(25, PlayerbotFaction::Alliance, false, false, 1, false, 24);
+    PlayerbotRaceFacts const HORDE_PANDAREN = Race(26, PlayerbotFaction::Horde, false, false, false, 24);
+    PlayerbotRaceFacts const ALLIANCE_PANDAREN = Race(25, PlayerbotFaction::Alliance, false, false, false, 24);
 
     PlayerbotRaceFacts Worgen()
     {
@@ -59,7 +58,7 @@ namespace
         Race(29, PlayerbotFaction::Alliance, true),                       // Void Elf
         Race(70, PlayerbotFaction::Horde, false, true),                   // Dracthyr (Horde), no allied flag
         Race(52, PlayerbotFaction::Alliance, true, true),                 // Dracthyr (Alliance), allied flag too
-        Race(99, PlayerbotFaction::Horde, false, false, 1, true),         // a monster race
+        Race(99, PlayerbotFaction::Horde, false, false, true),            // a monster race
     };
 
     std::vector<PlayerbotClassKind> const CLASSES =
@@ -179,7 +178,7 @@ TEST_CASE("Monster races and unplayable classes are never made", "[playerbots][c
 {
     PlayerbotCreateSettings const everything = AllSupported((1u << PLAYERBOT_CREATE_SWITCH_COUNT) - 1);
     PlayerbotCreateRules const rules;
-    REQUIRE(JudgePlayerbotRace(Race(99, PlayerbotFaction::Horde, false, false, 1, true), everything, rules).Refusal
+    REQUIRE(JudgePlayerbotRace(Race(99, PlayerbotFaction::Horde, false, false, true), everything, rules).Refusal
         == PlayerbotCreateRefusal::NotPlayableRace);
     REQUIRE(JudgePlayerbotClass(PlayerbotClassKind::NotPlayable, everything, rules).Refusal == PlayerbotCreateRefusal::NotPlayableClass);
 }
@@ -265,21 +264,21 @@ TEST_CASE("The faction choice byte is the one the client's window sends", "[play
 TEST_CASE("A switch that is on but has not passed its playtest makes no bots", "[playerbots][create]")
 {
     PlayerbotCreateSettings settings;
-    settings.Switches[std::size_t(Switch::AlliedRaces)] = true;
+    settings.Switches[std::size_t(Switch::Dracthyr)] = true;
     settings.Switches[std::size_t(Switch::Evoker)] = true;
     PlayerbotCreateRules const rules;
 
-    PlayerbotCreateVerdict const highmountain = JudgePlayerbotRace(Race(28, PlayerbotFaction::Horde, true), settings, rules);
-    REQUIRE(highmountain.Refusal == PlayerbotCreateRefusal::NotYetSupported);
-    REQUIRE(highmountain.Switch == Switch::AlliedRaces);
+    PlayerbotCreateVerdict const dracthyr = JudgePlayerbotRace(Race(70, PlayerbotFaction::Horde, false, true), settings, rules);
+    REQUIRE(dracthyr.Refusal == PlayerbotCreateRefusal::NotYetSupported);
+    REQUIRE(dracthyr.Switch == Switch::Dracthyr);
 
     PlayerbotCreateVerdict const evoker = JudgePlayerbotClass(PlayerbotClassKind::Evoker, settings, rules);
     REQUIRE(evoker.Refusal == PlayerbotCreateRefusal::NotYetSupported);
     REQUIRE(evoker.Switch == Switch::Evoker);
 
-    // Only the Horde has passed so far; the owner may turn Alliance, Pandaren and Worgen on to playtest them.
+    // Only the Horde has passed so far; the owner may turn Alliance, allied races, Pandaren and Worgen on to playtest them.
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
-        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) == Switch::Horde || Switch(i) == Switch::Alliance
+        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) == Switch::Horde || Switch(i) == Switch::Alliance || Switch(i) == Switch::AlliedRaces
             || Switch(i) == Switch::Pandaren || Switch(i) == Switch::Worgen));
 }
 
@@ -347,15 +346,46 @@ TEST_CASE("Both factions off makes no bot of any race", "[playerbots][create]")
     REQUIRE_FALSE(PickPlayerbotFaction(false, false, 50, 3, 4).has_value());
 }
 
-TEST_CASE("A race that starts above the start level is still not made", "[playerbots][create]")
+TEST_CASE("Playerbots.AlliedRaces makes allied races of each open faction, with the server's create rules", "[playerbots][create][allied]")
 {
-    PlayerbotCreateSettings const settings = AllSupported((1u << PLAYERBOT_CREATE_SWITCH_COUNT) - 1);
-    PlayerbotCreateRules rules;
-    rules.StartPlayerLevel = 1;
-    REQUIRE(JudgePlayerbotRace(Race(28, PlayerbotFaction::Horde, true, false, 10), settings, rules).Refusal
-        == PlayerbotCreateRefusal::StartsAboveStartLevel);
-    rules.StartPlayerLevel = 10;
-    REQUIRE(JudgePlayerbotRace(Race(28, PlayerbotFaction::Horde, true, false, 10), settings, rules).Allowed());
+    PlayerbotCreateRules const rules; // the server's defaults: StartPlayerLevel 1 does not refuse a level-10 start
+    PlayerbotCreateSettings settings;
+    PlayerbotRaceFacts const highmountain = Race(28, PlayerbotFaction::Horde, true);
+    PlayerbotRaceFacts const voidElf = Race(29, PlayerbotFaction::Alliance, true);
+    // Earthen and Haranir carry the allied flag, so the same switch makes them. The Alliance Haranir row says it starts
+    // at level 1 and the Horde one at 10; the server starts both at the allied level, and the filter treats them alike.
+    PlayerbotRaceFacts const haranirAlliance = Race(86, PlayerbotFaction::Alliance, true);
+    PlayerbotRaceFacts const haranirHorde = Race(91, PlayerbotFaction::Horde, true);
+
+    // Default keys: off, and it names itself.
+    REQUIRE_FALSE(settings.IsOn(Switch::AlliedRaces));
+    REQUIRE(settings.IsSupported(Switch::AlliedRaces));
+    PlayerbotCreateVerdict verdict = JudgePlayerbotRace(highmountain, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::AlliedRaces);
+
+    settings.Switches[std::size_t(Switch::AlliedRaces)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(highmountain, PlayerbotClassKind::Ordinary, settings, rules).Allowed());
+    REQUIRE(JudgePlayerbotRace(haranirHorde, settings, rules).Allowed());
+
+    // The Alliance ones still need the Alliance switch.
+    verdict = JudgePlayerbotRace(voidElf, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Alliance);
+    REQUIRE(JudgePlayerbotRace(haranirAlliance, settings, rules).Switch == Switch::Alliance);
+    settings.Switches[std::size_t(Switch::Alliance)] = true;
+    REQUIRE(JudgePlayerbotRace(voidElf, settings, rules).Allowed());
+    REQUIRE(JudgePlayerbotRace(haranirAlliance, settings, rules).Allowed());
+
+    // Dracthyr is not part of it, even with the allied flag.
+    verdict = JudgePlayerbotRace(Race(52, PlayerbotFaction::Alliance, true, true), settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Dracthyr);
+
+    // An allied Death Knight still needs the Death Knight switch.
+    verdict = JudgePlayerbotRaceClass(highmountain, PlayerbotClassKind::DeathKnight, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::DeathKnight);
 }
 
 TEST_CASE("The server's Demon Hunter and Evoker create rules refuse a bot as they would a new player", "[playerbots][create]")

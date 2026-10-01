@@ -281,6 +281,8 @@ namespace PlayerbotClient
     bool TryMeleeAttack(Player* player, ObjectGuid creatureGuid);
     bool TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId);
     CombatSpellPick PickCombatDamageSpell(Player* player, Unit* target);
+    // Each damage spell she knows and why it cannot be pressed at this target now, for the line a quiet fight writes.
+    std::string DescribeCombatDamageSpells(Player* player, Unit* target);
     // A heal, shield, or damage cut she knows and could cast on herself now. Long cooldowns only when allowLongCooldown.
     SpellInfo const* PickSelfDefenceSpell(Player* player, bool allowLongCooldown);
     bool TrySelfCast(Player* player, uint32 spellId);

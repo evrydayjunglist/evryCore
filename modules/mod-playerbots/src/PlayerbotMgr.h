@@ -101,6 +101,10 @@ struct PlayerbotRecord
     bool CombatCastPending = false;
     uint32 CombatCastWaitMs = 0;
     bool CombatFacingWait = false;
+    // How long her fight has stood without a swing, a press, a turn, or a walk; past a few seconds it writes why, once
+    // per target.
+    uint32 CombatQuietMs = 0;
+    bool CombatQuietLogged = false;
     // Where she stood when a player she fights back against attacked her; she does not walk far from it after them.
     // The refusal to walk after them is logged once per fight.
     Position PlayerFightStart;

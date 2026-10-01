@@ -54,6 +54,7 @@
 #include "Playerbots.h"
 #include "QuestDef.h"
 #include "SharedDefines.h"
+#include "SmartEnum.h"
 #include "Spell.h"
 #include "SpellAuraDefines.h"
 #include "SpellAuras.h"
@@ -3946,6 +3947,43 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
     }
 
     return pick;
+}
+
+std::string PlayerbotClient::DescribeCombatDamageSpells(Player* player, Unit* target)
+{
+    if (!player || !target || !player->GetMap())
+        return "she cannot see them";
+
+    bool const casting = player->IsNonMeleeSpellCast(false, false, true);
+    std::string text;
+    for (auto const& [spellId, playerSpell] : player->GetSpellMap())
+    {
+        if (playerSpell.state == PLAYERSPELL_REMOVED || !playerSpell.active || playerSpell.disabled)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+        if (!CombatDamageSpellIsEligible(player, spellInfo))
+            continue;
+
+        std::string why;
+        if (casting)
+            why = "she is already casting";
+        else if (!CombatSpellIsReady(player, spellInfo))
+            why = "not ready (global cooldown or cooldown)";
+        else if (CombatSpellAlreadyQueued(player, spellInfo))
+            why = "already queued";
+        else
+        {
+            SpellCastResult const result = CheckCombatSpellCast(player, target, spellInfo);
+            why = result == SPELL_CAST_OK ? std::string("could be pressed") : std::string(EnumUtils::ToConstant(result));
+        }
+
+        if (!text.empty())
+            text += ", ";
+        text += Trinity::StringFormat("spell {} reaches {:.1f} yards: {}", spellInfo->Id, CombatSpellMaxRange(player, target, spellInfo), why);
+    }
+
+    return text.empty() ? std::string("she knows no damage spell") : text;
 }
 
 bool PlayerbotClient::TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId)

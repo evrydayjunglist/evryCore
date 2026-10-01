@@ -236,6 +236,7 @@ PlayerbotRaceFacts RaceFacts(ChrRacesEntry const* raceEntry)
     facts.NpcOnly = raceEntry->GetFlags().HasFlag(ChrRacesFlag::NPCOnly);
     facts.AlliedRace = raceEntry->GetFlags().HasFlag(ChrRacesFlag::IsAlliedRace);
     facts.Dracthyr = raceEntry->ID == RACE_DRACTHYR_ALLIANCE || raceEntry->ID == RACE_DRACTHYR_HORDE;
+    facts.Worgen = raceEntry->ID == RACE_WORGEN;
     facts.StartingLevel = raceEntry->StartingLevel;
     if (!facts.NpcOnly)
         facts.Faction = FactionForTeam(Player::TeamForRace(raceEntry->ID));
@@ -272,6 +273,8 @@ void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
     static bool clampSaid = false;
     static bool oneSidedSaid = false;
     static bool pandarenSaid = false;
+    static bool allianceSaid = false;
+    static bool worgenSaid = false;
 
     if (settings.Opens(PlayerbotCreateSwitch::Pandaren) && !pandarenSaid)
     {
@@ -279,6 +282,21 @@ void WarnAboutSettingsOnce(PlayerbotCreateSettings const& settings)
         TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new Pandaren bots start on the Wandering Isle. The bot brain cannot "
             "yet do most of that zone's quests (balance poles, clicking a spirit or a cart, the balloon, escorts), so they will "
             "probably stop partway and not reach the faction choice.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Pandaren));
+    }
+
+    if (settings.Opens(PlayerbotCreateSwitch::Alliance) && !allianceSaid)
+    {
+        allianceSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new bots may be Alliance. Their starts have not been playtested yet, "
+            "and the bot brain cannot yet do the Dwarf start's gyrocopter ride or the Gnome start's spellclick, gossip and teleport, "
+            "so those bots will probably stop partway.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Alliance));
+    }
+
+    if (settings.Opens(PlayerbotCreateSwitch::Worgen) && settings.Opens(PlayerbotCreateSwitch::Alliance) && !worgenSaid)
+    {
+        worgenSaid = true;
+        TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: {} is 1, so new Worgen bots start in Gilneas. The bot brain cannot yet do that "
+            "start's vehicle and pet-bar steps, so they will probably stop partway.", PlayerbotCreateSwitchKey(PlayerbotCreateSwitch::Worgen));
     }
 
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)

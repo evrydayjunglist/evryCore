@@ -37,11 +37,21 @@ namespace
     PlayerbotRaceFacts const HORDE_PANDAREN = Race(26, PlayerbotFaction::Horde, false, false, 1, false, 24);
     PlayerbotRaceFacts const ALLIANCE_PANDAREN = Race(25, PlayerbotFaction::Alliance, false, false, 1, false, 24);
 
+    PlayerbotRaceFacts Worgen()
+    {
+        PlayerbotRaceFacts race = Race(22, PlayerbotFaction::Alliance);
+        race.Worgen = true;
+        return race;
+    }
+
+    PlayerbotRaceFacts const WORGEN = Worgen();
+
     // Made-up rows, one of each kind the factory meets. Ids are only labels here.
     std::vector<PlayerbotRaceFacts> const RACES =
     {
         Race(2, PlayerbotFaction::Horde),                                 // Orc
         Race(1, PlayerbotFaction::Alliance),                              // Human
+        WORGEN,
         NEUTRAL_PANDAREN,
         HORDE_PANDAREN,
         ALLIANCE_PANDAREN,
@@ -92,6 +102,8 @@ namespace
             return false;
         if (!race.Dracthyr && race.AlliedRace && !On(bits, Switch::AlliedRaces))
             return false;
+        if (race.Worgen && !On(bits, Switch::Worgen))
+            return false;
         switch (kind)
         {
             case PlayerbotClassKind::DeathKnight: return On(bits, Switch::DeathKnight);
@@ -127,6 +139,7 @@ TEST_CASE("The switch keys and defaults match the conf", "[playerbots][create]")
     REQUIRE(std::string(PlayerbotCreateSwitchKey(Switch::Horde)) == "Playerbots.Horde");
     REQUIRE(std::string(PlayerbotCreateSwitchKey(Switch::CoAClasses)) == "Playerbots.CoAClasses");
     REQUIRE(std::string(PlayerbotCreateSwitchKey(Switch::Pandaren)) == "Playerbots.Pandaren");
+    REQUIRE(std::string(PlayerbotCreateSwitchKey(Switch::Worgen)) == "Playerbots.Worgen");
     PlayerbotCreateSettings const defaults;
     REQUIRE(defaults.IsOn(Switch::Horde));
     for (std::size_t i = 1; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
@@ -209,6 +222,7 @@ TEST_CASE("A neutral Pandaren needs one faction open to choose", "[playerbots][c
 
     // Alliance on but not yet through its playtest does not count as open.
     PlayerbotCreateSettings settings;
+    settings.Supported[std::size_t(Switch::Alliance)] = false;
     settings.Switches[std::size_t(Switch::Pandaren)] = true;
     settings.Switches[std::size_t(Switch::Horde)] = false;
     settings.Switches[std::size_t(Switch::Alliance)] = true;
@@ -224,6 +238,7 @@ TEST_CASE("At the end of her start she chooses by the roster split and the open 
     REQUIRE(NeutralChoice(settings, 100, 0) == PlayerbotFaction::Horde);
 
     // Alliance switched on but not through its playtest: still the Horde.
+    settings.Supported[std::size_t(Switch::Alliance)] = false;
     settings.Switches[std::size_t(Switch::Alliance)] = true;
     REQUIRE(NeutralChoice(settings, 100, 0) == PlayerbotFaction::Horde);
 
@@ -250,21 +265,60 @@ TEST_CASE("The faction choice byte is the one the client's window sends", "[play
 TEST_CASE("A switch that is on but has not passed its playtest makes no bots", "[playerbots][create]")
 {
     PlayerbotCreateSettings settings;
-    settings.Switches[std::size_t(Switch::Alliance)] = true;
+    settings.Switches[std::size_t(Switch::AlliedRaces)] = true;
     settings.Switches[std::size_t(Switch::Evoker)] = true;
     PlayerbotCreateRules const rules;
 
-    PlayerbotCreateVerdict const human = JudgePlayerbotRace(Race(1, PlayerbotFaction::Alliance), settings, rules);
-    REQUIRE(human.Refusal == PlayerbotCreateRefusal::NotYetSupported);
-    REQUIRE(human.Switch == Switch::Alliance);
+    PlayerbotCreateVerdict const highmountain = JudgePlayerbotRace(Race(28, PlayerbotFaction::Horde, true), settings, rules);
+    REQUIRE(highmountain.Refusal == PlayerbotCreateRefusal::NotYetSupported);
+    REQUIRE(highmountain.Switch == Switch::AlliedRaces);
 
     PlayerbotCreateVerdict const evoker = JudgePlayerbotClass(PlayerbotClassKind::Evoker, settings, rules);
     REQUIRE(evoker.Refusal == PlayerbotCreateRefusal::NotYetSupported);
     REQUIRE(evoker.Switch == Switch::Evoker);
 
-    // Only the Horde has passed so far; the owner may turn Pandaren on anyway.
+    // Only the Horde has passed so far; the owner may turn Alliance, Pandaren and Worgen on to playtest them.
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
-        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) == Switch::Horde || Switch(i) == Switch::Pandaren));
+        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) == Switch::Horde || Switch(i) == Switch::Alliance
+            || Switch(i) == Switch::Pandaren || Switch(i) == Switch::Worgen));
+}
+
+TEST_CASE("Playerbots.Alliance makes the six core Alliance races, Worgen only with Playerbots.Worgen", "[playerbots][create][alliance]")
+{
+    PlayerbotCreateRules const rules;
+    PlayerbotCreateSettings settings;
+    PlayerbotRaceFacts const human = Race(1, PlayerbotFaction::Alliance);
+
+    // Default keys: Alliance is off and says so.
+    PlayerbotCreateVerdict verdict = JudgePlayerbotRace(human, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Alliance);
+
+    settings.Switches[std::size_t(Switch::Alliance)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(human, PlayerbotClassKind::Ordinary, settings, rules).Allowed());
+    // Allied Alliance races still need their own switch.
+    REQUIRE(JudgePlayerbotRace(Race(29, PlayerbotFaction::Alliance, true), settings, rules).Switch == Switch::AlliedRaces);
+
+    verdict = JudgePlayerbotRace(WORGEN, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Worgen);
+
+    settings.Switches[std::size_t(Switch::Worgen)] = true;
+    REQUIRE(JudgePlayerbotRace(WORGEN, settings, rules).Allowed());
+
+    // Worgen without Alliance names Alliance first.
+    settings.Switches[std::size_t(Switch::Alliance)] = false;
+    verdict = JudgePlayerbotRace(WORGEN, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Alliance);
+}
+
+TEST_CASE("With Alliance open, a neutral Pandaren may choose the Alliance by default settings", "[playerbots][create][alliance][pandaren]")
+{
+    PlayerbotCreateSettings settings;
+    settings.Switches[std::size_t(Switch::Alliance)] = true;
+    REQUIRE(NeutralChoice(settings, 10, 0) == PlayerbotFaction::Alliance);
+    REQUIRE(NeutralChoice(settings, 0, 10) == PlayerbotFaction::Horde);
 }
 
 TEST_CASE("An off switch is named before a switch that is not yet supported", "[playerbots][create]")

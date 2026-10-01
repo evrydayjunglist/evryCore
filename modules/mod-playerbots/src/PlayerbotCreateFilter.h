@@ -35,10 +35,11 @@ enum class PlayerbotCreateSwitch : uint8
     Evoker,
     HeroClass,
     CoAClasses,
-    Pandaren
+    Pandaren,
+    Worgen
 };
 
-inline constexpr std::size_t PLAYERBOT_CREATE_SWITCH_COUNT = 10;
+inline constexpr std::size_t PLAYERBOT_CREATE_SWITCH_COUNT = 11;
 
 inline constexpr std::array<char const*, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_KEYS =
 {
@@ -51,22 +52,26 @@ inline constexpr std::array<char const*, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBO
     "Playerbots.Evoker",
     "Playerbots.HeroClass",
     "Playerbots.CoAClasses",
-    "Playerbots.Pandaren"
+    "Playerbots.Pandaren",
+    "Playerbots.Worgen"
 };
 
 // Every new switch is off unless the owner turns it on. Horde is on so a fresh install makes the same bots as before.
 inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_DEFAULTS =
 {
-    true, false, false, false, false, false, false, false, false, false
+    true, false, false, false, false, false, false, false, false, false, false
 };
 
 // Which switches have passed their playtest. A switch that is on but not here yet makes no bots, and the factory says
 // so once. Raise one only when bots of that kind have been played through their starting zone. Pandaren is the owner's
 // to turn on (30 September 2026) even though the bot brain cannot yet do most of the Wandering Isle's quests (balance
-// poles, clicking a spirit or a cart, the balloon, escorts); the factory says so once when it is on.
+// poles, clicking a spirit or a cart, the balloon, escorts); the factory says so once when it is on. Alliance and Worgen
+// are the owner's to turn on too (30 September 2026) so their starts can be playtested; the bot brain cannot yet do the
+// Dwarf gyrocopter ride, the Gnome start's spellclick, gossip and teleport, or Gilneas's vehicle and pet-bar steps, and
+// the factory says so once when each is on.
 inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_SUPPORTED =
 {
-    true, false, false, false, false, false, false, false, false, true
+    true, true, false, false, false, false, false, false, false, true, true
 };
 
 inline constexpr char const* PLAYERBOTS_HORDE_PERCENT = "Playerbots.HordePercent";
@@ -91,6 +96,7 @@ struct PlayerbotRaceFacts
     bool NpcOnly = false;    // ChrRaces NPCOnly: a monster or companion race, never a character
     bool AlliedRace = false; // ChrRaces IsAlliedRace
     bool Dracthyr = false;   // Dracthyr have their own switch, whatever the allied flag says
+    bool Worgen = false;     // Worgen have their own switch as well as the Alliance one: the Gilneas start needs verbs bots lack
     int32 StartingLevel = 1; // ChrRaces StartingLevel
     // ChrRaces NeutralRaceID when that race is neutral: a player of this race starts as that race and chooses her faction
     // in its starting zone (the Horde and Alliance Pandaren). 0 for every other race.
@@ -189,6 +195,8 @@ inline PlayerbotCreateVerdict JudgePlayerbotRace(PlayerbotRaceFacts const& race,
         refused = JudgePlayerbotSwitches(settings, { faction, PlayerbotCreateSwitch::Dracthyr });
     else if (race.AlliedRace)
         refused = JudgePlayerbotSwitches(settings, { faction, PlayerbotCreateSwitch::AlliedRaces });
+    else if (race.Worgen)
+        refused = JudgePlayerbotSwitches(settings, { faction, PlayerbotCreateSwitch::Worgen });
     else
         refused = JudgePlayerbotSwitches(settings, { faction });
     if (refused)

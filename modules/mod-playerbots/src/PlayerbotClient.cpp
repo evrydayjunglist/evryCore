@@ -1628,6 +1628,23 @@ namespace
         return true;
     }
 
+    // A cast check refusal she can wait out: mana or energy coming back, a cooldown, a cast already going, or a turn
+    // she is about to make. Anything else (no wand, no bow, a missing reagent) stays refused however long she stands.
+    bool CombatRefusalPassesWithTime(SpellCastResult result)
+    {
+        switch (result)
+        {
+            case SPELL_FAILED_NO_POWER:
+            case SPELL_FAILED_NOT_READY:
+            case SPELL_FAILED_ITEM_NOT_READY:
+            case SPELL_FAILED_SPELL_IN_PROGRESS:
+            case SPELL_FAILED_UNIT_NOT_INFRONT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     SpellCastResult CheckCombatSpellCast(Player* player, Unit* target, SpellInfo const* spellInfo)
     {
         if (!player || !target || !spellInfo)
@@ -3928,7 +3945,9 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
             break;
         }
 
-        if (inRange)
+        // Only a refusal that passes with time is worth standing for. Shoot with no wand or Auto Shot with no bow is
+        // refused for good, and a level-1 mage used to stand beside her target for the rest of the session over it.
+        if (inRange && CombatRefusalPassesWithTime(result))
             pick.KnownInRange = true;
 
         if (result == SPELL_FAILED_UNIT_NOT_INFRONT && !pick.Face)

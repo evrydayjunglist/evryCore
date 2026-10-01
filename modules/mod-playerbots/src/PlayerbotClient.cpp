@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotClient.h"
+#include "PlayerbotClassCombat.h"
 #include "PlayerbotCreatureIndex.h"
 #include "PlayerbotGear.h"
 #include "PlayerbotLogDetail.h"
@@ -72,6 +73,7 @@
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
+#include <span>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -1520,6 +1522,38 @@ namespace
             return false;
 
         return player->HasActiveSpell(spellInfo->Id);
+    }
+
+    // A spell on her class list is an attack because the list says so; the cast check still decides whether it can go.
+    bool ClassSpellIsEligible(Player const* player, SpellInfo const* spellInfo)
+    {
+        if (!player || !spellInfo || spellInfo->IsPassive())
+            return false;
+
+        return player->HasActiveSpell(spellInfo->Id);
+    }
+
+    // Her own aura from this spell, or from a spell it triggers (Corruption and Moonfire put their damage on the target
+    // as another spell), is on the target.
+    bool TargetHasHerAuraFrom(Player const* player, Unit const* target, SpellInfo const* spellInfo)
+    {
+        if (target->HasAura(spellInfo->Id, player->GetGUID()))
+            return true;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.TriggerSpell && target->HasAura(effect.TriggerSpell, player->GetGUID()))
+                return true;
+
+        return false;
+    }
+
+    bool FinisherWantsMoreComboPoints(Player const* player, SpellInfo const* spellInfo)
+    {
+        if (!spellInfo->HasAttribute(SPELL_ATTR1_FINISHING_MOVE_DAMAGE))
+            return false;
+
+        int32 const wanted = std::min(PLAYERBOT_FINISHER_COMBO_POINTS, player->GetMaxPower(POWER_COMBO_POINTS));
+        return player->GetPower(POWER_COMBO_POINTS) < std::max(wanted, 1);
     }
 
     // A heal, a heal over time, a shield, or a cut to the damage she takes.
@@ -3930,15 +3964,9 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
     bool const casting = player->IsNonMeleeSpellCast(false, false, true);
     float approachRange = 0.0f;
 
-    for (auto const& [spellId, playerSpell] : player->GetSpellMap())
+    // Looks at one spell. True once it is the one she presses, which ends the look.
+    auto consider = [&](SpellInfo const* spellInfo)
     {
-        if (playerSpell.state == PLAYERSPELL_REMOVED || !playerSpell.active || playerSpell.disabled)
-            continue;
-
-        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
-        if (!CombatDamageSpellIsEligible(player, spellInfo))
-            continue;
-
         bool const melee = CombatSpellIsMelee(spellInfo);
         bool const inRange = melee ? player->IsWithinMeleeRange(target)
             : player->GetExactDist(target) <= CombatSpellMaxRange(player, target, spellInfo);
@@ -3947,7 +3975,7 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
         {
             if (inRange)
                 pick.KnownInRange = true;
-            continue;
+            return false;
         }
 
         if (melee && !inRange)
@@ -3959,7 +3987,7 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
                 approachRange = range;
             }
             pick.WalkCloser = true;
-            continue;
+            return false;
         }
 
         SpellCastResult const result = CheckCombatSpellCast(player, target, spellInfo);
@@ -3967,7 +3995,7 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
         {
             pick.Press = spellInfo;
             pick.KnownInRange = true;
-            break;
+            return true;
         }
 
         // Only a refusal that passes with time is worth standing for. Shoot with no wand or Auto Shot with no bow is
@@ -3988,6 +4016,38 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
         }
         else if (result == SPELL_FAILED_LINE_OF_SIGHT)
             pick.WalkCloser = true;
+        return false;
+    };
+
+    // Her class list first, in its order, then every other damage spell she knows.
+    std::span<PlayerbotClassSpell const> const listed = PlayerbotClassAttackSpells(player->GetClass());
+    for (PlayerbotClassSpell const& entry : listed)
+    {
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(entry.SpellId, player->GetMap()->GetDifficultyID());
+        if (!ClassSpellIsEligible(player, spellInfo))
+            continue;
+        if (entry.WhileNotOnTarget && TargetHasHerAuraFrom(player, target, spellInfo))
+            continue;
+        if (FinisherWantsMoreComboPoints(player, spellInfo))
+            continue;
+        if (consider(spellInfo))
+            return pick;
+    }
+
+    for (auto const& [spellId, playerSpell] : player->GetSpellMap())
+    {
+        if (playerSpell.state == PLAYERSPELL_REMOVED || !playerSpell.active || playerSpell.disabled)
+            continue;
+
+        if (std::any_of(listed.begin(), listed.end(), [id = spellId](PlayerbotClassSpell const& entry) { return entry.SpellId == id; }))
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+        if (!CombatDamageSpellIsEligible(player, spellInfo))
+            continue;
+
+        if (consider(spellInfo))
+            return pick;
     }
 
     return pick;
@@ -4043,6 +4103,7 @@ bool PlayerbotClient::TryCombatCast(Player* player, ObjectGuid creatureGuid, uin
         QueueSetSelection(player->GetSession(), creatureGuid);
 
     QueueCastSpell(player, creatureGuid, spellId);
+    PlayerbotClassCombatStats::Instance().NoteAttackPress(player->GetClass(), spellId);
     PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on {}.",
         player->GetName(), CombatSpellName(spellInfo), spellId, creatureGuid.ToString());
     return true;
@@ -4106,6 +4167,7 @@ bool PlayerbotClient::TrySelfCast(Player* player, uint32 spellId)
 
     // A client casting on itself keeps the enemy selected; only the cast names her.
     QueueCastSpell(player, player->GetGUID(), spellId);
+    PlayerbotClassCombatStats::Instance().NoteSelfPress(player->GetClass());
     PLAYERBOT_LOG_DETAIL(player, "mod-playerbots: {} queued CMSG_CAST_SPELL {} ({}) on herself.",
         player->GetName(), CombatSpellName(spellInfo), spellId);
     return true;

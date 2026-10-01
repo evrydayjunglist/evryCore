@@ -32,6 +32,7 @@
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "PlayerbotClassCombat.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotGear.h"
 #include "PlayerbotLogDetail.h"
@@ -40,6 +41,7 @@
 #include "PlayerbotWipe.h"
 #include "RealmList.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "StringFormat.h"
 #include "Unit.h"
 #include "UnitDefines.h"
@@ -49,6 +51,7 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -888,6 +891,13 @@ void PlayerbotMgr::Start()
 
     PlayerbotGear::LoadConfig();
 
+    // A class list spell this build does not have is passed over in every fight. Say so once.
+    for (uint8 classId = 1; classId < MAX_CLASSES; ++classId)
+        for (PlayerbotClassSpell const& entry : PlayerbotClassAttackSpells(classId))
+            if (!sSpellMgr->GetSpellInfo(entry.SpellId, DIFFICULTY_NONE))
+                TC_LOG_WARN(PLAYERBOTS_LOG, "mod-playerbots: spell {} on the class list for class {} is not in this build's spells. "
+                    "Bots of that class pass it over.", entry.SpellId, classId);
+
     std::string const invitePolicy = sConfigMgr->GetStringDefault(PLAYERBOTS_INVITE_POLICY, "GameMaster");
     if (std::optional<PlayerbotInvitePolicy> parsed = ParsePlayerbotInvitePolicy(invitePolicy))
         _invitePolicy = *parsed;
@@ -1241,10 +1251,15 @@ void PlayerbotMgr::ReportSlowUpdate(PlayerbotRecord const& bot, Player* player, 
 void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
 {
     uint32 inWorld = 0;
+    std::array<uint32, MAX_CLASSES> inWorldByClass{};
     for (PlayerbotRecord const& bot : _bots)
         if (WorldSession* session = FindBotSession(bot.Account.AccountId))
             if (Player* player = session->GetPlayer(); player && player->IsInWorld())
+            {
                 ++inWorld;
+                if (player->GetClass() < MAX_CLASSES)
+                    ++inWorldByClass[player->GetClass()];
+            }
 
     std::string slowest = "no bot";
     if (report.BotUpdates && report.MaxBotKey < _bots.size())
@@ -1292,6 +1307,8 @@ void PlayerbotMgr::ReportTickStats(PlayerbotTickReport const& report)
         // Steps sit inside each other (a navmesh route inside a stand spot pick), so the steps add up to more than the whole.
         TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s the bot updates spent {:.1f} ms in all, on: {}.",
             seconds, allBotsMicros / 1000.0, allCost.Describe(allBotsMicros));
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: over the same {} s, by class: {}.", seconds,
+            PlayerbotClassCombatStats::Instance().DescribeAndClear(inWorldByClass));
 
         // Each pass has its own lines of bots and its own stand spot memory. With bot brains on the world thread only, that
         // is one pass and the lines read as they always have.
@@ -3572,6 +3589,7 @@ bool PlayerbotMgr::LookAroundNow(PlayerbotRecord& bot)
 void PlayerbotMgr::BeginDeath(PlayerbotRecord& bot, Player* player)
 {
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} died. Waiting to release spirit.", player->GetName());
+    PlayerbotClassCombatStats::Instance().NoteDeath(player->GetClass());
     ClearLivingWork(bot, player);
     ClearDeath(bot);
     bot.Death = PlayerbotDeathWork::WaitToRelease;

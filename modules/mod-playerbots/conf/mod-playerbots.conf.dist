@@ -101,6 +101,7 @@ Playerbots.Classes =
 #    Playerbots.HeroClass
 #    Playerbots.CoAClasses
 #    Playerbots.Pandaren
+#    Playerbots.Worgen
 #        Description: Which new bot characters may be made. Each switch is 1 (on)
 #                     or 0 (off). A bot is made only when every switch she needs is
 #                     on, Playerbots.Races and Playerbots.Classes allow her, and she
@@ -131,11 +132,20 @@ Playerbots.Classes =
 #                                     escorts), so a Pandaren bot will probably
 #                                     stop partway; Playerbots.log says so once
 #                                     when this is 1.
-#                     Ordinary races and classes (Goblin, Worgen, Monk and the rest)
-#                     come with their faction.
-#                     Only Horde has passed its playtest so far; Pandaren may be
-#                     turned on anyway. Any other switch turned on makes no bots and
-#                     says so once in Playerbots.log.
+#                     Worgen        - Worgen, with Alliance also on. A Worgen bot
+#                                     starts in Gilneas; the bot brain cannot yet
+#                                     do that start's vehicle and pet-bar steps,
+#                                     so she will probably stop partway;
+#                                     Playerbots.log says so once when this and
+#                                     Playerbots.Alliance are both 1.
+#                     Ordinary races and classes (Goblin, Monk and the rest) come
+#                     with their faction.
+#                     Only Horde has passed its playtest so far. Alliance, Pandaren
+#                     and Worgen may be turned on to playtest them; with Alliance on,
+#                     Dwarf and Gnome bots will probably stop partway too (the Dwarf
+#                     gyrocopter ride; the Gnome spellclick, gossip and teleport).
+#                     Any other switch turned on makes no bots and says so once in
+#                     Playerbots.log.
 #                     With Horde and Alliance both 0, no new bot is made; one error
 #                     names both keys and existing bots still log in.
 #                     Read when a new bot character is created. Turning a switch off
@@ -154,6 +164,7 @@ Playerbots.Evoker = 0
 Playerbots.HeroClass = 0
 Playerbots.CoAClasses = 0
 Playerbots.Pandaren = 0
+Playerbots.Worgen = 0
 
 #
 #    Playerbots.HordePercent

@@ -105,6 +105,8 @@ namespace
     constexpr float COMBAT_SEARCH_RANGE = 150.0f;
     constexpr float LOOT_SEARCH_RANGE = 10.0f;
     constexpr uint32 COMBAT_CAST_RETRY_MS = 100;
+    // A fight that has stood this long without a swing, a press, a turn, or a walk writes why.
+    constexpr uint32 COMBAT_QUIET_LOG_MS = 5000;
     constexpr uint32 USE_ITEM_CAST_START_MS = 400;
     constexpr uint32 QUEST_SEARCH_RETRY_MS = 5000;
     // She could not step anywhere from where she stood: she looks again after this long.
@@ -4670,6 +4672,8 @@ void PlayerbotMgr::ClearCombat(PlayerbotRecord& bot, Player* player)
     bot.CombatCastPending = false;
     bot.CombatCastWaitMs = 0;
     bot.CombatFacingWait = false;
+    bot.CombatQuietMs = 0;
+    bot.CombatQuietLogged = false;
 }
 
 bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 diff, bool heldInPlace)
@@ -4759,6 +4763,28 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
                     player->GetName(), bot.CombatTarget.CreatureGuid.ToString());
             bot.CombatSwingSent = true;
         }
+    };
+
+    // She stands in the fight this tick and sends nothing new. Past a few seconds of that without auto-attack running,
+    // she writes why once for this target, with what each damage spell she knows says about it.
+    auto standQuiet = [&](std::string_view why)
+    {
+        swingIfMelee();
+        if (player->GetVictim() == target && player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+        {
+            bot.CombatQuietMs = 0;
+            return true;
+        }
+
+        bot.CombatQuietMs += diff;
+        if (bot.CombatQuietLogged || bot.CombatQuietMs < COMBAT_QUIET_LOG_MS)
+            return true;
+
+        bot.CombatQuietLogged = true;
+        TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: {} has stood {} s in her fight with {} at {:.1f} yards without a swing, a spell, a turn, or a walk: {}. Her damage spells: {}.",
+            player->GetName(), bot.CombatQuietMs / IN_MILLISECONDS, bot.CombatTarget.CreatureGuid.ToString(), player->GetExactDist(target), why,
+            PlayerbotClient::DescribeCombatDamageSpells(player, target));
+        return true;
     };
 
     auto failCloseInWalk = [&]()
@@ -4863,6 +4889,8 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
     }
 
     PlayerbotClient::CombatSpellPick const pick = PlayerbotClient::PickCombatDamageSpell(player, target);
+    if (heldInPlace || pick.Press || pick.Face || bot.Walker.IsMoving())
+        bot.CombatQuietMs = 0;
 
     if (heldInPlace)
     {
@@ -4926,10 +4954,8 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
         bot.CombatTarget.Pos = dest;
         float const dist = player->GetExactDist(dest);
         if (dist <= stop)
-        {
-            swingIfMelee();
-            return true;
-        }
+            return standQuiet(Trinity::StringFormat("spell {} says they are out of range, but she is already within {:.1f} yards of them, where it should reach",
+                pick.Approach->Id, stop));
 
         // The walk ends where the spell reaches, about that far short of them along the way to them.
         float const part = (dist - stop) / dist;
@@ -4952,8 +4978,7 @@ bool PlayerbotMgr::UpdateCombat(PlayerbotRecord& bot, Player* player, uint32 dif
     {
         if (bot.Walker.IsMoving())
             bot.Walker.Stop(player);
-        swingIfMelee();
-        return true;
+        return standQuiet("a damage spell she knows reaches them, so she stands and waits until one can be pressed");
     }
 
     if (inMelee)

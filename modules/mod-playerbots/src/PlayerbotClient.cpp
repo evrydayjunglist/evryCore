@@ -54,6 +54,7 @@
 #include "Playerbots.h"
 #include "QuestDef.h"
 #include "SharedDefines.h"
+#include "SmartEnum.h"
 #include "Spell.h"
 #include "SpellAuraDefines.h"
 #include "SpellAuras.h"
@@ -1625,6 +1626,23 @@ namespace
             return false;
 
         return true;
+    }
+
+    // A cast check refusal she can wait out: mana or energy coming back, a cooldown, a cast already going, or a turn
+    // she is about to make. Anything else (no wand, no bow, a missing reagent) stays refused however long she stands.
+    bool CombatRefusalPassesWithTime(SpellCastResult result)
+    {
+        switch (result)
+        {
+            case SPELL_FAILED_NO_POWER:
+            case SPELL_FAILED_NOT_READY:
+            case SPELL_FAILED_ITEM_NOT_READY:
+            case SPELL_FAILED_SPELL_IN_PROGRESS:
+            case SPELL_FAILED_UNIT_NOT_INFRONT:
+                return true;
+            default:
+                return false;
+        }
     }
 
     SpellCastResult CheckCombatSpellCast(Player* player, Unit* target, SpellInfo const* spellInfo)
@@ -3927,7 +3945,9 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
             break;
         }
 
-        if (inRange)
+        // Only a refusal that passes with time is worth standing for. Shoot with no wand or Auto Shot with no bow is
+        // refused for good, and a level-1 mage used to stand beside her target for the rest of the session over it.
+        if (inRange && CombatRefusalPassesWithTime(result))
             pick.KnownInRange = true;
 
         if (result == SPELL_FAILED_UNIT_NOT_INFRONT && !pick.Face)
@@ -3946,6 +3966,43 @@ PlayerbotClient::CombatSpellPick PlayerbotClient::PickCombatDamageSpell(Player* 
     }
 
     return pick;
+}
+
+std::string PlayerbotClient::DescribeCombatDamageSpells(Player* player, Unit* target)
+{
+    if (!player || !target || !player->GetMap())
+        return "she cannot see them";
+
+    bool const casting = player->IsNonMeleeSpellCast(false, false, true);
+    std::string text;
+    for (auto const& [spellId, playerSpell] : player->GetSpellMap())
+    {
+        if (playerSpell.state == PLAYERSPELL_REMOVED || !playerSpell.active || playerSpell.disabled)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, player->GetMap()->GetDifficultyID());
+        if (!CombatDamageSpellIsEligible(player, spellInfo))
+            continue;
+
+        std::string why;
+        if (casting)
+            why = "she is already casting";
+        else if (!CombatSpellIsReady(player, spellInfo))
+            why = "not ready (global cooldown or cooldown)";
+        else if (CombatSpellAlreadyQueued(player, spellInfo))
+            why = "already queued";
+        else
+        {
+            SpellCastResult const result = CheckCombatSpellCast(player, target, spellInfo);
+            why = result == SPELL_CAST_OK ? std::string("could be pressed") : std::string(EnumUtils::ToConstant(result));
+        }
+
+        if (!text.empty())
+            text += ", ";
+        text += Trinity::StringFormat("spell {} reaches {:.1f} yards: {}", spellInfo->Id, CombatSpellMaxRange(player, target, spellInfo), why);
+    }
+
+    return text.empty() ? std::string("she knows no damage spell") : text;
 }
 
 bool PlayerbotClient::TryCombatCast(Player* player, ObjectGuid creatureGuid, uint32 spellId)

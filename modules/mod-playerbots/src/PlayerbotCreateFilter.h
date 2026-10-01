@@ -70,9 +70,11 @@ inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREAT
 // Dwarf gyrocopter ride, the Gnome start's spellclick, gossip and teleport, or Gilneas's vehicle and pet-bar steps, and
 // the factory says so once when each is on. Allied races are open for a playtest the same way (1 October 2026); the bot
 // brain cannot yet do the Earthen start's extra action button and gossip, or the Haranir start's gossip and spellclick.
+// Dracthyr, Death Knight, Demon Hunter and Evoker are open for a playtest the same way (1 October 2026); their starts
+// need vehicles, scenes, gossip and an extra action button the bot brain cannot do yet, and the factory says so once.
 inline constexpr std::array<bool, PLAYERBOT_CREATE_SWITCH_COUNT> PLAYERBOT_CREATE_SWITCH_SUPPORTED =
 {
-    true, true, true, false, false, false, false, false, false, true, true
+    true, true, true, true, true, true, true, false, false, true, true
 };
 
 inline constexpr char const* PLAYERBOTS_HORDE_PERCENT = "Playerbots.HordePercent";

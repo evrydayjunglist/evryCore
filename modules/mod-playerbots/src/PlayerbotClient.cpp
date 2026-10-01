@@ -1670,9 +1670,14 @@ namespace
 
         // Spell::prepare fills m_powerCost before CheckCast. That member is not
         // writable from the module, so CheckPower inside CheckCast sees an empty
-        // cost. Match that check here with the same CalcPowerCost.
+        // cost. Match that check here with the same CalcPowerCost. Runes are
+        // counted the way Spell::CheckRuneCost counts them: runes off cooldown.
+        int32 runeCost = 0;
         for (SpellPowerCost const& cost : spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask(), look))
         {
+            if (cost.Power == POWER_RUNES)
+                runeCost += cost.Amount;
+
             if (cost.Power == POWER_HEALTH)
             {
                 if (int64(player->GetHealth()) <= cost.Amount)
@@ -1694,6 +1699,18 @@ namespace
         }
 
         delete look;
+
+        if (runeCost > 0 && player->HasRunes())
+        {
+            int32 readyRunes = 0;
+            for (int32 i = 0; i < player->GetMaxPower(POWER_RUNES); ++i)
+                if (player->GetRuneCooldown(uint8(i)) == 0)
+                    ++readyRunes;
+
+            if (readyRunes < runeCost)
+                return SPELL_FAILED_NO_POWER;
+        }
+
         return SPELL_CAST_OK;
     }
 

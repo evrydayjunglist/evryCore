@@ -264,22 +264,61 @@ TEST_CASE("The faction choice byte is the one the client's window sends", "[play
 TEST_CASE("A switch that is on but has not passed its playtest makes no bots", "[playerbots][create]")
 {
     PlayerbotCreateSettings settings;
-    settings.Switches[std::size_t(Switch::Dracthyr)] = true;
-    settings.Switches[std::size_t(Switch::Evoker)] = true;
+    settings.Switches[std::size_t(Switch::HeroClass)] = true;
+    settings.Switches[std::size_t(Switch::CoAClasses)] = true;
     PlayerbotCreateRules const rules;
 
-    PlayerbotCreateVerdict const dracthyr = JudgePlayerbotRace(Race(70, PlayerbotFaction::Horde, false, true), settings, rules);
-    REQUIRE(dracthyr.Refusal == PlayerbotCreateRefusal::NotYetSupported);
-    REQUIRE(dracthyr.Switch == Switch::Dracthyr);
+    PlayerbotCreateVerdict const hero = JudgePlayerbotClass(PlayerbotClassKind::Hero, settings, rules);
+    REQUIRE(hero.Refusal == PlayerbotCreateRefusal::NotYetSupported);
+    REQUIRE(hero.Switch == Switch::HeroClass);
 
-    PlayerbotCreateVerdict const evoker = JudgePlayerbotClass(PlayerbotClassKind::Evoker, settings, rules);
-    REQUIRE(evoker.Refusal == PlayerbotCreateRefusal::NotYetSupported);
-    REQUIRE(evoker.Switch == Switch::Evoker);
+    PlayerbotCreateVerdict const coa = JudgePlayerbotClass(PlayerbotClassKind::ConquestOfAzeroth, settings, rules);
+    REQUIRE(coa.Refusal == PlayerbotCreateRefusal::NotYetSupported);
+    REQUIRE(coa.Switch == Switch::CoAClasses);
 
-    // Only the Horde has passed so far; the owner may turn Alliance, allied races, Pandaren and Worgen on to playtest them.
+    // Only the Horde has passed so far; the owner may turn every other switch on to playtest it, except the custom classes.
     for (std::size_t i = 0; i < PLAYERBOT_CREATE_SWITCH_COUNT; ++i)
-        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) == Switch::Horde || Switch(i) == Switch::Alliance || Switch(i) == Switch::AlliedRaces
-            || Switch(i) == Switch::Pandaren || Switch(i) == Switch::Worgen));
+        REQUIRE(PLAYERBOT_CREATE_SWITCH_SUPPORTED[i] == (Switch(i) != Switch::HeroClass && Switch(i) != Switch::CoAClasses));
+}
+
+TEST_CASE("Death Knight, Demon Hunter, Evoker and Dracthyr each need their own switch", "[playerbots][create][heroclass]")
+{
+    PlayerbotCreateRules const rules;
+    PlayerbotCreateSettings settings;
+    PlayerbotRaceFacts const orc = Race(2, PlayerbotFaction::Horde);
+    PlayerbotRaceFacts const dracthyr = Race(70, PlayerbotFaction::Horde, false, true);
+
+    // Default keys: each is off and names itself, so a fresh install makes the same bots as before.
+    for (PlayerbotClassKind kind : { PlayerbotClassKind::DeathKnight, PlayerbotClassKind::DemonHunter, PlayerbotClassKind::Evoker })
+    {
+        PlayerbotCreateVerdict const verdict = JudgePlayerbotRaceClass(orc, kind, settings, rules);
+        REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    }
+    PlayerbotCreateVerdict verdict = JudgePlayerbotRace(dracthyr, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Dracthyr);
+
+    settings.Switches[std::size_t(Switch::DeathKnight)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(orc, PlayerbotClassKind::DeathKnight, settings, rules).Allowed());
+    REQUIRE(JudgePlayerbotRaceClass(orc, PlayerbotClassKind::DemonHunter, settings, rules).Switch == Switch::DemonHunter);
+
+    settings.Switches[std::size_t(Switch::DemonHunter)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(orc, PlayerbotClassKind::DemonHunter, settings, rules).Allowed());
+
+    // A Dracthyr Evoker needs both; a Dracthyr of an ordinary class needs only Dracthyr.
+    settings.Switches[std::size_t(Switch::Dracthyr)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(dracthyr, PlayerbotClassKind::Ordinary, settings, rules).Allowed());
+    verdict = JudgePlayerbotRaceClass(dracthyr, PlayerbotClassKind::Evoker, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Evoker);
+    settings.Switches[std::size_t(Switch::Evoker)] = true;
+    REQUIRE(JudgePlayerbotRaceClass(dracthyr, PlayerbotClassKind::Evoker, settings, rules).Allowed());
+
+    // Dracthyr still needs her faction open.
+    settings.Switches[std::size_t(Switch::Horde)] = false;
+    verdict = JudgePlayerbotRace(dracthyr, settings, rules);
+    REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);
+    REQUIRE(verdict.Switch == Switch::Horde);
 }
 
 TEST_CASE("Playerbots.Alliance makes the six core Alliance races, Worgen only with Playerbots.Worgen", "[playerbots][create][alliance]")
@@ -322,7 +361,7 @@ TEST_CASE("With Alliance open, a neutral Pandaren may choose the Alliance by def
 
 TEST_CASE("An off switch is named before a switch that is not yet supported", "[playerbots][create]")
 {
-    PlayerbotCreateSettings settings; // Horde on and supported, Dracthyr off and not supported
+    PlayerbotCreateSettings settings; // Horde on, Dracthyr off
     PlayerbotCreateRules const rules;
     PlayerbotCreateVerdict verdict = JudgePlayerbotRace(Race(70, PlayerbotFaction::Horde, false, true), settings, rules);
     REQUIRE(verdict.Refusal == PlayerbotCreateRefusal::SwitchOff);

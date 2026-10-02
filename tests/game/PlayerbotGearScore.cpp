@@ -192,6 +192,26 @@ TEST_CASE("Hands do not flip back and forth", "[playerbots][gear]")
     REQUIRE_FALSE(PlayerbotGearWhatItReplaces(PlayerbotGearHand::OffHand, Empty, Worn(75), true, Empty).Allowed);
 }
 
+TEST_CASE("A hunter keeps the weapon kind her specialization fights with", "[playerbots][gear]")
+{
+    using R = PlayerbotGearReach;
+    using F = PlayerbotGearReachFit;
+    // A bow hunter: a two-hand axe never replaces her bow, and a bow replaces the axe she picked up first.
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Melee, R::Ranged) == F::Refused);
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Ranged, R::Melee) == F::Replaces);
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Ranged, R::Ranged) == F::Compare);
+    // Survival is the other way round.
+    REQUIRE(PlayerbotGearReachFits(R::Melee, R::Ranged, R::Melee) == F::Refused);
+    REQUIRE(PlayerbotGearReachFits(R::Melee, R::Melee, R::Ranged) == F::Replaces);
+    // A fishing pole or a miscellaneous weapon never replaces her bow, and her bow replaces one.
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Any, R::Ranged) == F::Refused);
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Ranged, R::Any) == F::Replaces);
+    // Neither one the kind she wants, or a class with no preference: judged by score.
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Melee, R::Any) == F::Compare);
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Any, R::Melee) == F::Compare);
+    REQUIRE(PlayerbotGearReachFits(R::Any, R::Melee, R::Ranged) == F::Compare);
+}
+
 TEST_CASE("Specializations the module has no row for get an even start", "[playerbots][gear]")
 {
     PlayerbotGearStats const tank = PlayerbotGearArchetypeWeights(PlayerbotGearPrimary::Strength, PlayerbotGearRole::Tank);

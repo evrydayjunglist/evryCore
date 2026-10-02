@@ -105,6 +105,45 @@ namespace
         }
     }
 
+    // Her specialization, or her class's starting one before she has picked.
+    ChrSpecializationEntry const* SpecOf(Player const* player)
+    {
+        uint32 specId = uint32(AsUnderlyingType(player->GetPrimarySpecialization()));
+        if (!specId)
+            specId = player->GetDefaultSpecId();
+        return sChrSpecializationStore.LookupEntry(specId);
+    }
+
+    // The main-hand weapon kind a hunter fights with: melee when the game marks her specialization as melee (Survival),
+    // otherwise a bow, gun, or crossbow. Other classes have no preference.
+    PlayerbotGearReach ReachSheWants(Player const* player)
+    {
+        if (player->GetClass() != CLASS_HUNTER)
+            return PlayerbotGearReach::Any;
+        ChrSpecializationEntry const* spec = SpecOf(player);
+        return spec && spec->GetFlags().HasFlag(ChrSpecializationFlag::Melee) ? PlayerbotGearReach::Melee : PlayerbotGearReach::Ranged;
+    }
+
+    PlayerbotGearReach ReachOf(ItemTemplate const* proto)
+    {
+        if (!proto || proto->GetClass() != ITEM_CLASS_WEAPON)
+            return PlayerbotGearReach::Any;
+        switch (proto->GetSubClass())
+        {
+            case ITEM_SUBCLASS_WEAPON_BOW:
+            case ITEM_SUBCLASS_WEAPON_GUN:
+            case ITEM_SUBCLASS_WEAPON_CROSSBOW:
+                return PlayerbotGearReach::Ranged;
+            case ITEM_SUBCLASS_WEAPON_WAND:
+            case ITEM_SUBCLASS_WEAPON_THROWN:
+            case ITEM_SUBCLASS_WEAPON_FISHING_POLE:
+            case ITEM_SUBCLASS_WEAPON_MISCELLANEOUS:
+                return PlayerbotGearReach::Any;
+            default:
+                return PlayerbotGearReach::Melee;
+        }
+    }
+
     // Cloth, leather, mail, or plate on a body slot; 0 for anything else (rings, cloaks, shields, weapons).
     uint8 ArmorKindOf(ItemTemplate const* proto)
     {
@@ -130,10 +169,7 @@ namespace
         if (player->GetLootSpecId())
             return false;
 
-        uint32 specId = uint32(AsUnderlyingType(player->GetPrimarySpecialization()));
-        if (!specId)
-            specId = player->GetDefaultSpecId();
-        ChrSpecializationEntry const* spec = sChrSpecializationStore.LookupEntry(specId);
+        ChrSpecializationEntry const* spec = SpecOf(player);
         if (!spec || spec->OrderIndex != INITIAL_SPECIALIZATION_INDEX)
             return false;
 
@@ -341,6 +377,8 @@ namespace
         uint8 const itemArmor = ArmorKindOf(proto);
         bool const bothHands = TakesBothHands(proto, titanGrip);
         float const margin = PlayerbotGear::UpgradeMarginPct();
+        PlayerbotGearReach const wantedReach = ReachSheWants(player);
+        PlayerbotGearReach const itemReach = ReachOf(proto);
 
         Optional<PlayerbotGear::Upgrade> best;
         std::string why = "it is not gear she wears for its stats";
@@ -352,12 +390,30 @@ namespace
             else if (slot == EQUIPMENT_SLOT_OFFHAND)
                 hand = PlayerbotGearHand::OffHand;
 
-            PlayerbotGearReplaced const replaced = PlayerbotGearWhatItReplaces(hand, worn.Slots[slot],
+            PlayerbotGearReplaced replaced = PlayerbotGearWhatItReplaces(hand, worn.Slots[slot],
                 worn.Slots[EQUIPMENT_SLOT_MAINHAND], worn.MainIsTwoHand, worn.Slots[EQUIPMENT_SLOT_OFFHAND]);
             if (!replaced.Allowed)
             {
                 why = "her two-hand weapon fills both hands";
                 continue;
+            }
+
+            bool replacesWrongReach = false;
+            if (slot == EQUIPMENT_SLOT_MAINHAND && worn.Items[slot])
+            {
+                switch (PlayerbotGearReachFits(wantedReach, itemReach, ReachOf(worn.Items[slot]->GetTemplate())))
+                {
+                    case PlayerbotGearReachFit::Refused:
+                        why = Trinity::StringFormat("her specialization fights with a {} weapon and she has {} in her main hand",
+                            wantedReach == PlayerbotGearReach::Ranged ? "ranged" : "melee", worn.Items[slot]->GetTemplate()->GetDefaultLocaleName());
+                        continue;
+                    case PlayerbotGearReachFit::Replaces:
+                        replaced.Nothing = true;
+                        replacesWrongReach = true;
+                        break;
+                    default:
+                        break;
+                }
             }
 
             if (!PlayerbotGearArmorKindAllows(classArmor, itemArmor, worn.ArmorKind[slot]))
@@ -388,7 +444,8 @@ namespace
                 best->Slot = slot;
                 best->Score = score;
                 best->Replaced = replaced.Score;
-                best->ReplacesNothing = replaced.Nothing;
+                best->ReplacesNothing = replaced.Nothing && !replacesWrongReach;
+                best->ReplacesWrongKind = replacesWrongReach;
                 best->Gain = gain;
             }
         }
@@ -402,6 +459,9 @@ namespace
     {
         if (upgrade.ReplacesNothing)
             return Trinity::StringFormat("her {} slot is empty; it scores {:.1f} by her stat weights", SlotName(upgrade.Slot), upgrade.Score);
+        if (upgrade.ReplacesWrongKind)
+            return Trinity::StringFormat("it is the kind of weapon her specialization fights with; it scores {:.1f} by her stat weights against {:.1f} for the other kind she wore in her {} slot",
+                upgrade.Score, upgrade.Replaced, SlotName(upgrade.Slot));
         return Trinity::StringFormat("it scores {:.1f} by her stat weights against {:.1f} for what she wore in her {} slot",
             upgrade.Score, upgrade.Replaced, SlotName(upgrade.Slot));
     }
@@ -459,6 +519,18 @@ void PlayerbotGear::LoadConfig()
 
     TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: bots judge gear by stat weights for {} specializations ({} changed by the conf) and change a piece only for one at least {}% better.",
         WeightsBySpec.size(), changed, UpgradeMargin);
+
+    std::string hunterReach;
+    for (ChrSpecializationEntry const* spec : sChrSpecializationStore)
+    {
+        if (spec->ClassID != CLASS_HUNTER)
+            continue;
+        if (!hunterReach.empty())
+            hunterReach += ", ";
+        hunterReach += Trinity::StringFormat("{} ({}) {}", spec->Name[DEFAULT_LOCALE], spec->ID,
+            spec->GetFlags().HasFlag(ChrSpecializationFlag::Melee) ? "melee" : "ranged");
+    }
+    TC_LOG_INFO(PLAYERBOTS_LOG, "mod-playerbots: hunter bots keep the main-hand weapon kind their specialization fights with: {}.", hunterReach);
 }
 
 float PlayerbotGear::UpgradeMarginPct()

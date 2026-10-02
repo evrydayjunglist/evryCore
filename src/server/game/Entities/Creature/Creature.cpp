@@ -2351,6 +2351,7 @@ void Creature::Respawn(bool force)
             SelectLevel();
 
             setDeathState(JUST_RESPAWNED);
+            SelectWildBattlePetLevel();
 
             CreatureModel display(GetNativeDisplayId(), GetNativeDisplayScale(), 1.0f);
             if (sObjectMgr->GetCreatureModelRandomGender(&display, GetCreatureTemplate()))

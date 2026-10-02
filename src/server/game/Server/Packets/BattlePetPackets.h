@@ -20,9 +20,12 @@
 
 #include "Packet.h"
 #include "PacketUtilities.h"
+#include "LFGPacketsCommon.h"
 #include "ObjectGuid.h"
 #include "Optional.h"
+#include "Position.h"
 #include "UnitDefines.h"
+#include <array>
 #include <memory>
 
 namespace WorldPackets
@@ -264,6 +267,489 @@ namespace WorldPackets
             void Read() override;
 
             ObjectGuid PetGuid;
+        };
+
+
+        // ============================================================================
+        // Pet Battle Combat Packets (turn-based battle system)
+        // ============================================================================
+
+        // Shared sub-structures for pet battle packets
+        struct PetBattleAbilityInfo
+        {
+            int32 AbilityID = 0;
+            int16 CooldownRemaining = 0;
+            int16 LockdownRemaining = 0;
+            int8 AbilityIndex = 0;
+            uint8 Pboid = 0;
+        };
+
+        struct PetBattleAuraInfo
+        {
+            int32 AbilityID = 0;
+            uint32 InstanceID = 0;
+            int32 RoundsRemaining = 0;
+            int32 CurrentRound = 0;
+            uint8 CasterPBOID = 0;
+        };
+
+        struct PetBattleStateInfo
+        {
+            uint32 StateID = 0;
+            int32 StateValue = 0;
+        };
+
+        struct PetBattlePetUpdateInfo
+        {
+            ObjectGuid BattlePetGUID;
+            int32 SpeciesID = 0;
+            int32 DisplayID = 0;
+            int32 CollarID = 0;
+            int16 Level = 0;
+            int16 Xp = 0;
+            int32 CurHealth = 0;
+            int32 MaxHealth = 0;
+            int32 Power = 0;
+            int32 Speed = 0;
+            int32 NpcTeamMemberID = 0;
+            uint8 BreedQuality = 0;         // wire u8; JamPetBattlePetUpdate declares uint32@52 (see report)
+            uint16 StatusFlags = 0;
+            int8 Slot = 0;
+            std::string CustomName;
+            std::vector<PetBattleAbilityInfo> Abilities;
+            std::vector<PetBattleAuraInfo> Auras;
+            std::vector<PetBattleStateInfo> States;
+        };
+
+        // JamPetBattlePlayerUpdate. NOTE: reflection in-memory offsets place pets@32 before frontPet@56/
+        // inputFlags@57, but the verified 12.0.7 parser serializes frontPet+inputFlags BEFORE the pets
+        // vector (see operator<<). Wire order (verified) is kept; offset order is NOT the wire order here.
+        struct PetBattlePlayerUpdateInfo
+        {
+            ObjectGuid CharacterGUID;
+            int32 TrapAbilityID = 0;
+            int32 TrapStatus = 0;
+            uint16 RoundTimeSecs = 0;
+            int8 FrontPet = 0;
+            uint8 InputFlags = 0;           // wire u8; JamPetBattlePlayerUpdate declares uint32@57 (see report)
+            std::vector<PetBattlePetUpdateInfo> Pets;
+        };
+
+        struct PetBattleEnviroInfo
+        {
+            std::vector<PetBattleAuraInfo> Auras;
+            std::vector<PetBattleStateInfo> States;
+        };
+
+        // JamPetBattleEffectTarget is a tagged union on the wire: discriminator (Type, upper nibble) +
+        // Petx (target PBOID) + the variant fields selected by Type (carried in Params). The reflection
+        // descriptor lists all 18 union members flat; only the active variant is serialized.
+        struct PetBattleEffectTargetInfo
+        {
+            uint8 Type = 0;     // JamPetBattleEffectTarget field 0 (wire: uint8(Type << 4); client reads byte>>4)
+            int32 Petx = 0;     // field 1 (petx@4) — target pet index / PBOID, always read after the discriminator
+            // Params carry the type-specific union members (ascending reflection offset):
+            //  1 aura:     auraInstanceID, auraAbilityID, roundsRemaining, currentRound (fields 2-5)
+            //  2 state:    stateID, stateValue                                         (fields 6-7)
+            //  3 health:   health                                                      (field 8)
+            //  4 stat:     newStatValue                                                (field 9)
+            //  5 trigger:  triggerAbilityID                                            (field 10)
+            //  6 cooldown: changedAbilityID, cooldownRemaining, lockdownRemaining      (fields 11-13)
+            //  7 broadcast:broadcastTextID                                             (field 14)
+            //  8 pet:      EmbeddedPetUpdate (field 15 'pet'); slot/newAbilityID (16-17) not serialized — see report
+            std::vector<int32> Params;
+            Optional<PetBattlePetUpdateInfo> EmbeddedPetUpdate; // Only when Type == 8
+        };
+
+        struct PetBattleEffectInfo
+        {
+            int32 AbilityEffectID = 0;
+            int32 Flags = 0;
+            int16 SourceAuraInstanceID = 0;
+            int16 TurnInstanceID = 0;
+            int32 PetBattleEffectType = 0;  // JamPetBattleEffect field 4 (client switches on this value)
+            int32 CasterPBOID = 0;
+            uint8 StackDepth = 0;           // wire u8; JamPetBattleEffect declares uint32@20 (see report)
+            std::vector<PetBattleEffectTargetInfo> Targets;
+        };
+
+        struct PetBattleCooldownInfo
+        {
+            int32 AbilityID = 0;
+            int16 CooldownRemaining = 0;
+            int16 LockdownRemaining = 0;
+            int8 AbilityIndex = 0;
+            uint8 Pboid = 0;
+        };
+
+        struct PetBattleRoundPlayerData
+        {
+            uint8 NextInputFlags = 0;
+            int8 NextTrapStatus = 0;
+            uint16 RoundTimeSecs = 0;
+        };
+
+        // Shared location structure used by multiple pet battle packets
+        struct PetBattleLocation
+        {
+            int32 LocationResult = 0;
+            Position BattleOrigin;          // Only XYZ written
+            float BattleFacing = 0.0f;
+            std::array<Position, 2> PlayerPositions;  // Only XYZ written
+        };
+
+        // ---- CMSG packets ----
+
+        class PetBattleRequestWild final : public ClientPacket
+        {
+        public:
+            explicit PetBattleRequestWild(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_REQUEST_WILD, std::move(packet)) { }
+
+            void Read() override;
+
+            ObjectGuid TargetGUID;
+            PetBattleLocation Location;
+        };
+
+        class PetBattleInput final : public ClientPacket
+        {
+        public:
+            explicit PetBattleInput(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_INPUT, std::move(packet)) { }
+
+            void Read() override;
+
+            int32 MoveType = 0;
+            int8 NewFrontPetIndex = -1;
+            int32 DebugFlags = 0;
+            uint8 BattleInterrupted = 0;
+            int32 AbilityID = 0;
+            int32 Round = 0;
+            bool IgnoreAbandonPenalty = false;
+        };
+
+        class PetBattleReplaceFrontPet final : public ClientPacket
+        {
+        public:
+            explicit PetBattleReplaceFrontPet(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_REPLACE_FRONT_PET, std::move(packet)) { }
+
+            void Read() override;
+
+            int8 FrontPetIndex = 0;
+        };
+
+        class PetBattleQuitNotify final : public ClientPacket
+        {
+        public:
+            explicit PetBattleQuitNotify(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_QUIT_NOTIFY, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
+        class PetBattleFinalNotify final : public ClientPacket
+        {
+        public:
+            explicit PetBattleFinalNotify(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_FINAL_NOTIFY, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
+        class PetBattleRequestPVP final : public ClientPacket
+        {
+        public:
+            explicit PetBattleRequestPVP(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_REQUEST_PVP, std::move(packet)) { }
+
+            void Read() override;
+
+            ObjectGuid TargetGUID;
+            PetBattleLocation Location;
+        };
+
+        class JoinPetBattleQueue final : public ClientPacket
+        {
+        public:
+            explicit JoinPetBattleQueue(WorldPacket&& packet) : ClientPacket(CMSG_JOIN_PET_BATTLE_QUEUE, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
+        class LeavePetBattleQueue final : public ClientPacket
+        {
+        public:
+            explicit LeavePetBattleQueue(WorldPacket&& packet) : ClientPacket(CMSG_LEAVE_PET_BATTLE_QUEUE, std::move(packet)) { }
+
+            void Read() override;
+
+            // The client sends a GUID, two uint32, a uint64 and one bit (12.0.7 reader). What the fields mean
+            // is not known; they are read only so the packet is consumed exactly.
+            ObjectGuid TicketGUID;
+            uint32 Unk1 = 0;
+            uint32 Unk2 = 0;
+            uint64 Unk3 = 0;
+            bool UnkBit = false;
+        };
+
+        class PetBattleQueueProposeMatchResult final : public ClientPacket
+        {
+        public:
+            explicit PetBattleQueueProposeMatchResult(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_QUEUE_PROPOSE_MATCH_RESULT, std::move(packet)) { }
+
+            void Read() override;
+
+            bool Accepted = false;
+        };
+
+        class PetBattleRequestUpdate final : public ClientPacket
+        {
+        public:
+            explicit PetBattleRequestUpdate(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_REQUEST_UPDATE, std::move(packet)) { }
+
+            void Read() override;
+
+            ObjectGuid TargetGUID;
+            bool Canceled = false;
+        };
+
+        class PetBattleScriptErrorNotify final : public ClientPacket
+        {
+        public:
+            explicit PetBattleScriptErrorNotify(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_SCRIPT_ERROR_NOTIFY, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
+        class PetBattleWildLocationFail final : public ClientPacket
+        {
+        public:
+            explicit PetBattleWildLocationFail(WorldPacket&& packet) : ClientPacket(CMSG_PET_BATTLE_WILD_LOCATION_FAIL, std::move(packet)) { }
+
+            void Read() override { }
+        };
+
+        // ---- SMSG packets ----
+
+        class PetBattleFinalizeLocation final : public ServerPacket
+        {
+        public:
+            PetBattleFinalizeLocation() : ServerPacket(SMSG_PET_BATTLE_FINALIZE_LOCATION) { }
+
+            WorldPacket const* Write() override;
+
+            PetBattleLocation Location;
+        };
+
+        class PetBattleInitialUpdate final : public ServerPacket
+        {
+        public:
+            // The 12.1 client only reads the battle broadcasts on the SMSG_SCENE_OBJECT_PET_BATTLE_* opcodes,
+            // each starting with the GUID of a SceneObject of SceneType::PetBattle. It ignores the older
+            // SMSG_PET_BATTLE_INITIAL_UPDATE.
+            PetBattleInitialUpdate() : ServerPacket(SMSG_SCENE_OBJECT_PET_BATTLE_INITIAL_UPDATE) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid SceneObjectGUID;
+            std::array<PetBattlePlayerUpdateInfo, 2> Players;
+            std::array<PetBattleEnviroInfo, 3> Enviros;
+            uint16 WaitingForFrontPetsMaxSecs = 30;
+            uint16 PvpMaxRoundTime = 30;
+            int32 CurRound = 0;
+            uint32 NpcCreatureID = 0;
+            uint32 NpcDisplayID = 0;
+            int8 CurPetBattleState = 0;
+            uint8 ForfeitPenalty = 0;
+            ObjectGuid InitialWildPetGUID;
+            bool IsPVP = false;
+            bool CanAwardXP = false;
+        };
+
+        class PetBattleFirstRound final : public ServerPacket
+        {
+        public:
+            // FIRST_ROUND, ROUND_RESULT and REPLACEMENTS_MADE share one client reader and one body; only
+            // the opcode differs.
+            PetBattleFirstRound() : ServerPacket(SMSG_SCENE_OBJECT_PET_BATTLE_FIRST_ROUND) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid SceneObjectGUID;
+            uint32 CurRound = 0;
+            int8 NextPetBattleState = 0;
+            std::array<PetBattleRoundPlayerData, 2> Players;
+            std::vector<PetBattleEffectInfo> Effects;
+            std::vector<PetBattleCooldownInfo> Cooldowns;
+            std::vector<int8> PetXDied;
+        };
+
+        class PetBattleRoundResult final : public ServerPacket
+        {
+        public:
+            PetBattleRoundResult() : ServerPacket(SMSG_SCENE_OBJECT_PET_BATTLE_ROUND_RESULT) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid SceneObjectGUID;
+            uint32 CurRound = 0;
+            int8 NextPetBattleState = 0;
+            std::array<PetBattleRoundPlayerData, 2> Players;
+            std::vector<PetBattleEffectInfo> Effects;
+            std::vector<PetBattleCooldownInfo> Cooldowns;
+            std::vector<int8> PetXDied;
+        };
+
+        class PetBattleReplacementsMade final : public ServerPacket
+        {
+        public:
+            PetBattleReplacementsMade() : ServerPacket(SMSG_SCENE_OBJECT_PET_BATTLE_REPLACEMENTS_MADE) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid SceneObjectGUID;
+            uint32 CurRound = 0;
+            int8 NextPetBattleState = 0;
+            std::array<PetBattleRoundPlayerData, 2> Players;
+            std::vector<PetBattleEffectInfo> Effects;
+            std::vector<PetBattleCooldownInfo> Cooldowns;
+            std::vector<int8> PetXDied;
+        };
+
+        struct PetBattleFinalPet
+        {
+            ObjectGuid Guid;
+            uint16 Level = 0;
+            uint16 Xp = 0;
+            int32 Health = 0;
+            int32 MaxHealth = 0;
+            uint16 InitialLevel = 0;
+            uint8 Pboid = 0;
+            bool Captured = false;
+            bool Caged = false;
+            bool SeenAction = false;
+            bool AwardedXP = false;
+        };
+
+        class PetBattleFinalRound final : public ServerPacket
+        {
+        public:
+            PetBattleFinalRound() : ServerPacket(SMSG_SCENE_OBJECT_PET_BATTLE_FINAL_ROUND) { }
+
+            WorldPacket const* Write() override;
+
+            // The SceneObject GUID in front is assumed from FIRST_ROUND and ROUND_RESULT, which captures
+            // confirm; no capture of FINAL_ROUND itself has been checked.
+            ObjectGuid SceneObjectGUID;
+            bool Abandoned = false;
+            bool PvpBattle = false;
+            // The winner is one flag per team in the flag byte (checked against five 12.0.7 battles). The two
+            // uint32 after it are one creature id per team, as the 12.1.0.69587 client reads them: 0 for the
+            // player, the trainer entry for a tamer battle, 0 for a wild battle.
+            std::array<bool, 2> Winners = {};
+            std::array<uint32, 2> NpcCreatureID = {};
+            std::vector<PetBattleFinalPet> Pets;
+        };
+
+        class PetBattleFinished final : public ServerPacket
+        {
+        public:
+            // The body is the SceneObject GUID and nothing else (from the client's reader).
+            PetBattleFinished() : ServerPacket(SMSG_SCENE_OBJECT_PET_BATTLE_FINISHED, 20) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid SceneObjectGUID;
+        };
+
+        class PetBattleRequestFailed final : public ServerPacket
+        {
+        public:
+            PetBattleRequestFailed() : ServerPacket(SMSG_PET_BATTLE_REQUEST_FAILED) { }
+
+            WorldPacket const* Write() override;
+
+            uint8 Reason = 0;
+        };
+
+        class PetBattlePVPChallenge final : public ServerPacket
+        {
+        public:
+            PetBattlePVPChallenge() : ServerPacket(SMSG_PET_BATTLE_PVP_CHALLENGE) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid ChallengerGUID;
+            PetBattleLocation Location;
+        };
+
+        class PetBattleQueueStatus final : public ServerPacket
+        {
+        public:
+            PetBattleQueueStatus() : ServerPacket(SMSG_PET_BATTLE_QUEUE_STATUS) { }
+
+            WorldPacket const* Write() override;
+
+            // 12.1.0.69587 capture (CMSG_JOIN_PET_BATTLE_QUEUE answered by two QUEUED statuses):
+            //   Status u32, SlotResult (sized, empty on QUEUED), RideTicket{RequesterGuid = player,
+            //   Id, Type = 3 (PetBattle), Time = enqueue time, IsCrossFaction}, then the two optional
+            //   wait times as 64-bit seconds (ClientWaitTime 0 -> 8 across a 7.3 s gap, AvgWaitTime 60).
+
+            uint32 Status = 0;
+            std::vector<uint32> SlotResult;
+            WorldPackets::LFG::RideTicket Ticket;
+            Optional<uint64> ClientWaitTime;
+            Optional<uint64> AvgWaitTime;
+        };
+
+        class PetBattleQueueProposeMatch final : public ServerPacket
+        {
+        public:
+            PetBattleQueueProposeMatch() : ServerPacket(SMSG_PET_BATTLE_QUEUE_PROPOSE_MATCH, 0) { }
+
+            WorldPacket const* Write() override { return &_worldPacket; }
+        };
+
+        class PetBattleMaxGameLengthWarning final : public ServerPacket
+        {
+        public:
+            PetBattleMaxGameLengthWarning() : ServerPacket(SMSG_PET_BATTLE_MAX_GAME_LENGTH_WARNING, 12) { }
+
+            WorldPacket const* Write() override;
+
+            uint64 TimeRemaining = 0;   // unit not confirmed
+            uint32 RoundsRemaining = 0;
+        };
+
+        // Not sent yet. Retail sends it when a player in a pet battle uses a restricted chat channel.
+        class PetBattleChatRestricted final : public ServerPacket
+        {
+        public:
+            PetBattleChatRestricted() : ServerPacket(SMSG_PET_BATTLE_CHAT_RESTRICTED, 0) { }
+
+            WorldPacket const* Write() override { return &_worldPacket; }
+        };
+
+        class PetBattleDebugQueueDumpResponse final : public ServerPacket
+        {
+        public:
+            PetBattleDebugQueueDumpResponse() : ServerPacket(SMSG_PET_BATTLE_DEBUG_QUEUE_DUMP_RESPONSE, 0) { }
+
+            WorldPacket const* Write() override { return &_worldPacket; }
+        };
+
+        class BattlePetsHealed final : public ServerPacket
+        {
+        public:
+            BattlePetsHealed() : ServerPacket(SMSG_BATTLE_PETS_HEALED, 0) { }
+
+            WorldPacket const* Write() override { return &_worldPacket; }
+        };
+
+        class BattlePetTrapLevel final : public ServerPacket
+        {
+        public:
+            BattlePetTrapLevel() : ServerPacket(SMSG_BATTLE_PET_TRAP_LEVEL) { }
+
+            WorldPacket const* Write() override;
+
+            uint16 TrapLevel = 0;
         };
     }
 }

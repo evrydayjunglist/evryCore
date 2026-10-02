@@ -63,6 +63,12 @@ public:
     void Remove();
 
     static SceneObject* CreateSceneObject(uint32 sceneId, Unit* creator, Position const& pos, ObjectGuid privateObjectOwner);
+
+    // The SMSG_SCENE_OBJECT_PET_BATTLE_* packets are addressed to a SceneObject of SceneType::PetBattle.
+    // A pet battle has no scene_template or script package, so this skips the template lookup and
+    // uses scene id 0, which is also the id in the scene object GUID of a 12.1 retail capture.
+    static SceneObject* CreatePetBattleSceneObject(Unit* creator, Position const& pos, ObjectGuid privateObjectOwner);
+
     bool Create(ObjectGuid::LowType lowGuid, SceneType type, uint32 sceneId, uint32 scriptPackageId, Map* map, Unit* creator,
         Position const& pos, ObjectGuid privateObjectOwner);
 

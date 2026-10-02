@@ -325,8 +325,8 @@ void PetBattleMgr::BuildEffectActionMap()
         for (BattlePetAbilityEffectEntry const* entry : sBattlePetAbilityEffectStore)
             usageCounts[entry->BattlePetEffectPropertiesID]++;
 
-        TC_LOG_WARN("server.loading", "PetBattle: {} EffectProperties entries fell through classifier "
-            "(default = DAMAGE). Sample IDs follow:", unclassifiedCount);
+        TC_LOG_WARN("server.loading", "PetBattle: {} EffectProperties entries match no known effect and do nothing "
+            "in a battle. Their IDs are logged at debug level.", unclassifiedCount);
         for (uint16 propsID : unclassifiedIDs)
         {
             BattlePetEffectPropertiesEntry const* p = sBattlePetEffectPropertiesStore.LookupEntry(propsID);

@@ -1547,9 +1547,20 @@ namespace
         return false;
     }
 
+    // A finishing move spends combo points as part of its cost, which is how the core's rogue scripts know one. Checking
+    // only the attribute, rogues pressed Eviscerate almost once for every Sinister Strike and died four times as often.
+    bool IsFinishingMove(SpellInfo const* spellInfo)
+    {
+        if (spellInfo->HasAttribute(SPELL_ATTR1_FINISHING_MOVE_DAMAGE))
+            return true;
+
+        return std::any_of(spellInfo->PowerCosts.begin(), spellInfo->PowerCosts.end(),
+            [](SpellPowerEntry const* cost) { return cost && cost->PowerType == POWER_COMBO_POINTS; });
+    }
+
     bool FinisherWantsMoreComboPoints(Player const* player, SpellInfo const* spellInfo)
     {
-        if (!spellInfo->HasAttribute(SPELL_ATTR1_FINISHING_MOVE_DAMAGE))
+        if (!IsFinishingMove(spellInfo))
             return false;
 
         int32 const wanted = std::min(PLAYERBOT_FINISHER_COMBO_POINTS, player->GetMaxPower(POWER_COMBO_POINTS));

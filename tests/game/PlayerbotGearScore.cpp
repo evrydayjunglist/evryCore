@@ -203,8 +203,12 @@ TEST_CASE("A hunter keeps the weapon kind her specialization fights with", "[pla
     // Survival is the other way round.
     REQUIRE(PlayerbotGearReachFits(R::Melee, R::Ranged, R::Melee) == F::Refused);
     REQUIRE(PlayerbotGearReachFits(R::Melee, R::Melee, R::Ranged) == F::Replaces);
-    // An empty hand, or a class with no preference, is judged by score.
+    // A fishing pole or a miscellaneous weapon never replaces her bow, and her bow replaces one.
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Any, R::Ranged) == F::Refused);
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Ranged, R::Any) == F::Replaces);
+    // Neither one the kind she wants, or a class with no preference: judged by score.
     REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Melee, R::Any) == F::Compare);
+    REQUIRE(PlayerbotGearReachFits(R::Ranged, R::Any, R::Melee) == F::Compare);
     REQUIRE(PlayerbotGearReachFits(R::Any, R::Melee, R::Ranged) == F::Compare);
 }
 

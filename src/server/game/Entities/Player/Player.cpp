@@ -32707,6 +32707,13 @@ void Player::RemoveFromChromieTime(bool teleportToCapital /*= false*/)
     if (!teleportToCapital || !IsInWorld())
         return;
 
+    // Far teleport is immediate unless this flag is set. KillRewarder now runs before
+    // dungeon corpse loot, and GiveLevel can kick Chromie Time from another unit's
+    // update (another player, a pet, or a damage over time effect). An immediate TeleportTo removes the looter
+    // from the instance; Unit::Kill then ASSERT_NOTNULL(GetPlayer(creature, looterGuid)).
+    // Queue the port like RewardQuest. Player::Update runs the delayed worldport after loot.
+    SetCanDelayTeleport(true);
+
     // Kick to the capital near Chromie 167032 — not on her, the hourglass, or the campfire.
     // Orgrimmar: Chromie (1557.18,-4216.54) faces about northeast toward bonfire GO 204676 (1558.98,-4212.85);
     //      stand southwest of the pedestal at ground Z, facing Chromie. Stormwind: no campfire on the pad.

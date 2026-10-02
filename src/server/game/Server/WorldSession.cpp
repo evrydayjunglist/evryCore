@@ -48,6 +48,7 @@
 #include "NeighborhoodMgr.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvPMgr.h"
+#include "PetBattleMgr.h"
 #include "PacketUtilities.h"
 #include "Player.h"
 #include "QueryHolder.h"
@@ -671,6 +672,10 @@ void WorldSession::LogoutPlayer(bool save)
 
         ///- Remove pet
         _player->RemovePet(nullptr, PET_SAVE_AS_CURRENT);
+
+        ///- Leave any pet battle, queue or duel challenge; the battle ends as a loss for this player.
+        ///- Done before the journal lock is released so the battle can still write to the journal.
+        sPetBattleMgr->OnPlayerLogout(_player);
 
         ///- Release battle pet journal lock
         if (_battlePetMgr->HasJournalLock())

@@ -43,6 +43,7 @@ namespace PlayerbotGear
         float Score = 0.0f;
         float Replaced = 0.0f;
         bool ReplacesNothing = false;
+        bool ReplacesWrongKind = false;  // a hunter's main hand: the weapon kind her specialization fights with
         float Gain = 0.0f;
     };
 

@@ -403,4 +403,28 @@ inline PlayerbotGearReplaced PlayerbotGearWhatItReplaces(PlayerbotGearHand hand,
     return out;
 }
 
+// A hunter's main hand holds either a bow, gun, or crossbow or a melee weapon, and her specialization says which she
+// fights with. The other kind never replaces the kind she wants; the kind she wants replaces the other whatever it scores,
+// the way a player swaps a stand-in out as soon as she has the real thing.
+enum class PlayerbotGearReach : uint8
+{
+    Any,     // no preference, or not a weapon
+    Melee,
+    Ranged
+};
+
+enum class PlayerbotGearReachFit : uint8
+{
+    Compare,   // judge it by score as usual
+    Refused,   // the wrong kind against the kind she wants
+    Replaces   // the kind she wants against the wrong kind: as good as an empty hand
+};
+
+inline PlayerbotGearReachFit PlayerbotGearReachFits(PlayerbotGearReach wanted, PlayerbotGearReach item, PlayerbotGearReach worn)
+{
+    if (wanted == PlayerbotGearReach::Any || item == PlayerbotGearReach::Any || worn == PlayerbotGearReach::Any || item == worn)
+        return PlayerbotGearReachFit::Compare;
+    return item == wanted ? PlayerbotGearReachFit::Replaces : PlayerbotGearReachFit::Refused;
+}
+
 #endif

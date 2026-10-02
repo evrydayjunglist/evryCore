@@ -1819,6 +1819,8 @@ class TC_GAME_API WorldSession
         void LoadHousingRetroactiveProgress();
         // Tells the callback whether any character of this Battle.net account has turned in the quest.
         void QueryWarbandQuestRewarded(uint32 questId, std::function<void(bool)>&& callback);
+        // Tells the callback whether any character of this Battle.net account has turned in any of the quests.
+        void QueryWarbandAnyQuestRewarded(std::vector<uint32> const& questIds, std::function<void(bool)>&& callback);
         void HandleHousingSvcsAcceptNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsAcceptNeighborhoodOwnership const& housingSvcsAcceptNeighborhoodOwnership);
         void HandleHousingSvcsRejectNeighborhoodOwnership(WorldPackets::Housing::HousingSvcsRejectNeighborhoodOwnership const& housingSvcsRejectNeighborhoodOwnership);
         void HandleHousingSvcsGetPotentialHouseOwners(WorldPackets::Housing::HousingSvcsGetPotentialHouseOwners const& housingSvcsGetPotentialHouseOwners);

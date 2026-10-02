@@ -771,6 +771,18 @@ namespace WorldPackets
             Duration<Milliseconds, uint32> LifetimeMs;
         };
 
+        class MoveAddImpulse final : public ServerPacket
+        {
+        public:
+            explicit MoveAddImpulse() : ServerPacket(SMSG_MOVE_ADD_IMPULSE, 16 + 4 + 4 * 3) { }
+
+            WorldPacket const* Write() override;
+
+            ObjectGuid MoverGUID;
+            uint32 SequenceIndex = 0;
+            TaggedPosition<Position::XYZ> Direction;
+        };
+
         class MoveRemoveInertia final : public ServerPacket
         {
         public:

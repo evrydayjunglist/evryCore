@@ -1203,6 +1203,7 @@ class TC_GAME_API Unit : public WorldObject
 
         void ApplyInertia(int32 id, Milliseconds duration);
         void RemoveInertia(int32 id);
+        void SendAddImpulse(Position const& direction);
 
         void SetGravityModifier(float gravityModifier);
 

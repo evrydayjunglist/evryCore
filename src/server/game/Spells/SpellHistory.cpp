@@ -33,6 +33,7 @@
 #include "SpellPackets.h"
 #include "World.h"
 #include <boost/container/small_vector.hpp>
+#include <set>
 
 template<>
 struct SpellHistory::PersistenceHelper<Player>
@@ -311,23 +312,45 @@ void SpellHistory::WritePacket(WorldPackets::Spells::SendSpellHistory* sendSpell
 
 void SpellHistory::WritePacket(WorldPackets::Spells::SendSpellCharges* sendSpellCharges) const
 {
-    sendSpellCharges->Entries.reserve(_categoryCharges.size());
-
-    TimePoint now = time_point_cast<Duration>(GameTime::GetTime<Clock>());
-    for (auto const& [categoryId, consumedCharges] : _categoryCharges)
+    // Retail lists every charge category of a known spell, full ones too. The client shows a
+    // charge count, such as the six shared Skyriding charges, only for categories listed here.
+    std::set<uint32> chargeCategories;
+    if (Player const* player = _owner->ToPlayer())
     {
-        if (!consumedCharges.empty())
+        for (auto const& [spellId, playerSpell] : player->GetSpellMap())
         {
-            Milliseconds cooldownDuration = duration_cast<Milliseconds>(consumedCharges.front().RechargeEnd - now);
-            if (cooldownDuration.count() <= 0)
+            if (playerSpell.state == PLAYERSPELL_REMOVED || playerSpell.disabled)
                 continue;
 
-            WorldPackets::Spells::SpellChargeEntry chargeEntry;
-            chargeEntry.Category = categoryId;
-            chargeEntry.NextRecoveryTime = uint32(cooldownDuration.count());
-            chargeEntry.ConsumedCharges = uint8(consumedCharges.size());
-            sendSpellCharges->Entries.push_back(chargeEntry);
+            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+                if (spellInfo->ChargeCategoryId && GetMaxCharges(spellInfo->ChargeCategoryId) > 0)
+                    chargeCategories.insert(spellInfo->ChargeCategoryId);
         }
+    }
+
+    for (auto const& [categoryId, consumedCharges] : _categoryCharges)
+        chargeCategories.insert(categoryId);
+
+    sendSpellCharges->Entries.reserve(chargeCategories.size());
+
+    TimePoint now = time_point_cast<Duration>(GameTime::GetTime<Clock>());
+    for (uint32 categoryId : chargeCategories)
+    {
+        WorldPackets::Spells::SpellChargeEntry chargeEntry;
+        chargeEntry.Category = categoryId;
+
+        auto consumedChargesItr = _categoryCharges.find(categoryId);
+        if (consumedChargesItr != _categoryCharges.end() && !consumedChargesItr->second.empty())
+        {
+            Milliseconds cooldownDuration = duration_cast<Milliseconds>(consumedChargesItr->second.front().RechargeEnd - now);
+            if (cooldownDuration.count() > 0)
+            {
+                chargeEntry.NextRecoveryTime = uint32(cooldownDuration.count());
+                chargeEntry.ConsumedCharges = uint8(consumedChargesItr->second.size());
+            }
+        }
+
+        sendSpellCharges->Entries.push_back(chargeEntry);
     }
 }
 

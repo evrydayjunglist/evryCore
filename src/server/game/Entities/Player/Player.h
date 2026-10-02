@@ -1997,6 +1997,9 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void RemoveSpell(uint32 spell_id, bool disabled = false, bool learn_low_rank = true, bool suppressMessaging = false);
         void ResetSpells(bool myClassOnly = false);
         void LearnCustomSpells();
+        void UpdateSkyridingUnlocks();
+        // Called with the answer to the Warband check UpdateSkyridingUnlocks starts
+        void SetSkyridingUnlockedForWarband(bool unlocked);
         void LearnDefaultSkills();
         void LearnDefaultSkill(SkillRaceClassInfoEntry const* rcInfo);
         void LearnQuestRewardedSpells();
@@ -2086,6 +2089,9 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void DeleteTraitConfig(int32 deletedConfigId);
         void ApplyTraitConfig(int32 configId, bool apply);
         void ApplyTraitEntry(int32 traitNodeEntryId, int32 rank, int32 grantedRanks, bool apply);
+        void SyncGrantedTraitEntries(int32 configId);
+        // False until the end of _LoadTraits has applied every config loaded at login
+        bool AreTraitConfigsApplied() const { return m_traitConfigsApplied; }
         void SetActiveCombatTraitConfigID(int32 traitConfigId) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ActiveCombatTraitConfigID), traitConfigId); }
         void SetCurrentCombatTraitConfigSubTreeID(int32 traitSubTreeId) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerData).ModifyValue(&UF::PlayerData::CurrentCombatTraitConfigSubTreeID), traitSubTreeId); }
         void SetTraitConfigUseStarterBuild(int32 traitConfigId, bool useStarterBuild);
@@ -3428,6 +3434,17 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         SpecializationInfo _specializationInfo;
 
         std::unordered_map<int32, PlayerSpellState> m_traitConfigStates;
+        bool m_traitConfigsApplied = false;
+
+        enum class SkyridingUnlock : uint8
+        {
+            NotChecked,
+            Checking,   // asked the database whether another character of the Warband has unlocked it
+            Locked,
+            Unlocked
+        };
+        SkyridingUnlock m_skyridingUnlock = SkyridingUnlock::NotChecked;
+        bool IsSkyridingUnlocked();
 
         ActionButtonList m_actionButtons;
         uint64 m_actionButtonsLoadGeneration = 0;

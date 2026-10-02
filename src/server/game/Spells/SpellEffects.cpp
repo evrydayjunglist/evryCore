@@ -6245,7 +6245,16 @@ void Spell::EffectCreateTraitTreeConfig()
     }).first;
 
     if (!existingConfigIdForSystem)
+    {
         target->CreateTraitConfig(newConfig);
+
+        // CreateTraitConfig only stores the granted entries; learn their spells now. While logging in,
+        // the end of _LoadTraits applies every config instead, so skip it then to avoid applying twice.
+        if (target->AreTraitConfigsApplied())
+            target->ApplyTraitConfig(newConfig.ID, true);
+    }
+    else
+        target->SyncGrantedTraitEntries(*existingConfigIdForSystem);
 }
 
 void Spell::EffectChangeActiveCombatTraitConfig()

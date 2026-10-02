@@ -3827,13 +3827,26 @@ void WorldSession::StartHousingTutorial(bool warbandCompletedMyFirstHome, Object
 
 void WorldSession::QueryWarbandQuestRewarded(uint32 questId, std::function<void(bool)>&& callback)
 {
+    QueryWarbandAnyQuestRewarded({ questId }, std::move(callback));
+}
+
+void WorldSession::QueryWarbandAnyQuestRewarded(std::vector<uint32> const& questIds, std::function<void(bool)>&& callback)
+{
+    std::string questList;
+    for (uint32 questId : questIds)
+        questList += (questList.empty() ? "" : ",") + std::to_string(questId);
+
+    // An empty list asks for nothing that can match.
+    if (questList.empty())
+        questList = "0";
+
     // A character's rewarded quests are in character_queststatus_rewarded, keyed by character; the Battle.net account
     // reaches its characters through its game accounts.
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_GAME_ACCOUNT_IDS);
     stmt->setUInt32(0, GetBattlenetAccountId());
     std::shared_ptr<std::function<void(bool)>> done = std::make_shared<std::function<void(bool)>>(std::move(callback));
     GetQueryProcessor().AddCallback(LoginDatabase.AsyncQuery(stmt)
-        .WithChainingPreparedCallback([questId, done](QueryCallback& chain, PreparedQueryResult gameAccounts)
+        .WithChainingPreparedCallback([questList, done](QueryCallback& chain, PreparedQueryResult gameAccounts)
         {
             std::string accountIds;
             if (gameAccounts)
@@ -3852,7 +3865,7 @@ void WorldSession::QueryWarbandQuestRewarded(uint32 questId, std::function<void(
 
             chain.SetNextQuery(CharacterDatabase.AsyncQuery(Trinity::StringFormat(
                 "SELECT 1 FROM character_queststatus_rewarded r JOIN characters c ON c.guid = r.guid "
-                "WHERE r.quest = {} AND r.active = 1 AND c.account IN ({}) LIMIT 1", questId, accountIds).c_str()));
+                "WHERE r.quest IN ({}) AND r.active = 1 AND c.account IN ({}) LIMIT 1", questList, accountIds).c_str()));
         })
         .WithCallback([done](QueryResult rewarded)
         {

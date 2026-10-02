@@ -2407,6 +2407,8 @@ void Player::GiveLevel(uint8 level)
 
     PushQuests();
 
+    UpdateSkyridingUnlocks();
+
     sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
 }
 
@@ -15670,6 +15672,20 @@ void Player::RewardQuestPackage(uint32 questPackageId, ItemContext context, uint
     }
 }
 
+namespace
+{
+    // Turning in any one of these unlocks Skyriding for the whole Warband: the Dragon Isles quest (68795, and 80012
+    // with the same name and reward spell), the later "Skyriding" quest that rewards spell 445964 Skyriding (90754),
+    // and Khaz Algar's "Secure the Beach" (78533). The Midnight intro "The Light's Summons" also unlocks it on
+    // retail, but it is not in our quest data.
+    constexpr uint32 SkyridingUnlockQuests[] = { 68795, 80012, 90754, 78533 };
+
+    bool IsSkyridingUnlockQuest(uint32 questId)
+    {
+        return std::ranges::find(SkyridingUnlockQuests, questId) != std::ranges::end(SkyridingUnlockQuests);
+    }
+}
+
 void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rewardId, Object* questGiver, bool announce)
 {
     //this THING should be here to protect code from quest, which cast on player far teleport as a reward
@@ -15927,6 +15943,9 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
     UpdateCriteria(CriteriaType::CompleteQuestsCount);
     UpdateCriteria(CriteriaType::CompleteQuest, quest->GetQuestId());
     UpdateCriteria(CriteriaType::CompleteAnyReplayQuest, 1);
+
+    if (IsSkyridingUnlockQuest(quest->GetQuestId()))
+        SetSkyridingUnlockedForWarband(true);
 
     // make full db save
     SaveToDB(false);
@@ -19447,6 +19466,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadTraits(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRAIT_CONFIGS),
         holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_TRAIT_ENTRIES)); // must be after loading spells
 
+    UpdateSkyridingUnlocks(); // must be after achievements and traits
+
     // must be before inventory (some items required reputation check)
     m_reputationMgr->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_REPUTATION));
 
@@ -19988,9 +20009,6 @@ void Player::_LoadAuras(PreparedQueryResult auraResult, PreparedQueryResult effe
         }
         while (auraResult->NextRow());
     }
-
-    // TODO: finish dragonriding - this forces old flight mode
-    AddAura(404468, this);
 }
 
 void Player::_LoadGlyphAuras()
@@ -26391,6 +26409,91 @@ void Player::ResetSpells(bool myClassOnly)
     LearnQuestRewardedSpells();
 }
 
+bool Player::IsSkyridingUnlocked()
+{
+    static constexpr uint32 SPELL_SKYRIDING_BASICS = 376777;
+
+    switch (m_skyridingUnlock)
+    {
+        case SkyridingUnlock::Unlocked:
+            return true;
+        case SkyridingUnlock::Checking:
+        case SkyridingUnlock::Locked:
+            return false;
+        default:
+            break;
+    }
+
+    // Her own Skyriding tree, or her own turn-in, answers it without asking the database
+    if (HasSpell(SPELL_SKYRIDING_BASICS)
+        || std::ranges::any_of(SkyridingUnlockQuests, [this](uint32 questId) { return GetQuestRewardStatus(questId); }))
+    {
+        m_skyridingUnlock = SkyridingUnlock::Unlocked;
+        return true;
+    }
+
+    // Another character of the Warband may have turned one in. The answer comes back on the session.
+    m_skyridingUnlock = SkyridingUnlock::Checking;
+    WorldSession* session = GetSession();
+    ObjectGuid guid = GetGUID();
+    session->QueryWarbandAnyQuestRewarded({ std::begin(SkyridingUnlockQuests), std::end(SkyridingUnlockQuests) }, [session, guid](bool rewarded)
+    {
+        Player* player = session->GetPlayer();
+        if (!player || player->GetGUID() != guid)
+            return;
+
+        player->SetSkyridingUnlockedForWarband(rewarded);
+    });
+    return false;
+}
+
+void Player::SetSkyridingUnlockedForWarband(bool unlocked)
+{
+    if (m_skyridingUnlock == SkyridingUnlock::Unlocked)
+        return;
+
+    m_skyridingUnlock = unlocked ? SkyridingUnlock::Unlocked : SkyridingUnlock::Locked;
+    if (unlocked)
+        UpdateSkyridingUnlocks();
+}
+
+void Player::UpdateSkyridingUnlocks()
+{
+    // Retail: once a Warband has unlocked Skyriding by quest, every character of level 10 or more can skyride.
+    // A new Warband has no Skyriding until then.
+    static constexpr uint8 SKYRIDING_MIN_LEVEL = 10;
+    static constexpr uint32 ACHIEVEMENT_DYNAMIC_FLIGHT_POWER_1 = 40172;          // hidden; level 10 grants Skyriding Basics and its passives
+    static constexpr uint32 SPELL_CREATE_DRAGONRIDING_TRAITS_LOADOUT = 384557;   // creates the Skyriding trait config (tree 672)
+    static constexpr uint32 SPELL_SWITCH_FLIGHT_STYLE = 436854;
+
+    // Since patch 11.2.7 Second Wind is learned at level 20 and Aerial Halt at level 30. The trait data grants
+    // each through a hidden achievement that retail completes from a server script.
+    static constexpr std::pair<uint8, uint32> scriptGrantedAchievements[] =
+    {
+        { 20, 61553 }, // Dynamic Flight Power - Second Wind
+        { 30, 61554 }, // Dynamic Flight Power - Aerial Halt
+    };
+
+    if (GetLevel() < SKYRIDING_MIN_LEVEL || !IsSkyridingUnlocked())
+        return;
+
+    // A character made above level 10 never levelled through it, so the level achievement was never checked
+    if (!HasAchieved(ACHIEVEMENT_DYNAMIC_FLIGHT_POWER_1))
+        UpdateCriteria(CriteriaType::ReachLevel);
+
+    for (auto const& [level, achievementId] : scriptGrantedAchievements)
+        if (GetLevel() >= level && !HasAchieved(achievementId))
+            if (AchievementEntry const* achievement = sAchievementStore.LookupEntry(achievementId))
+                CompletedAchievement(achievement);
+
+    // The spellbook toggle between Skyriding and Steady Flight. Retail teaches it with Skyriding.
+    if (!HasSpell(SPELL_SWITCH_FLIGHT_STYLE))
+        LearnSpell(SPELL_SWITCH_FLIGHT_STYLE, false);
+
+    // Creates the trait config, or brings the nodes it grants up to date with the achievements above
+    CastSpell(this, SPELL_CREATE_DRAGONRIDING_TRAITS_LOADOUT, true);
+}
+
 void Player::LearnCustomSpells()
 {
     if (!sWorld->getBoolConfig(CONFIG_START_ALL_SPELLS))
@@ -30372,6 +30475,9 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
 
         ApplyTraitConfig(id, true);
     }
+
+    // Configs created after this point are applied by whoever creates them
+    m_traitConfigsApplied = true;
 }
 
 void Player::_SaveTalents(CharacterDatabaseTransaction trans)
@@ -30834,6 +30940,66 @@ void Player::CreateTraitConfig(WorldPackets::Traits::TraitConfig& traitConfig)
     }
 
     m_traitConfigStates[configId] = PLAYERSPELL_CHANGED;
+}
+
+// Brings a config that already exists up to date with the entries the trait conditions grant now,
+// such as a node granted by an achievement completed since the config was made.
+void Player::SyncGrantedTraitEntries(int32 configId)
+{
+    UF::TraitConfig const* traitConfig = GetTraitConfig(configId);
+    if (!traitConfig)
+        return;
+
+    std::vector<UF::TraitEntry> grantedEntries = TraitMgr::GetGrantedTraitEntriesForConfig(WorldPackets::Traits::TraitConfig(*traitConfig), this);
+
+    // Before the end of _LoadTraits nothing is applied yet; only update the fields and let it learn the spells
+    bool const applyTraits = m_traitConfigsApplied;
+
+    auto configSetter = m_values.ModifyValue(&Player::m_activePlayerData)
+        .ModifyValue(&UF::ActivePlayerData::TraitConfigs, configId);
+
+    for (UF::TraitEntry const& grantedEntry : grantedEntries)
+    {
+        // Applying an entry learns spells, which can change the config fields, so look it up again each time
+        traitConfig = GetTraitConfig(configId);
+        if (!traitConfig)
+            return;
+
+        int32 existingIndex = traitConfig->Entries.FindIndexIf([&](UF::TraitEntry const& entry)
+        {
+            return entry.TraitNodeID == grantedEntry.TraitNodeID && entry.TraitNodeEntryID == grantedEntry.TraitNodeEntryID;
+        });
+
+        bool const applyEntry = applyTraits && TraitMgr::CanApplyTraitNode(*traitConfig, grantedEntry);
+
+        if (existingIndex < 0)
+        {
+            AddDynamicUpdateFieldValue(configSetter.ModifyValue(&UF::TraitConfig::Entries)) = grantedEntry;
+            m_traitConfigStates[configId] = PLAYERSPELL_CHANGED;
+
+            if (applyEntry)
+                ApplyTraitEntry(grantedEntry.TraitNodeEntryID, grantedEntry.Rank, grantedEntry.GrantedRanks, true);
+
+            continue;
+        }
+
+        int32 const existingRank = traitConfig->Entries[existingIndex].Rank;
+        int32 const existingGrantedRanks = traitConfig->Entries[existingIndex].GrantedRanks;
+        if (existingGrantedRanks >= grantedEntry.GrantedRanks)
+            continue;
+
+        // The learned spell depends on rank plus granted ranks, so remove it at the old ranks first
+        if (applyEntry)
+            ApplyTraitEntry(grantedEntry.TraitNodeEntryID, existingRank, existingGrantedRanks, false);
+
+        SetUpdateFieldValue(configSetter
+            .ModifyValue(&UF::TraitConfig::Entries, existingIndex)
+            .ModifyValue(&UF::TraitEntry::GrantedRanks), grantedEntry.GrantedRanks);
+        m_traitConfigStates[configId] = PLAYERSPELL_CHANGED;
+
+        if (applyEntry)
+            ApplyTraitEntry(grantedEntry.TraitNodeEntryID, existingRank, grantedEntry.GrantedRanks, true);
+    }
 }
 
 void Player::AddTraitConfig(WorldPackets::Traits::TraitConfig const& traitConfig)

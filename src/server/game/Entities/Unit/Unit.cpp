@@ -8522,6 +8522,25 @@ void Unit::UpdateMountCapability()
 
             if (!HasAura(capability->ModSpellAuraID))
                 CastSpell(this, capability->ModSpellAuraID, aurEff);
+            else if (Aura const* modAura = GetAura(capability->ModSpellAuraID))
+            {
+                // Logging in removes the auras that the mount capability aura linked in (Dragonrider Energy 372773
+                // for Skyriding, which every Skyriding ability needs on the caster) but keeps the capability aura
+                // itself, so the cast above is skipped. Remounting would cast the links again; do the same here.
+                std::vector<std::pair<uint32, AuraEffect const*>> missingLinks;
+                for (AuraEffect const* modEff : modAura->GetAuraEffects())
+                {
+                    if (!modEff || (modEff->GetAuraType() != SPELL_AURA_LINKED && modEff->GetAuraType() != SPELL_AURA_LINKED_2))
+                        continue;
+
+                    uint32 linkedSpellId = modEff->GetSpellEffectInfo().TriggerSpell;
+                    if (linkedSpellId && !HasAura(linkedSpellId))
+                        missingLinks.emplace_back(linkedSpellId, modEff);
+                }
+
+                for (auto const& [linkedSpellId, modEff] : missingLinks)
+                    CastSpell(this, linkedSpellId, modEff);
+            }
         }
     }
 }
@@ -14393,6 +14412,18 @@ void Unit::ApplyInertia(int32 id, Milliseconds duration)
         updateApplyInertia.InertiaID = id;
         updateApplyInertia.LifetimeMs = duration;
         SendMessageToSet(updateApplyInertia.Write(), true);
+    }
+}
+
+void Unit::SendAddImpulse(Position const& direction)
+{
+    if (Player const* movingPlayer = GetPlayerMovingMe())
+    {
+        WorldPackets::Movement::MoveAddImpulse addImpulse;
+        addImpulse.MoverGUID = GetGUID();
+        addImpulse.SequenceIndex = m_movementCounter++;
+        addImpulse.Direction = direction;
+        movingPlayer->SendDirectMessage(addImpulse.Write());
     }
 }
 

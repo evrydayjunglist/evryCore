@@ -7413,7 +7413,9 @@ void Player::ModifyCurrency(uint32 id, int32 amount, CurrencyGainSource gainSour
 
     bool ignoreCaps = isGainOnRefund || gainSource == CurrencyGainSource::QuestRewardIgnoreCaps || gainSource == CurrencyGainSource::WorldQuestRewardIgnoreCaps;
 
-    if (amount > 0 && !isGainOnRefund && gainSource != CurrencyGainSource::Vendor)
+    // AccountCopy is a warband move of an existing amount (debit already happened on the
+    // offline alt). Gain auras such as Spoils of War would mint extra currency.
+    if (amount > 0 && !isGainOnRefund && gainSource != CurrencyGainSource::Vendor && gainSource != CurrencyGainSource::AccountCopy)
     {
         amount *= GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_CURRENCY_GAIN, id);
         amount *= GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_CURRENCY_CATEGORY_GAIN_PCT, currency->CategoryID);

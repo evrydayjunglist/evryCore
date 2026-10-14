@@ -834,7 +834,7 @@ bool Neighborhood::RemoveDeletedCharacter(ObjectGuid characterGuid, CharacterDat
 
     auto memberIt = std::find_if(_members.begin(), _members.end(),
         [&characterGuid](Member const& member) { return member.PlayerGuid == characterGuid; });
-    if (memberIt != _members.end() && memberIt->Role != NEIGHBORHOOD_ROLE_OWNER && characterGuid != _ownerGuid)
+    if (memberIt != _members.end())
     {
         if (memberIt->PlotIndex != INVALID_PLOT_INDEX)
             TC_LOG_ERROR("housing", "Neighborhood::RemoveDeletedCharacter: deleted {} still held plot {} of neighborhood '{}'; the plot keeps its house without a roster entry",
@@ -870,6 +870,21 @@ bool Neighborhood::RemoveDeletedCharacter(ObjectGuid characterGuid, CharacterDat
         BroadcastRoster();
 
     return rosterChanged;
+}
+
+void Neighborhood::DetachDeletedOwner(CharacterDatabaseTransaction trans)
+{
+    ObjectGuid const previousOwnerGuid = _ownerGuid;
+    _ownerGuid = Housing::MakeOrphanedNeighborhoodOwnerGuid();
+    _pendingTransfer.reset();
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NEIGHBORHOOD_OWNER);
+    stmt->setUInt64(0, ORPHANED_NEIGHBORHOOD_OWNER);
+    stmt->setUInt64(1, _guid.GetCounter());
+    trans->Append(stmt);
+
+    TC_LOG_INFO("housing", "Neighborhood::DetachDeletedOwner: neighborhood '{}' no longer has a living owner (was {}); owner-only checks will not follow a reused guid",
+        _name, previousOwnerGuid.ToString());
 }
 
 ObjectGuid Neighborhood::ReleasePlotByHouse(ObjectGuid houseGuid, CharacterDatabaseTransaction trans)
@@ -1579,6 +1594,9 @@ bool Neighborhood::IsManager(ObjectGuid playerGuid) const
 
 bool Neighborhood::IsOwner(ObjectGuid playerGuid) const
 {
+    if (playerGuid.IsEmpty() || Housing::IsOrphanedNeighborhoodOwner(_ownerGuid))
+        return false;
+
     return _ownerGuid == playerGuid;
 }
 

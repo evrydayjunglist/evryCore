@@ -131,6 +131,10 @@ public:
     static bool IsFirstHouse(bool firstHouseRecorded, std::size_t accountHouseCount);
     // What a purchase costs: nothing for the account's first house, the plot's cost for every other.
     static uint64 GetPurchasePrice(bool firstHouse, uint64 plotCost);
+    // neighborhoods.ownerGuid after the founder is permanently deleted. Not empty (that marks a
+    // server-public neighborhood) and not a recyclable player guid.
+    static ObjectGuid MakeOrphanedNeighborhoodOwnerGuid();
+    static bool IsOrphanedNeighborhoodOwner(ObjectGuid guid);
 
     // A guild member's Battle.net account (0 when not known) and whether that member played in the last
     // GUILD_NEIGHBORHOOD_ACTIVE_DAYS days.

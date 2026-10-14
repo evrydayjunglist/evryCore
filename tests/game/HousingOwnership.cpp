@@ -216,6 +216,17 @@ TEST_CASE("A house that changes plot takes its exterior decor along", "[Housing]
     }
 }
 
+TEST_CASE("A deleted neighborhood founder does not keep a recyclable player guid", "[Housing][Ownership]")
+{
+    ObjectGuid const orphan = Housing::MakeOrphanedNeighborhoodOwnerGuid();
+    REQUIRE(orphan.GetHigh() == HighGuid::Player);
+    REQUIRE(orphan.GetCounter() == ORPHANED_NEIGHBORHOOD_OWNER);
+    REQUIRE_FALSE(orphan.IsEmpty());
+    REQUIRE(Housing::IsOrphanedNeighborhoodOwner(orphan));
+    REQUIRE_FALSE(Housing::IsOrphanedNeighborhoodOwner(ObjectGuid::Create<HighGuid::Player>(1)));
+    REQUIRE_FALSE(Housing::IsOrphanedNeighborhoodOwner(ObjectGuid::Empty));
+}
+
 TEST_CASE("A deleted owner's house passes to a character of the account who may own it", "[Housing][Ownership]")
 {
     uint32 constexpr GuildId = 7;

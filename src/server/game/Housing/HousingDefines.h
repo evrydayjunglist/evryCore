@@ -851,6 +851,11 @@ static constexpr uint32 MAX_PENDING_INVITES             = 20;
 // slots as the server says are needed. Whether the creator counts as one of the ten is not known.
 static constexpr uint32 MIN_CHARTER_SIGNATURES          = 10;
 static constexpr uint8  INVALID_PLOT_INDEX              = 255;
+// neighborhoods.ownerGuid after the founding character is permanently deleted. 0 is a server-public
+// neighborhood (IsServerPublic). A real player guid would be reused after a restart
+// (ObjectMgr::SetHighestGuids takes MAX(guid) FROM characters). This counter is never issued to a
+// player: ObjectGuidGenerator shuts the world down before overflow.
+static constexpr uint64 ORPHANED_NEIGHBORHOOD_OWNER     = UI64LIT(0xFFFFFFFFFFFFFFFF);
 static constexpr uint32 HOUSING_MAX_NAME_LENGTH         = 64;
 // Houses reach level 12 in 12.1 (Blizzard's 12.1 notes, https://news.blizzard.com/en-us/article/24293281), and
 // HouseLevelData.db2 holds levels 1 to 12.

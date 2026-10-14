@@ -168,6 +168,16 @@ uint64 Housing::GetPurchasePrice(bool firstHouse, uint64 plotCost)
     return firstHouse ? 0 : plotCost;
 }
 
+ObjectGuid Housing::MakeOrphanedNeighborhoodOwnerGuid()
+{
+    return ObjectGuid::Create<HighGuid::Player>(ORPHANED_NEIGHBORHOOD_OWNER);
+}
+
+bool Housing::IsOrphanedNeighborhoodOwner(ObjectGuid guid)
+{
+    return !guid.IsEmpty() && guid.GetCounter() == ORPHANED_NEIGHBORHOOD_OWNER;
+}
+
 void Housing::CountBattlenetAccounts(std::vector<GuildMemberAccount> const& members, uint32& accounts, uint32& activeAccounts)
 {
     std::unordered_map<uint32, bool> active;

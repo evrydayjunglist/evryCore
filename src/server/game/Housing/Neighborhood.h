@@ -235,10 +235,13 @@ public:
     void MovePlotHolder(uint8 plotIndex, ObjectGuid newHolderGuid, CharacterDatabaseTransaction trans);
     // The character whose roster entry holds a plot, or empty.
     ObjectGuid GetPlotHolder(uint8 plotIndex) const;
-    // A character's rows are removed for good (NeighborhoodMgr::OnCharacterRemoved): her roster entry leaves, unless it
-    // makes her this neighborhood's owner, and her invite, plot hold and any ownership offer to her go. The rows change
-    // in trans. True when the roster changed.
+    // A character's rows are removed for good (NeighborhoodMgr::OnCharacterRemoved): her roster entry leaves, and her
+    // invite, plot hold and any ownership offer to her go. The rows change in trans. True when the roster changed.
     bool RemoveDeletedCharacter(ObjectGuid characterGuid, CharacterDatabaseTransaction trans);
+    // The founding character is gone for good. Owner-only checks must not follow a guid a new character can receive
+    // after a restart, and a server-public neighborhood is owner-empty, so the owner becomes the orphaned sentinel.
+    // Who takes over is still not decided. The row changes in trans.
+    void DetachDeletedOwner(CharacterDatabaseTransaction trans);
 
     // Whether a character in actorRole may evict the one in targetRole. The owner may evict anyone but herself; a
     // manager may evict residents only ("Evict non-Managers from the Neighborhood", GlobalStrings

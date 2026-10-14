@@ -1292,15 +1292,19 @@ void NeighborhoodMgr::OnCharacterRemoved(ObjectGuid characterGuid, CharacterData
     trans->Append(stmt);
 
     // Her roster entries and the invites naming her. OnCharacterDeleted has already passed on or packed every house she
-    // was shown as owner of, and the plots she held with them.
+    // was shown as owner of, and the plots she held with them. If she still owns the neighborhood, the owner guid is
+    // detached first so IsOwner cannot follow a guid a new character can receive after a restart.
     for (auto const& [neighborhoodGuid, neighborhood] : _neighborhoods)
     {
-        if (neighborhood->RemoveDeletedCharacter(characterGuid, trans))
-            neighborhood->RefreshMirrorDataForOnlineMembers();
+        bool const wasOwner = neighborhood->IsOwner(characterGuid);
+        if (wasOwner)
+        {
+            neighborhood->DetachDeletedOwner(trans);
+            _ownerToNeighborhood.erase(characterGuid);
+        }
 
-        if (neighborhood->IsOwner(characterGuid))
-            TC_LOG_INFO("housing", "NeighborhoodMgr::OnCharacterRemoved: deleted {} still owns neighborhood '{}'; its owner is not changed",
-                characterGuid.ToString(), neighborhood->GetName());
+        if (neighborhood->RemoveDeletedCharacter(characterGuid, trans) || wasOwner)
+            neighborhood->RefreshMirrorDataForOnlineMembers();
     }
 
     TC_LOG_DEBUG("housing", "NeighborhoodMgr::OnCharacterRemoved: removed the charter, signatures, invites and roster entries of {} ({} signer(s) of her charter)",

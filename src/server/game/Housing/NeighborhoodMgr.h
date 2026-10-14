@@ -107,8 +107,8 @@ public:
     // A character's rows are being removed for good (Player::DeleteFromDB with the remove method, after
     // OnCharacterDeleted), and a new character can get her guid after a restart. Her charter that was never finalized
     // and its signatures are dropped, and so are her signatures on other charters, the invites naming her, and her
-    // roster entries. A roster entry that makes her a neighborhood's owner stays: who takes over a neighborhood is not
-    // decided. Rows change in trans. World thread only.
+    // roster entries. If she still owns a neighborhood, its owner becomes the orphaned sentinel: who takes over is
+    // not decided, but her guid must not keep owner-only checks after it is reused. Rows change in trans. World thread only.
     void OnCharacterRemoved(ObjectGuid characterGuid, CharacterDatabaseTransaction trans);
 
     // Packs a house that stands on a plot of the neighborhood, when it is not given up by choice: its owner was deleted

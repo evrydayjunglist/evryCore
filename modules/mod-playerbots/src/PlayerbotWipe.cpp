@@ -292,10 +292,11 @@ bool PlayerbotWipe::Data::Find(State& result)
     }
 
     BattlenetList = JoinIds(battlenetIds);
+    // "0" is only a placeholder for auth-database IN-lists (account.id 0 is not a row). It is not
+    // used against characters.account: that column is 0 after a client soft-delete.
     AccountList = GameAccounts.empty() ? std::string("0") : JoinIds(GameAccounts);
     // Characters still on a bot account, and characters an earlier delete unlinked from one.
-    BotCharacters = Trinity::StringFormat(
-        "SELECT guid FROM characters WHERE account IN ({0}) OR deleteInfos_Account IN ({0})", AccountList);
+    BotCharacters = PlayerbotWipeCharacterGuidSql(GameAccounts);
 
     // What ties a bot to a human player, counted before anything goes, so the log says what the core delete did
     // with it. Bots have no guild, mail or auction verbs, so these are normally zero.
@@ -310,9 +311,8 @@ bool PlayerbotWipe::Data::Find(State& result)
     Auctions = Count(CharacterDatabase, Trinity::StringFormat(
         "SELECT COUNT(*) FROM auctionhouse WHERE owner IN ({0}) OR bidder IN ({0})", BotCharacters));
 
-    if (QueryResult found = CharacterDatabase.Query(Trinity::StringFormat(
-        "SELECT guid, account, deleteInfos_Account FROM characters WHERE account IN ({0}) OR deleteInfos_Account IN ({0})",
-        AccountList).c_str()))
+    if (QueryResult found = CharacterDatabase.Query(
+        ("SELECT guid, account, deleteInfos_Account FROM characters WHERE guid IN (" + BotCharacters + ")").c_str()))
     {
         do
         {

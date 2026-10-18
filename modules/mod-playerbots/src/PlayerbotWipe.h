@@ -18,8 +18,11 @@
 #ifndef EVRY_MOD_PLAYERBOT_WIPE_H
 #define EVRY_MOD_PLAYERBOT_WIPE_H
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <vector>
 
 // The Battle.net email the module gives a bot it creates (PlayerbotFactory::MakeBattlenetEmail): PLAYERBOT, one or
 // more digits, then @PLAYERBOTS.LOCAL, in upper case as the core stores it. The wipe deletes an account only when its
@@ -39,6 +42,23 @@ inline bool IsPlayerbotBattlenetEmail(std::string_view email)
         if (c < '0' || c > '9')
             return false;
     return true;
+}
+
+// SQL that lists bot character guids for the wipe. An empty game-account list must not become IN (0):
+// CHAR_UPD_DELETE_INFO sets characters.account = 0 on every pending-delete character, including human ones.
+inline std::string PlayerbotWipeCharacterGuidSql(std::vector<std::uint32_t> const& gameAccountIds)
+{
+    if (gameAccountIds.empty())
+        return "SELECT guid FROM characters WHERE 0";
+
+    std::string ids;
+    for (std::uint32_t id : gameAccountIds)
+    {
+        if (!ids.empty())
+            ids += ',';
+        ids += std::to_string(id);
+    }
+    return "SELECT guid FROM characters WHERE account IN (" + ids + ") OR deleteInfos_Account IN (" + ids + ")";
 }
 
 // Deletes every bot character, bot game account and bot Battle.net account, and what belongs to them, waiting until

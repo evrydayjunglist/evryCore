@@ -29,6 +29,14 @@ TEST_CASE("Human accounts the SQL LIKE would also find are not bots", "[playerbo
     REQUIRE_FALSE(IsPlayerbotBattlenetEmail("PLAYERBOT 1@PLAYERBOTS.LOCAL"));
 }
 
+TEST_CASE("Wipe character select does not match pending-delete humans when bot game accounts are missing", "[playerbots][wipe]")
+{
+    REQUIRE(PlayerbotWipeCharacterGuidSql({}) == "SELECT guid FROM characters WHERE 0");
+    REQUIRE(PlayerbotWipeCharacterGuidSql({}).find("IN (0)") == std::string::npos);
+    REQUIRE(PlayerbotWipeCharacterGuidSql({ 42, 7 }) ==
+        "SELECT guid FROM characters WHERE account IN (42,7) OR deleteInfos_Account IN (42,7)");
+}
+
 TEST_CASE("Similar human accounts are not bots", "[playerbots][wipe]")
 {
     REQUIRE_FALSE(IsPlayerbotBattlenetEmail("PLAYERBOT1@PLAYERBOTS.LOCAL.COM"));
